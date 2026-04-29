@@ -836,6 +836,172 @@ async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std
 }
 
 #[tokio::test]
+async fn network_proxy_feature_starts_proxy_without_enabling_sandbox_network() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(
+                toml::from_str(
+                    r#"
+[network_proxy]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+enable_socks5 = false
+"#,
+                )
+                .expect("valid features"),
+            ),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted
+    );
+    let network = config
+        .permissions
+        .network
+        .as_ref()
+        .expect("network_proxy should start the managed network proxy");
+    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+    assert!(!network.socks_enabled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_proxy_cli_overrides_merge_toggle_with_proxy_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![
+            (
+                "features.network_proxy.enabled".to_string(),
+                toml::Value::Boolean(true),
+            ),
+            (
+                "features.network_proxy.proxy_url".to_string(),
+                toml::Value::String("http://127.0.0.1:43128".to_string()),
+            ),
+            (
+                "features.network_proxy.enable_socks5".to_string(),
+                toml::Value::Boolean(false),
+            ),
+        ])
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted
+    );
+    let network = config
+        .permissions
+        .network
+        .as_ref()
+        .expect("network_proxy should start the managed network proxy");
+    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+    assert!(!network.socks_enabled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_network_requirements_enable_proxy_without_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                network: Some(codex_config::NetworkRequirementsToml {
+                    enabled: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::NetworkProxy));
+    assert!(config.managed_network_requirements_enabled());
+    assert!(
+        config
+            .permissions
+            .network
+            .as_ref()
+            .expect("experimental_network should configure the managed proxy")
+            .enabled()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(toml::from_str("network_proxy = true").expect("valid features")),
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(NetworkToml {
+                            enabled: Some(true),
+                            proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                            enable_socks5: Some(false),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
+    let network = config
+        .permissions
+        .network
+        .as_ref()
+        .expect("network_proxy should start the managed network proxy");
+    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+    assert!(!network.socks_enabled());
+    Ok(())
+}
+
+#[tokio::test]
 async fn permissions_profiles_network_disabled_by_default_does_not_start_proxy()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;

@@ -139,6 +139,19 @@ fn tool_suggest_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn network_proxy_is_experimental_and_disabled_by_default() {
+    assert_eq!(
+        feature_for_key("network_proxy"),
+        Some(Feature::NetworkProxy)
+    );
+    assert!(matches!(
+        Feature::NetworkProxy.stage(),
+        Stage::Experimental { .. }
+    ));
+    assert_eq!(Feature::NetworkProxy.default_enabled(), false);
+}
+
+#[test]
 fn tool_search_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolSearch.stage(), Stage::Stable);
     assert_eq!(Feature::ToolSearch.default_enabled(), true);

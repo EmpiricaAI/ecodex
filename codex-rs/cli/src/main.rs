@@ -58,7 +58,7 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_features::FEATURES;
 use codex_features::Stage;
-use codex_features::is_known_feature_key;
+use codex_features::feature_toggle_override_key;
 use codex_login::AuthManager;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
@@ -676,22 +676,23 @@ impl FeatureToggles {
     fn to_overrides(&self) -> anyhow::Result<Vec<String>> {
         let mut v = Vec::new();
         for feature in &self.enable {
-            Self::validate_feature(feature)?;
-            v.push(format!("features.{feature}=true"));
+            let key = Self::feature_override_key(feature)?;
+            v.push(format!("{key}=true"));
         }
         for feature in &self.disable {
-            Self::validate_feature(feature)?;
-            v.push(format!("features.{feature}=false"));
+            let key = Self::feature_override_key(feature)?;
+            v.push(format!("{key}=false"));
         }
         Ok(v)
     }
 
+    fn feature_override_key(feature: &str) -> anyhow::Result<String> {
+        feature_toggle_override_key(feature)
+            .ok_or_else(|| anyhow::anyhow!("Unknown feature flag: {feature}"))
+    }
+
     fn validate_feature(feature: &str) -> anyhow::Result<()> {
-        if is_known_feature_key(feature) {
-            Ok(())
-        } else {
-            anyhow::bail!("Unknown feature flag: {feature}")
-        }
+        Self::feature_override_key(feature).map(|_| ())
     }
 }
 
@@ -2564,6 +2565,22 @@ mod tests {
             vec![
                 "features.web_search_request=true".to_string(),
                 "features.unified_exec=false".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn feature_toggles_preserve_configurable_feature_tables() {
+        let toggles = FeatureToggles {
+            enable: vec!["network_proxy".to_string()],
+            disable: vec!["multi_agent_v2".to_string()],
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(
+            overrides,
+            vec![
+                "features.network_proxy.enabled=true".to_string(),
+                "features.multi_agent_v2.enabled=false".to_string(),
             ]
         );
     }
