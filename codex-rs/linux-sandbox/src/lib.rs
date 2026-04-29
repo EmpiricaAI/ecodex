@@ -6,6 +6,14 @@
 #[cfg(target_os = "linux")]
 mod bwrap;
 #[cfg(target_os = "linux")]
+mod file_system_protected_metadata;
+#[cfg(target_os = "linux")]
+mod file_system_protected_metadata_cleanup;
+#[cfg(target_os = "linux")]
+mod file_system_protected_metadata_monitor;
+#[cfg(target_os = "linux")]
+mod file_system_protected_metadata_runtime;
+#[cfg(target_os = "linux")]
 mod landlock;
 #[cfg(target_os = "linux")]
 mod launcher;

@@ -19,11 +19,14 @@ use std::fs::Metadata;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStringExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::file_system_protected_metadata::FileSystemPermissionsEnforcement;
+use crate::file_system_protected_metadata::SyntheticMountTarget;
+use crate::file_system_protected_metadata::append_metadata_path_masks_for_writable_root;
+use crate::file_system_protected_metadata::append_protected_create_targets_for_writable_root;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::permissions::is_protected_metadata_name;
@@ -107,121 +110,7 @@ impl BwrapNetworkMode {
 pub(crate) struct BwrapArgs {
     pub args: Vec<String>,
     pub preserved_files: Vec<File>,
-    pub synthetic_mount_targets: Vec<SyntheticMountTarget>,
-    pub protected_create_targets: Vec<ProtectedCreateTarget>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FileIdentity {
-    dev: u64,
-    ino: u64,
-}
-
-impl FileIdentity {
-    fn from_metadata(metadata: &Metadata) -> Self {
-        Self {
-            dev: metadata.dev(),
-            ino: metadata.ino(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SyntheticMountTargetKind {
-    EmptyFile,
-    EmptyDirectory,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SyntheticMountTarget {
-    path: PathBuf,
-    kind: SyntheticMountTargetKind,
-    // If an empty metadata path was already present, remember its inode so
-    // cleanup does not delete a real pre-existing file or directory.
-    pre_existing_path: Option<FileIdentity>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ProtectedCreateTarget {
-    path: PathBuf,
-}
-
-impl ProtectedCreateTarget {
-    pub(crate) fn missing(path: &Path) -> Self {
-        Self {
-            path: path.to_path_buf(),
-        }
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl SyntheticMountTarget {
-    pub(crate) fn missing(path: &Path) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            kind: SyntheticMountTargetKind::EmptyFile,
-            pre_existing_path: None,
-        }
-    }
-
-    pub(crate) fn missing_empty_directory(path: &Path) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            kind: SyntheticMountTargetKind::EmptyDirectory,
-            pre_existing_path: None,
-        }
-    }
-
-    pub(crate) fn existing_empty_file(path: &Path, metadata: &Metadata) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            kind: SyntheticMountTargetKind::EmptyFile,
-            pre_existing_path: Some(FileIdentity::from_metadata(metadata)),
-        }
-    }
-
-    fn existing_empty_directory(path: &Path, metadata: &Metadata) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            kind: SyntheticMountTargetKind::EmptyDirectory,
-            pre_existing_path: Some(FileIdentity::from_metadata(metadata)),
-        }
-    }
-
-    pub(crate) fn preserves_pre_existing_path(&self) -> bool {
-        self.pre_existing_path.is_some()
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub(crate) fn kind(&self) -> SyntheticMountTargetKind {
-        self.kind
-    }
-
-    pub(crate) fn should_remove_after_bwrap(&self, metadata: &Metadata) -> bool {
-        match self.kind {
-            SyntheticMountTargetKind::EmptyFile => {
-                if !metadata.file_type().is_file() || metadata.len() != 0 {
-                    return false;
-                }
-            }
-            SyntheticMountTargetKind::EmptyDirectory => {
-                if !metadata.file_type().is_dir() {
-                    return false;
-                }
-            }
-        }
-
-        match self.pre_existing_path {
-            Some(pre_existing_path) => pre_existing_path != FileIdentity::from_metadata(metadata),
-            None => true,
-        }
-    }
+    pub file_system_permissions_enforcement: FileSystemPermissionsEnforcement,
 }
 
 /// Wrap a command with bubblewrap so the filesystem is read-only by default,
@@ -247,8 +136,7 @@ pub(crate) fn create_bwrap_command_args(
             Ok(BwrapArgs {
                 args: command,
                 preserved_files: Vec::new(),
-                synthetic_mount_targets: Vec::new(),
-                protected_create_targets: Vec::new(),
+                file_system_permissions_enforcement: FileSystemPermissionsEnforcement::default(),
             })
         } else {
             Ok(create_bwrap_flags_full_filesystem(command, options))
@@ -288,8 +176,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
     BwrapArgs {
         args,
         preserved_files: Vec::new(),
-        synthetic_mount_targets: Vec::new(),
-        protected_create_targets: Vec::new(),
+        file_system_permissions_enforcement: FileSystemPermissionsEnforcement::default(),
     }
 }
 
@@ -304,8 +191,7 @@ fn create_bwrap_flags(
     let BwrapArgs {
         args: filesystem_args,
         preserved_files,
-        synthetic_mount_targets,
-        protected_create_targets,
+        file_system_permissions_enforcement,
     } = create_filesystem_args(
         file_system_sandbox_policy,
         sandbox_policy_cwd,
@@ -343,8 +229,7 @@ fn create_bwrap_flags(
     Ok(BwrapArgs {
         args,
         preserved_files,
-        synthetic_mount_targets,
-        protected_create_targets,
+        file_system_permissions_enforcement,
     })
 }
 
@@ -513,8 +398,7 @@ fn create_filesystem_args(
     let mut bwrap_args = BwrapArgs {
         args,
         preserved_files: Vec::new(),
-        synthetic_mount_targets: Vec::new(),
-        protected_create_targets: Vec::new(),
+        file_system_permissions_enforcement: FileSystemPermissionsEnforcement::default(),
     };
     let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
     for writable_root in &writable_roots {
@@ -586,7 +470,7 @@ fn create_filesystem_args(
             read_only_subpaths = remap_paths_for_symlink_target(read_only_subpaths, root, target);
         }
         append_protected_create_targets_for_writable_root(
-            &mut bwrap_args,
+            &mut bwrap_args.file_system_permissions_enforcement,
             &protected_metadata_names,
             root,
             symlink_target.as_deref(),
@@ -627,74 +511,6 @@ fn create_filesystem_args(
     }
 
     Ok(bwrap_args)
-}
-
-fn append_protected_create_targets_for_writable_root(
-    bwrap_args: &mut BwrapArgs,
-    protected_metadata_names: &[String],
-    root: &Path,
-    symlink_target: Option<&Path>,
-    read_only_subpaths: &[PathBuf],
-) {
-    for name in protected_metadata_names {
-        let mut path = root.join(name);
-        if let Some(target) = symlink_target
-            && let Ok(relative_path) = path.strip_prefix(root)
-        {
-            path = target.join(relative_path);
-        }
-        if read_only_subpaths.iter().any(|subpath| subpath == &path) || path.exists() {
-            continue;
-        }
-        bwrap_args
-            .protected_create_targets
-            .push(ProtectedCreateTarget::missing(&path));
-    }
-}
-
-fn append_metadata_path_masks_for_writable_root(
-    read_only_subpaths: &mut Vec<PathBuf>,
-    root: &Path,
-    mount_root: &Path,
-    protected_metadata_names: &[String],
-) {
-    for name in protected_metadata_names {
-        let path = root.join(name);
-        if should_leave_missing_git_for_parent_repo_discovery(mount_root, name) {
-            continue;
-        }
-        if !read_only_subpaths.iter().any(|subpath| subpath == &path) {
-            read_only_subpaths.push(path);
-        }
-    }
-}
-
-fn should_leave_missing_git_for_parent_repo_discovery(mount_root: &Path, name: &str) -> bool {
-    let path = mount_root.join(name);
-    name == ".git"
-        && matches!(
-            path.symlink_metadata(),
-            Err(err) if err.kind() == io::ErrorKind::NotFound
-        )
-        && mount_root
-            .ancestors()
-            .skip(1)
-            .any(ancestor_has_git_metadata)
-}
-
-fn ancestor_has_git_metadata(ancestor: &Path) -> bool {
-    let git_path = ancestor.join(".git");
-    let Ok(metadata) = git_path.symlink_metadata() else {
-        return false;
-    };
-    if metadata.is_dir() {
-        return git_path.join("HEAD").symlink_metadata().is_ok();
-    }
-    if metadata.is_file() {
-        return fs::read_to_string(git_path)
-            .is_ok_and(|contents| contents.trim_start().starts_with("gitdir:"));
-    }
-    false
 }
 
 fn expand_unreadable_globs_with_ripgrep(
@@ -1095,6 +911,7 @@ fn append_missing_read_only_subpath_args(bwrap_args: &mut BwrapArgs, path: &Path
     if path.file_name().is_some_and(is_protected_metadata_name) {
         append_empty_directory_args(bwrap_args, path);
         bwrap_args
+            .file_system_permissions_enforcement
             .synthetic_mount_targets
             .push(SyntheticMountTarget::missing_empty_directory(path));
         return Ok(());
@@ -1106,6 +923,7 @@ fn append_missing_read_only_subpath_args(bwrap_args: &mut BwrapArgs, path: &Path
 fn append_missing_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
     append_empty_file_bind_data_args(bwrap_args, path)?;
     bwrap_args
+        .file_system_permissions_enforcement
         .synthetic_mount_targets
         .push(SyntheticMountTarget::missing(path));
     Ok(())
@@ -1118,6 +936,7 @@ fn append_existing_empty_file_bind_data_args(
 ) -> Result<()> {
     append_empty_file_bind_data_args(bwrap_args, path)?;
     bwrap_args
+        .file_system_permissions_enforcement
         .synthetic_mount_targets
         .push(SyntheticMountTarget::existing_empty_file(path, metadata));
     Ok(())
@@ -1130,6 +949,7 @@ fn append_existing_empty_directory_args(
 ) {
     append_empty_directory_args(bwrap_args, path);
     bwrap_args
+        .file_system_permissions_enforcement
         .synthetic_mount_targets
         .push(SyntheticMountTarget::existing_empty_directory(
             path, metadata,
@@ -1777,7 +1597,10 @@ mod tests {
         );
         let metadata = std::fs::symlink_metadata(&dot_git).expect("stat .git");
         assert!(
-            !args.synthetic_mount_targets[0].should_remove_after_bwrap(&metadata),
+            !args
+                .file_system_permissions_enforcement
+                .synthetic_mount_targets[0]
+                .should_remove_after_bwrap(&metadata),
             "pre-existing empty preserved files must not be cleaned up as synthetic targets",
         );
     }
@@ -2552,7 +2375,11 @@ mod tests {
         let blocked_file_str = path_to_string(blocked_file.as_path());
 
         assert_eq!(args.preserved_files.len(), 1);
-        assert!(args.synthetic_mount_targets.is_empty());
+        assert!(
+            args.file_system_permissions_enforcement
+                .synthetic_mount_targets
+                .is_empty()
+        );
         assert!(args.args.windows(5).any(|window| {
             window[0] == "--perms"
                 && window[1] == "000"
@@ -2692,14 +2519,16 @@ mod tests {
     }
 
     fn synthetic_mount_target_paths(args: &BwrapArgs) -> Vec<PathBuf> {
-        args.synthetic_mount_targets
+        args.file_system_permissions_enforcement
+            .synthetic_mount_targets
             .iter()
             .map(|target| target.path().to_path_buf())
             .collect()
     }
 
     fn protected_create_target_paths(args: &BwrapArgs) -> Vec<PathBuf> {
-        args.protected_create_targets
+        args.file_system_permissions_enforcement
+            .protected_create_targets
             .iter()
             .map(|target| target.path().to_path_buf())
             .collect()
