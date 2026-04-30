@@ -265,10 +265,11 @@ async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread(
 
 #[test]
 fn hooks_needing_review_startup_warning_snapshot() {
-    let message = startup_prompts::hooks_needing_review_warning(2)
+    let message = startup_prompts::hooks_needing_review_warning(/*count*/ 2)
         .expect("review-needed hooks should produce a startup warning");
-    let rendered =
-        lines_to_single_string(&history_cell::new_warning_event(message).display_lines(80));
+    let rendered = lines_to_single_string(
+        &history_cell::new_warning_event(message).display_lines(/*width*/ 80),
+    );
 
     assert_app_snapshot!("hooks_needing_review_startup_warning", rendered);
 }
