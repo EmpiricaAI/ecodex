@@ -4,7 +4,6 @@ expression: "render_lines(&view, 44)"
 ---
                                             
   PreToolUse hooks                          
-  Review new or changed hooks, then turn t  
                                             
   [x] Hook 1                                
                                             

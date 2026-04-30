@@ -483,6 +483,8 @@ fn command_hook_hash(
     timeout_sec: u64,
     status_message: Option<&str>,
 ) -> String {
+    // Hash normalized handler fields instead of source text so equivalent hooks from
+    // config TOML and hooks.json converge on the same trust identity.
     let TomlValue::Table(mut table) = TomlValue::Table(Default::default()) else {
         unreachable!("TOML table construction should stay a table");
     };

@@ -242,27 +242,46 @@ impl HooksBrowserView {
         ]
     }
 
-    fn handler_header_lines(event_name: HookEventName) -> Vec<Line<'static>> {
-        vec![
-            format!("{} hooks", event_label(event_name)).bold().into(),
-            "Review new or changed hooks, then turn them on or off."
-                .dim()
-                .into(),
-        ]
+    fn handler_header_lines(
+        event_name: HookEventName,
+        review_needed_count: usize,
+    ) -> Vec<Line<'static>> {
+        let mut lines = vec![format!("{} hooks", event_label(event_name)).bold().into()];
+        match review_needed_count {
+            0 => {}
+            1 => lines.push("1 hook needs review before it can run.".dim().into()),
+            count => lines.push(
+                format!("{count} hooks need review before they can run.")
+                    .dim()
+                    .into(),
+            ),
+        }
+        lines
+    }
+
+    fn review_needed_count(&self, event_name: HookEventName) -> usize {
+        self.handlers_for_event(event_name)
+            .filter(|hook| hook_needs_review(hook))
+            .count()
     }
 
     fn event_table_lines(&self) -> Vec<Line<'static>> {
+        let rows = self.event_rows();
+        let show_review = rows.iter().any(|row| row.needs_review > 0);
         let mut lines = Vec::new();
-        lines.push(Line::from(vec![
+        let mut header = vec![
             format!("{:<EVENT_COLUMN_WIDTH$}", "Event").into(),
             format!("{:<COUNT_COLUMN_WIDTH$}", "Installed").into(),
             format!("{:<COUNT_COLUMN_WIDTH$}", "Active").into(),
-            format!("{:<COUNT_COLUMN_WIDTH$}", "Review").into(),
-            "Description".into(),
-        ]));
-        for (idx, row) in self.event_rows().into_iter().enumerate() {
+        ];
+        if show_review {
+            header.push(format!("{:<COUNT_COLUMN_WIDTH$}", "Review").into());
+        }
+        header.push("Description".into());
+        lines.push(Line::from(header));
+        for (idx, row) in rows.into_iter().enumerate() {
             if self.state.selected_idx == Some(idx) {
-                lines.push(Line::from(vec![
+                let mut row_line = vec![
                     Span::from(format!(
                         "{:<EVENT_COLUMN_WIDTH$}",
                         event_label(row.event_name)
@@ -275,22 +294,32 @@ impl HooksBrowserView {
                     Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.active))
                         .cyan()
                         .bold(),
-                    Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.needs_review))
-                        .cyan()
-                        .bold(),
-                    Span::from(event_description(row.event_name)).cyan().bold(),
-                ]));
+                ];
+                if show_review {
+                    row_line.push(
+                        Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.needs_review))
+                            .cyan()
+                            .bold(),
+                    );
+                }
+                row_line.push(Span::from(event_description(row.event_name)).cyan().bold());
+                lines.push(Line::from(row_line));
             } else {
-                lines.push(Line::from(vec![
+                let mut row_line = vec![
                     Span::from(format!(
                         "{:<EVENT_COLUMN_WIDTH$}",
                         event_label(row.event_name)
                     )),
                     Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.installed)).dim(),
                     Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.active)).dim(),
-                    Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.needs_review)).dim(),
-                    Span::from(event_description(row.event_name)).dim(),
-                ]));
+                ];
+                if show_review {
+                    row_line.push(
+                        Span::from(format!("{:<COUNT_COLUMN_WIDTH$}", row.needs_review)).dim(),
+                    );
+                }
+                row_line.push(Span::from(event_description(row.event_name)).dim());
+                lines.push(Line::from(row_line));
             }
         }
         lines
@@ -528,11 +557,14 @@ impl Renderable for HooksBrowserView {
             HooksBrowserPage::Events => self.event_page_lines().len(),
             HooksBrowserPage::Handlers(event_name) => {
                 let row_count = self.handler_row_lines(event_name, content_width).len();
+                let header_line_count =
+                    Self::handler_header_lines(event_name, self.review_needed_count(event_name))
+                        .len();
                 if row_count == 0 {
-                    Self::handler_header_lines(event_name).len() + 2
+                    header_line_count + 2
                 } else {
                     let visible_row_count = row_count.min(MAX_POPUP_ROWS);
-                    Self::handler_header_lines(event_name).len()
+                    header_line_count
                         + 1
                         + visible_row_count
                         + 1
@@ -555,7 +587,8 @@ impl Renderable for HooksBrowserView {
         let lines = match self.page {
             HooksBrowserPage::Events => self.event_page_lines(),
             HooksBrowserPage::Handlers(event_name) => {
-                let mut lines = Self::handler_header_lines(event_name);
+                let mut lines =
+                    Self::handler_header_lines(event_name, self.review_needed_count(event_name));
                 let rows = self.handler_row_lines(event_name, width);
                 if rows.is_empty() {
                     lines.push(Line::default());
@@ -869,6 +902,34 @@ mod tests {
     fn renders_event_browser() {
         let view = view();
         assert_snapshot!("hooks_browser_events", render_lines(&view, /*width*/ 112));
+    }
+
+    #[test]
+    fn renders_event_browser_with_review_column_when_needed() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut untrusted_hook = hook(
+            "path:untrusted",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/pre-tool-use-check.sh",
+            /*enabled*/ false,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        untrusted_hook.trusted_hash = None;
+        untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        let view = HooksBrowserView::new(
+            vec![untrusted_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+
+        assert_snapshot!(
+            "hooks_browser_events_with_review_column",
+            render_lines(&view, /*width*/ 112)
+        );
     }
 
     #[test]

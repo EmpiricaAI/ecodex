@@ -4,7 +4,6 @@ expression: "render_lines(&view, 112)"
 ---
                                                                                                                 
   PermissionRequest hooks                                                                                       
-  Review new or changed hooks, then turn them on or off.                                                        
                                                                                                                 
   [x] Hook 1                                                                                                    
                                                                                                                 

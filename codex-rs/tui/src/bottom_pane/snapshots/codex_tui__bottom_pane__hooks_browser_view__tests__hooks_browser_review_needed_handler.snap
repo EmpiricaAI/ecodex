@@ -4,7 +4,7 @@ expression: "render_lines(&view, 112)"
 ---
                                                                                                                 
   PreToolUse hooks                                                                                              
-  Review new or changed hooks, then turn them on or off.                                                        
+  1 hook needs review before it can run.                                                                        
                                                                                                                 
   [!] Hook 1 · new                                                                                              
                                                                                                                 
