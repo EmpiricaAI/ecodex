@@ -952,6 +952,7 @@ fn command_execution_started_event(turn_id: &str, item: &ThreadItem) -> Option<V
         process_id,
         source,
         command_actions,
+        started_at_ms,
         ..
     } = item
     else {
@@ -973,7 +974,7 @@ fn command_execution_started_event(turn_id: &str, item: &ThreadItem) -> Option<V
                 .collect(),
             source: source.to_core(),
             interaction_input: None,
-            started_at_ms: None,
+            started_at_ms: *started_at_ms,
         }),
     }])
 }

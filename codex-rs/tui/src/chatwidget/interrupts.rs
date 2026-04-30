@@ -193,6 +193,7 @@ mod tests {
             started_at_ms: None,
             source: ExecCommandSource::Agent,
             interaction_input: None,
+            started_at_ms: None,
         }
     }
 

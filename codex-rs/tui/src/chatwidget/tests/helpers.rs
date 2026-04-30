@@ -649,7 +649,7 @@ pub(super) fn end_exec(
         source,
         interaction_input,
         process_id,
-        ..
+        started_at_ms,
     } = begin_event;
     chat.handle_codex_event(Event {
         id: call_id.clone(),
@@ -662,7 +662,7 @@ pub(super) fn end_exec(
             parsed_cmd,
             source,
             interaction_input,
-            started_at_ms: None,
+            started_at_ms,
             completed_at_ms: None,
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),

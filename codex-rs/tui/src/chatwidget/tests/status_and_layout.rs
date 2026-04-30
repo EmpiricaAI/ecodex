@@ -2834,6 +2834,8 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             started_at_ms: None,
             completed_at_ms: None,
             interaction_input: None,
+            started_at_ms: None,
+            completed_at_ms: None,
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: String::new(),
