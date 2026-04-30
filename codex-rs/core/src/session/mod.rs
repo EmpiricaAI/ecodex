@@ -1235,11 +1235,21 @@ impl Session {
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
         let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
+        let reference_context_item = reconstructed_rollout.reference_context_item.clone();
         self.replace_history(
             reconstructed_rollout.history,
             reconstructed_rollout.reference_context_item,
         )
         .await;
+        if let Some(reference_context_item) = reference_context_item {
+            let mut state = self.state.lock().await;
+            if let Ok(cwd) = AbsolutePathBuf::try_from(reference_context_item.cwd.clone()) {
+                state.session_configuration.cwd = cwd;
+            }
+            if let Some(environments) = reference_context_item.environments {
+                state.session_configuration.environments = environments;
+            }
+        }
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
         previous_turn_settings

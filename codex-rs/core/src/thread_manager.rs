@@ -613,10 +613,13 @@ impl ThreadManager {
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        let environments = default_thread_environment_selections(
-            self.state.environment_manager.as_ref(),
-            &config.cwd,
-        );
+        let environments = restore_thread_environment_selections_from_history(&initial_history)
+            .unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.state.environment_manager.as_ref(),
+                    &config.cwd,
+                )
+            });
         Box::pin(self.state.spawn_thread(
             config,
             thread_store,
@@ -668,10 +671,13 @@ impl ThreadManager {
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        let environments = default_thread_environment_selections(
-            self.state.environment_manager.as_ref(),
-            &config.cwd,
-        );
+        let environments = restore_thread_environment_selections_from_history(&initial_history)
+            .unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.state.environment_manager.as_ref(),
+                    &config.cwd,
+                )
+            });
         Box::pin(self.state.spawn_thread(
             config,
             thread_store,
@@ -810,10 +816,13 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
-        let environments = default_thread_environment_selections(
-            self.state.environment_manager.as_ref(),
-            &config.cwd,
-        );
+        let environments = restore_thread_environment_selections_from_history(&history)
+            .unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.state.environment_manager.as_ref(),
+                    &config.cwd,
+                )
+            });
         Box::pin(self.state.spawn_thread(
             config,
             thread_store,
@@ -962,8 +971,13 @@ impl ThreadManagerState {
             inherited_exec_policy,
         } = options;
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        let environments =
-            default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
+        let environments = restore_thread_environment_selections_from_history(&initial_history)
+            .unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.environment_manager.as_ref(),
+                    &config.cwd,
+                )
+            });
         Box::pin(self.spawn_thread_with_source(
             config,
             thread_store,
@@ -996,9 +1010,14 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
-        let environments = environments.unwrap_or_else(|| {
-            default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
-        });
+        let environments = environments
+            .or_else(|| restore_thread_environment_selections_from_history(&initial_history))
+            .unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.environment_manager.as_ref(),
+                    &config.cwd,
+                )
+            });
         Box::pin(self.spawn_thread_with_source(
             config,
             thread_store,
@@ -1363,6 +1382,22 @@ fn append_interrupted_boundary(
             InitialHistory::Forked(resumed.history)
         }
     }
+}
+
+fn restore_thread_environment_selections_from_history(
+    history: &InitialHistory,
+) -> Option<Vec<TurnEnvironmentSelection>> {
+    history
+        .get_rollout_items()
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::TurnContext(context) => context
+                .environments
+                .clone()
+                .filter(|environments| !environments.is_empty()),
+            _ => None,
+        })
 }
 
 #[cfg(test)]

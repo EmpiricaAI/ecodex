@@ -331,6 +331,12 @@ impl TurnContext {
             turn_id: Some(self.sub_id.clone()),
             trace_id: self.trace_id.clone(),
             cwd: self.cwd.to_path_buf(),
+            environments: (!self.environments.is_empty()).then(|| {
+                self.environments
+                    .iter()
+                    .map(TurnEnvironment::selection)
+                    .collect()
+            }),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
