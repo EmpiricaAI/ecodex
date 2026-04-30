@@ -315,10 +315,16 @@ impl ToolHandler for UnifiedExecHandler {
                     }
                 };
 
+                let apply_patch_sandbox = target_environment.environment.is_remote().then(|| {
+                    context.turn.file_system_sandbox_context_for_cwd(
+                        &cwd, /*additional_permissions*/ None,
+                    )
+                });
                 if let Some(output) = intercept_apply_patch(
                     &command,
                     &cwd,
-                    fs.as_ref(),
+                    fs.clone(),
+                    apply_patch_sandbox,
                     context.session.clone(),
                     context.turn.clone(),
                     Some(&tracker),

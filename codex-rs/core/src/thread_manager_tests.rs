@@ -440,16 +440,20 @@ async fn resume_and_fork_restore_thread_environments_from_rollout() {
         .thread
         .rollout_path()
         .expect("source rollout path should exist");
-    let InitialHistory::Resumed(persisted_history) = RolloutRecorder::get_rollout_history(&rollout_path)
-        .await
-        .expect("read source rollout history")
+    let InitialHistory::Resumed(persisted_history) =
+        RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .expect("read source rollout history")
     else {
         panic!("expected resumed source rollout history");
     };
-    let persisted_turn_context = persisted_history.history.iter().find_map(|item| match item {
-        RolloutItem::TurnContext(ctx) => Some(ctx.clone()),
-        _ => None,
-    });
+    let persisted_turn_context = persisted_history
+        .history
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::TurnContext(ctx) => Some(ctx.clone()),
+            _ => None,
+        });
     assert_eq!(
         persisted_turn_context
             .as_ref()
@@ -461,16 +465,21 @@ async fn resume_and_fork_restore_thread_environments_from_rollout() {
         .shutdown_and_wait()
         .await
         .expect("shutdown source thread before resume");
-    let InitialHistory::Resumed(post_shutdown_history) = RolloutRecorder::get_rollout_history(&rollout_path)
-        .await
-        .expect("read post-shutdown source rollout history")
+    let InitialHistory::Resumed(post_shutdown_history) =
+        RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .expect("read post-shutdown source rollout history")
     else {
         panic!("expected resumed post-shutdown source rollout history");
     };
-    let post_shutdown_turn_context = post_shutdown_history.history.iter().find_map(|item| match item {
-        RolloutItem::TurnContext(ctx) => Some(ctx.clone()),
-        _ => None,
-    });
+    let post_shutdown_turn_context =
+        post_shutdown_history
+            .history
+            .iter()
+            .find_map(|item| match item {
+                RolloutItem::TurnContext(ctx) => Some(ctx.clone()),
+                _ => None,
+            });
     assert_eq!(
         post_shutdown_turn_context
             .as_ref()

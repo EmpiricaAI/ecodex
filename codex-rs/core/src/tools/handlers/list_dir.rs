@@ -1,19 +1,24 @@
 use std::collections::VecDeque;
 use std::ffi::OsStr;
-use std::fs::FileType;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::permissions::ReadDenyMatcher;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
-use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::resolve_environment_id_argument;
+use crate::tools::handlers::resolve_process_tool_environment;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -39,6 +44,8 @@ fn default_depth() -> usize {
 #[derive(Deserialize)]
 struct ListDirArgs {
     dir_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment_id: Option<String>,
     #[serde(default = "default_offset")]
     offset: usize,
     #[serde(default = "default_limit")]
@@ -66,10 +73,12 @@ impl ToolHandler for ListDirHandler {
             }
         };
 
+        let environment_id = resolve_environment_id_argument(&arguments)?;
         let args: ListDirArgs = parse_arguments(&arguments)?;
 
         let ListDirArgs {
             dir_path,
+            environment_id: _,
             offset,
             limit,
             depth,
@@ -94,16 +103,22 @@ impl ToolHandler for ListDirHandler {
         }
 
         let path = PathBuf::from(&dir_path);
-        if !path.is_absolute() {
+        let path = AbsolutePathBuf::from_absolute_path_checked(&path).map_err(|_| {
+            FunctionCallError::RespondToModel("dir_path must be an absolute path".to_string())
+        })?;
+        let Some(target_environment) =
+            resolve_process_tool_environment(&turn, environment_id.as_deref())?
+        else {
             return Err(FunctionCallError::RespondToModel(
-                "dir_path must be an absolute path".to_string(),
+                "list_dir is unavailable in this session".to_string(),
             ));
-        }
+        };
         let file_system_sandbox_policy = turn.file_system_sandbox_policy();
-        let read_deny_matcher = ReadDenyMatcher::new(&file_system_sandbox_policy, &turn.cwd);
+        let read_deny_matcher =
+            ReadDenyMatcher::new(&file_system_sandbox_policy, &target_environment.cwd);
         if read_deny_matcher
             .as_ref()
-            .is_some_and(|matcher| matcher.is_read_denied(&path))
+            .is_some_and(|matcher| matcher.is_read_denied(path.as_path()))
         {
             return Err(FunctionCallError::RespondToModel(format!(
                 "{DENY_READ_POLICY_MESSAGE}: `{}`",
@@ -111,9 +126,22 @@ impl ToolHandler for ListDirHandler {
             )));
         }
 
-        let entries =
-            list_dir_slice_with_policy(&path, offset, limit, depth, read_deny_matcher.as_ref())
-                .await?;
+        let sandbox = target_environment.environment.is_remote().then(|| {
+            turn.file_system_sandbox_context_for_cwd(
+                &target_environment.cwd,
+                /*additional_permissions*/ None,
+            )
+        });
+        let entries = list_dir_slice_with_policy(
+            target_environment.environment.get_filesystem(),
+            &path,
+            offset,
+            limit,
+            depth,
+            read_deny_matcher.as_ref(),
+            sandbox.as_ref(),
+        )
+        .await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
@@ -122,14 +150,25 @@ impl ToolHandler for ListDirHandler {
 }
 
 async fn list_dir_slice_with_policy(
-    path: &Path,
+    fs: Arc<dyn ExecutorFileSystem>,
+    path: &AbsolutePathBuf,
     offset: usize,
     limit: usize,
     depth: usize,
     read_deny_matcher: Option<&ReadDenyMatcher>,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
-    collect_entries(path, Path::new(""), depth, read_deny_matcher, &mut entries).await?;
+    collect_entries(
+        fs,
+        path,
+        Path::new(""),
+        depth,
+        read_deny_matcher,
+        sandbox,
+        &mut entries,
+    )
+    .await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -162,47 +201,47 @@ async fn list_dir_slice_with_policy(
 }
 
 async fn collect_entries(
-    dir_path: &Path,
+    fs: Arc<dyn ExecutorFileSystem>,
+    dir_path: &AbsolutePathBuf,
     relative_prefix: &Path,
     depth: usize,
     read_deny_matcher: Option<&ReadDenyMatcher>,
+    sandbox: Option<&FileSystemSandboxContext>,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
-    queue.push_back((dir_path.to_path_buf(), relative_prefix.to_path_buf(), depth));
+    queue.push_back((dir_path.clone(), relative_prefix.to_path_buf(), depth));
 
     while let Some((current_dir, prefix, remaining_depth)) = queue.pop_front() {
-        let mut read_dir = fs::read_dir(&current_dir).await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
-        })?;
-
         let mut dir_entries = Vec::new();
 
-        while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
-        })? {
-            let entry_path = entry.path();
+        for entry in fs
+            .read_directory(&current_dir, sandbox)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
+            })?
+        {
+            let entry_path = current_dir.join(&entry.file_name);
             if let Some(read_deny_matcher) = read_deny_matcher
-                && read_deny_matcher.is_read_denied(&entry_path)
+                && read_deny_matcher.is_read_denied(entry_path.as_path())
             {
                 continue;
             }
-
-            let file_type = entry.file_type().await.map_err(|err| {
+            let metadata = fs.get_metadata(&entry_path, sandbox).await.map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to inspect entry: {err}"))
             })?;
 
-            let file_name = entry.file_name();
             let relative_path = if prefix.as_os_str().is_empty() {
-                PathBuf::from(&file_name)
+                PathBuf::from(&entry.file_name)
             } else {
-                prefix.join(&file_name)
+                prefix.join(&entry.file_name)
             };
 
-            let display_name = format_entry_component(&file_name);
+            let display_name = format_entry_component(OsStr::new(&entry.file_name));
             let display_depth = prefix.components().count();
             let sort_key = format_entry_name(&relative_path);
-            let kind = DirEntryKind::from(&file_type);
+            let kind = DirEntryKind::from(&metadata);
             dir_entries.push((
                 entry_path,
                 relative_path,
@@ -275,13 +314,13 @@ enum DirEntryKind {
     Other,
 }
 
-impl From<&FileType> for DirEntryKind {
-    fn from(file_type: &FileType) -> Self {
-        if file_type.is_symlink() {
+impl From<&FileMetadata> for DirEntryKind {
+    fn from(metadata: &FileMetadata) -> Self {
+        if metadata.is_symlink {
             DirEntryKind::Symlink
-        } else if file_type.is_dir() {
+        } else if metadata.is_directory {
             DirEntryKind::Directory
-        } else if file_type.is_file() {
+        } else if metadata.is_file {
             DirEntryKind::File
         } else {
             DirEntryKind::Other

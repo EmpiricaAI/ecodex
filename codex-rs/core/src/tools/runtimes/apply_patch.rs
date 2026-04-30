@@ -18,6 +18,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
+use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -33,11 +34,12 @@ use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
-#[derive(Debug)]
 pub struct ApplyPatchRequest {
     pub action: ApplyPatchAction,
+    pub file_system: Arc<dyn ExecutorFileSystem>,
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
@@ -77,7 +79,7 @@ impl ApplyPatchRuntime {
             effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
         Some(FileSystemSandboxContext {
             permissions,
-            cwd: Some(attempt.sandbox_cwd.clone()),
+            cwd: Some(req.action.cwd.clone()),
             windows_sandbox_level: attempt.windows_sandbox_level,
             windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
             use_legacy_landlock: attempt.use_legacy_landlock,
@@ -189,13 +191,10 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx,
+        _ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let turn_environment = ctx.turn.primary_environment().ok_or_else(|| {
-            ToolError::Rejected("apply_patch is unavailable in this session".to_string())
-        })?;
         let started_at = Instant::now();
-        let fs = turn_environment.environment.get_filesystem();
+        let fs = req.file_system.clone();
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();

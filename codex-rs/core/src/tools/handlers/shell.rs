@@ -520,10 +520,17 @@ impl ShellHandler {
         }
 
         // Intercept apply_patch if present.
+        let apply_patch_sandbox = target_environment.environment.is_remote().then(|| {
+            turn.file_system_sandbox_context_for_cwd(
+                &exec_params.cwd,
+                /*additional_permissions*/ None,
+            )
+        });
         if let Some(output) = intercept_apply_patch(
             &exec_params.command,
             &exec_params.cwd,
-            fs.as_ref(),
+            fs.clone(),
+            apply_patch_sandbox,
             session.clone(),
             turn.clone(),
             Some(&tracker),

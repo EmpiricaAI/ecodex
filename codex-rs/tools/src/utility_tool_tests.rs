@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 #[test]
 fn list_dir_tool_matches_expected_spec() {
     assert_eq!(
-        create_list_dir_tool(),
+        create_list_dir_tool(ListDirToolOptions {
+            include_environment_id: false,
+        }),
         ToolSpec::Function(ResponsesApiTool {
             name: "list_dir".to_string(),
             description:

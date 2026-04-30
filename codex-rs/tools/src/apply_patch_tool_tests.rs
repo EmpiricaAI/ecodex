@@ -24,7 +24,9 @@ fn create_apply_patch_freeform_tool_matches_expected_spec() {
 #[test]
 fn create_apply_patch_json_tool_matches_expected_spec() {
     assert_eq!(
-        create_apply_patch_json_tool(),
+        create_apply_patch_json_tool(ApplyPatchToolOptions {
+            include_environment_id: false,
+        }),
         ToolSpec::Function(ResponsesApiTool {
             name: "apply_patch".to_string(),
             description: APPLY_PATCH_JSON_TOOL_DESCRIPTION.to_string(),

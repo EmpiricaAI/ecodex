@@ -3,8 +3,13 @@ use crate::ResponsesApiTool;
 use crate::ToolSpec;
 use std::collections::BTreeMap;
 
-pub fn create_list_dir_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListDirToolOptions {
+    pub include_environment_id: bool,
+}
+
+pub fn create_list_dir_tool(options: ListDirToolOptions) -> ToolSpec {
+    let mut properties = BTreeMap::from([
         (
             "dir_path".to_string(),
             JsonSchema::string(Some("Absolute path to the directory to list.".to_string())),
@@ -26,6 +31,14 @@ pub fn create_list_dir_tool() -> ToolSpec {
             )),
         ),
     ]);
+    if options.include_environment_id {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional environment id from the <environment_context> block. If omitted, uses the primary environment.".to_string(),
+            )),
+        );
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_dir".to_string(),

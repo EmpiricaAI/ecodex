@@ -109,11 +109,10 @@ pub(crate) fn resolve_process_tool_environment(
 ) -> Result<Option<ProcessToolEnvironment>, FunctionCallError> {
     if environment_id.is_none() && !turn.has_multiple_selected_environments() {
         return Ok(turn
-            .environment
-            .as_ref()
+            .primary_environment()
             .map(|environment| ProcessToolEnvironment {
-                environment: Arc::clone(environment),
-                cwd: turn.cwd.clone(),
+                environment: Arc::clone(&environment.environment),
+                cwd: environment.cwd.clone(),
             }));
     }
 

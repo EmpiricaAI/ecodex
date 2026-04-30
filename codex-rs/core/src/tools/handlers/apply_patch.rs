@@ -22,6 +22,8 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::resolve_environment_id_argument;
+use crate::tools::handlers::resolve_process_tool_environment;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::PostToolUsePayload;
@@ -258,6 +260,7 @@ fn apply_patch_payload_command(payload: &ToolPayload) -> Option<String> {
 async fn effective_patch_permissions(
     session: &Session,
     turn: &TurnContext,
+    cwd: &AbsolutePathBuf,
     action: &ApplyPatchAction,
 ) -> (
     Vec<AbsolutePathBuf>,
@@ -276,9 +279,9 @@ async fn effective_patch_permissions(
     );
     let effective_additional_permissions = apply_granted_turn_permissions(
         session,
-        turn.cwd.as_path(),
+        cwd.as_path(),
         crate::sandboxing::SandboxPermissions::UseDefault,
-        write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, &turn.cwd),
+        write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, cwd),
     )
     .await;
 
@@ -346,12 +349,12 @@ impl ToolHandler for ApplyPatchHandler {
             ..
         } = invocation;
 
-        let patch_input = match payload {
+        let patch_input = match &payload {
             ToolPayload::Function { arguments } => {
                 let args: ApplyPatchToolArgs = parse_arguments(&arguments)?;
                 args.input
             }
-            ToolPayload::Custom { input } => input,
+            ToolPayload::Custom { input } => input.clone(),
             _ => {
                 return Err(FunctionCallError::RespondToModel(
                     "apply_patch handler received unsupported payload".to_string(),
@@ -361,18 +364,24 @@ impl ToolHandler for ApplyPatchHandler {
 
         // Re-parse and verify the patch so we can compute changes and approval.
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
-        let cwd = turn.cwd.clone();
-        let command = vec!["apply_patch".to_string(), patch_input.clone()];
-        let Some(turn_environment) = turn.primary_environment() else {
+        let environment_id = match &payload {
+            ToolPayload::Function { arguments } => resolve_environment_id_argument(arguments)?,
+            ToolPayload::Custom { .. } => None,
+            _ => None,
+        };
+        let Some(process_environment) =
+            resolve_process_tool_environment(&turn, environment_id.as_deref())?
+        else {
             return Err(FunctionCallError::RespondToModel(
                 "apply_patch is unavailable in this session".to_string(),
             ));
         };
-        let fs = turn_environment.environment.get_filesystem();
-        let sandbox = turn_environment
-            .environment
-            .is_remote()
-            .then(|| turn.file_system_sandbox_context(/*additional_permissions*/ None));
+        let cwd = process_environment.cwd.clone();
+        let command = vec!["apply_patch".to_string(), patch_input.clone()];
+        let fs = process_environment.environment.get_filesystem();
+        let sandbox = process_environment.environment.is_remote().then(|| {
+            turn.file_system_sandbox_context_for_cwd(&cwd, /*additional_permissions*/ None)
+        });
         match codex_apply_patch::maybe_parse_apply_patch_verified(
             &command,
             &cwd,
@@ -383,7 +392,8 @@ impl ToolHandler for ApplyPatchHandler {
         {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
-                    effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
+                    effective_patch_permissions(session.as_ref(), turn.as_ref(), &cwd, &changes)
+                        .await;
                 match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
                     .await
                 {
@@ -405,6 +415,7 @@ impl ToolHandler for ApplyPatchHandler {
 
                         let req = ApplyPatchRequest {
                             action: apply.action,
+                            file_system: fs.clone(),
                             file_paths,
                             changes,
                             exec_approval_requirement: apply.exec_approval_requirement,
@@ -467,19 +478,21 @@ impl ToolHandler for ApplyPatchHandler {
 pub(crate) async fn intercept_apply_patch(
     command: &[String],
     cwd: &AbsolutePathBuf,
-    fs: &dyn ExecutorFileSystem,
+    fs: Arc<dyn ExecutorFileSystem>,
+    sandbox: Option<codex_exec_server::FileSystemSandboxContext>,
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    let sandbox = turn
-        .primary_environment()
-        .filter(|env| env.environment.is_remote())
-        .map(|_| turn.file_system_sandbox_context(/*additional_permissions*/ None));
-    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, sandbox.as_ref())
-        .await
+    match codex_apply_patch::maybe_parse_apply_patch_verified(
+        command,
+        cwd,
+        fs.as_ref(),
+        sandbox.as_ref(),
+    )
+    .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
@@ -491,7 +504,7 @@ pub(crate) async fn intercept_apply_patch(
                 )
                 .await;
             let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =
-                effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
+                effective_patch_permissions(session.as_ref(), turn.as_ref(), cwd, &changes).await;
             match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
                 .await
             {
@@ -512,6 +525,7 @@ pub(crate) async fn intercept_apply_patch(
 
                     let req = ApplyPatchRequest {
                         action: apply.action,
+                        file_system: fs.clone(),
                         file_paths: approval_keys,
                         changes,
                         exec_approval_requirement: apply.exec_approval_requirement,

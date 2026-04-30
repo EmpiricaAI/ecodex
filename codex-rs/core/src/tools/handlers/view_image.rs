@@ -15,6 +15,8 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::resolve_environment_id_argument;
+use crate::tools::handlers::resolve_process_tool_environment;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::protocol::EventMsg;
@@ -29,6 +31,8 @@ const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
 struct ViewImageArgs {
     path: String,
     detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -72,12 +76,18 @@ impl ToolHandler for ViewImageHandler {
             }
         };
 
+        let environment_id = resolve_environment_id_argument(&arguments)?;
         let args: ViewImageArgs = parse_arguments(&arguments)?;
+        let ViewImageArgs {
+            path,
+            detail,
+            environment_id: _,
+        } = args;
         // `view_image` accepts only its documented detail values: omit
         // `detail` for the default path or set it to `original`.
         // Other string values remain invalid rather than being silently
         // reinterpreted.
-        let detail = match args.detail.as_deref() {
+        let detail = match detail.as_deref() {
             None => None,
             Some("original") => Some(ViewImageDetail::Original),
             Some(detail) => {
@@ -87,16 +97,19 @@ impl ToolHandler for ViewImageHandler {
             }
         };
 
-        let abs_path = turn.resolve_path(Some(args.path));
-        let Some(environment) = turn.primary_environment() else {
+        let Some(environment) = resolve_process_tool_environment(&turn, environment_id.as_deref())?
+        else {
             return Err(FunctionCallError::RespondToModel(
                 "view_image is unavailable in this session".to_string(),
             ));
         };
-        let sandbox = environment
-            .environment
-            .is_remote()
-            .then(|| turn.file_system_sandbox_context(/*additional_permissions*/ None));
+        let abs_path = environment.cwd.join(path);
+        let sandbox = environment.environment.is_remote().then(|| {
+            turn.file_system_sandbox_context_for_cwd(
+                &environment.cwd,
+                /*additional_permissions*/ None,
+            )
+        });
 
         let metadata = environment
             .environment

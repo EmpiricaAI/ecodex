@@ -82,6 +82,13 @@ It is important to remember:
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApplyPatchToolArgs {
     pub input: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApplyPatchToolOptions {
+    pub include_environment_id: bool,
 }
 
 /// Returns a custom tool that can be used to edit files. Well-suited for GPT-5 models
@@ -99,13 +106,21 @@ pub fn create_apply_patch_freeform_tool() -> ToolSpec {
 }
 
 /// Returns a json tool that can be used to edit files. Should only be used with gpt-oss models
-pub fn create_apply_patch_json_tool() -> ToolSpec {
-    let properties = BTreeMap::from([(
+pub fn create_apply_patch_json_tool(options: ApplyPatchToolOptions) -> ToolSpec {
+    let mut properties = BTreeMap::from([(
         "input".to_string(),
         JsonSchema::string(Some(
             "The entire contents of the apply_patch command".to_string(),
         )),
     )]);
+    if options.include_environment_id {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional environment id from the <environment_context> block. If omitted, uses the primary environment.".to_string(),
+            )),
+        );
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: "apply_patch".to_string(),

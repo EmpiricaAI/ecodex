@@ -1,4 +1,6 @@
+use crate::ApplyPatchToolOptions;
 use crate::CommandToolOptions;
+use crate::ListDirToolOptions;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
@@ -335,7 +337,9 @@ pub fn build_tool_registry_plan(
             }
             ApplyPatchToolType::Function => {
                 plan.push_spec(
-                    create_apply_patch_json_tool(),
+                    create_apply_patch_json_tool(ApplyPatchToolOptions {
+                        include_environment_id: config.has_multiple_selected_environments,
+                    }),
                     /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
                 );
@@ -351,7 +355,9 @@ pub fn build_tool_registry_plan(
             .any(|tool| tool == "list_dir")
     {
         plan.push_spec(
-            create_list_dir_tool(),
+            create_list_dir_tool(ListDirToolOptions {
+                include_environment_id: config.has_multiple_selected_environments,
+            }),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
@@ -395,6 +401,7 @@ pub fn build_tool_registry_plan(
         plan.push_spec(
             create_view_image_tool(ViewImageToolOptions {
                 can_request_original_image_detail: config.can_request_original_image_detail,
+                include_environment_id: config.has_multiple_selected_environments,
             }),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
