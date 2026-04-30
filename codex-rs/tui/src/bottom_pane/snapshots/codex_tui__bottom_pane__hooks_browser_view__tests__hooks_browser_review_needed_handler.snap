@@ -6,14 +6,13 @@ expression: "render_lines(&view, 112)"
   PreToolUse hooks                                                                                              
   Review new or changed hooks, then turn them on or off.                                                        
                                                                                                                 
-  [x] Hook 1                                                                                                    
-  [x] Hook 2                                                                                                    
+  [!] Hook 1 · new                                                                                              
                                                                                                                 
   Event     PreToolUse                                                                                          
   Matcher   Bash                                                                                                
-  Source    Admin config                                                                                        
-  Command   /enterprise/hooks/pre-tool-use-2.sh                                                                 
+  Source    User config - /tmp/hooks.json                                                                       
+  Command   /tmp/pre-tool-use-check.sh                                                                          
   Timeout   30s                                                                                                 
-  Trust     Managed                                                                                             
+  Trust     New hook - review required                                                                          
                                                                                                                 
-  Managed hooks are always on; press esc to go back
+  Press t to trust; esc to go back

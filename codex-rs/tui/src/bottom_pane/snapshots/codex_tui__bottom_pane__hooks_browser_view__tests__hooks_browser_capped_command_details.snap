@@ -4,7 +4,7 @@ expression: "render_lines(&view, 44)"
 ---
                                             
   PreToolUse hooks                          
-  Turn hooks on or off. Your changes are s  
+  Review new or changed hooks, then turn t  
                                             
   [x] Hook 1                                
                                             
@@ -15,5 +15,6 @@ expression: "render_lines(&view, 44)"
             seven eight nine ten eleven     
             twelve thirteen fourteen…       
   Timeout   30s                             
+  Trust     Trusted                         
                                             
   Press space or enter to toggle; esc to go

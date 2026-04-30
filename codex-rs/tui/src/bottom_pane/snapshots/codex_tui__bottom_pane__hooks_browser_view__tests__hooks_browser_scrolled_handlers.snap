@@ -4,7 +4,7 @@ expression: "render_lines(&view, 112)"
 ---
                                                                                                                 
   PreToolUse hooks                                                                                              
-  Turn hooks on or off. Your changes are saved automatically.                                                   
+  Review new or changed hooks, then turn them on or off.                                                        
                                                                                                                 
   [x] Hook 2                                                                                                    
   [x] Hook 3                                                                                                    
@@ -20,5 +20,6 @@ expression: "render_lines(&view, 112)"
   Source    User config - /tmp/hooks.json                                                                       
   Command   /tmp/hook-8.sh                                                                                      
   Timeout   30s                                                                                                 
+  Trust     Trusted                                                                                             
                                                                                                                 
   Press space or enter to toggle; esc to go back
