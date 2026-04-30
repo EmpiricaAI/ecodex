@@ -163,6 +163,9 @@ impl ThreadScopedOutgoingMessageSender {
     }
 
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
+        self.outgoing
+            .analytics_events_client
+            .track_notification(notification.clone());
         if self.connection_ids.is_empty() {
             return;
         }
@@ -546,7 +549,7 @@ impl OutgoingMessageSender {
             targeted_connections = connection_ids.len(),
             "app-server event: {notification}"
         );
-        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
+        let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
         if connection_ids.is_empty() {
             if let Err(err) = self
                 .sender
@@ -580,7 +583,7 @@ impl OutgoingMessageSender {
         notification: ServerNotification,
     ) {
         tracing::trace!("app-server event: {notification}");
-        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
+        let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
         let (write_complete_tx, write_complete_rx) = oneshot::channel();
         if let Err(err) = self
             .sender
