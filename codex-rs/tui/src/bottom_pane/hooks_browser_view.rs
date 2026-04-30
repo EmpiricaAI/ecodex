@@ -661,6 +661,7 @@ mod tests {
     use codex_app_server_protocol::HookHandlerType;
     use codex_app_server_protocol::HookMetadata;
     use codex_app_server_protocol::HookSource;
+    use codex_app_server_protocol::HookTrustStatus;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use insta::assert_snapshot;
@@ -706,6 +707,7 @@ mod tests {
         is_managed: bool,
         display_order: i64,
     ) -> HookMetadata {
+        let current_hash = "sha256:current".to_string();
         HookMetadata {
             key: key.to_string(),
             event_name,
@@ -720,6 +722,13 @@ mod tests {
             plugin_id: plugin_id.map(str::to_string),
             display_order,
             enabled,
+            current_hash: current_hash.clone(),
+            trusted_hash: (!is_managed).then_some(current_hash),
+            trust_status: if is_managed {
+                HookTrustStatus::Managed
+            } else {
+                HookTrustStatus::Trusted
+            },
         }
     }
 
