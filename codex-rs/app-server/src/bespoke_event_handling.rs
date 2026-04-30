@@ -863,6 +863,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 status: DynamicToolCallStatus::InProgress,
                 content_items: None,
                 success: None,
+                started_at_ms: request.started_at_ms,
+                completed_at_ms: None,
                 duration_ms: None,
             };
             let notification = ItemStartedNotification {
@@ -916,6 +918,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                         .collect(),
                 ),
                 success: Some(response.success),
+                started_at_ms: response.started_at_ms,
+                completed_at_ms: response.completed_at_ms,
                 duration_ms,
             };
             let notification = ItemCompletedNotification {
@@ -961,6 +965,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: Some(begin_event.model),
                 reasoning_effort: Some(begin_event.reasoning_effort),
                 agents_states: HashMap::new(),
+                started_at_ms: begin_event.started_at_ms,
+                completed_at_ms: None,
+                duration_ms: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1000,6 +1007,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: Some(end_event.model),
                 reasoning_effort: Some(end_event.reasoning_effort),
                 agents_states,
+                started_at_ms: end_event.started_at_ms,
+                completed_at_ms: end_event.completed_at_ms,
+                duration_ms: end_event.duration_ms,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1022,6 +1032,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states: HashMap::new(),
+                started_at_ms: begin_event.started_at_ms,
+                completed_at_ms: None,
+                duration_ms: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1050,6 +1063,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states: [(receiver_id, received_status)].into_iter().collect(),
+                started_at_ms: end_event.started_at_ms,
+                completed_at_ms: end_event.completed_at_ms,
+                duration_ms: end_event.duration_ms,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1076,6 +1092,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states: HashMap::new(),
+                started_at_ms: begin_event.started_at_ms,
+                completed_at_ms: None,
+                duration_ms: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1114,6 +1133,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states,
+                started_at_ms: end_event.started_at_ms,
+                completed_at_ms: end_event.completed_at_ms,
+                duration_ms: end_event.duration_ms,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1135,6 +1157,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states: HashMap::new(),
+                started_at_ms: begin_event.started_at_ms,
+                completed_at_ms: None,
+                duration_ms: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1177,6 +1202,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states,
+                started_at_ms: end_event.started_at_ms,
+                completed_at_ms: end_event.completed_at_ms,
+                duration_ms: end_event.duration_ms,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1566,6 +1594,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     command_actions,
                     aggregated_output: None,
                     exit_code: None,
+                    started_at_ms: exec_command_begin_event.started_at_ms,
+                    completed_at_ms: None,
                     duration_ms: None,
                 };
                 let notification = ItemStartedNotification {
@@ -1947,6 +1977,8 @@ async fn start_command_execution_item(
                 command_actions,
                 aggregated_output: None,
                 exit_code: None,
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: None,
             },
         };
@@ -1991,6 +2023,8 @@ async fn complete_command_execution_item(
         command_actions,
         aggregated_output: None,
         exit_code: None,
+        started_at_ms: None,
+        completed_at_ms: None,
         duration_ms: None,
     };
     let notification = ItemCompletedNotification {
@@ -2532,6 +2566,9 @@ async fn on_file_change_request_approval_response(
                 id: item_id.clone(),
                 changes,
                 status,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             },
             event_turn_id.clone(),
             &outgoing,
@@ -2689,6 +2726,9 @@ fn collab_resume_begin_item(
         model: None,
         reasoning_effort: None,
         agents_states: HashMap::new(),
+        started_at_ms: begin_event.started_at_ms,
+        completed_at_ms: None,
+        duration_ms: None,
     }
 }
 
@@ -2715,6 +2755,9 @@ fn collab_resume_end_item(end_event: codex_protocol::protocol::CollabResumeEndEv
         model: None,
         reasoning_effort: None,
         agents_states,
+        started_at_ms: end_event.started_at_ms,
+        completed_at_ms: end_event.completed_at_ms,
+        duration_ms: end_event.duration_ms,
     }
 }
 
@@ -2733,6 +2776,8 @@ async fn construct_mcp_tool_call_notification(
         mcp_app_resource_uri: begin_event.mcp_app_resource_uri,
         result: None,
         error: None,
+        started_at_ms: begin_event.started_at_ms,
+        completed_at_ms: None,
         duration_ms: None,
     };
     ItemStartedNotification {
@@ -2781,6 +2826,8 @@ async fn construct_mcp_tool_call_end_notification(
         mcp_app_resource_uri: end_event.mcp_app_resource_uri,
         result,
         error,
+        started_at_ms: end_event.started_at_ms,
+        completed_at_ms: end_event.completed_at_ms,
         duration_ms,
     };
     ItemCompletedNotification {
@@ -3153,6 +3200,8 @@ mod tests {
                         command_actions: completion_item.command_actions.clone(),
                         aggregated_output: None,
                         exit_code: None,
+                        started_at_ms: None,
+                        completed_at_ms: None,
                         duration_ms: None,
                     }
                 );
@@ -3842,6 +3891,9 @@ mod tests {
             model: None,
             reasoning_effort: None,
             agents_states: HashMap::new(),
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         };
         assert_eq!(item, expected);
     }
@@ -3877,6 +3929,9 @@ mod tests {
             )]
             .into_iter()
             .collect(),
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         };
         assert_eq!(item, expected);
     }
@@ -4283,6 +4338,8 @@ mod tests {
                 mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
                 result: None,
                 error: None,
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: None,
             },
         };
@@ -4449,6 +4506,8 @@ mod tests {
                 mcp_app_resource_uri: None,
                 result: None,
                 error: None,
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: None,
             },
         };
@@ -4512,6 +4571,8 @@ mod tests {
                     })),
                 })),
                 error: None,
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: Some(0),
             },
         };
@@ -4558,6 +4619,8 @@ mod tests {
                 error: Some(McpToolCallError {
                     message: "boom".to_string(),
                 }),
+                started_at_ms: None,
+                completed_at_ms: None,
                 duration_ms: Some(1),
             },
         };

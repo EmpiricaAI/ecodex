@@ -5867,6 +5867,12 @@ pub enum ThreadItem {
         aggregated_output: Option<String>,
         /// The command's exit code.
         exit_code: Option<i32>,
+        /// Unix timestamp (in milliseconds) when command execution started, if known.
+        #[ts(type = "number | null")]
+        started_at_ms: Option<i64>,
+        /// Unix timestamp (in milliseconds) when command execution completed, if known.
+        #[ts(type = "number | null")]
+        completed_at_ms: Option<i64>,
         /// The duration of the command execution in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
@@ -5877,6 +5883,15 @@ pub enum ThreadItem {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
+        /// Unix timestamp (in milliseconds) when patch application started, if known.
+        #[ts(type = "number | null")]
+        started_at_ms: Option<i64>,
+        /// Unix timestamp (in milliseconds) when patch application completed, if known.
+        #[ts(type = "number | null")]
+        completed_at_ms: Option<i64>,
+        /// The duration of patch application in milliseconds.
+        #[ts(type = "number | null")]
+        duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -5891,6 +5906,12 @@ pub enum ThreadItem {
         mcp_app_resource_uri: Option<String>,
         result: Option<Box<McpToolCallResult>>,
         error: Option<McpToolCallError>,
+        /// Unix timestamp (in milliseconds) when MCP tool execution started, if known.
+        #[ts(type = "number | null")]
+        started_at_ms: Option<i64>,
+        /// Unix timestamp (in milliseconds) when MCP tool execution completed, if known.
+        #[ts(type = "number | null")]
+        completed_at_ms: Option<i64>,
         /// The duration of the MCP tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
@@ -5905,6 +5926,12 @@ pub enum ThreadItem {
         status: DynamicToolCallStatus,
         content_items: Option<Vec<DynamicToolCallOutputContentItem>>,
         success: Option<bool>,
+        /// Unix timestamp (in milliseconds) when dynamic tool execution started, if known.
+        #[ts(type = "number | null")]
+        started_at_ms: Option<i64>,
+        /// Unix timestamp (in milliseconds) when dynamic tool execution completed, if known.
+        #[ts(type = "number | null")]
+        completed_at_ms: Option<i64>,
         /// The duration of the dynamic tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
@@ -5931,6 +5958,15 @@ pub enum ThreadItem {
         reasoning_effort: Option<ReasoningEffort>,
         /// Last known status of the target agents, when available.
         agents_states: HashMap<String, CollabAgentState>,
+        /// Unix timestamp (in milliseconds) when collab tool execution started, if known.
+        #[ts(type = "number | null")]
+        started_at_ms: Option<i64>,
+        /// Unix timestamp (in milliseconds) when collab tool execution completed, if known.
+        #[ts(type = "number | null")]
+        completed_at_ms: Option<i64>,
+        /// The duration of the collab tool execution in milliseconds.
+        #[ts(type = "number | null")]
+        duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -5938,6 +5974,15 @@ pub enum ThreadItem {
         id: String,
         query: String,
         action: Option<WebSearchAction>,
+        /// Unix timestamp (in milliseconds) when web search execution started, if known.
+        #[ts(type = "number | null")]
+        started_at_ms: Option<i64>,
+        /// Unix timestamp (in milliseconds) when web search execution completed, if known.
+        #[ts(type = "number | null")]
+        completed_at_ms: Option<i64>,
+        /// The duration of the web search execution in milliseconds.
+        #[ts(type = "number | null")]
+        duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -5952,6 +5997,15 @@ pub enum ThreadItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         saved_path: Option<AbsolutePathBuf>,
+        /// Unix timestamp (in milliseconds) when image generation started, if known.
+        #[ts(type = "number | null")]
+        started_at_ms: Option<i64>,
+        /// Unix timestamp (in milliseconds) when image generation completed, if known.
+        #[ts(type = "number | null")]
+        completed_at_ms: Option<i64>,
+        /// The duration of image generation in milliseconds.
+        #[ts(type = "number | null")]
+        duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -6416,6 +6470,9 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: search.id,
                 query: search.query,
                 action: Some(WebSearchAction::from(search.action)),
+                started_at_ms: search.started_at_ms,
+                completed_at_ms: search.completed_at_ms,
+                duration_ms: search.duration_ms,
             },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,
@@ -6423,6 +6480,9 @@ impl From<CoreTurnItem> for ThreadItem {
                 revised_prompt: image.revised_prompt,
                 result: image.result,
                 saved_path: image.saved_path,
+                started_at_ms: image.started_at_ms,
+                completed_at_ms: image.completed_at_ms,
+                duration_ms: image.duration_ms,
             },
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }
@@ -10311,6 +10371,9 @@ mod tests {
                     query: Some("docs".to_string()),
                     queries: None,
                 }),
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             }
         );
     }
