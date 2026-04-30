@@ -215,6 +215,7 @@ pub(crate) fn interaction_end(ev: CollabAgentInteractionEndEvent) -> PlainHistor
         receiver_agent_role,
         prompt,
         status: _,
+        ..
     } = ev;
 
     let title = title_with_agent(
@@ -240,6 +241,7 @@ pub(crate) fn waiting_begin(ev: CollabWaitingBeginEvent) -> PlainHistoryCell {
         receiver_thread_ids,
         receiver_agents,
         call_id: _,
+        ..
     } = ev;
     let receiver_agents = merge_wait_receivers(&receiver_thread_ids, receiver_agents);
 
@@ -271,6 +273,7 @@ pub(crate) fn waiting_end(ev: CollabWaitingEndEvent) -> PlainHistoryCell {
         sender_thread_id: _,
         agent_statuses,
         statuses,
+        ..
     } = ev;
     let details = wait_complete_lines(&statuses, &agent_statuses);
     collab_event(title_text("Finished waiting"), details)
@@ -284,6 +287,7 @@ pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
         receiver_agent_nickname,
         receiver_agent_role,
         status: _,
+        ..
     } = ev;
 
     collab_event(
@@ -307,6 +311,7 @@ pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
         receiver_thread_id,
         receiver_agent_nickname,
         receiver_agent_role,
+        ..
     } = ev;
 
     collab_event(
@@ -331,6 +336,7 @@ pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
         receiver_agent_nickname,
         receiver_agent_role,
         status,
+        ..
     } = ev;
 
     collab_event(
@@ -612,6 +618,9 @@ mod tests {
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
                 status: AgentStatus::PendingInit,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             },
             Some(&SpawnRequestSummary {
                 model: "gpt-5".to_string(),
@@ -627,6 +636,9 @@ mod tests {
             receiver_agent_role: Some("explorer".to_string()),
             prompt: "Please continue and return the answer only.".to_string(),
             status: AgentStatus::Running,
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         });
 
         let waiting = waiting_begin(CollabWaitingBeginEvent {
@@ -638,6 +650,7 @@ mod tests {
                 agent_role: Some("explorer".to_string()),
             }],
             call_id: "call-wait".to_string(),
+            started_at_ms: None,
         });
 
         let mut statuses = HashMap::new();
@@ -664,6 +677,9 @@ mod tests {
                 },
             ],
             statuses,
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         });
 
         let close = close_end(CollabCloseEndEvent {
@@ -673,6 +689,9 @@ mod tests {
             receiver_agent_nickname: Some("Robie".to_string()),
             receiver_agent_role: Some("explorer".to_string()),
             status: AgentStatus::Completed(Some("39916800".to_string())),
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         });
 
         let snapshot = [spawn, send, waiting, finished, close]
@@ -750,6 +769,9 @@ mod tests {
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
                 status: AgentStatus::PendingInit,
+                started_at_ms: None,
+                completed_at_ms: None,
+                duration_ms: None,
             },
             Some(&SpawnRequestSummary {
                 model: "gpt-5".to_string(),
@@ -783,6 +805,9 @@ mod tests {
             receiver_agent_nickname: Some("Robie".to_string()),
             receiver_agent_role: Some("explorer".to_string()),
             status: AgentStatus::Interrupted,
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         });
 
         assert_snapshot!("collab_resume_interrupted", cell_to_text(&cell));

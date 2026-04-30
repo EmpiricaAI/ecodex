@@ -893,6 +893,9 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
             id: id.clone(),
             query: query.clone(),
             action: app_server_web_search_action_to_core(action.clone()?)?,
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         })),
         ThreadItem::ImageGeneration {
             id,
@@ -906,6 +909,9 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
             revised_prompt: revised_prompt.clone(),
             result: result.clone(),
             saved_path: saved_path.clone(),
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         })),
         ThreadItem::ContextCompaction { id } => {
             Some(TurnItem::ContextCompaction(ContextCompactionItem {
@@ -957,6 +963,7 @@ fn command_execution_started_event(turn_id: &str, item: &ThreadItem) -> Option<V
                 .collect(),
             source: source.to_core(),
             interaction_input: None,
+            started_at_ms: None,
         }),
     }])
 }
@@ -1017,6 +1024,8 @@ fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option
                 .collect(),
             source: source.to_core(),
             interaction_input: None,
+            started_at_ms: None,
+            completed_at_ms: None,
             stdout: String::new(),
             stderr: String::new(),
             aggregated_output: aggregated_output.clone(),

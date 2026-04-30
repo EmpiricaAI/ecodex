@@ -33,6 +33,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
@@ -149,6 +150,7 @@ pub(crate) async fn handle_mcp_tool_call(
             .await
     };
 
+    let started_at_ms = now_unix_timestamp_ms();
     if server == CODEX_APPS_MCP_SERVER_NAME && !app_tool_policy.enabled {
         let result = notify_mcp_tool_call_skip(
             sess.as_ref(),
@@ -158,6 +160,7 @@ pub(crate) async fn handle_mcp_tool_call(
             mcp_app_resource_uri.clone(),
             "MCP tool call blocked by app configuration".to_string(),
             /*already_started*/ false,
+            started_at_ms,
         )
         .await;
         let status = if result.is_ok() { "ok" } else { "error" };
@@ -189,6 +192,7 @@ pub(crate) async fn handle_mcp_tool_call(
         call_id: call_id.clone(),
         invocation: invocation.clone(),
         mcp_app_resource_uri: mcp_app_resource_uri.clone(),
+        started_at_ms: Some(started_at_ms),
     });
     notify_mcp_tool_call_event(sess.as_ref(), turn_context.as_ref(), tool_call_begin_event).await;
 
@@ -215,6 +219,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     metadata.as_ref(),
                     request_meta,
                     mcp_app_resource_uri,
+                    started_at_ms,
                 )
                 .await;
             }
@@ -228,6 +233,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     mcp_app_resource_uri.clone(),
                     message,
                     /*already_started*/ true,
+                    started_at_ms,
                 )
                 .await
             }
@@ -241,6 +247,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     mcp_app_resource_uri.clone(),
                     message,
                     /*already_started*/ true,
+                    started_at_ms,
                 )
                 .await
             }
@@ -253,6 +260,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     mcp_app_resource_uri.clone(),
                     message,
                     /*already_started*/ true,
+                    started_at_ms,
                 )
                 .await
             }
@@ -283,6 +291,7 @@ pub(crate) async fn handle_mcp_tool_call(
         metadata.as_ref(),
         request_meta,
         mcp_app_resource_uri,
+        started_at_ms,
     )
     .await
 }
@@ -292,6 +301,7 @@ pub(crate) struct HandledMcpToolCall {
     pub(crate) tool_input: JsonValue,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_approved_mcp_tool_call(
     sess: &Session,
     turn_context: &TurnContext,
@@ -300,6 +310,7 @@ async fn handle_approved_mcp_tool_call(
     metadata: Option<&McpToolApprovalMetadata>,
     request_meta: Option<JsonValue>,
     mcp_app_resource_uri: Option<String>,
+    started_at_ms: i64,
 ) -> HandledMcpToolCall {
     maybe_mark_thread_memory_mode_polluted(sess, turn_context).await;
 
@@ -361,10 +372,13 @@ async fn handle_approved_mcp_tool_call(
         tracing::warn!("MCP tool call error: {error:?}");
     }
     let duration = start.elapsed();
+    let completed_at_ms = now_unix_timestamp_ms();
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.to_string(),
         invocation,
         mcp_app_resource_uri,
+        started_at_ms: Some(started_at_ms),
+        completed_at_ms: Some(completed_at_ms),
         duration,
         result: truncate_mcp_tool_result_for_event(&result),
     });
@@ -1964,6 +1978,7 @@ fn requires_mcp_tool_approval(annotations: Option<&ToolAnnotations>) -> bool {
             .unwrap_or(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn notify_mcp_tool_call_skip(
     sess: &Session,
     turn_context: &TurnContext,
@@ -1972,12 +1987,14 @@ async fn notify_mcp_tool_call_skip(
     mcp_app_resource_uri: Option<String>,
     message: String,
     already_started: bool,
+    started_at_ms: i64,
 ) -> Result<CallToolResult, String> {
     if !already_started {
         let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
             call_id: call_id.to_string(),
             invocation: invocation.clone(),
             mcp_app_resource_uri: mcp_app_resource_uri.clone(),
+            started_at_ms: Some(started_at_ms),
         });
         notify_mcp_tool_call_event(sess, turn_context, tool_call_begin_event).await;
     }
@@ -1988,6 +2005,8 @@ async fn notify_mcp_tool_call_skip(
         mcp_app_resource_uri,
         duration: Duration::ZERO,
         result: truncate_mcp_tool_result_for_event(&Err(message.clone())),
+        started_at_ms: Some(started_at_ms),
+        completed_at_ms: Some(now_unix_timestamp_ms()),
     });
     notify_mcp_tool_call_event(sess, turn_context, tool_call_end_event).await;
     Err(message)

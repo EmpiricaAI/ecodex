@@ -203,6 +203,9 @@ mod tests {
             revised_prompt: Some("final prompt".into()),
             result: "Zm9v".into(),
             saved_path: None,
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         });
 
         assert!(should_persist_event_msg(

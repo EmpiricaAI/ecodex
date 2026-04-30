@@ -190,6 +190,7 @@ mod tests {
             command: vec!["true".to_string()],
             cwd: AbsolutePathBuf::current_dir().expect("current dir"),
             parsed_cmd: Vec::new(),
+            started_at_ms: None,
             source: ExecCommandSource::Agent,
             interaction_input: None,
         }

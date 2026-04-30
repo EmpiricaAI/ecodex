@@ -15,6 +15,7 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
             prompt: "Explore the repo".to_string(),
             model: "gpt-5".to_string(),
             reasoning_effort: ReasoningEffortConfig::High,
+            started_at_ms: None,
         }),
     });
     chat.handle_codex_event(Event {
@@ -29,6 +30,9 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
             model: "gpt-5".to_string(),
             reasoning_effort: ReasoningEffortConfig::High,
             status: AgentStatus::PendingInit,
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         }),
     });
 

@@ -3828,6 +3828,7 @@ mod tests {
             receiver_thread_id: ThreadId::new(),
             receiver_agent_nickname: None,
             receiver_agent_role: None,
+            started_at_ms: None,
         };
 
         let item = collab_resume_begin_item(event.clone());
@@ -3854,6 +3855,9 @@ mod tests {
             receiver_agent_nickname: None,
             receiver_agent_role: None,
             status: codex_protocol::protocol::AgentStatus::NotFound,
+            started_at_ms: None,
+            completed_at_ms: None,
+            duration_ms: None,
         };
 
         let item = collab_resume_end_item(event.clone());
@@ -4255,6 +4259,7 @@ mod tests {
                 arguments: Some(serde_json::json!({"server": ""})),
             },
             mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
+            started_at_ms: None,
         };
 
         let thread_id = ThreadId::new().to_string();
@@ -4420,6 +4425,7 @@ mod tests {
                 arguments: None,
             },
             mcp_app_resource_uri: None,
+            started_at_ms: None,
         };
 
         let thread_id = ThreadId::new().to_string();
@@ -4475,6 +4481,8 @@ mod tests {
             mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
             duration: Duration::from_nanos(92708),
             result: Ok(result),
+            started_at_ms: None,
+            completed_at_ms: None,
         };
 
         let thread_id = ThreadId::new().to_string();
@@ -4523,6 +4531,8 @@ mod tests {
             mcp_app_resource_uri: None,
             duration: Duration::from_millis(1),
             result: Err("boom".to_string()),
+            started_at_ms: None,
+            completed_at_ms: None,
         };
 
         let thread_id = ThreadId::new().to_string();
