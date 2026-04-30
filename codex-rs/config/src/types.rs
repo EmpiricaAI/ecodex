@@ -425,6 +425,32 @@ pub struct AppsConfigToml {
     pub apps: HashMap<String, AppConfig>,
 }
 
+/// macOS-specific Computer Use controls loaded from `config.toml`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ComputerUseMacosConfigToml {
+    /// Bundle identifiers that Computer Use is not allowed to access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denied_bundle_ids: Option<Vec<String>>,
+
+    /// Bundle identifiers that Computer Use is allowed to access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_bundle_ids: Option<Vec<String>>,
+}
+
+/// Computer Use controls loaded from `config.toml`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ComputerUseConfigToml {
+    /// Whether approval requests can offer persistent approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_persistent_approval: Option<bool>,
+
+    /// macOS-specific Computer Use controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos: Option<ComputerUseMacosConfigToml>,
+}
+
 // ===== OTEL configuration =====
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

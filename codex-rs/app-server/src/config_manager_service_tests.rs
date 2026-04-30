@@ -4,6 +4,8 @@ use codex_app_server_protocol::AppConfig;
 use codex_app_server_protocol::AppToolApproval;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::ComputerUseConfig;
+use codex_app_server_protocol::ComputerUseMacosConfig;
 use codex_config::CloudRequirementsLoader;
 use codex_config::FeatureRequirementsToml;
 use codex_config::LoaderOverrides;
@@ -161,6 +163,44 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
                     tools: None,
                 },
             )]),
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_returns_computer_use_config() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"
+[computer_use]
+allow_persistent_approval = false
+
+[computer_use.macos]
+denied_bundle_ids = ["com.apple.Terminal"]
+allowed_bundle_ids = ["com.apple.Safari"]
+"#,
+    )?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let read = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("config read succeeds");
+
+    assert_eq!(
+        read.config.computer_use,
+        Some(ComputerUseConfig {
+            allow_persistent_approval: Some(false),
+            macos: Some(ComputerUseMacosConfig {
+                denied_bundle_ids: Some(vec!["com.apple.Terminal".to_string()]),
+                allowed_bundle_ids: Some(vec!["com.apple.Safari".to_string()]),
+            }),
         })
     );
 

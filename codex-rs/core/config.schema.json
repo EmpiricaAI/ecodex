@@ -328,6 +328,46 @@
       },
       "type": "object"
     },
+    "ComputerUseConfigToml": {
+      "additionalProperties": false,
+      "description": "Computer Use controls loaded from `config.toml`.",
+      "properties": {
+        "allow_persistent_approval": {
+          "description": "Whether approval requests can offer persistent approval.",
+          "type": "boolean"
+        },
+        "macos": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ComputerUseMacosConfigToml"
+            }
+          ],
+          "description": "macOS-specific Computer Use controls."
+        }
+      },
+      "type": "object"
+    },
+    "ComputerUseMacosConfigToml": {
+      "additionalProperties": false,
+      "description": "macOS-specific Computer Use controls loaded from `config.toml`.",
+      "properties": {
+        "allowed_bundle_ids": {
+          "description": "Bundle identifiers that Computer Use is allowed to access.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "denied_bundle_ids": {
+          "description": "Bundle identifiers that Computer Use is not allowed to access.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -3297,6 +3337,15 @@
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
+    },
+    "computer_use": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ComputerUseConfigToml"
+        }
+      ],
+      "default": null,
+      "description": "Settings for Computer Use controls."
     },
     "default_permissions": {
       "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",

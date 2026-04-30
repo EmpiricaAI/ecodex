@@ -61,6 +61,10 @@ export type { CommandExecutionRequestApprovalResponse } from "./CommandExecution
 export type { CommandExecutionSource } from "./CommandExecutionSource";
 export type { CommandExecutionStatus } from "./CommandExecutionStatus";
 export type { CommandMigration } from "./CommandMigration";
+export type { ComputerUseConfig } from "./ComputerUseConfig";
+export type { ComputerUseMacosConfig } from "./ComputerUseMacosConfig";
+export type { ComputerUseMacosRequirements } from "./ComputerUseMacosRequirements";
+export type { ComputerUseRequirements } from "./ComputerUseRequirements";
 export type { Config } from "./Config";
 export type { ConfigBatchWriteParams } from "./ConfigBatchWriteParams";
 export type { ConfigEdit } from "./ConfigEdit";

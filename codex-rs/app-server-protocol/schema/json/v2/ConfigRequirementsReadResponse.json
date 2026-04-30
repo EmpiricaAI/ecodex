@@ -60,6 +60,50 @@
         }
       ]
     },
+    "ComputerUseMacosRequirements": {
+      "properties": {
+        "allowedBundleIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "deniedBundleIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ComputerUseRequirements": {
+      "properties": {
+        "allowPersistentApproval": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ComputerUseMacosRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ConfigRequirements": {
       "properties": {
         "allowedApprovalPolicies": {
@@ -87,6 +131,16 @@
           "type": [
             "array",
             "null"
+          ]
+        },
+        "computerUse": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ComputerUseRequirements"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "enforceResidency": {

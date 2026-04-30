@@ -188,6 +188,50 @@
         }
       ]
     },
+    "ComputerUseConfig": {
+      "properties": {
+        "allow_persistent_approval": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ComputerUseMacosConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ComputerUseMacosConfig": {
+      "properties": {
+        "allowed_bundle_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "denied_bundle_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Config": {
       "additionalProperties": true,
       "properties": {
@@ -227,6 +271,17 @@
             "string",
             "null"
           ]
+        },
+        "computer_use": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ComputerUseConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "developer_instructions": {
           "type": [

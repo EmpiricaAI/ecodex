@@ -11,6 +11,7 @@ use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
 use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
+use crate::types::ComputerUseConfigToml;
 use crate::types::FeedbackConfigToml;
 use crate::types::History;
 use crate::types::MarketplaceConfig;
@@ -394,6 +395,10 @@ pub struct ConfigToml {
     /// Settings for app-specific controls.
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
+
+    /// Settings for Computer Use controls.
+    #[serde(default)]
+    pub computer_use: Option<ComputerUseConfigToml>,
 
     /// OTEL configuration.
     pub otel: Option<OtelConfigToml>,

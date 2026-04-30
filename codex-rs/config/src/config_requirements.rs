@@ -614,6 +614,77 @@ impl AppsRequirementsToml {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComputerUseMacosRequirementsToml {
+    pub denied_bundle_ids: Option<Vec<String>>,
+    pub allowed_bundle_ids: Option<Vec<String>>,
+}
+
+impl ComputerUseMacosRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.denied_bundle_ids.as_ref().is_none_or(Vec::is_empty)
+            && self.allowed_bundle_ids.is_none()
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComputerUseRequirementsToml {
+    pub allow_persistent_approval: Option<bool>,
+    pub macos: Option<ComputerUseMacosRequirementsToml>,
+}
+
+impl ComputerUseRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.allow_persistent_approval.is_none()
+            && self
+                .macos
+                .as_ref()
+                .is_none_or(ComputerUseMacosRequirementsToml::is_empty)
+    }
+}
+
+pub(crate) fn merge_computer_use_requirements_descending(
+    base: &mut ComputerUseRequirementsToml,
+    incoming: ComputerUseRequirementsToml,
+) {
+    if base.allow_persistent_approval == Some(false)
+        || incoming.allow_persistent_approval == Some(false)
+    {
+        base.allow_persistent_approval = Some(false);
+    } else {
+        base.allow_persistent_approval = base
+            .allow_persistent_approval
+            .or(incoming.allow_persistent_approval);
+    }
+
+    let Some(incoming_macos) = incoming.macos else {
+        return;
+    };
+
+    let base_macos = base.macos.get_or_insert_with(Default::default);
+    if let Some(incoming_denied_bundle_ids) = incoming_macos.denied_bundle_ids
+        && !incoming_denied_bundle_ids.is_empty()
+    {
+        let base_denied_bundle_ids = base_macos
+            .denied_bundle_ids
+            .get_or_insert_with(Default::default);
+        for bundle_id in incoming_denied_bundle_ids {
+            if !base_denied_bundle_ids.contains(&bundle_id) {
+                base_denied_bundle_ids.push(bundle_id);
+            }
+        }
+    }
+
+    if let Some(incoming_allowed_bundle_ids) = incoming_macos.allowed_bundle_ids {
+        if let Some(base_allowed_bundle_ids) = base_macos.allowed_bundle_ids.as_mut() {
+            base_allowed_bundle_ids
+                .retain(|bundle_id| incoming_allowed_bundle_ids.contains(bundle_id));
+        } else {
+            base_macos.allowed_bundle_ids = Some(incoming_allowed_bundle_ids);
+        }
+    }
+}
+
 /// Merge `enabled` configs from a lower-precedence source into an existing higher-precedence set.
 /// This lets managed sources (for example Cloud/MDM) enforce setting disablement across layers.
 /// Implemented with AppsRequirementsToml for now, could be abstracted if we have more enablement-style configs in the future.
@@ -648,6 +719,7 @@ pub struct ConfigRequirementsToml {
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub plugins: Option<BTreeMap<String, PluginRequirementsToml>>,
     pub apps: Option<AppsRequirementsToml>,
+    pub computer_use: Option<ComputerUseRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[serde(rename = "experimental_network")]
@@ -695,6 +767,7 @@ pub struct ConfigRequirementsWithSources {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
+    pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
     pub network: Option<Sourced<NetworkRequirementsToml>>,
@@ -731,6 +804,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers: _,
             plugins: _,
             apps: _,
+            computer_use: _,
             rules: _,
             enforce_residency: _,
             network: _,
@@ -771,7 +845,18 @@ impl ConfigRequirementsWithSources {
             if let Some(existing_apps) = self.apps.as_mut() {
                 merge_enablement_settings_descending(&mut existing_apps.value, incoming_apps);
             } else {
-                self.apps = Some(Sourced::new(incoming_apps, source));
+                self.apps = Some(Sourced::new(incoming_apps, source.clone()));
+            }
+        }
+
+        if let Some(incoming_computer_use) = other.computer_use.take() {
+            if let Some(existing_computer_use) = self.computer_use.as_mut() {
+                merge_computer_use_requirements_descending(
+                    &mut existing_computer_use.value,
+                    incoming_computer_use,
+                );
+            } else {
+                self.computer_use = Some(Sourced::new(incoming_computer_use, source));
             }
         }
     }
@@ -787,6 +872,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers,
             plugins,
             apps,
+            computer_use,
             rules,
             enforce_residency,
             network,
@@ -804,6 +890,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             plugins: plugins.map(|sourced| sourced.value),
             apps: apps.map(|sourced| sourced.value),
+            computer_use: computer_use.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
             network: network.map(|sourced| sourced.value),
@@ -899,6 +986,10 @@ impl ConfigRequirementsToml {
                 .apps
                 .as_ref()
                 .is_none_or(AppsRequirementsToml::is_empty)
+            && self
+                .computer_use
+                .as_ref()
+                .is_none_or(ComputerUseRequirementsToml::is_empty)
             && self.rules.is_none()
             && self.enforce_residency.is_none()
             && self.network.is_none()
@@ -924,6 +1015,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             mcp_servers,
             plugins,
             apps: _apps,
+            computer_use: _computer_use,
             rules,
             enforce_residency,
             network,
@@ -1231,6 +1323,7 @@ mod tests {
             mcp_servers,
             plugins,
             apps,
+            computer_use,
             rules,
             enforce_residency,
             network,
@@ -1252,6 +1345,7 @@ mod tests {
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             plugins: plugins.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             apps: apps.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1298,6 +1392,7 @@ mod tests {
             mcp_servers: None,
             plugins: None,
             apps: None,
+            computer_use: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
             network: None,
@@ -1331,6 +1426,7 @@ mod tests {
                 mcp_servers: None,
                 plugins: None,
                 apps: None,
+                computer_use: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
                 network: None,
@@ -1370,6 +1466,7 @@ mod tests {
                 mcp_servers: None,
                 plugins: None,
                 apps: None,
+                computer_use: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1417,6 +1514,7 @@ mod tests {
                 mcp_servers: None,
                 plugins: None,
                 apps: None,
+                computer_use: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1590,6 +1688,32 @@ allowed_approvals_reviewers = ["user"]
         Ok(())
     }
 
+    #[test]
+    fn deserialize_computer_use_requirements() -> Result<()> {
+        let toml_str = r#"
+            [computer_use]
+            allow_persistent_approval = false
+
+            [computer_use.macos]
+            denied_bundle_ids = ["com.apple.Terminal"]
+            allowed_bundle_ids = ["com.apple.Safari"]
+        "#;
+        let requirements: ConfigRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            requirements.computer_use,
+            Some(ComputerUseRequirementsToml {
+                allow_persistent_approval: Some(false),
+                macos: Some(ComputerUseMacosRequirementsToml {
+                    denied_bundle_ids: Some(vec!["com.apple.Terminal".to_string()]),
+                    allowed_bundle_ids: Some(vec!["com.apple.Safari".to_string()]),
+                }),
+            })
+        );
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
     fn apps_requirements(entries: &[(&str, Option<bool>)]) -> AppsRequirementsToml {
         AppsRequirementsToml {
             apps: entries
@@ -1734,6 +1858,108 @@ allowed_approvals_reviewers = ["user"]
             target.apps.map(|apps| apps.value),
             Some(apps_requirements(&[("connector_123123", Some(false))])),
         );
+    }
+
+    #[test]
+    fn merge_computer_use_requirements_descending_is_restrictive() {
+        let mut merged = ComputerUseRequirementsToml {
+            allow_persistent_approval: Some(true),
+            macos: Some(ComputerUseMacosRequirementsToml {
+                denied_bundle_ids: Some(vec![
+                    "com.example.High".to_string(),
+                    "com.example.Shared".to_string(),
+                ]),
+                allowed_bundle_ids: Some(vec![
+                    "com.example.Shared".to_string(),
+                    "com.example.HighOnly".to_string(),
+                ]),
+            }),
+        };
+        let lower = ComputerUseRequirementsToml {
+            allow_persistent_approval: Some(false),
+            macos: Some(ComputerUseMacosRequirementsToml {
+                denied_bundle_ids: Some(vec![
+                    "com.example.Low".to_string(),
+                    "com.example.Shared".to_string(),
+                ]),
+                allowed_bundle_ids: Some(vec![
+                    "com.example.Shared".to_string(),
+                    "com.example.LowOnly".to_string(),
+                ]),
+            }),
+        };
+
+        merge_computer_use_requirements_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            ComputerUseRequirementsToml {
+                allow_persistent_approval: Some(false),
+                macos: Some(ComputerUseMacosRequirementsToml {
+                    denied_bundle_ids: Some(vec![
+                        "com.example.High".to_string(),
+                        "com.example.Shared".to_string(),
+                        "com.example.Low".to_string(),
+                    ]),
+                    allowed_bundle_ids: Some(vec!["com.example.Shared".to_string()]),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn merge_unset_fields_merges_computer_use_across_sources() {
+        let higher_source = RequirementSource::CloudRequirements;
+        let mut target = ConfigRequirementsWithSources::default();
+
+        target.merge_unset_fields(
+            higher_source.clone(),
+            ConfigRequirementsToml {
+                computer_use: Some(ComputerUseRequirementsToml {
+                    allow_persistent_approval: Some(true),
+                    macos: Some(ComputerUseMacosRequirementsToml {
+                        denied_bundle_ids: Some(vec!["com.example.High".to_string()]),
+                        allowed_bundle_ids: Some(vec![
+                            "com.example.Shared".to_string(),
+                            "com.example.HighOnly".to_string(),
+                        ]),
+                    }),
+                }),
+                ..Default::default()
+            },
+        );
+        target.merge_unset_fields(
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
+            ConfigRequirementsToml {
+                computer_use: Some(ComputerUseRequirementsToml {
+                    allow_persistent_approval: Some(false),
+                    macos: Some(ComputerUseMacosRequirementsToml {
+                        denied_bundle_ids: Some(vec!["com.example.Low".to_string()]),
+                        allowed_bundle_ids: Some(vec![
+                            "com.example.Shared".to_string(),
+                            "com.example.LowOnly".to_string(),
+                        ]),
+                    }),
+                }),
+                ..Default::default()
+            },
+        );
+
+        let computer_use = target.computer_use.expect("computer_use should be present");
+        assert_eq!(
+            computer_use.value,
+            ComputerUseRequirementsToml {
+                allow_persistent_approval: Some(false),
+                macos: Some(ComputerUseMacosRequirementsToml {
+                    denied_bundle_ids: Some(vec![
+                        "com.example.High".to_string(),
+                        "com.example.Low".to_string(),
+                    ]),
+                    allowed_bundle_ids: Some(vec!["com.example.Shared".to_string()]),
+                }),
+            }
+        );
+        assert_eq!(computer_use.source, higher_source);
     }
 
     #[test]
