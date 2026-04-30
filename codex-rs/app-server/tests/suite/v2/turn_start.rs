@@ -1982,6 +1982,106 @@ async fn turn_start_resolves_sticky_thread_environments_and_turn_overrides() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn turn_start_model_surface_gates_multi_environment_process_tools() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+
+    let server = create_mock_responses_server_repeating_assistant("done").await;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::UnifiedExec, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(
+        &codex_home,
+        &[("CODEX_EXEC_SERVER_URL", Some("http://127.0.0.1:1"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    run_model_surface_turn(&mut mcp, &workspace, &["local"], "single").await?;
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    let single_request = requests.last().expect("single-env request");
+    assert!(body_contains(single_request, "<cwd>"));
+    assert!(!body_contains(single_request, "<environments>"));
+    assert!(!body_contains(single_request, "environment_id"));
+
+    run_model_surface_turn(&mut mcp, &workspace, &["local", "remote"], "multi").await?;
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    let multi_request = requests.last().expect("multi-env request");
+    assert!(body_contains(multi_request, "<environments>"));
+    assert!(body_contains(
+        multi_request,
+        r#"<environment id=\"local\" primary=\"true\">"#
+    ));
+    assert!(body_contains(
+        multi_request,
+        r#"<environment id=\"remote\" primary=\"false\">"#
+    ));
+    assert!(body_contains(multi_request, "environment_id"));
+
+    Ok(())
+}
+
+async fn run_model_surface_turn(
+    mcp: &mut McpProcess,
+    workspace: &Path,
+    environments: &[&str],
+    text: &str,
+) -> Result<()> {
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            environments: environment_params(Some(environments), workspace)?,
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace.to_path_buf()),
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    mcp.clear_message_buffer();
+    Ok(())
+}
+
 struct EnvironmentSelectionCase {
     name: &'static str,
     sticky: Option<&'static [&'static str]>,

@@ -87,6 +87,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_exec_command_tool(CommandToolOptions {
             allow_login_shell: true,
             exec_permission_approvals_enabled: false,
+            include_environment_id: false,
         }),
         create_write_stdin_tool(),
         create_update_plan_tool(),
@@ -156,6 +157,88 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         strip_descriptions_tool(&mut expected_spec);
         assert_eq!(actual_spec, expected_spec, "spec mismatch for {name}");
     }
+}
+
+#[test]
+fn process_tool_specs_include_environment_id_only_for_multiple_selected_environments() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (single_environment_tools, _) = build_specs(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_process_tool_environment_id(
+        &single_environment_tools,
+        "exec_command",
+        /*expected_present*/ false,
+    );
+
+    let multi_environment_config = config
+        .with_has_multiple_selected_environments(/*has_multiple_selected_environments*/ true);
+    let (multi_environment_tools, _) = build_specs(
+        &multi_environment_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_process_tool_environment_id(
+        &multi_environment_tools,
+        "exec_command",
+        /*expected_present*/ true,
+    );
+
+    let mut shell_command_features = Features::with_defaults();
+    shell_command_features.disable(Feature::UnifiedExec);
+    let shell_command_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &shell_command_features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (single_environment_shell_tools, _) = build_specs(
+        &shell_command_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_process_tool_environment_id(
+        &single_environment_shell_tools,
+        "shell_command",
+        /*expected_present*/ false,
+    );
+
+    let multi_environment_shell_config = shell_command_config
+        .with_has_multiple_selected_environments(/*has_multiple_selected_environments*/ true);
+    let (multi_environment_shell_tools, _) = build_specs(
+        &multi_environment_shell_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_process_tool_environment_id(
+        &multi_environment_shell_tools,
+        "shell_command",
+        /*expected_present*/ true,
+    );
 }
 
 #[test]
@@ -2427,6 +2510,23 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
         .iter()
         .find(|tool| tool.name() == expected_name)
         .unwrap_or_else(|| panic!("expected tool {expected_name}"))
+}
+
+fn assert_process_tool_environment_id(
+    tools: &[ConfiguredToolSpec],
+    expected_name: &str,
+    expected_present: bool,
+) {
+    let tool = find_tool(tools, expected_name);
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &tool.spec else {
+        panic!("expected function tool {expected_name}");
+    };
+    let (properties, _) = expect_object_schema(parameters);
+    assert_eq!(
+        properties.contains_key("environment_id"),
+        expected_present,
+        "{expected_name} environment_id parameter presence"
+    );
 }
 
 fn find_namespace_function_tool<'a>(

@@ -198,6 +198,9 @@ impl TurnContext {
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_has_environment(self.tools_config.has_environment)
+        .with_has_multiple_selected_environments(
+            self.tools_config.has_multiple_selected_environments,
+        )
         .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -272,6 +275,31 @@ impl TurnContext {
     pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
         path.as_ref()
             .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
+    }
+
+    pub(crate) fn has_multiple_selected_environments(&self) -> bool {
+        self.environments.len() > 1
+    }
+
+    pub(crate) fn primary_environment(&self) -> Option<&TurnEnvironment> {
+        self.environments.first()
+    }
+
+    pub(crate) fn selected_environment(
+        &self,
+        environment_id: Option<&str>,
+    ) -> Result<Option<&TurnEnvironment>, String> {
+        let Some(environment_id) = environment_id else {
+            return Ok(self.primary_environment());
+        };
+        if environment_id.is_empty() {
+            return Err("environment_id cannot be empty".to_string());
+        }
+        self.environments
+            .iter()
+            .find(|environment| environment.environment_id == environment_id)
+            .map(Some)
+            .ok_or_else(|| format!("unknown selected environment_id `{environment_id}`"))
     }
 
     pub(crate) fn file_system_sandbox_context(
@@ -482,6 +510,7 @@ impl Session {
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_has_environment(!environments.is_empty())
+        .with_has_multiple_selected_environments(environments.len() > 1)
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)

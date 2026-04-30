@@ -89,6 +89,7 @@ pub struct ToolsConfig {
     pub shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_shell_mode: UnifiedExecShellMode,
     pub has_environment: bool,
+    pub has_multiple_selected_environments: bool,
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -206,6 +207,7 @@ impl ToolsConfig {
             shell_command_backend,
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
             has_environment: true,
+            has_multiple_selected_environments: false,
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -308,6 +310,14 @@ impl ToolsConfig {
 
     pub fn with_has_environment(mut self, has_environment: bool) -> Self {
         self.has_environment = has_environment;
+        self
+    }
+
+    pub fn with_has_multiple_selected_environments(
+        mut self,
+        has_multiple_selected_environments: bool,
+    ) -> Self {
+        self.has_multiple_selected_environments = has_multiple_selected_environments;
         self
     }
 

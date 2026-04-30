@@ -94,6 +94,7 @@ pub(crate) struct ExecCommandRequest {
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<AbsolutePathBuf>,
+    pub environment: Arc<codex_exec_server::Environment>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,

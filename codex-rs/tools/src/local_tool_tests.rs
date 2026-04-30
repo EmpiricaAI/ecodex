@@ -10,6 +10,7 @@ fn windows_shell_guidance_description() -> String {
 fn shell_tool_matches_expected_spec() {
     let tool = create_shell_tool(ShellToolOptions {
         exec_permission_approvals_enabled: false,
+        include_environment_id: false,
     });
 
     let description = if cfg!(windows) {
@@ -96,6 +97,7 @@ fn exec_command_tool_matches_expected_spec() {
     let tool = create_exec_command_tool(CommandToolOptions {
         allow_login_shell: true,
         exec_permission_approvals_enabled: false,
+        include_environment_id: false,
     });
 
     let description = if cfg!(windows) {
@@ -175,6 +177,38 @@ fn exec_command_tool_matches_expected_spec() {
 }
 
 #[test]
+fn process_tools_include_environment_id_when_requested() {
+    for tool in [
+        create_shell_tool(ShellToolOptions {
+            exec_permission_approvals_enabled: false,
+            include_environment_id: true,
+        }),
+        create_shell_command_tool(CommandToolOptions {
+            allow_login_shell: true,
+            exec_permission_approvals_enabled: false,
+            include_environment_id: true,
+        }),
+        create_exec_command_tool(CommandToolOptions {
+            allow_login_shell: true,
+            exec_permission_approvals_enabled: false,
+            include_environment_id: true,
+        }),
+    ] {
+        let ToolSpec::Function(tool) = tool else {
+            panic!("expected function tool");
+        };
+        assert!(
+            tool.parameters
+                .properties
+                .as_ref()
+                .is_some_and(|properties| properties.contains_key("environment_id")),
+            "{} should include environment_id",
+            tool.name
+        );
+    }
+}
+
+#[test]
 fn write_stdin_tool_matches_expected_spec() {
     let tool = create_write_stdin_tool();
 
@@ -228,6 +262,7 @@ fn write_stdin_tool_matches_expected_spec() {
 fn shell_tool_with_request_permission_includes_additional_permissions() {
     let tool = create_shell_tool(ShellToolOptions {
         exec_permission_approvals_enabled: true,
+        include_environment_id: false,
     });
 
     let mut properties = BTreeMap::from([
@@ -332,6 +367,7 @@ fn shell_command_tool_matches_expected_spec() {
     let tool = create_shell_command_tool(CommandToolOptions {
         allow_login_shell: true,
         exec_permission_approvals_enabled: false,
+        include_environment_id: false,
     });
 
     let description = if cfg!(windows) {

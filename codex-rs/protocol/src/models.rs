@@ -1254,6 +1254,9 @@ pub struct SearchToolCallParams {
 pub struct ShellToolCallParams {
     pub command: Vec<String>,
     pub workdir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub environment_id: Option<String>,
 
     /// This is the maximum time in milliseconds that the command is allowed to run.
     #[serde(alias = "timeout")]
@@ -1278,6 +1281,9 @@ pub struct ShellToolCallParams {
 pub struct ShellCommandToolCallParams {
     pub command: String,
     pub workdir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub environment_id: Option<String>,
 
     /// Whether to run the shell with login shell semantics
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2523,6 +2529,7 @@ mod tests {
             ShellToolCallParams {
                 command: vec!["ls".to_string(), "-l".to_string()],
                 workdir: Some("/tmp".to_string()),
+                environment_id: None,
                 timeout_ms: Some(1000),
                 sandbox_permissions: None,
                 prefix_rule: None,

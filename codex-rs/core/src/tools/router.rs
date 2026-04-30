@@ -248,6 +248,7 @@ impl ToolRouter {
                         let params = ShellToolCallParams {
                             command: exec.command,
                             workdir: exec.working_directory,
+                            environment_id: None,
                             timeout_ms: exec.timeout_ms,
                             sandbox_permissions: Some(SandboxPermissions::UseDefault),
                             additional_permissions: None,

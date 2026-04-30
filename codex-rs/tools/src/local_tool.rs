@@ -9,11 +9,13 @@ use std::collections::BTreeMap;
 pub struct CommandToolOptions {
     pub allow_login_shell: bool,
     pub exec_permission_approvals_enabled: bool,
+    pub include_environment_id: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShellToolOptions {
     pub exec_permission_approvals_enabled: bool,
+    pub include_environment_id: bool,
 }
 
 pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
@@ -63,6 +65,7 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
             )),
         );
     }
+    maybe_insert_environment_id_parameter(&mut properties, options.include_environment_id);
     properties.extend(create_approval_parameters(
         options.exec_permission_approvals_enabled,
     ));
@@ -158,6 +161,7 @@ pub fn create_shell_tool(options: ShellToolOptions) -> ToolSpec {
     properties.extend(create_approval_parameters(
         options.exec_permission_approvals_enabled,
     ));
+    maybe_insert_environment_id_parameter(&mut properties, options.include_environment_id);
 
     let description = if cfg!(windows) {
         format!(
@@ -226,6 +230,7 @@ pub fn create_shell_command_tool(options: CommandToolOptions) -> ToolSpec {
             )),
         );
     }
+    maybe_insert_environment_id_parameter(&mut properties, options.include_environment_id);
     properties.extend(create_approval_parameters(
         options.exec_permission_approvals_enabled,
     ));
@@ -264,6 +269,20 @@ Examples of valid command strings:
         ),
         output_schema: None,
     })
+}
+
+fn maybe_insert_environment_id_parameter(
+    properties: &mut BTreeMap<String, JsonSchema>,
+    include_environment_id: bool,
+) {
+    if include_environment_id {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional environment id from the <environment_context> block. If omitted, uses the primary environment.".to_string(),
+            )),
+        );
+    }
 }
 
 pub fn create_request_permissions_tool(description: String) -> ToolSpec {

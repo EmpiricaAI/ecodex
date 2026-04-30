@@ -4527,6 +4527,78 @@ async fn primary_environment_uses_first_turn_environment() {
 }
 
 #[tokio::test]
+async fn selected_environment_defaults_to_primary_and_resolves_explicit_ids() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let session_cwd = session.get_config().await.cwd.clone();
+    let selected_cwd =
+        AbsolutePathBuf::try_from(session_cwd.as_path().join("selected")).expect("absolute path");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                environments: Some(vec![TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: selected_cwd.clone(),
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn should start");
+
+    assert!(!turn_context.has_multiple_selected_environments());
+
+    let primary = turn_context
+        .selected_environment(/*environment_id*/ None)
+        .expect("primary lookup should succeed")
+        .expect("primary environment should exist");
+    assert_eq!(primary.environment_id, "local");
+    assert_eq!(primary.cwd, selected_cwd);
+
+    let explicit = turn_context
+        .selected_environment(Some("local"))
+        .expect("explicit lookup should succeed")
+        .expect("explicit environment should exist");
+    assert_eq!(explicit.environment_id, "local");
+    assert_eq!(explicit.cwd, selected_cwd);
+}
+
+#[tokio::test]
+async fn selected_environment_rejects_empty_and_unknown_ids() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let selected_cwd =
+        AbsolutePathBuf::try_from(session.get_config().await.cwd.as_path().join("selected"))
+            .expect("absolute path");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                environments: Some(vec![TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: selected_cwd,
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn should start");
+
+    assert!(!turn_context.has_multiple_selected_environments());
+
+    let empty_err = turn_context
+        .selected_environment(Some(""))
+        .expect_err("empty id should be rejected");
+    assert_eq!(empty_err, "environment_id cannot be empty");
+
+    let unknown_err = turn_context
+        .selected_environment(Some("remote"))
+        .expect_err("unknown id should be rejected");
+    assert_eq!(unknown_err, "unknown selected environment_id `remote`");
+}
+
+#[tokio::test]
 async fn empty_turn_environments_clear_primary_environment() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
 
