@@ -161,7 +161,7 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
                     "pre_tool_use",
                     Some("Bash"),
                     "python3 /tmp/listed-hook.py",
-                    5,
+                    /*timeout_sec*/ 5,
                     Some("running listed hook"),
                 ),
                 trusted_hash: None,
@@ -240,7 +240,7 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
                     "pre_tool_use",
                     Some("Bash"),
                     "echo plugin hook",
-                    7,
+                    /*timeout_sec*/ 7,
                     Some("running plugin hook"),
                 ),
                 trusted_hash: None,
@@ -366,8 +366,8 @@ timeout = 5
                         "pre_tool_use",
                         Some("Bash"),
                         "echo project hook",
-                        5,
-                        None,
+                        /*timeout_sec*/ 5,
+                        /*status_message*/ None,
                     ),
                     trusted_hash: None,
                     trust_status: HookTrustStatus::Untrusted,
@@ -552,6 +552,29 @@ command = "python3 {hook_script_path}"
     let HooksListResponse { data } = to_response(response)?;
     let hook = &data[0].hooks[0];
     assert_eq!(hook.enabled, true);
+
+    let write_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            edits: vec![ConfigEdit {
+                key_path: "hooks.state".to_string(),
+                value: serde_json::json!({
+                    hook.key.clone(): {
+                        "trusted_hash": hook.current_hash.clone()
+                    }
+                }),
+                merge_strategy: MergeStrategy::Upsert,
+            }],
+            file_path: None,
+            expected_version: None,
+            reload_user_config: true,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(write_id)),
+    )
+    .await??;
+    let _: codex_app_server_protocol::ConfigWriteResponse = to_response(response)?;
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {

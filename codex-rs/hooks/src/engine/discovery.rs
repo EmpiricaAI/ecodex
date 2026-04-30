@@ -162,7 +162,6 @@ fn append_plugin_hook_sources(
     plugin_hook_sources: Vec<PluginHookSource>,
     hook_states: &HashMap<String, HookStateToml>,
 ) {
-    // TODO(abhinav): check enabled/trusted state here before plugin hooks become runnable.
     for source in plugin_hook_sources {
         let PluginHookSource {
             plugin_root,
@@ -444,7 +443,12 @@ fn append_matcher_groups(
                         trusted_hash,
                         trust_status,
                     });
-                    if enabled {
+                    if enabled
+                        && matches!(
+                            trust_status,
+                            HookTrustStatus::Managed | HookTrustStatus::Trusted
+                        )
+                    {
                         handlers.push(ConfiguredHandler {
                             event_name,
                             matcher: matcher.map(ToOwned::to_owned),
@@ -593,7 +597,7 @@ mod tests {
     }
 
     fn hook_source() -> HookSource {
-        HookSource::User
+        HookSource::System
     }
 
     fn hook_handler_source<'a>(
