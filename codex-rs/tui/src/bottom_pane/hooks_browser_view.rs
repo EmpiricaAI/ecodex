@@ -248,7 +248,11 @@ impl HooksBrowserView {
     ) -> Vec<Line<'static>> {
         let mut lines = vec![format!("{} hooks", event_label(event_name)).bold().into()];
         match review_needed_count {
-            0 => {}
+            0 => lines.push(
+                "Turn hooks on or off. Your changes are saved automatically."
+                    .dim()
+                    .into(),
+            ),
             1 => lines.push("1 hook needs review before it can run.".dim().into()),
             count => lines.push(
                 format!("{count} hooks need review before they can run.")
