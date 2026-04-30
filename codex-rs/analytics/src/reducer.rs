@@ -19,6 +19,8 @@ use crate::events::CodexMcpToolCallEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
+use crate::events::CodexToolCallReviewEventParams;
+use crate::events::CodexToolCallReviewEventRequest;
 use crate::events::CodexToolItemEventBase;
 use crate::events::CodexTurnEventParams;
 use crate::events::CodexTurnEventRequest;
@@ -38,6 +40,10 @@ use crate::events::ThreadInitializedEventParams;
 use crate::events::ToolItemFailureKind;
 use crate::events::ToolItemFinalApprovalOutcome;
 use crate::events::ToolItemTerminalStatus;
+use crate::events::ToolReviewReviewer;
+use crate::events::ToolReviewStatus;
+use crate::events::ToolReviewToolKind;
+use crate::events::ToolReviewTrigger;
 use crate::events::TrackEventRequest;
 use crate::events::WebSearchActionKind;
 use crate::events::codex_app_metadata;
@@ -77,16 +83,26 @@ use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionSource as AppServerCommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallStatus;
+use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::GuardianApprovalReviewAction;
+use codex_app_server_protocol::GuardianApprovalReviewStatus;
+use codex_app_server_protocol::GuardianCommandSource as AppServerGuardianCommandSource;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::McpToolCallStatus;
+use codex_app_server_protocol::NetworkPolicyRuleAction;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
+use codex_app_server_protocol::PermissionGrantScope;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RequestPermissionProfile;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
@@ -111,6 +127,9 @@ pub(crate) struct AnalyticsReducer {
     turns: HashMap<String, TurnState>,
     connections: HashMap<u64, ConnectionState>,
     threads: HashMap<String, ThreadAnalyticsState>,
+    tool_review_requests: HashMap<RequestId, PendingToolReviewState>,
+    guardian_review_starts: HashMap<String, PendingGuardianReviewState>,
+    tool_review_summaries: HashMap<String, ToolReviewSummary>,
 }
 
 struct ConnectionState {
@@ -192,6 +211,35 @@ enum MissingAnalyticsContext {
     ThreadConnection,
     Connection { connection_id: u64 },
     ThreadMetadata,
+}
+
+#[derive(Clone)]
+struct PendingToolReviewState {
+    thread_id: String,
+    turn_id: String,
+    item_id: Option<String>,
+    review_id: String,
+    tool_kind: ToolReviewToolKind,
+    tool_name: String,
+    trigger: ToolReviewTrigger,
+    created_at: u64,
+    duration_started: bool,
+    requested_additional_permissions: bool,
+    requested_network_access: bool,
+}
+
+struct PendingGuardianReviewState {
+    created_at: u64,
+}
+
+#[derive(Clone, Default)]
+struct ToolReviewSummary {
+    review_count: u64,
+    guardian_review_count: u64,
+    user_review_count: u64,
+    final_approval_outcome: Option<ToolItemFinalApprovalOutcome>,
+    requested_additional_permissions: bool,
+    requested_network_access: bool,
 }
 
 #[derive(Clone)]
@@ -311,12 +359,14 @@ impl AnalyticsReducer {
                 self.ingest_notification(*notification, out);
             }
             AnalyticsFact::ServerRequest {
-                connection_id: _connection_id,
-                request: _request,
-            } => {}
-            AnalyticsFact::ServerResponse {
-                response: _response,
-            } => {}
+                connection_id,
+                request,
+            } => {
+                self.ingest_server_request(connection_id, *request);
+            }
+            AnalyticsFact::ServerResponse { response } => {
+                self.ingest_server_response(*response, out);
+            }
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
                     self.ingest_subagent_thread_started(input, out);
@@ -679,6 +729,151 @@ impl AnalyticsReducer {
         }
     }
 
+    fn ingest_server_request(&mut self, _connection_id: u64, request: ServerRequest) {
+        match request {
+            ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
+                let requested_network_access = params.network_approval_context.is_some()
+                    || params
+                        .proposed_network_policy_amendments
+                        .as_ref()
+                        .is_some_and(|amendments| !amendments.is_empty())
+                    || params
+                        .additional_permissions
+                        .as_ref()
+                        .and_then(|permissions| permissions.network.as_ref())
+                        .and_then(|network| network.enabled)
+                        .unwrap_or(false);
+                let requested_additional_permissions = params.additional_permissions.is_some()
+                    || params.proposed_execpolicy_amendment.is_some();
+                let trigger = if params.approval_id.is_some() {
+                    ToolReviewTrigger::SubcommandExecve
+                } else if requested_network_access {
+                    ToolReviewTrigger::NetworkRetry
+                } else if requested_additional_permissions {
+                    ToolReviewTrigger::SandboxRetry
+                } else {
+                    ToolReviewTrigger::Initial
+                };
+                self.tool_review_requests.insert(
+                    request_id.clone(),
+                    PendingToolReviewState {
+                        thread_id: params.thread_id,
+                        turn_id: params.turn_id,
+                        item_id: Some(params.item_id),
+                        review_id: user_review_id(&request_id),
+                        tool_kind: ToolReviewToolKind::CommandExecution,
+                        tool_name: "shell".to_string(),
+                        trigger,
+                        created_at: now_unix_seconds(),
+                        duration_started: true,
+                        requested_additional_permissions,
+                        requested_network_access,
+                    },
+                );
+            }
+            ServerRequest::FileChangeRequestApproval { request_id, params } => {
+                let requested_additional_permissions = params.grant_root.is_some();
+                self.tool_review_requests.insert(
+                    request_id.clone(),
+                    PendingToolReviewState {
+                        thread_id: params.thread_id,
+                        turn_id: params.turn_id,
+                        item_id: Some(params.item_id),
+                        review_id: user_review_id(&request_id),
+                        tool_kind: ToolReviewToolKind::FileChange,
+                        tool_name: "apply_patch".to_string(),
+                        trigger: if requested_additional_permissions {
+                            ToolReviewTrigger::SandboxRetry
+                        } else {
+                            ToolReviewTrigger::Initial
+                        },
+                        created_at: now_unix_seconds(),
+                        duration_started: true,
+                        requested_additional_permissions,
+                        requested_network_access: false,
+                    },
+                );
+            }
+            ServerRequest::PermissionsRequestApproval { request_id, params } => {
+                let requested_network_access = params
+                    .permissions
+                    .network
+                    .as_ref()
+                    .and_then(|network| network.enabled)
+                    .unwrap_or(false);
+                let requested_additional_permissions =
+                    requested_network_access || params.permissions.file_system.is_some();
+                let trigger = if requested_network_access {
+                    ToolReviewTrigger::NetworkRetry
+                } else if requested_additional_permissions {
+                    ToolReviewTrigger::SandboxRetry
+                } else {
+                    ToolReviewTrigger::Initial
+                };
+                self.tool_review_requests.insert(
+                    request_id.clone(),
+                    PendingToolReviewState {
+                        thread_id: params.thread_id,
+                        turn_id: params.turn_id,
+                        item_id: Some(params.item_id),
+                        review_id: user_review_id(&request_id),
+                        tool_kind: ToolReviewToolKind::Permissions,
+                        tool_name: "permissions".to_string(),
+                        trigger,
+                        created_at: now_unix_seconds(),
+                        duration_started: true,
+                        requested_additional_permissions,
+                        requested_network_access,
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn ingest_server_response(
+        &mut self,
+        response: ServerResponse,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        match response {
+            ServerResponse::CommandExecutionRequestApproval {
+                request_id,
+                response,
+            } => {
+                let Some(pending_review) = self.tool_review_requests.remove(&request_id) else {
+                    return;
+                };
+                let status = command_execution_review_status(response.decision);
+                self.emit_tool_review_event(pending_review, ToolReviewReviewer::User, status, out);
+            }
+            ServerResponse::FileChangeRequestApproval {
+                request_id,
+                response,
+            } => {
+                let Some(pending_review) = self.tool_review_requests.remove(&request_id) else {
+                    return;
+                };
+                let status = file_change_review_status(response.decision);
+                self.emit_tool_review_event(pending_review, ToolReviewReviewer::User, status, out);
+            }
+            ServerResponse::PermissionsRequestApproval {
+                request_id,
+                response,
+            } => {
+                let Some(pending_review) = self.tool_review_requests.remove(&request_id) else {
+                    return;
+                };
+                let status = match response.scope {
+                    PermissionGrantScope::Turn => ToolReviewStatus::Approved,
+                    PermissionGrantScope::Session => ToolReviewStatus::ApprovedForSession,
+                };
+                self.emit_tool_review_event(pending_review, ToolReviewReviewer::User, status, out);
+            }
+            _ => {}
+        }
+    }
+
     fn ingest_error_response(
         &mut self,
         connection_id: u64,
@@ -744,15 +939,28 @@ impl AnalyticsReducer {
                 else {
                     return;
                 };
-                if let Some(event) = tool_item_event(
-                    &notification.thread_id,
-                    &notification.turn_id,
-                    &notification.item,
+                if let Some(event) = tool_item_event(ToolItemEventInput {
+                    thread_id: &notification.thread_id,
+                    turn_id: &notification.turn_id,
+                    item: &notification.item,
                     connection_state,
                     thread_metadata,
-                ) {
+                    review_summary: self.tool_review_summaries.get(item_id),
+                }) {
                     out.push(event);
                 }
+                self.tool_review_summaries.remove(item_id);
+            }
+            ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
+                self.guardian_review_starts.insert(
+                    notification.review_id,
+                    PendingGuardianReviewState {
+                        created_at: now_unix_seconds(),
+                    },
+                );
+            }
+            ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => {
+                self.ingest_guardian_tool_review_completed(notification, out);
             }
             ServerNotification::TurnStarted(notification) => {
                 let turn_state = self.turns.entry(notification.turn.id).or_insert(TurnState {
@@ -869,6 +1077,47 @@ impl AnalyticsReducer {
         )));
     }
 
+    fn ingest_guardian_tool_review_completed(
+        &mut self,
+        notification: codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let completed_at = now_unix_seconds();
+        let started = self.guardian_review_starts.remove(&notification.review_id);
+        let created_at = started
+            .as_ref()
+            .map(|start| start.created_at)
+            .unwrap_or(completed_at);
+        let Some(status) = guardian_review_status(notification.review.status) else {
+            return;
+        };
+        let (tool_kind, tool_name, trigger) = guardian_review_tool_metadata(&notification.action);
+        let pending_review = PendingToolReviewState {
+            thread_id: notification.thread_id,
+            turn_id: notification.turn_id,
+            item_id: notification.target_item_id,
+            review_id: notification.review_id,
+            tool_kind,
+            tool_name,
+            trigger,
+            created_at,
+            duration_started: started.is_some(),
+            requested_additional_permissions: guardian_review_requested_additional_permissions(
+                &notification.action,
+            ),
+            requested_network_access: guardian_review_requested_network_access(
+                &notification.action,
+            ),
+        };
+        self.emit_tool_review_event_at(
+            pending_review,
+            ToolReviewReviewer::Guardian,
+            status,
+            completed_at,
+            out,
+        );
+    }
+
     fn ingest_turn_steer_response(
         &mut self,
         connection_id: u64,
@@ -932,6 +1181,84 @@ impl AnalyticsReducer {
                 created_at: pending_request.created_at,
             },
         }));
+    }
+
+    fn emit_tool_review_event(
+        &mut self,
+        pending_review: PendingToolReviewState,
+        reviewer: ToolReviewReviewer,
+        status: ToolReviewStatus,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        self.emit_tool_review_event_at(pending_review, reviewer, status, now_unix_seconds(), out);
+    }
+
+    fn emit_tool_review_event_at(
+        &mut self,
+        pending_review: PendingToolReviewState,
+        reviewer: ToolReviewReviewer,
+        status: ToolReviewStatus,
+        completed_at: u64,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        if let Some(item_id) = pending_review.item_id.as_ref() {
+            self.record_tool_review_summary(item_id, reviewer, status, &pending_review);
+        }
+        let Some(thread_metadata) = self.thread_metadata(&pending_review.thread_id) else {
+            tracing::warn!(
+                thread_id = %pending_review.thread_id,
+                turn_id = %pending_review.turn_id,
+                review_id = %pending_review.review_id,
+                "dropping tool review analytics event: missing thread lifecycle metadata"
+            );
+            return;
+        };
+        out.push(TrackEventRequest::ToolCallReview(
+            CodexToolCallReviewEventRequest {
+                event_type: "codex_tool_call_review_event",
+                event_params: CodexToolCallReviewEventParams {
+                    thread_id: pending_review.thread_id,
+                    turn_id: pending_review.turn_id,
+                    item_id: pending_review.item_id,
+                    review_id: pending_review.review_id,
+                    thread_source: thread_metadata.thread_source,
+                    subagent_source: thread_metadata.subagent_source.clone(),
+                    parent_thread_id: thread_metadata.parent_thread_id.clone(),
+                    tool_kind: pending_review.tool_kind,
+                    tool_name: pending_review.tool_name,
+                    reviewer,
+                    trigger: pending_review.trigger,
+                    status,
+                    created_at: pending_review.created_at,
+                    completed_at: Some(completed_at),
+                    duration_ms: pending_review
+                        .duration_started
+                        .then(|| observed_duration_ms(pending_review.created_at, completed_at))
+                        .flatten(),
+                },
+            },
+        ));
+    }
+
+    fn record_tool_review_summary(
+        &mut self,
+        item_id: &str,
+        reviewer: ToolReviewReviewer,
+        status: ToolReviewStatus,
+        pending_review: &PendingToolReviewState,
+    ) {
+        let summary = self
+            .tool_review_summaries
+            .entry(item_id.to_string())
+            .or_default();
+        summary.review_count += 1;
+        match reviewer {
+            ToolReviewReviewer::Guardian => summary.guardian_review_count += 1,
+            ToolReviewReviewer::User => summary.user_review_count += 1,
+        }
+        summary.final_approval_outcome = Some(tool_item_final_approval_outcome(reviewer, status));
+        summary.requested_additional_permissions |= pending_review.requested_additional_permissions;
+        summary.requested_network_access |= pending_review.requested_network_access;
     }
 
     fn maybe_emit_turn_event(&mut self, turn_id: &str, out: &mut Vec<TrackEventRequest>) {
@@ -1057,13 +1384,24 @@ fn tool_item_id(item: &ThreadItem) -> Option<&str> {
     }
 }
 
-fn tool_item_event(
-    thread_id: &str,
-    turn_id: &str,
-    item: &ThreadItem,
-    connection_state: &ConnectionState,
-    thread_metadata: &ThreadMetadataState,
-) -> Option<TrackEventRequest> {
+struct ToolItemEventInput<'a> {
+    thread_id: &'a str,
+    turn_id: &'a str,
+    item: &'a ThreadItem,
+    connection_state: &'a ConnectionState,
+    thread_metadata: &'a ThreadMetadataState,
+    review_summary: Option<&'a ToolReviewSummary>,
+}
+
+fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
+    let ToolItemEventInput {
+        thread_id,
+        turn_id,
+        item,
+        connection_state,
+        thread_metadata,
+        review_summary,
+    } = input;
     match item {
         ThreadItem::CommandExecution {
             id,
@@ -1094,6 +1432,7 @@ fn tool_item_event(
                     completed_at_ms,
                     connection_state,
                     thread_metadata,
+                    review_summary,
                 },
             );
             Some(TrackEventRequest::CommandExecution(
@@ -1136,6 +1475,7 @@ fn tool_item_event(
                     completed_at_ms,
                     connection_state,
                     thread_metadata,
+                    review_summary,
                 },
             );
             Some(TrackEventRequest::FileChange(CodexFileChangeEventRequest {
@@ -1179,6 +1519,7 @@ fn tool_item_event(
                     completed_at_ms,
                     connection_state,
                     thread_metadata,
+                    review_summary,
                 },
             );
             Some(TrackEventRequest::McpToolCall(
@@ -1226,6 +1567,7 @@ fn tool_item_event(
                     completed_at_ms,
                     connection_state,
                     thread_metadata,
+                    review_summary,
                 },
             );
             Some(TrackEventRequest::DynamicToolCall(
@@ -1274,6 +1616,7 @@ fn tool_item_event(
                     completed_at_ms,
                     connection_state,
                     thread_metadata,
+                    review_summary,
                 },
             );
             Some(TrackEventRequest::CollabAgentToolCall(
@@ -1337,6 +1680,7 @@ fn tool_item_event(
                     completed_at_ms,
                     connection_state,
                     thread_metadata,
+                    review_summary,
                 },
             );
             Some(TrackEventRequest::WebSearch(CodexWebSearchEventRequest {
@@ -1377,6 +1721,7 @@ fn tool_item_event(
                     completed_at_ms,
                     connection_state,
                     thread_metadata,
+                    review_summary,
                 },
             );
             Some(TrackEventRequest::ImageGeneration(
@@ -1406,6 +1751,7 @@ struct ToolItemContext<'a> {
     completed_at_ms: u64,
     connection_state: &'a ConnectionState,
     thread_metadata: &'a ThreadMetadataState,
+    review_summary: Option<&'a ToolReviewSummary>,
 }
 
 fn tool_item_base(
@@ -1417,6 +1763,7 @@ fn tool_item_base(
     context: ToolItemContext<'_>,
 ) -> CodexToolItemEventBase {
     let thread_metadata = context.thread_metadata;
+    let review_summary = context.review_summary.cloned().unwrap_or_default();
     CodexToolItemEventBase {
         thread_id: thread_id.to_string(),
         turn_id: turn_id.to_string(),
@@ -1431,15 +1778,187 @@ fn tool_item_base(
         completed_at_ms: Some(context.completed_at_ms),
         duration_ms: outcome.duration_ms,
         execution_started: true,
-        review_count: 0,
-        guardian_review_count: 0,
-        user_review_count: 0,
-        final_approval_outcome: ToolItemFinalApprovalOutcome::Unknown,
+        review_count: review_summary.review_count,
+        guardian_review_count: review_summary.guardian_review_count,
+        user_review_count: review_summary.user_review_count,
+        final_approval_outcome: review_summary
+            .final_approval_outcome
+            .unwrap_or(ToolItemFinalApprovalOutcome::Unknown),
         terminal_status: outcome.terminal_status,
         failure_kind: outcome.failure_kind,
-        requested_additional_permissions: false,
-        requested_network_access: false,
-        retry_count: 0,
+        requested_additional_permissions: review_summary.requested_additional_permissions,
+        requested_network_access: review_summary.requested_network_access,
+        retry_count: review_summary.review_count.saturating_sub(1),
+    }
+}
+
+fn observed_duration_ms(started_at_ms: u64, completed_at_ms: u64) -> Option<u64> {
+    completed_at_ms.checked_sub(started_at_ms)
+}
+
+fn user_review_id(request_id: &RequestId) -> String {
+    format!("user:{request_id}")
+}
+
+fn command_execution_review_status(decision: CommandExecutionApprovalDecision) -> ToolReviewStatus {
+    match decision {
+        CommandExecutionApprovalDecision::Accept => ToolReviewStatus::Approved,
+        CommandExecutionApprovalDecision::AcceptForSession => ToolReviewStatus::ApprovedForSession,
+        CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment { .. } => {
+            ToolReviewStatus::ApprovedExecpolicyAmendment
+        }
+        CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+            network_policy_amendment,
+        } => match network_policy_amendment.action {
+            NetworkPolicyRuleAction::Allow => ToolReviewStatus::NetworkPolicyAllow,
+            NetworkPolicyRuleAction::Deny => ToolReviewStatus::NetworkPolicyDeny,
+        },
+        CommandExecutionApprovalDecision::Decline => ToolReviewStatus::Denied,
+        CommandExecutionApprovalDecision::Cancel => ToolReviewStatus::Aborted,
+    }
+}
+
+fn file_change_review_status(decision: FileChangeApprovalDecision) -> ToolReviewStatus {
+    match decision {
+        FileChangeApprovalDecision::Accept => ToolReviewStatus::Approved,
+        FileChangeApprovalDecision::AcceptForSession => ToolReviewStatus::ApprovedForSession,
+        FileChangeApprovalDecision::Decline => ToolReviewStatus::Denied,
+        FileChangeApprovalDecision::Cancel => ToolReviewStatus::Aborted,
+    }
+}
+
+fn guardian_review_status(status: GuardianApprovalReviewStatus) -> Option<ToolReviewStatus> {
+    match status {
+        GuardianApprovalReviewStatus::InProgress => None,
+        GuardianApprovalReviewStatus::Approved => Some(ToolReviewStatus::Approved),
+        GuardianApprovalReviewStatus::Denied => Some(ToolReviewStatus::Denied),
+        GuardianApprovalReviewStatus::TimedOut => Some(ToolReviewStatus::TimedOut),
+        GuardianApprovalReviewStatus::Aborted => Some(ToolReviewStatus::Aborted),
+    }
+}
+
+fn guardian_review_tool_metadata(
+    action: &GuardianApprovalReviewAction,
+) -> (ToolReviewToolKind, String, ToolReviewTrigger) {
+    match action {
+        GuardianApprovalReviewAction::Command { source, .. } => (
+            ToolReviewToolKind::CommandExecution,
+            app_server_guardian_command_tool_name(*source).to_string(),
+            ToolReviewTrigger::Initial,
+        ),
+        GuardianApprovalReviewAction::Execve { source, .. } => (
+            ToolReviewToolKind::CommandExecution,
+            app_server_guardian_command_tool_name(*source).to_string(),
+            ToolReviewTrigger::SubcommandExecve,
+        ),
+        GuardianApprovalReviewAction::ApplyPatch { .. } => (
+            ToolReviewToolKind::FileChange,
+            "apply_patch".to_string(),
+            ToolReviewTrigger::SandboxRetry,
+        ),
+        GuardianApprovalReviewAction::NetworkAccess { .. } => (
+            ToolReviewToolKind::NetworkAccess,
+            "network_access".to_string(),
+            ToolReviewTrigger::NetworkRetry,
+        ),
+        GuardianApprovalReviewAction::RequestPermissions { permissions, .. } => {
+            let requested_network_access = permissions
+                .network
+                .as_ref()
+                .and_then(|network| network.enabled)
+                .unwrap_or(false);
+            let trigger = if requested_network_access {
+                ToolReviewTrigger::NetworkRetry
+            } else if permissions.file_system.is_some() {
+                ToolReviewTrigger::SandboxRetry
+            } else {
+                ToolReviewTrigger::Initial
+            };
+            (
+                ToolReviewToolKind::Permissions,
+                "permissions".to_string(),
+                trigger,
+            )
+        }
+        GuardianApprovalReviewAction::McpToolCall { tool_name, .. } => (
+            ToolReviewToolKind::McpToolCall,
+            tool_name.clone(),
+            ToolReviewTrigger::Initial,
+        ),
+    }
+}
+
+fn guardian_review_requested_additional_permissions(action: &GuardianApprovalReviewAction) -> bool {
+    match action {
+        GuardianApprovalReviewAction::ApplyPatch { .. }
+        | GuardianApprovalReviewAction::NetworkAccess { .. } => true,
+        GuardianApprovalReviewAction::RequestPermissions { permissions, .. } => {
+            guardian_review_request_permissions_network_enabled(permissions)
+                || permissions.file_system.is_some()
+        }
+        GuardianApprovalReviewAction::Command { .. }
+        | GuardianApprovalReviewAction::Execve { .. }
+        | GuardianApprovalReviewAction::McpToolCall { .. } => false,
+    }
+}
+
+fn guardian_review_requested_network_access(action: &GuardianApprovalReviewAction) -> bool {
+    match action {
+        GuardianApprovalReviewAction::NetworkAccess { .. } => true,
+        GuardianApprovalReviewAction::RequestPermissions { permissions, .. } => {
+            guardian_review_request_permissions_network_enabled(permissions)
+        }
+        GuardianApprovalReviewAction::ApplyPatch { .. }
+        | GuardianApprovalReviewAction::Command { .. }
+        | GuardianApprovalReviewAction::Execve { .. }
+        | GuardianApprovalReviewAction::McpToolCall { .. } => false,
+    }
+}
+
+fn guardian_review_request_permissions_network_enabled(
+    permissions: &RequestPermissionProfile,
+) -> bool {
+    permissions
+        .network
+        .as_ref()
+        .and_then(|network| network.enabled)
+        .unwrap_or(false)
+}
+
+fn app_server_guardian_command_tool_name(source: AppServerGuardianCommandSource) -> &'static str {
+    match source {
+        AppServerGuardianCommandSource::Shell => "shell",
+        AppServerGuardianCommandSource::UnifiedExec => "unified_exec",
+    }
+}
+
+fn tool_item_final_approval_outcome(
+    reviewer: ToolReviewReviewer,
+    status: ToolReviewStatus,
+) -> ToolItemFinalApprovalOutcome {
+    match (reviewer, status) {
+        (ToolReviewReviewer::Guardian, ToolReviewStatus::Approved) => {
+            ToolItemFinalApprovalOutcome::GuardianApproved
+        }
+        (
+            ToolReviewReviewer::Guardian,
+            ToolReviewStatus::Denied | ToolReviewStatus::NetworkPolicyDeny,
+        ) => ToolItemFinalApprovalOutcome::GuardianDenied,
+        (ToolReviewReviewer::Guardian, _) => ToolItemFinalApprovalOutcome::GuardianAborted,
+        (
+            ToolReviewReviewer::User,
+            ToolReviewStatus::Approved
+            | ToolReviewStatus::ApprovedExecpolicyAmendment
+            | ToolReviewStatus::NetworkPolicyAllow,
+        ) => ToolItemFinalApprovalOutcome::UserApproved,
+        (ToolReviewReviewer::User, ToolReviewStatus::ApprovedForSession) => {
+            ToolItemFinalApprovalOutcome::UserApprovedForSession
+        }
+        (
+            ToolReviewReviewer::User,
+            ToolReviewStatus::Denied | ToolReviewStatus::NetworkPolicyDeny,
+        ) => ToolItemFinalApprovalOutcome::UserDenied,
+        (ToolReviewReviewer::User, _) => ToolItemFinalApprovalOutcome::UserAborted,
     }
 }
 
