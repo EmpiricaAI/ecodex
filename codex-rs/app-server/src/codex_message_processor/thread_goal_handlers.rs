@@ -41,7 +41,7 @@ impl CodexMessageProcessor {
                 }
             },
             None => {
-                match find_thread_path_by_id_str_with_state_db(
+                match find_thread_path_by_id_str(
                     &self.config.codex_home,
                     &thread_id.to_string(),
                     self.state_db.as_deref(),
@@ -262,7 +262,7 @@ impl CodexMessageProcessor {
                 }
             },
             None => {
-                match find_thread_path_by_id_str_with_state_db(
+                match find_thread_path_by_id_str(
                     &self.config.codex_home,
                     &thread_id.to_string(),
                     self.state_db.as_deref(),
@@ -345,7 +345,7 @@ impl CodexMessageProcessor {
                 return Ok(state_db);
             }
         } else {
-            match find_thread_path_by_id_str_with_state_db(
+            match find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &thread_id.to_string(),
                 self.state_db.as_deref(),
