@@ -140,13 +140,58 @@ Forking codex into `Nubaeon/ecodex` still earns its keep:
 
 But the fork is a **distribution artifact**, not a deep technical fork.
 
-## Outstanding (still in T2 noetic)
+## Config + credential storage (Subtask 3)
 
-1. **Plugin install path** — where do users place plugins? Likely `~/.codex/plugins/<name>/` based on existing patterns; need to confirm via `core-plugins/src/loader.rs`.
-2. **Hook firing frequency** — for latency-budget grounding (Subtask 4).
-3. **Config + credential storage layout** — Subtask 3.
-4. **Memory pipeline interop** — does codex's Phase 1/Phase 2 pipeline ingest external sources, or is it rollout-only?
-5. **Branding hook** — does the binary name come from `arg0` crate? Forking the name needs a clean swap point.
+**Codex home:** `$CODEX_HOME` env var, defaults to `~/.codex/`. Resolver in `utils/home-dir/src/lib.rs::find_codex_home()` — must exist and be a directory if env var is set.
+
+**Layout under `~/.codex/`:**
+- `config.toml` — main config (TOML; rich schema in `core/config.schema.json`)
+- `memories/` — memory artifacts (git-baseline initialized; `~/.codex/memories/.git`)
+- `plugins/cache/<plugin_id>/<version>/` — installed plugin payloads (atomic version replace)
+- `plugins/data/` — plugin runtime data
+- `.agents/plugins/marketplace.json` — installed marketplace state
+
+**Credential storage:**
+- `keyring-store/` — OS keyring integration (macOS Keychain, Linux Secret Service, Windows Credential Vault)
+- `login/` — auth flows: device-code, PKCE, web server callback
+- `device-key/` — per-device key management
+- `secrets/` — generic secrets handling
+
+**Where empirica plugin lands:** `~/.codex/plugins/cache/empirica/<version>/manifest.json` (+ optional `hooks.json`, `skills/`, etc.). Install via marketplace OR direct `--bundle` path.
+
+**Config-side empirica integration:** users add the plugin to their `config.toml` (codex has `plugin_edit.rs` for this). The plugin's hooks then activate on every codex session.
+
+## Hook firing frequency estimate (Subtask 4)
+
+Reasoning from architecture (no runtime measurement yet — that's a post-T3 task):
+
+| Event | Per-session frequency |
+|---|---|
+| `SessionStart` | 1 |
+| `UserPromptSubmit` | ~5–50 (one per user turn) |
+| `PreToolUse` | ~10–100 (one per tool call; coding sessions vary widely) |
+| `PostToolUse` | ~10–100 (paired with PreToolUse) |
+| `PermissionRequest` | ~0–10 (only on escalation) |
+| `Stop` | 1 |
+| **Total per session** | **~30–270 hook fires** |
+
+**Latency budget for subprocess shellout (Option A) per hook fire:**
+- Python interpreter startup: 50–100ms
+- empirica CLI logic (sentinel-gate.py: state DB read + maybe Qdrant): 50–200ms
+- **Total: 100–300ms per fire**
+
+**Cumulative session overhead:** ~3s–80s spread over a session lasting minutes → 1–15% wall-clock overhead. Tolerable.
+
+**Per-tool-call user-visible cost:** PreToolUse + PostToolUse = 200–600ms added to every tool call. Perceptible but not painful.
+
+**Verdict:** **Subprocess shellout (Option A) is viable for v1.** Options B/C/D/E (sidecar IPC, PyO3, full Rust port, AI-translated Rust) are not necessary for the integration. They become relevant only if real-world measurement shows the per-tool-call cost is unacceptable for power users.
+
+## Outstanding (parked for post-T3)
+
+1. **Memory pipeline interop** — does codex's Phase 1/Phase 2 pipeline ingest external sources, or is it rollout-only? Affects whether empirica findings flow into codex memories or stay parallel.
+2. **Branding hook** — does the binary name come from `arg0` crate? Forking the name to `ecodex` cleanly needs a swap point.
+3. **Goal-pairing protocol** — if we link empirica project-goals ↔ codex thread-goals, what's the wire format? Token-budget pass-through?
+4. **Runtime hook latency** — actual measurement once a prototype empirica plugin is wired up.
 
 ## Decisions parked for T3 (David sign-off required)
 
