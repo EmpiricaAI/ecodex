@@ -229,7 +229,6 @@ where
         .thread_manager
         .start_thread_with_tools(
             base_test.config.clone(),
-            codex_core::thread_store_from_config(&base_test.config),
             dynamic_tools,
             /*persist_extended_history*/ false,
         )
