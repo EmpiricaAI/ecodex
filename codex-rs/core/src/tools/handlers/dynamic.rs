@@ -33,7 +33,7 @@ impl ToolHandler for DynamicToolHandler {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         Some(PreToolUsePayload {
-            tool_name: HookToolName::for_function_tool(&invocation.tool_name),
+            tool_name: HookToolName::for_dynamic_tool(&invocation.tool_name),
             tool_input: dynamic_tool_input(invocation).ok()?,
         })
     }
@@ -44,7 +44,7 @@ impl ToolHandler for DynamicToolHandler {
         result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
         Some(PostToolUsePayload {
-            tool_name: HookToolName::for_function_tool(&invocation.tool_name),
+            tool_name: HookToolName::for_dynamic_tool(&invocation.tool_name),
             tool_use_id: invocation.call_id.clone(),
             tool_input: dynamic_tool_input(invocation).ok()?,
             tool_response: result

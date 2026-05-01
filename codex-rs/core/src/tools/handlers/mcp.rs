@@ -29,7 +29,7 @@ impl ToolHandler for McpHandler {
         };
 
         Some(PreToolUsePayload {
-            tool_name: HookToolName::for_function_tool(&invocation.tool_name),
+            tool_name: HookToolName::for_mcp_tool(&invocation.tool_name),
             tool_input: mcp_hook_tool_input(raw_arguments),
         })
     }
@@ -46,7 +46,7 @@ impl ToolHandler for McpHandler {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
-            tool_name: HookToolName::for_function_tool(&invocation.tool_name),
+            tool_name: HookToolName::for_mcp_tool(&invocation.tool_name),
             tool_use_id: invocation.call_id.clone(),
             tool_input: result.tool_input.clone(),
             tool_response,
@@ -78,7 +78,7 @@ impl ToolHandler for McpHandler {
 
         let (server, tool, raw_arguments) = payload;
         let arguments_str = raw_arguments;
-        let hook_tool_name = HookToolName::for_function_tool(&model_tool_name);
+        let hook_tool_name = HookToolName::for_mcp_tool(&model_tool_name);
 
         let started = Instant::now();
         let result = handle_mcp_tool_call(
@@ -147,7 +147,7 @@ mod tests {
                 payload,
             }),
             Some(PreToolUsePayload {
-                tool_name: HookToolName::for_function_tool(&codex_tools::ToolName::namespaced(
+                tool_name: HookToolName::for_mcp_tool(&codex_tools::ToolName::namespaced(
                     "mcp__memory__",
                     "create_entities",
                 )),
@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(
             McpHandler.post_tool_use_payload(&invocation, &output),
             Some(PostToolUsePayload {
-                tool_name: HookToolName::for_function_tool(&codex_tools::ToolName::namespaced(
+                tool_name: HookToolName::for_mcp_tool(&codex_tools::ToolName::namespaced(
                     "mcp__filesystem__",
                     "read_file",
                 )),
