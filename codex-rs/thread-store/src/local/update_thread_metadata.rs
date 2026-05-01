@@ -14,6 +14,7 @@ use codex_rollout::read_session_meta_line;
 
 use super::LocalThreadStore;
 use super::live_writer;
+use crate::GitInfoPatch;
 use crate::ReadThreadParams;
 use crate::StoredThread;
 use crate::ThreadStoreError;
@@ -30,13 +31,10 @@ pub(super) async fn update_thread_metadata(
     store: &LocalThreadStore,
     params: UpdateThreadMetadataParams,
 ) -> ThreadStoreResult<StoredThread> {
-    if params.patch.git_info.is_some() {
-        return Err(ThreadStoreError::Internal {
-            message: "local thread store does not implement git metadata updates in this slice"
-                .to_string(),
-        });
-    }
-    if params.patch.name.is_some() && params.patch.memory_mode.is_some() {
+    let field_count = usize::from(params.patch.name.is_some())
+        + usize::from(params.patch.memory_mode.is_some())
+        + usize::from(params.patch.git_info.is_some());
+    if field_count > 1 {
         return Err(ThreadStoreError::InvalidRequest {
             message: "local thread store applies one metadata field per patch in this slice"
                 .to_string(),
@@ -44,8 +42,12 @@ pub(super) async fn update_thread_metadata(
     }
 
     let thread_id = params.thread_id;
+    if live_writer::rollout_path(store, thread_id).await.is_ok() {
+        live_writer::persist_thread(store, thread_id).await?;
+    }
     let resolved_rollout_path =
         resolve_rollout_path(store, thread_id, params.include_archived).await?;
+    let git_info = params.patch.git_info;
     if let Some(name) = params.patch.name {
         apply_thread_name(store, resolved_rollout_path.path.as_path(), thread_id, name).await?;
     }
@@ -65,6 +67,10 @@ pub(super) async fn update_thread_metadata(
         /*new_thread_memory_mode*/ None,
     )
     .await;
+
+    if let Some(git_info) = git_info {
+        apply_thread_git_info(store, thread_id, git_info).await?;
+    }
 
     match read_thread::read_thread(
         store,
@@ -86,6 +92,36 @@ pub(super) async fn update_thread_metadata(
             )
             .await
         }
+    }
+}
+
+async fn apply_thread_git_info(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    git_info: GitInfoPatch,
+) -> ThreadStoreResult<()> {
+    let Some(state_db) = store.state_db().await else {
+        return Err(ThreadStoreError::Internal {
+            message: format!("sqlite state db unavailable for thread {thread_id}"),
+        });
+    };
+    let updated = state_db
+        .update_thread_git_info(
+            thread_id,
+            git_info.sha.as_ref().map(|value| value.as_deref()),
+            git_info.branch.as_ref().map(|value| value.as_deref()),
+            git_info.origin_url.as_ref().map(|value| value.as_deref()),
+        )
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to update git metadata for thread {thread_id}: {err}"),
+        })?;
+    if updated {
+        Ok(())
+    } else {
+        Err(ThreadStoreError::Internal {
+            message: format!("thread metadata disappeared before update completed: {thread_id}"),
+        })
     }
 }
 
@@ -200,6 +236,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::GitInfoPatch;
     use crate::ResumeThreadParams;
     use crate::ThreadEventPersistenceMode;
     use crate::ThreadMetadataPatch;
@@ -321,6 +358,136 @@ mod tests {
         let appended = last_rollout_item(path.as_path());
         assert_eq!(appended["type"], "session_meta");
         assert_eq!(appended["payload"]["memory_mode"], "disabled");
+    }
+
+    #[tokio::test]
+    async fn update_thread_metadata_sets_git_info() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = Uuid::from_u128(309);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file(home.path(), "2025-01-03T17-00-00", uuid).expect("session file");
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    git_info: Some(GitInfoPatch {
+                        sha: Some(Some("abc123".to_string())),
+                        branch: Some(Some("main".to_string())),
+                        origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                    }),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("set git metadata");
+
+        let git_info = thread.git_info.expect("git info should be present");
+        assert_eq!(
+            git_info.commit_hash.as_ref().map(|sha| sha.0.as_str()),
+            Some("abc123")
+        );
+        assert_eq!(git_info.branch.as_deref(), Some("main"));
+        assert_eq!(
+            git_info.repository_url.as_deref(),
+            Some("https://github.com/openai/codex")
+        );
+    }
+
+    #[tokio::test]
+    async fn update_thread_metadata_partially_updates_git_info() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = Uuid::from_u128(310);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file(home.path(), "2025-01-03T17-30-00", uuid).expect("session file");
+
+        store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    git_info: Some(GitInfoPatch {
+                        sha: Some(Some("abc123".to_string())),
+                        branch: Some(Some("main".to_string())),
+                        origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                    }),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("seed git metadata");
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    git_info: Some(GitInfoPatch {
+                        branch: Some(Some("feature".to_string())),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("partially update git metadata");
+
+        let git_info = thread.git_info.expect("git info should be present");
+        assert_eq!(
+            git_info.commit_hash.as_ref().map(|sha| sha.0.as_str()),
+            Some("abc123")
+        );
+        assert_eq!(git_info.branch.as_deref(), Some("feature"));
+        assert_eq!(
+            git_info.repository_url.as_deref(),
+            Some("https://github.com/openai/codex")
+        );
+    }
+
+    #[tokio::test]
+    async fn update_thread_metadata_clears_git_info_fields() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = Uuid::from_u128(311);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file(home.path(), "2025-01-03T18-00-00", uuid).expect("session file");
+
+        store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    git_info: Some(GitInfoPatch {
+                        sha: Some(Some("abc123".to_string())),
+                        branch: Some(Some("main".to_string())),
+                        origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                    }),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("seed git metadata");
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    git_info: Some(GitInfoPatch {
+                        sha: Some(None),
+                        branch: Some(None),
+                        origin_url: Some(None),
+                    }),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("clear git metadata");
+
+        assert!(thread.git_info.is_none());
     }
 
     #[tokio::test]
