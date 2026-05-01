@@ -362,7 +362,7 @@ impl ThreadManager {
             provider,
             codex_home,
             environment_manager,
-            None,
+            /*state_db*/ None,
         )
     }
 
