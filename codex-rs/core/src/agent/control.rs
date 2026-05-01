@@ -366,34 +366,34 @@ impl AgentControl {
 
         let parent_thread_id = *parent_thread_id;
         let parent_thread = state.get_thread(parent_thread_id).await.ok();
-        if let Some(parent_thread) = parent_thread.as_ref() {
-            // `record_conversation_items` only queues rollout writes asynchronously.
-            // Flush/materialize the live parent before snapshotting JSONL for a fork.
+        let mut forked_rollout_items = if let Some(parent_thread) = parent_thread.as_ref() {
+            // `record_conversation_items` only queues persistence writes asynchronously.
+            // Flush before snapshotting store history for a fork.
+            parent_thread.flush_rollout().await?;
             parent_thread
-                .codex
-                .session
-                .ensure_rollout_materialized()
-                .await;
-            parent_thread.codex.session.flush_rollout().await?;
-        }
-
-        let rollout_path = parent_thread
-            .as_ref()
-            .and_then(|parent_thread| parent_thread.rollout_path())
-            .or(find_thread_path_by_id_str(
+                .load_history(/*include_archived*/ true)
+                .await
+                .map_err(|err| {
+                    CodexErr::Fatal(format!(
+                        "failed to load parent thread history for fork {parent_thread_id}: {err}"
+                    ))
+                })?
+                .items
+        } else {
+            let rollout_path = find_thread_path_by_id_str(
                 config.codex_home.as_path(),
                 &parent_thread_id.to_string(),
             )
-            .await?)
+            .await?
             .ok_or_else(|| {
                 CodexErr::Fatal(format!(
                     "parent thread rollout unavailable for fork: {parent_thread_id}"
                 ))
             })?;
-
-        let mut forked_rollout_items = RolloutRecorder::get_rollout_history(&rollout_path)
-            .await?
-            .get_rollout_items();
+            RolloutRecorder::get_rollout_history(&rollout_path)
+                .await?
+                .get_rollout_items()
+        };
         if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);

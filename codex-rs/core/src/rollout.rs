@@ -51,6 +51,7 @@ pub(crate) mod list {
 }
 
 pub(crate) mod recorder {
+    #[allow(unused_imports)]
     pub use codex_rollout::RolloutRecorder;
 }
 
