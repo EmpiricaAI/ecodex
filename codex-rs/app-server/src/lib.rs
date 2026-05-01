@@ -463,6 +463,7 @@ pub async fn run_main_with_transport_options(
                     if let Err(err) = codex_core::personality_migration::maybe_migrate_personality(
                         &config.codex_home,
                         &config_toml,
+                        /*state_db*/ None,
                     )
                     .await
                     {
@@ -749,6 +750,7 @@ pub async fn run_main_with_transport_options(
             environment_manager,
             feedback: feedback.clone(),
             log_db,
+            state_db: state_db.clone(),
             config_warnings,
             session_source,
             auth_manager,

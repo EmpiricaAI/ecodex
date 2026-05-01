@@ -83,6 +83,7 @@ use codex_model_provider::create_model_provider;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_rollout::StateDbHandle;
 use codex_state::log_db::LogDbLayer;
 use futures::FutureExt;
 use tokio::sync::broadcast;
@@ -255,6 +256,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
+    pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -276,6 +278,7 @@ impl MessageProcessor {
             environment_manager,
             feedback,
             log_db,
+            state_db,
             config_warnings,
             session_source,
             auth_manager,
@@ -289,7 +292,7 @@ impl MessageProcessor {
         // The thread store is intentionally process-scoped. Config reloads can
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
-        let thread_store = thread_store_from_config(config.as_ref());
+        let thread_store = thread_store_from_config(config.as_ref(), state_db.clone());
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
@@ -297,6 +300,7 @@ impl MessageProcessor {
             environment_manager,
             Some(analytics_events_client.clone()),
             Arc::clone(&thread_store),
+            state_db.clone(),
         ));
         thread_manager
             .plugins_manager()
@@ -313,6 +317,7 @@ impl MessageProcessor {
             thread_store,
             feedback,
             log_db,
+            state_db: state_db.clone(),
         });
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
@@ -331,8 +336,7 @@ impl MessageProcessor {
             thread_manager.clone(),
             analytics_events_client.clone(),
         );
-        let device_key_api =
-            DeviceKeyApi::new(config.sqlite_home.clone(), config.model_provider_id.clone());
+        let device_key_api = DeviceKeyApi::new(state_db);
         let external_agent_config_api =
             ExternalAgentConfigApi::new(config.codex_home.to_path_buf());
         let fs_api = FsApi::new(

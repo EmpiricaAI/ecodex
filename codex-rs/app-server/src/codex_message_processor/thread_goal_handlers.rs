@@ -41,8 +41,12 @@ impl CodexMessageProcessor {
                 }
             },
             None => {
-                match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
-                    .await
+                match find_thread_path_by_id_str_with_state_db(
+                    &self.config.codex_home,
+                    &thread_id.to_string(),
+                    self.state_db.as_deref(),
+                )
+                .await
                 {
                     Ok(Some(path)) => path,
                     Ok(None) => {
@@ -258,8 +262,12 @@ impl CodexMessageProcessor {
                 }
             },
             None => {
-                match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
-                    .await
+                match find_thread_path_by_id_str_with_state_db(
+                    &self.config.codex_home,
+                    &thread_id.to_string(),
+                    self.state_db.as_deref(),
+                )
+                .await
                 {
                     Ok(Some(path)) => path,
                     Ok(None) => {
@@ -337,7 +345,12 @@ impl CodexMessageProcessor {
                 return Ok(state_db);
             }
         } else {
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
+            match find_thread_path_by_id_str_with_state_db(
+                &self.config.codex_home,
+                &thread_id.to_string(),
+                self.state_db.as_deref(),
+            )
+            .await
             {
                 Ok(Some(_)) => {}
                 Ok(None) => {
@@ -351,8 +364,8 @@ impl CodexMessageProcessor {
             }
         }
 
-        open_state_db_for_direct_thread_lookup(&self.config)
-            .await
+        self.state_db
+            .clone()
             .ok_or_else(|| internal_error("sqlite state db unavailable for thread goals"))
     }
 

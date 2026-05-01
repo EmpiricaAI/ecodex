@@ -29,9 +29,7 @@ use codex_device_key::RemoteControlClientEnrollmentSignPayload;
 use codex_state::DeviceKeyBindingRecord;
 use codex_state::StateRuntime;
 use std::fmt;
-use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
 
 #[derive(Clone)]
 pub(crate) struct DeviceKeyApi {
@@ -39,12 +37,9 @@ pub(crate) struct DeviceKeyApi {
 }
 
 impl DeviceKeyApi {
-    pub(crate) fn new(sqlite_home: PathBuf, default_provider: String) -> Self {
+    pub(crate) fn new(state_db: Option<Arc<StateRuntime>>) -> Self {
         Self {
-            store: DeviceKeyStore::new(Arc::new(StateDeviceKeyBindingStore::new(
-                sqlite_home,
-                default_provider,
-            ))),
+            store: DeviceKeyStore::new(Arc::new(StateDeviceKeyBindingStore::new(state_db))),
         }
     }
 
@@ -101,39 +96,25 @@ impl DeviceKeyApi {
 }
 
 struct StateDeviceKeyBindingStore {
-    sqlite_home: PathBuf,
-    default_provider: String,
-    state_db: OnceCell<Arc<StateRuntime>>,
+    state_db: Option<Arc<StateRuntime>>,
 }
 
 impl StateDeviceKeyBindingStore {
-    fn new(sqlite_home: PathBuf, default_provider: String) -> Self {
-        Self {
-            sqlite_home,
-            default_provider,
-            state_db: OnceCell::new(),
-        }
+    fn new(state_db: Option<Arc<StateRuntime>>) -> Self {
+        Self { state_db }
     }
 
     async fn state_db(&self) -> Result<Arc<StateRuntime>, DeviceKeyError> {
-        let sqlite_home = self.sqlite_home.clone();
-        let default_provider = self.default_provider.clone();
         self.state_db
-            .get_or_try_init(|| async move {
-                StateRuntime::init(sqlite_home, default_provider)
-                    .await
-                    .map_err(|err| DeviceKeyError::Platform(err.to_string()))
-            })
-            .await
-            .cloned()
+            .clone()
+            .ok_or_else(|| DeviceKeyError::Platform("sqlite state db unavailable".to_string()))
     }
 }
 
 impl fmt::Debug for StateDeviceKeyBindingStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StateDeviceKeyBindingStore")
-            .field("sqlite_home", &self.sqlite_home)
-            .field("default_provider", &self.default_provider)
+            .field("has_state_db", &self.state_db.is_some())
             .finish_non_exhaustive()
     }
 }
