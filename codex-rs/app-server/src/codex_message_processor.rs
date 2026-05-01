@@ -250,7 +250,6 @@ use codex_core::CodexThread;
 use codex_core::CodexThreadTurnContextOverrides;
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
-use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::StartThreadOptions;
 use codex_core::SteerInputError;
@@ -266,7 +265,6 @@ use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
-use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
@@ -372,9 +370,11 @@ use codex_rollout::state_db::get_state_db;
 use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
+#[cfg(test)]
 use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
 use codex_thread_store::ArchiveThreadParams as StoreArchiveThreadParams;
+use codex_thread_store::GitInfoPatch as StoreGitInfoPatch;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::ListThreadsParams as StoreListThreadsParams;
 use codex_thread_store::LocalThreadStore;
@@ -429,7 +429,6 @@ use crate::filters::source_kind_matches;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
-use token_usage_replay::latest_token_usage_turn_id_for_thread_path;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
 use token_usage_replay::send_thread_token_usage_update_to_connection;
 
@@ -3319,54 +3318,41 @@ impl CodexMessageProcessor {
             return Err(invalid_request("gitInfo must include at least one field"));
         }
 
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
-        let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
-        if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config).await;
-        }
-        let Some(state_db_ctx) = state_db_ctx else {
-            return Err(internal_error(format!(
-                "sqlite state db unavailable for thread {thread_uuid}"
-            )));
-        };
-
-        self.ensure_thread_metadata_row_exists(thread_uuid, &state_db_ctx, loaded_thread.as_ref())
-            .await?;
-
         let git_sha = Self::normalize_thread_metadata_git_field(sha, "gitInfo.sha")?;
         let git_branch = Self::normalize_thread_metadata_git_field(branch, "gitInfo.branch")?;
         let git_origin_url =
             Self::normalize_thread_metadata_git_field(origin_url, "gitInfo.originUrl")?;
 
-        let updated = state_db_ctx
-            .update_thread_git_info(
-                thread_uuid,
-                git_sha.as_ref().map(|value| value.as_deref()),
-                git_branch.as_ref().map(|value| value.as_deref()),
-                git_origin_url.as_ref().map(|value| value.as_deref()),
-            )
-            .await
-            .map_err(|err| {
-                internal_error(format!(
-                    "failed to update thread metadata for {thread_uuid}: {err}"
-                ))
-            })?;
-        if !updated {
-            return Err(internal_error(format!(
-                "thread metadata disappeared before update completed: {thread_uuid}"
-            )));
-        }
-
-        let Some(summary) =
-            read_summary_from_state_db_context_by_thread_id(Some(&state_db_ctx), thread_uuid).await
-        else {
-            return Err(internal_error(format!(
-                "failed to reload updated thread metadata for {thread_uuid}"
-            )));
+        let patch = StoreThreadMetadataPatch {
+            git_info: Some(StoreGitInfoPatch {
+                sha: git_sha,
+                branch: git_branch,
+                origin_url: git_origin_url,
+            }),
+            ..Default::default()
         };
+        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
+        let updated_thread = if let Some(loaded_thread) = loaded_thread.as_ref() {
+            loaded_thread
+                .update_thread_metadata(patch, /*include_archived*/ true)
+                .await
+        } else {
+            self.thread_store
+                .update_thread_metadata(StoreUpdateThreadMetadataParams {
+                    thread_id: thread_uuid,
+                    patch,
+                    include_archived: true,
+                })
+                .await
+        }
+        .map_err(|err| thread_store_write_error("update thread metadata", err))?;
 
-        let mut thread = summary_to_thread(summary, &self.config.cwd);
+        let (mut thread, _) = thread_from_stored_thread(
+            updated_thread,
+            self.config.model_provider_id.as_str(),
+            &self.config.cwd,
+        );
         self.attach_thread_name(thread_uuid, &mut thread).await;
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -3392,122 +3378,6 @@ impl CodexMessageProcessor {
             }
             Some(None) => Ok(Some(None)),
             None => Ok(None),
-        }
-    }
-
-    async fn ensure_thread_metadata_row_exists(
-        &self,
-        thread_uuid: ThreadId,
-        state_db_ctx: &Arc<StateRuntime>,
-        loaded_thread: Option<&Arc<CodexThread>>,
-    ) -> Result<(), JSONRPCErrorError> {
-        match state_db_ctx.get_thread(thread_uuid).await {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) => {}
-            Err(err) => {
-                return Err(internal_error(format!(
-                    "failed to load thread metadata for {thread_uuid}: {err}"
-                )));
-            }
-        }
-
-        if let Some(thread) = loaded_thread {
-            let Some(rollout_path) = thread.rollout_path() else {
-                return Err(invalid_request(format!(
-                    "ephemeral thread does not support metadata updates: {thread_uuid}"
-                )));
-            };
-
-            reconcile_rollout(
-                Some(state_db_ctx),
-                rollout_path.as_path(),
-                self.config.model_provider_id.as_str(),
-                /*builder*/ None,
-                &[],
-                /*archived_only*/ None,
-                /*new_thread_memory_mode*/ None,
-            )
-            .await;
-
-            match state_db_ctx.get_thread(thread_uuid).await {
-                Ok(Some(_)) => return Ok(()),
-                Ok(None) => {}
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to load reconciled thread metadata for {thread_uuid}: {err}"
-                    )));
-                }
-            }
-
-            let config_snapshot = thread.config_snapshot().await;
-            let model_provider = config_snapshot.model_provider_id.clone();
-            let mut builder = ThreadMetadataBuilder::new(
-                thread_uuid,
-                rollout_path,
-                Utc::now(),
-                config_snapshot.session_source.clone(),
-            );
-            builder.model_provider = Some(model_provider.clone());
-            builder.cwd = config_snapshot.cwd.to_path_buf();
-            builder.cli_version = Some(env!("CARGO_PKG_VERSION").to_string());
-            builder.sandbox_policy = config_snapshot.sandbox_policy();
-            builder.approval_mode = config_snapshot.approval_policy;
-            let metadata = builder.build(model_provider.as_str());
-            if let Err(err) = state_db_ctx.insert_thread_if_absent(&metadata).await {
-                return Err(internal_error(format!(
-                    "failed to create thread metadata for {thread_uuid}: {err}"
-                )));
-            }
-            return Ok(());
-        }
-
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
-                .await
-            {
-                Ok(Some(path)) => path,
-                Ok(None) => match find_archived_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &thread_uuid.to_string(),
-                )
-                .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        return Err(invalid_request(format!("thread not found: {thread_uuid}")));
-                    }
-                    Err(err) => {
-                        return Err(internal_error(format!(
-                            "failed to locate archived thread id {thread_uuid}: {err}"
-                        )));
-                    }
-                },
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to locate thread id {thread_uuid}: {err}"
-                    )));
-                }
-            };
-
-        reconcile_rollout(
-            Some(state_db_ctx),
-            rollout_path.as_path(),
-            self.config.model_provider_id.as_str(),
-            /*builder*/ None,
-            &[],
-            /*archived_only*/ None,
-            /*new_thread_memory_mode*/ None,
-        )
-        .await;
-
-        match state_db_ctx.get_thread(thread_uuid).await {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => Err(internal_error(format!(
-                "failed to create thread metadata from rollout for {thread_uuid}"
-            ))),
-            Err(err) => Err(internal_error(format!(
-                "failed to load reconciled thread metadata for {thread_uuid}: {err}"
-            ))),
         }
     }
 
@@ -5094,16 +4964,10 @@ impl CodexMessageProcessor {
         // `excludeTurns` is the cheap fork path, so skip restored usage replay
         // instead of rebuilding history only to attribute a historical update.
         if let Some(token_usage_thread) = token_usage_thread {
-            let token_usage_turn_id = if let Some(turn_id) =
-                latest_token_usage_turn_id_for_thread_path(&token_usage_thread).await
-            {
-                Some(turn_id)
-            } else {
-                latest_token_usage_turn_id_from_rollout_items(
-                    &history_items,
-                    token_usage_thread.turns.as_slice(),
-                )
-            };
+            let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
+                &history_items,
+                token_usage_thread.turns.as_slice(),
+            );
             // Mirror the resume contract for forks: the new thread is usable as soon
             // as the response arrives, so restored usage must follow immediately.
             send_thread_token_usage_update_to_connection(
@@ -7228,40 +7092,44 @@ impl CodexMessageProcessor {
         review_request: ReviewRequest,
         display_text: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        let rollout_path = if let Some(path) = parent_thread.rollout_path() {
-            path
-        } else {
-            find_thread_path_by_id_str(&self.config.codex_home, &parent_thread_id.to_string())
-                .await
-                .map_err(|err| JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to locate thread id {parent_thread_id}: {err}"),
-                    data: None,
-                })?
-                .ok_or_else(|| JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("no rollout found for thread id {parent_thread_id}"),
-                    data: None,
-                })?
-        };
+        parent_thread
+            .flush_rollout()
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to flush parent thread {parent_thread_id}: {err}"),
+                data: None,
+            })?;
+        let parent_history = parent_thread
+            .load_history(/*include_archived*/ true)
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to load parent thread {parent_thread_id}: {err}"),
+                data: None,
+            })?;
 
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
+        let review_thread_store = thread_store_from_config(&config);
 
         let NewThread {
             thread_id,
             thread: review_thread,
-            session_configured,
             ..
         } = self
             .thread_manager
-            .fork_thread(
+            .fork_thread_from_history(
                 ForkSnapshot::Interrupted,
                 config.clone(),
-                thread_store_from_config(&config),
-                rollout_path,
+                review_thread_store.clone(),
+                InitialHistory::Resumed(ResumedHistory {
+                    conversation_id: parent_thread_id,
+                    history: parent_history.items.clone(),
+                    rollout_path: parent_thread.rollout_path(),
+                }),
                 /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
             )
@@ -7285,38 +7153,53 @@ impl CodexMessageProcessor {
         );
 
         let fallback_provider = self.config.model_provider_id.as_str();
-        if let Some(rollout_path) = review_thread.rollout_path() {
-            match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
-                Ok(summary) => {
-                    let mut thread = summary_to_thread(summary, &self.config.cwd);
-                    self.thread_watch_manager
-                        .upsert_thread_silently(thread.clone())
-                        .await;
-                    thread.status = resolve_thread_status(
-                        self.thread_watch_manager
-                            .loaded_status_for_thread(&thread.id)
-                            .await,
-                        /*has_in_progress_turn*/ false,
-                    );
-                    let notif = thread_started_notification(thread);
-                    self.outgoing
-                        .send_server_notification(ServerNotification::ThreadStarted(notif))
-                        .await;
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to load summary for review thread {}: {}",
-                        session_configured.session_id,
-                        err
-                    );
-                }
+        let mut thread = match self
+            .read_stored_thread_for_new_fork(
+                review_thread_store.as_ref(),
+                thread_id,
+                /*include_history*/ false,
+            )
+            .await
+        {
+            Ok(stored_thread) => self
+                .stored_thread_to_api_thread(
+                    stored_thread,
+                    fallback_provider,
+                    /*include_turns*/ false,
+                )
+                .await
+                .map_err(|message| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!(
+                        "failed to build detached review thread {thread_id}: {message}"
+                    ),
+                    data: None,
+                })?,
+            Err(err) => {
+                tracing::warn!(
+                    "failed to read detached review thread {thread_id} from thread store: {err:?}"
+                );
+                let config_snapshot = review_thread.config_snapshot().await;
+                build_thread_from_snapshot(
+                    thread_id,
+                    &config_snapshot,
+                    review_thread.rollout_path(),
+                )
             }
-        } else {
-            tracing::warn!(
-                "review thread {} has no rollout path",
-                session_configured.session_id
-            );
-        }
+        };
+        self.thread_watch_manager
+            .upsert_thread_silently(thread.clone())
+            .await;
+        thread.status = resolve_thread_status(
+            self.thread_watch_manager
+                .loaded_status_for_thread(&thread.id)
+                .await,
+            /*has_in_progress_turn*/ false,
+        );
+        let notif = thread_started_notification(thread);
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadStarted(notif))
+            .await;
 
         let turn_id = self
             .submit_core_op(
@@ -8516,7 +8399,7 @@ async fn send_thread_goal_snapshot_notification(
     }
 }
 
-fn populate_thread_turns_from_history(
+pub(crate) fn populate_thread_turns_from_history(
     thread: &mut Thread,
     items: &[RolloutItem],
     active_turn: Option<&Turn>,
@@ -8961,6 +8844,7 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn read_summary_from_state_db_context_by_thread_id(
     state_db_ctx: Option<&StateDbHandle>,
     thread_id: ThreadId,
@@ -9192,7 +9076,7 @@ fn thread_store_write_error(operation: &str, err: ThreadStoreError) -> JSONRPCEr
     }
 }
 
-fn thread_from_stored_thread(
+pub(crate) fn thread_from_stored_thread(
     thread: StoredThread,
     fallback_provider: &str,
     fallback_cwd: &AbsolutePathBuf,
@@ -9327,6 +9211,7 @@ fn summary_from_stored_thread(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn summary_from_state_db_metadata(
     conversation_id: ThreadId,
     path: PathBuf,
@@ -9371,6 +9256,7 @@ fn summary_from_state_db_metadata(
     }
 }
 
+#[allow(dead_code)]
 fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummary {
     summary_from_state_db_metadata(
         metadata.id,
@@ -9394,6 +9280,7 @@ fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummar
     )
 }
 
+#[allow(dead_code)]
 pub(crate) async fn read_summary_from_rollout(
     path: &Path,
     fallback_provider: &str,
@@ -9468,18 +9355,7 @@ pub(crate) async fn read_summary_from_rollout(
     })
 }
 
-pub(crate) async fn read_rollout_items_from_rollout(
-    path: &Path,
-) -> std::io::Result<Vec<RolloutItem>> {
-    let items = match RolloutRecorder::get_rollout_history(path).await? {
-        InitialHistory::New | InitialHistory::Cleared => Vec::new(),
-        InitialHistory::Forked(items) => items,
-        InitialHistory::Resumed(resumed) => resumed.history,
-    };
-
-    Ok(items)
-}
-
+#[allow(dead_code)]
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
@@ -9528,6 +9404,7 @@ fn extract_conversation_summary(
     })
 }
 
+#[allow(dead_code)]
 fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     ConversationGitInfo {
         sha: git_info.commit_hash.as_ref().map(|sha| sha.0.clone()),
@@ -9677,6 +9554,7 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     })
 }
 
+#[allow(dead_code)]
 async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String> {
     let updated_at = tokio::fs::metadata(path)
         .await
@@ -9689,7 +9567,7 @@ async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String
     updated_at.or_else(|| created_at.map(str::to_string))
 }
 
-fn build_thread_from_snapshot(
+pub(crate) fn build_thread_from_snapshot(
     thread_id: ThreadId,
     config_snapshot: &ThreadConfigSnapshot,
     path: Option<PathBuf>,
@@ -9724,7 +9602,7 @@ fn build_thread_from_loaded_snapshot(
     build_thread_from_snapshot(thread_id, config_snapshot, loaded_thread.rollout_path())
 }
 
-fn thread_started_notification(mut thread: Thread) -> ThreadStartedNotification {
+pub(crate) fn thread_started_notification(mut thread: Thread) -> ThreadStartedNotification {
     thread.turns.clear();
     ThreadStartedNotification { thread }
 }

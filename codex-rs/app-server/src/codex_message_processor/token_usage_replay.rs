@@ -9,7 +9,6 @@
 //! the time the `TokenCount` was persisted so the notification still targets the
 //! corresponding rebuilt turn.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use codex_app_server_protocol::ServerNotification;
@@ -24,7 +23,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 
-use crate::codex_message_processor::read_rollout_items_from_rollout;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 
@@ -57,19 +55,6 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
             ServerNotification::ThreadTokenUsageUpdated(notification),
         )
         .await;
-}
-
-pub(super) async fn latest_token_usage_turn_id_for_thread_path(thread: &Thread) -> Option<String> {
-    let rollout_path = thread.path.as_deref()?;
-    latest_token_usage_turn_id_from_rollout_path(rollout_path, thread.turns.as_slice()).await
-}
-
-pub(super) async fn latest_token_usage_turn_id_from_rollout_path(
-    rollout_path: &Path,
-    turns: &[Turn],
-) -> Option<String> {
-    let rollout_items = read_rollout_items_from_rollout(rollout_path).await.ok()?;
-    latest_token_usage_turn_id_from_rollout_items(&rollout_items, turns)
 }
 
 /// Identifies the turn that was active when a `TokenCount` record appeared.
