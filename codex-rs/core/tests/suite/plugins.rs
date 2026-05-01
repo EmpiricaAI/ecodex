@@ -67,18 +67,34 @@ fn write_plugin_skill_plugin(home: &TempDir) -> std::path::PathBuf {
 
 fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {
     let plugin_root = write_sample_plugin_manifest_and_config(home);
+    let runfiles_env_vars = [
+        "RUNFILES_DIR",
+        "RUNFILES_MANIFEST_FILE",
+        "RUNFILES_MANIFEST_ONLY",
+        "JAVA_RUNFILES",
+        "TEST_SRCDIR",
+        "TEST_WORKSPACE",
+        "TEST_BINARY",
+    ]
+    .into_iter()
+    .filter(|name| std::env::var_os(name).is_some())
+    .collect::<Vec<_>>();
+    let mut sample_server = serde_json::json!({
+        "command": command,
+        "startup_timeout_sec": 60.0,
+    });
+    if !runfiles_env_vars.is_empty() {
+        sample_server["env_vars"] =
+            serde_json::to_value(runfiles_env_vars).expect("serialize runfiles env vars");
+    }
     std::fs::write(
         plugin_root.join(".mcp.json"),
-        format!(
-            r#"{{
-  "mcpServers": {{
-    "sample": {{
-      "command": "{command}",
-      "startup_timeout_sec": 60.0
-    }}
-  }}
-}}"#
-        ),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "mcpServers": {
+                "sample": sample_server,
+            },
+        }))
+        .expect("serialize plugin mcp config"),
     )
     .expect("write plugin mcp config");
 }
