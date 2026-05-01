@@ -136,6 +136,7 @@ use codex_thread_store::LiveThreadInitGuard;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadEventPersistenceMode;
+use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
@@ -274,7 +275,6 @@ use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpManager;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
-use crate::plugins::PluginsManager;
 use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
@@ -301,6 +301,7 @@ use crate::turn_timing::TurnTimingState;
 use crate::turn_timing::record_turn_ttfm_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use codex_core_plugins::PluginsManager;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::with_codex_apps_mcp;
@@ -318,7 +319,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::DeprecationNoticeEvent;
@@ -348,6 +348,7 @@ use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_protocol::protocol::SkillToolDependency as ProtocolSkillToolDependency;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -475,7 +476,8 @@ impl Codex {
         let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());
-        let plugin_outcome = plugins_manager.plugins_for_config(&config).await;
+        let plugins_input = config.plugins_config_input();
+        let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input, fs).await;
@@ -1381,6 +1383,9 @@ impl Session {
     }
 
     pub(crate) async fn reload_user_config_layer(&self) {
+        // Refresh layer-backed runtime state for an existing session, including enabled plugin,
+        // skill, and hook state. Derived config fields such as feature gates and legacy notify
+        // settings remain session-static.
         let config_toml_path = {
             let state = self.state.lock().await;
             state
@@ -1406,16 +1411,36 @@ impl Session {
             }
         };
 
-        let mut state = self.state.lock().await;
-        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-        config.config_layer_stack = config
-            .config_layer_stack
-            .with_user_config(&config_toml_path, user_config);
-        config.tool_suggest =
-            resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
-        state.session_configuration.original_config_do_not_use = Arc::new(config);
+        let config = {
+            let mut state = self.state.lock().await;
+            let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+            config.config_layer_stack = config
+                .config_layer_stack
+                .with_user_config(&config_toml_path, user_config);
+            config.tool_suggest =
+                resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
+            let config = Arc::new(config);
+            state.session_configuration.original_config_do_not_use = Arc::clone(&config);
+            config
+        };
         self.services.skills_manager.clear_cache();
         self.services.plugins_manager.clear_cache();
+        let hooks = build_hooks_for_config(
+            config.as_ref(),
+            self.services.plugins_manager.as_ref(),
+            self.services.user_shell.as_ref(),
+        )
+        .await;
+
+        let state = self.state.lock().await;
+        // A newer reload may have updated the config while this hook build was in flight.
+        // Only publish hooks derived from the current config snapshot.
+        if Arc::ptr_eq(
+            &state.session_configuration.original_config_do_not_use,
+            &config,
+        ) {
+            self.services.hooks.store(Arc::new(hooks));
+        }
     }
 
     async fn build_settings_update_items(
@@ -2643,7 +2668,7 @@ impl Session {
         let loaded_plugins = self
             .services
             .plugins_manager
-            .plugins_for_config(&turn_context.config)
+            .plugins_for_config(&turn_context.config.plugins_config_input())
             .await;
         if let Some(plugin_instructions) =
             AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
@@ -2912,17 +2937,6 @@ impl Session {
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
         self.ensure_rollout_materialized().await;
-    }
-
-    pub(crate) async fn notify_background_event(
-        &self,
-        turn_context: &TurnContext,
-        message: impl Into<String>,
-    ) {
-        let event = EventMsg::BackgroundEvent(BackgroundEventEvent {
-            message: message.into(),
-        });
-        self.send_event(turn_context, event).await;
     }
 
     pub(crate) async fn notify_stream_error(
@@ -3201,8 +3215,8 @@ impl Session {
         }
     }
 
-    pub(crate) fn hooks(&self) -> &Hooks {
-        &self.services.hooks
+    pub(crate) fn hooks(&self) -> Arc<Hooks> {
+        self.services.hooks.load_full()
     }
 
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {
@@ -3327,6 +3341,37 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 }
 
 use codex_memories_read::build_memory_tool_developer_instructions;
+
+/// Builds the hook engine for one config snapshot, including any enabled plugin hooks.
+async fn build_hooks_for_config(
+    config: &Config,
+    plugins_manager: &PluginsManager,
+    user_shell: &crate::shell::Shell,
+) -> Hooks {
+    let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
+    let hook_shell_program = hook_shell_argv.remove(0);
+    let _ = hook_shell_argv.pop();
+    let plugin_hooks_enabled = config.features.enabled(Feature::PluginHooks);
+    let (plugin_hook_sources, plugin_hook_load_warnings) = if plugin_hooks_enabled {
+        let plugins_input = config.plugins_config_input();
+        let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
+        (
+            plugin_outcome.effective_plugin_hook_sources(),
+            plugin_outcome.effective_plugin_hook_warnings(),
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    Hooks::new(HooksConfig {
+        legacy_notify_argv: config.notify.clone(),
+        feature_enabled: config.features.enabled(Feature::CodexHooks),
+        config_layer_stack: Some(config.config_layer_stack.clone()),
+        plugin_hook_sources,
+        plugin_hook_load_warnings,
+        shell_program: Some(hook_shell_program),
+        shell_args: hook_shell_argv,
+    })
+}
 
 #[cfg(test)]
 pub(crate) mod tests;

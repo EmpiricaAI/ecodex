@@ -1157,6 +1157,43 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
 }
 
 #[tokio::test]
+async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        config
+            .features
+            .enable(Feature::CodexHooks)
+            .expect("enable Codex hooks");
+    })
+    .await?;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[hooks]
+
+[[hooks.SessionStart]]
+hooks = [{ type = "command", command = "python3 /tmp/user.py" }]
+"#,
+    )?;
+
+    let request = codex_hooks::SessionStartRequest {
+        session_id: session.conversation_id,
+        cwd: session.get_config().await.cwd.clone(),
+        transcript_path: None,
+        model: "gpt-5.2".to_string(),
+        permission_mode: "default".to_string(),
+        source: codex_hooks::SessionStartSource::Startup,
+    };
+    assert!(session.hooks().preview_session_start(&request).is_empty());
+
+    session.reload_user_config_layer().await;
+
+    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn reload_user_config_layer_updates_effective_tool_suggest_config() {
     let (session, _turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
@@ -1642,9 +1679,6 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         .fork_thread(
             usize::MAX,
             fork_config.clone(),
-            std::sync::Arc::new(codex_thread_store::LocalThreadStore::new(
-                codex_rollout::RolloutConfig::from_view(&fork_config),
-            )),
             rollout_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -2683,6 +2717,7 @@ async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) ->
 }
 
 async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
+    let config = session.get_config().await;
     let live_thread = LiveThread::create(
         Arc::clone(&session.services.thread_store),
         CreateThreadParams {
@@ -2691,6 +2726,15 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             source: SessionSource::Exec,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(config.cwd.to_path_buf()),
+                model_provider: config.model_provider_id.clone(),
+                memory_mode: if config.memories.generate_memories {
+                    ThreadMemoryMode::Enabled
+                } else {
+                    ThreadMemoryMode::Disabled
+                },
+            },
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
         },
     )
@@ -3355,7 +3399,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
-            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+            codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
     )
@@ -3476,10 +3520,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
             config.analytics_enabled,
         ),
-        hooks: Hooks::new(HooksConfig {
+        hooks: arc_swap::ArcSwap::from_pointee(Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
-        }),
+        })),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
@@ -3502,7 +3546,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         state_db: None,
         live_thread: None,
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
-            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+            codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
         )),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
@@ -3521,7 +3565,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config)
+        .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
@@ -3674,7 +3718,7 @@ async fn make_session_with_config_and_rx(
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
-            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+            codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
     )
@@ -4537,6 +4581,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
     let (mut session, _turn_context) = make_session_and_context().await;
     let store = Arc::new(codex_thread_store::InMemoryThreadStore::default());
     let thread_store: Arc<dyn codex_thread_store::ThreadStore> = store.clone();
+    let config = session.get_config().await;
     let live_thread = LiveThread::create(
         Arc::clone(&thread_store),
         CreateThreadParams {
@@ -4545,6 +4590,15 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             source: SessionSource::Exec,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(config.cwd.to_path_buf()),
+                model_provider: config.model_provider_id.clone(),
+                memory_mode: if config.memories.generate_memories {
+                    ThreadMemoryMode::Enabled
+                } else {
+                    ThreadMemoryMode::Disabled
+                },
+            },
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
         },
     )
@@ -4905,10 +4959,10 @@ where
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
             config.analytics_enabled,
         ),
-        hooks: Hooks::new(HooksConfig {
+        hooks: arc_swap::ArcSwap::from_pointee(Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
-        }),
+        })),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
@@ -4931,7 +4985,7 @@ where
         state_db: None,
         live_thread: None,
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
-            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+            codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
         )),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
@@ -4950,7 +5004,7 @@ where
 
     let plugin_outcome = services
         .plugins_manager
-        .plugins_for_config(&per_turn_config)
+        .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =

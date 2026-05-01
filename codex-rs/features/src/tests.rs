@@ -157,6 +157,13 @@ fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::BrowserUse.default_enabled(), true);
     assert_eq!(feature_for_key("browser_use"), Some(Feature::BrowserUse));
 
+    assert_eq!(Feature::BrowserUseExternal.stage(), Stage::Stable);
+    assert_eq!(Feature::BrowserUseExternal.default_enabled(), true);
+    assert_eq!(
+        feature_for_key("browser_use_external"),
+        Some(Feature::BrowserUseExternal)
+    );
+
     assert_eq!(Feature::ComputerUse.stage(), Stage::Stable);
     assert_eq!(Feature::ComputerUse.default_enabled(), true);
     assert_eq!(feature_for_key("computer_use"), Some(Feature::ComputerUse));
@@ -258,6 +265,12 @@ fn telepathy_is_legacy_alias_for_chronicle() {
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+}
+
+#[test]
+fn codex_hooks_is_legacy_alias_for_hooks() {
+    assert_eq!(feature_for_key("hooks"), Some(Feature::CodexHooks));
+    assert_eq!(feature_for_key("codex_hooks"), Some(Feature::CodexHooks));
 }
 
 #[test]

@@ -104,7 +104,6 @@ mod tool_suggest;
 mod tools;
 mod truncation;
 mod turn_state;
-mod undo;
 mod unified_exec;
 mod unstable_features_warning;
 mod user_notification;

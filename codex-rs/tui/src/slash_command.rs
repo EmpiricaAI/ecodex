@@ -17,6 +17,7 @@ pub enum SlashCommand {
     Approvals,
     Permissions,
     Keymap,
+    Vim,
     #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
     #[strum(serialize = "sandbox-add-read-dir")]
@@ -26,6 +27,7 @@ pub enum SlashCommand {
     AutoReview,
     Memories,
     Skills,
+    Hooks,
     Review,
     Rename,
     New,
@@ -38,7 +40,6 @@ pub enum SlashCommand {
     Collab,
     Agent,
     Side,
-    // Undo,
     Copy,
     Diff,
     Mention,
@@ -85,12 +86,12 @@ impl SlashCommand {
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
-            // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Copy => "copy last response as markdown",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
+            SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
@@ -115,6 +116,7 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::Keymap => "remap TUI shortcuts",
+            SlashCommand::Vim => "toggle Vim mode for the composer",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::SandboxReadRoot => {
                 "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
@@ -169,13 +171,13 @@ impl SlashCommand {
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
-            // | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Fast
             | SlashCommand::Personality
             | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::Keymap
+            | SlashCommand::Vim
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
@@ -191,6 +193,7 @@ impl SlashCommand {
             | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills
+            | SlashCommand::Hooks
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

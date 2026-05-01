@@ -11,6 +11,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use strum_macros::EnumIter;
+
 use crate::AgentPath;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
@@ -163,7 +165,7 @@ pub struct ConversationStartParams {
     )]
     pub prompt: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport: Option<ConversationStartTransport>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -366,7 +368,7 @@ pub struct RealtimeResponseDone {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub enum RealtimeEvent {
     SessionUpdated {
-        session_id: String,
+        realtime_session_id: String,
         instructions: Option<String>,
     },
     InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
@@ -775,12 +777,6 @@ pub enum Op {
     /// model.
     SetThreadMemoryMode { mode: ThreadMemoryMode },
 
-    /// Legacy request to undo a turn.
-    ///
-    /// The op is still accepted for compatibility, but ghost snapshots are no
-    /// longer produced so the request reports unavailable.
-    Undo,
-
     /// Request Codex to drop the last N user turns from in-memory context.
     ///
     /// This does not attempt to revert local filesystem changes. Clients are
@@ -909,7 +905,6 @@ impl Op {
             Self::Compact => "compact",
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
-            Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
@@ -1366,20 +1361,12 @@ pub enum EventMsg {
     /// User/system input message (what was sent to the model)
     UserMessage(UserMessageEvent),
 
-    /// Agent text output delta message
-    AgentMessageDelta(AgentMessageDeltaEvent),
-
     /// Reasoning event from agent.
     AgentReasoning(AgentReasoningEvent),
-
-    /// Agent reasoning delta event from agent.
-    AgentReasoningDelta(AgentReasoningDeltaEvent),
 
     /// Raw chain-of-thought from agent.
     AgentReasoningRawContent(AgentReasoningRawContentEvent),
 
-    /// Agent reasoning content delta event from agent.
-    AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent),
     /// Signaled when the model begins a new reasoning summary section (e.g., a new titled block).
     AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent),
 
@@ -1444,12 +1431,6 @@ pub enum EventMsg {
     /// Notification advising the user that something they are using has been
     /// deprecated and should be phased out.
     DeprecationNotice(DeprecationNoticeEvent),
-
-    BackgroundEvent(BackgroundEventEvent),
-
-    UndoStarted(UndoStartedEvent),
-
-    UndoCompleted(UndoCompletedEvent),
 
     /// Notification that a model stream experienced an error or disconnect
     /// and the system is handling it (e.g., retrying with backoff).
@@ -1529,7 +1510,7 @@ pub enum EventMsg {
     CollabResumeEnd(CollabResumeEndEvent),
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, EnumIter)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEventName {
     PreToolUse,
@@ -1571,10 +1552,26 @@ pub enum HookSource {
     Mdm,
     SessionFlags,
     Plugin,
+    CloudRequirements,
     LegacyManagedConfigFile,
     LegacyManagedConfigMdm,
     #[default]
     Unknown,
+}
+
+impl HookSource {
+    /// Returns whether hooks from this source are managed and therefore not
+    /// user-configurable.
+    pub fn is_managed(self) -> bool {
+        matches!(
+            self,
+            Self::System
+                | Self::Mdm
+                | Self::CloudRequirements
+                | Self::LegacyManagedConfigFile
+                | Self::LegacyManagedConfigMdm
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -1651,7 +1648,7 @@ pub enum RealtimeConversationVersion {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct RealtimeConversationStartedEvent {
-    pub session_id: Option<String>,
+    pub realtime_session_id: Option<String>,
     pub version: RealtimeConversationVersion,
 }
 
@@ -1876,9 +1873,7 @@ pub struct AgentMessageContentDeltaEvent {
 
 impl HasLegacyEvent for AgentMessageContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: self.delta.clone(),
-        })]
+        Vec::new()
     }
 }
 
@@ -1903,9 +1898,7 @@ pub struct ReasoningContentDeltaEvent {
 
 impl HasLegacyEvent for ReasoningContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: self.delta.clone(),
-        })]
+        Vec::new()
     }
 }
 
@@ -1922,11 +1915,7 @@ pub struct ReasoningRawContentDeltaEvent {
 
 impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentReasoningRawContentDelta(
-            AgentReasoningRawContentDeltaEvent {
-                delta: self.delta.clone(),
-            },
-        )]
+        Vec::new()
     }
 }
 
@@ -2292,11 +2281,6 @@ pub struct UserMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentMessageDeltaEvent {
-    pub delta: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningEvent {
     pub text: String,
 }
@@ -2307,22 +2291,12 @@ pub struct AgentReasoningRawContentEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentReasoningRawContentDeltaEvent {
-    pub delta: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningSectionBreakEvent {
     // load with default value so it's backward compatible with the old format.
     #[serde(default)]
     pub item_id: String,
     #[serde(default)]
     pub summary_index: i64,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentReasoningDeltaEvent {
-    pub delta: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
@@ -3171,30 +3145,12 @@ pub struct TerminalInteractionEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct BackgroundEventEvent {
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct DeprecationNoticeEvent {
     /// Concise summary of what is deprecated.
     pub summary: String,
     /// Optional extra guidance, such as migration steps or rationale.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct UndoStartedEvent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct UndoCompletedEvent {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -3991,6 +3947,20 @@ mod tests {
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
 
+    #[test]
+    fn hook_source_managedness_is_source_derived() {
+        assert_eq!(HookSource::System.is_managed(), true);
+        assert_eq!(HookSource::Mdm.is_managed(), true);
+        assert_eq!(HookSource::CloudRequirements.is_managed(), true);
+        assert_eq!(HookSource::LegacyManagedConfigFile.is_managed(), true);
+        assert_eq!(HookSource::LegacyManagedConfigMdm.is_managed(), true);
+        assert_eq!(HookSource::User.is_managed(), false);
+        assert_eq!(HookSource::Project.is_managed(), false);
+        assert_eq!(HookSource::SessionFlags.is_managed(), false);
+        assert_eq!(HookSource::Plugin.is_managed(), false);
+        assert_eq!(HookSource::Unknown.is_managed(), false);
+    }
+
     fn sorted_writable_roots(roots: Vec<WritableRoot>) -> Vec<(PathBuf, Vec<PathBuf>)> {
         let mut sorted_roots: Vec<(PathBuf, Vec<PathBuf>)> = roots
             .into_iter()
@@ -4734,14 +4704,14 @@ mod tests {
         let start = Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("be helpful".to_string())),
-            session_id: Some("conv_1".to_string()),
+            realtime_session_id: Some("conv_1".to_string()),
             transport: None,
             voice: None,
         });
         let webrtc_start = Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("be helpful".to_string())),
-            session_id: Some("conv_1".to_string()),
+            realtime_session_id: Some("conv_1".to_string()),
             transport: Some(ConversationStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
@@ -4754,14 +4724,14 @@ mod tests {
         let default_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
             prompt: None,
-            session_id: None,
+            realtime_session_id: None,
             transport: None,
             voice: None,
         });
         let null_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
             output_modality: RealtimeOutputModality::Audio,
             prompt: Some(None),
-            session_id: None,
+            realtime_session_id: None,
             transport: None,
             voice: None,
         });
@@ -4773,7 +4743,7 @@ mod tests {
                 "type": "realtime_conversation_start",
                 "output_modality": "audio",
                 "prompt": "be helpful",
-                "session_id": "conv_1"
+                "realtime_session_id": "conv_1"
             })
         );
         assert_eq!(
@@ -4850,12 +4820,28 @@ mod tests {
                 "type": "realtime_conversation_start",
                 "output_modality": "audio",
                 "prompt": "be helpful",
-                "session_id": "conv_1",
+                "realtime_session_id": "conv_1",
                 "transport": {
                     "type": "webrtc",
                     "sdp": "v=offer\r\n"
                 },
                 "voice": "cove"
+            })
+        );
+    }
+
+    #[test]
+    fn realtime_conversation_started_event_uses_realtime_session_id() {
+        let event = RealtimeConversationStartedEvent {
+            realtime_session_id: Some("conv_1".to_string()),
+            version: RealtimeConversationVersion::V2,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            json!({
+                "realtime_session_id": "conv_1",
+                "version": "v2"
             })
         );
     }
