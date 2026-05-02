@@ -7,5 +7,6 @@
 //! Phase 3b will add `anthropic`. Phase 4 adds the event tap that emits CIF
 //! `StreamEvent`s on a Unix socket for Empirica subscribers.
 
+pub mod anthropic;
 pub mod chat;
 pub mod responses;
