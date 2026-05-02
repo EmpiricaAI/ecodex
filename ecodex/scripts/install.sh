@@ -16,11 +16,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 ECODEX_ROOT="$(cd -- "${SCRIPT_DIR}/.." &> /dev/null && pwd)"
+WORKSPACE_ROOT="$(cd -- "${ECODEX_ROOT}/.." &> /dev/null && pwd)"
 
 # ─── Defaults ────────────────────────────────────────────────────────
 SCOPE="user"           # system | user
 PREFIX="/usr/local"
-ECODEX_BINARY="${ECODEX_BINARY:-${ECODEX_ROOT}/../codex-rs/target/release/ecodex}"
+ECODEX_BINARY="${ECODEX_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/ecodex}"
+PLUGIN_BINARY="${PLUGIN_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/codex-empirica-plugin}"
+PLUGIN_SRC="${WORKSPACE_ROOT}/codex-rs/codex-empirica-plugin"
+PLUGIN_VERSION="0.1.0"
 
 # ─── Parse args ──────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -60,6 +64,16 @@ if [[ ! -x "$ECODEX_BINARY" ]]; then
   echo "  Or set ECODEX_BINARY to override." >&2
   exit 1
 fi
+if [[ ! -x "$PLUGIN_BINARY" ]]; then
+  echo "ecodex install: plugin binary not found at $PLUGIN_BINARY" >&2
+  echo "  Build it first: (cd codex-rs && cargo build --release -p codex-empirica-plugin)" >&2
+  echo "  Or set PLUGIN_BINARY to override." >&2
+  exit 1
+fi
+if [[ ! -d "$PLUGIN_SRC" ]]; then
+  echo "ecodex install: plugin source not found at $PLUGIN_SRC" >&2
+  exit 1
+fi
 
 # ─── Install managed.toml (B layer — the lock) ───────────────────────
 echo "→ Installing managed.toml lock to $MANAGED_DIR/"
@@ -88,12 +102,29 @@ chmod +x "$BINARY_DEST"
 sed -i.bak "s|^ECODEX_BINARY_PATH=.*|ECODEX_BINARY_PATH=\"$BINARY_DEST\"|" "$WRAPPER_DEST"
 rm -f "${WRAPPER_DEST}.bak"
 
+# ─── Install empirica plugin (cache + plugin binary on PATH) ─────────
+PLUGIN_DEST_DIR="${HOME}/.codex/plugins/cache/empirica/${PLUGIN_VERSION}"
+PLUGIN_BIN_DEST="$(dirname "$WRAPPER_DEST")/codex-empirica-plugin"
+
+echo "→ Installing empirica plugin to $PLUGIN_DEST_DIR/"
+mkdir -p "$PLUGIN_DEST_DIR"
+cp "${PLUGIN_SRC}/manifest.json"     "${PLUGIN_DEST_DIR}/manifest.json"
+cp "${PLUGIN_SRC}/hooks.json"        "${PLUGIN_DEST_DIR}/hooks.json"
+cp "${PLUGIN_SRC}/mcp_servers.json"  "${PLUGIN_DEST_DIR}/mcp_servers.json"
+cp -r "${PLUGIN_SRC}/skills"         "${PLUGIN_DEST_DIR}/skills"
+
+echo "→ Installing plugin binary to $PLUGIN_BIN_DEST"
+cp "$PLUGIN_BINARY" "$PLUGIN_BIN_DEST"
+chmod +x "$PLUGIN_BIN_DEST"
+
 # ─── Done ────────────────────────────────────────────────────────────
 echo ""
 echo "✓ ecodex installed."
-echo "  • binary:       $BINARY_DEST"
-echo "  • wrapper:      $WRAPPER_DEST  (this is what users invoke as 'ecodex')"
-echo "  • managed.toml: ${MANAGED_DIR}/managed.toml  (locks plugins.empirica.enabled=true)"
+echo "  • binary:        $BINARY_DEST"
+echo "  • wrapper:       $WRAPPER_DEST  (this is what users invoke as 'ecodex')"
+echo "  • plugin cache:  $PLUGIN_DEST_DIR/  (manifest+hooks+mcp+skills)"
+echo "  • plugin binary: $PLUGIN_BIN_DEST  (codex's hooks invoke this)"
+echo "  • managed.toml:  ${MANAGED_DIR}/managed.toml  (locks plugins.empirica.enabled=true)"
 if [[ ! -f "$CODEX_CONFIG.bak" && -f "$CODEX_CONFIG" ]]; then
   echo "  • config.toml:  $CODEX_CONFIG  (left as-is or freshly installed default)"
 fi

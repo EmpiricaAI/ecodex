@@ -63,6 +63,22 @@ if [[ -d "$BINARY_DEST" ]]; then
   rm -rf "$BINARY_DEST"
 fi
 
+# ─── Remove plugin (cache + plugin binary on PATH) ───────────────────
+PLUGIN_BIN_DEST="$(dirname "$WRAPPER_DEST")/codex-empirica-plugin"
+PLUGIN_CACHE_DIR="${HOME}/.codex/plugins/cache/empirica"
+
+if [[ -f "$PLUGIN_BIN_DEST" ]]; then
+  echo "→ Removing plugin binary $PLUGIN_BIN_DEST"
+  rm -f "$PLUGIN_BIN_DEST"
+fi
+if [[ -d "$PLUGIN_CACHE_DIR" ]]; then
+  echo "→ Removing plugin cache $PLUGIN_CACHE_DIR"
+  rm -rf "$PLUGIN_CACHE_DIR"
+  # Clean up parent cache dirs if now empty
+  rmdir --ignore-fail-on-non-empty "${HOME}/.codex/plugins/cache" 2>/dev/null || true
+  rmdir --ignore-fail-on-non-empty "${HOME}/.codex/plugins" 2>/dev/null || true
+fi
+
 # ─── Optional --purge of user config ─────────────────────────────────
 if [[ "$PURGE" -eq 1 && -f "$CODEX_CONFIG" ]]; then
   BACKUP="${CODEX_CONFIG}.uninstall-backup-$(date +%Y%m%d-%H%M%S)"
