@@ -131,18 +131,56 @@ The point isn't to imprison anyone. It's to make the AI's training environment *
 3. **`managed.toml` location:** **Per-user `~/.ecodex/managed.toml` for v1**, with `/etc/ecodex/managed.toml` honored as well if present (system-wide). Per-user works for individual installs without sudo; system-wide works for shared/multi-user setups. The AI doesn't have a preference; the human collaborator's install context decides.
 4. **Marketing posture:** **Hard — "ecodex IS the AI's calibration training environment."** With the AI as user, this is the honest framing. The differentiator vs vanilla codex isn't "discipline as feature," it's "your AI gets demonstrably better at knowing what it knows over time, measured by Brier score." Smaller TAM is fine — the audience that wants this is the audience that values measurable AI trustworthiness over raw speed.
 
-## Implementation status (T17, 2026-05-02)
+## Implementation status (T17–T18, 2026-05-02)
 
-Config artifacts shipped:
+Config artifacts and install/uninstall flow shipped:
 
 | Artifact | Layer | Installs to | Purpose |
 |---|---|---|---|
 | [`ecodex/managed.toml.example`](../../../ecodex/managed.toml.example) | B | `/etc/ecodex/managed.toml` (system) or `~/.ecodex/managed.toml` (per-user) | Pins `plugins.empirica.enabled = true` so AI runtime can't disable |
 | [`ecodex/config.toml.default`](../../../ecodex/config.toml.default) | A + E | `~/.codex/config.toml` (first run only) | Bundled defaults — empirica enabled, curated providers (DeepSeek default), strict-mode env vars documented |
+| [`ecodex/scripts/install.sh`](../../../ecodex/scripts/install.sh) | A+B+E | runs at install | Drops managed.toml, wrapper, and binary; preserves existing user config |
+| [`ecodex/scripts/ecodex-wrapper.sh`](../../../ecodex/scripts/ecodex-wrapper.sh) | E | runs at every invocation | Exports `EMPIRICA_SENTINEL_*` env vars then exec's the real binary |
+| [`ecodex/scripts/uninstall.sh`](../../../ecodex/scripts/uninstall.sh) | (cleanup) | runs at uninstall | Removes managed.toml + wrapper + binary; preserves user config (unless `--purge`) |
 
-Remaining implementation:
-- ecodex installer/wrapper script that drops these into the right OS locations and exports `EMPIRICA_SENTINEL_*` env vars (T18 candidate)
-- (If C escalation needed) `ensure_empirica_present()` in `cli/src/main.rs` startup
-- Cross-platform verification (Linux x86_64 first; macOS / Windows later)
+### Install flow
+
+```sh
+# Per-user install (no sudo)
+cd <ecodex-source>
+(cd codex-rs && cargo build --release -p codex-cli)   # if not yet built
+./ecodex/scripts/install.sh                           # default --user
+```
+
+This drops:
+- `~/.local/lib/ecodex/bin/ecodex` (the real Rust binary)
+- `~/.local/bin/ecodex` (wrapper that exports env + exec's the real one)
+- `~/.ecodex/managed.toml` (the lock — pins empirica enabled)
+- `~/.codex/config.toml` (only if absent — won't clobber existing user config)
+
+### System-wide install
+
+```sh
+sudo ./ecodex/scripts/install.sh --system
+```
+
+Same artifacts but to `/usr/local/{bin,lib}/` and `/etc/ecodex/`.
+
+### Uninstall
+
+```sh
+./ecodex/scripts/uninstall.sh           # removes ecodex; preserves ~/.codex/config.toml
+./ecodex/scripts/uninstall.sh --purge   # also removes ~/.codex/config.toml (with backup)
+```
+
+Removing the managed.toml unlocks the `plugins.empirica.enabled` config key so the user can choose to disable the plugin (or switch to vanilla codex entirely).
+
+### Remaining
+
+- (If C escalation needed) `ensure_empirica_present()` in `cli/src/main.rs` startup — fail-fast if empirica plugin is missing/unresponsive at startup
+- macOS install variant (paths differ — Homebrew conventions, `~/Library/Application Support/ecodex/`?)
+- Windows install variant (much different — installer convention TBD)
+- Live integration smoke test against a real codex/ecodex run (T19 candidate)
+- npm/cargo distribution wrappers (T20 candidate, if we publish)
 
 The wrapper script approach (rather than editing codex's config schema to add empirica-specific keys) keeps our changes outside upstream codex source — supports the fork-and-PR-back-upstream posture.
