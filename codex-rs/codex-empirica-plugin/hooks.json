@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin pre-tool-use",
+            "timeout": 30,
+            "statusMessage": "Empirica sentinel"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin stop",
+            "timeout": 10,
+            "statusMessage": "Empirica transaction enforcer"
+          }
+        ]
+      }
+    ]
+  }
+}

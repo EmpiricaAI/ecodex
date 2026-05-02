@@ -9,5 +9,6 @@
     "developerName": "Nubaeon",
     "category": "agent-discipline",
     "capabilities": ["hooks", "epistemic-state", "calibration"]
-  }
+  },
+  "hooks": "./hooks.json"
 }

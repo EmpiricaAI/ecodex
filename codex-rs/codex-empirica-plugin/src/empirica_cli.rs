@@ -25,8 +25,19 @@ pub struct HookOutput {
 }
 
 /// Invoke `python3 <hooks_dir>/<script>` with `input_json` on stdin.
+///
+/// Returns `Err` for *infrastructure* failures — missing script file, failure
+/// to spawn python3, IO errors writing stdin. Hook handlers translate `Err`
+/// into fail-open (allow). Exit code 2 from a successful subprocess run is a
+/// genuine "block" signal from the script and must reach the caller verbatim.
 pub fn run_hook_script(script: &str, input_json: &str) -> Result<HookOutput> {
     let script_path = resolve_hooks_dir().join(script);
+
+    // Pre-check: if the script file is missing, fail open rather than letting
+    // python3 exit 2 (which would be misread as a hook block by codex).
+    if !script_path.is_file() {
+        anyhow::bail!("hook script not found: {}", script_path.display());
+    }
 
     let mut child = Command::new("python3")
         .arg(&script_path)
