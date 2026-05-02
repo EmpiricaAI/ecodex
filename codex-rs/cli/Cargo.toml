@@ -6,7 +6,7 @@ license.workspace = true
 build = "build.rs"
 
 [[bin]]
-name = "codex"
+name = "ecodex"
 path = "src/main.rs"
 
 [lib]
