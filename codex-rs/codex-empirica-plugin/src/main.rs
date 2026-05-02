@@ -35,12 +35,12 @@ fn main() -> ExitCode {
 
     match event.as_str() {
         "pre-tool-use" => hooks::pre_tool_use::handle(),
+        "post-tool-use" => hooks::post_tool_use::handle(),
+        "session-start" => hooks::session_start::handle(),
+        "user-prompt-submit" => hooks::user_prompt_submit::handle(),
         "stop" => hooks::stop::handle(),
-        "post-tool-use"
-        | "session-start"
-        | "user-prompt-submit"
-        | "permission-request" => {
-            // v1 stubs — succeed silently until ported.
+        "permission-request" => {
+            // codex-specific event; design TBD — no-op stub for v1.
             ExitCode::SUCCESS
         }
         unknown => {

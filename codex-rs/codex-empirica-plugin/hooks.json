@@ -13,6 +13,45 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin post-tool-use",
+            "timeout": 10,
+            "statusMessage": "Empirica tool capture"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin session-start",
+            "timeout": 60,
+            "statusMessage": "Empirica session init"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin user-prompt-submit",
+            "timeout": 30,
+            "statusMessage": "Empirica context injection"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": ".*",

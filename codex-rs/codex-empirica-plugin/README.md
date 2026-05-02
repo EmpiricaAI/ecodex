@@ -38,10 +38,10 @@ The plugin manifest (`manifest.json`) is loadable by codex's plugin marketplace 
 | Hook event | Status | Backed by |
 |---|---|---|
 | `pre-tool-use` | ✅ wired | `sentinel-gate.py` |
+| `post-tool-use` | ✅ wired | `tool-failure.py` |
+| `session-start` | ✅ wired | `session-init.py` |
+| `user-prompt-submit` | ✅ wired | `tool-router.py` |
 | `stop` | ✅ wired | `transaction-enforcer.py` |
-| `post-tool-use` | stub | (planned: `tool-failure.py`) |
-| `session-start` | stub | (planned: `session-init.py`) |
-| `user-prompt-submit` | stub | (planned: `tool-router.py`) |
 | `permission-request` | stub | (codex-specific; design TBD) |
 
 See the parent goal "Build v1 empirica plugin for codex" for the full porting plan.
