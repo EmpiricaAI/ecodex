@@ -1,13 +1,22 @@
-//! ecodex chat-completions ↔ Responses API translator.
+//! ecodex chat-completions ↔ Responses API translator, organized around a
+//! Canonical Intermediate Format (CIF).
 //!
-//! Localhost HTTP proxy that lets ecodex talk to chat-completions providers
-//! (DeepSeek, Qwen, GLM, Kimi, LMStudio, vLLM, etc.) after upstream codex
-//! removed `wire_api = "chat"` support in commit d2394a2494.
+//! ```text
+//! codex → /v1/responses → [responses adapter parses to CIF]
+//!                       → [chat adapter encodes from CIF]
+//!                       → upstream provider /v1/chat/completions
+//!                       ← [chat adapter parses chunks to CIF events]
+//!                       ← [responses adapter encodes events as SSE]
+//!                       → codex
+//! ```
 //!
-//! Field-mapping reference: `vendored/chat_request.rs` and
-//! `vendored/chat_sse.rs` (resurrected from d2394a2494^).
+//! Phase 3a: the CIF + responses + chat adapters land. Phase 3b adds an
+//! `anthropic` adapter (proves the design holds at N=3). Phase 4 adds an
+//! event tap so Empirica subscribers consume the CIF stream externally
+//! (per David's "thin translator + external subscribers" architecture).
 
+pub mod adapters;
+pub mod cif;
 pub mod server;
-pub mod translate;
 
 pub use server::{run, ServerConfig};
