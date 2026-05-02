@@ -1,0 +1,135 @@
+# Discipline Strengthening: Wiring Empirica Deeper Into ecodex
+
+**Status:** decision-required (architectural; needs David sign-off on direction)
+**Driver:** "if you can actually wire in the discipline more strongly into ecodex that would be beneficial" (David, 2026-05-02)
+
+## The question
+
+Today the model is **`ecodex = codex + bundled empirica plugin (toggleable)`**. The empirica plugin is opt-in: even if ecodex bundles it, a user can `plugins.empirica.enabled = false` in their `config.toml` and the discipline goes away.
+
+Should ecodex make empirica discipline harder to disable, deeper in the stack, or both?
+
+## What's already on our side
+
+- **The plugin is feature-complete** — 5/6 hooks live, 10 skills, MCP server registered, config working
+- **Provider defaults bundled** — `docs/ecodex/integrations/providers.md` ships open-weights endpoints
+- **Branded binary** — `ecodex` instead of `codex` (T10)
+
+If we just ship that, we have a "codex with discipline pre-installed" — easy to set up, easy to bypass.
+
+## Five strengthening axes
+
+| Option | Mechanism | Strength | Code change | Forks codex? |
+|---|---|---|---|---|
+| **A. Bundle pre-installed** (status quo plan) | ecodex installer drops plugin into `~/.codex/plugins/cache/empirica/` and sets `plugins.empirica.enabled = true` in default config | weakest — user can flip to false | none | no |
+| **B. SystemRequirementsToml lock** | ecodex ships a managed-config TOML that pins `plugins.empirica.enabled = true` via codex's existing `RequirementSource::SystemRequirementsToml` infrastructure | strong — user-config writes get rejected for that key | small (config bake) | no |
+| **C. Refuse to start without empirica** | Modify `cli/src/main.rs` to verify empirica plugin is loaded + responsive at startup; fail-fast with helpful message otherwise | strongest in-process | medium (cli mod) | yes (fork divergence) |
+| **D. Embed empirica into codex-core** | Move empirica logic out of plugin layer into core hook system or sidecar daemon; not user-removable because it's not a plugin | maximum (impossible to disable) | large (core mod) | yes (significant divergence) |
+| **E. Bundle strict defaults** | Ship a `config.toml` with conservative empirica settings (no fail-open, lower auto-proceed thresholds, MDM-ish workflow lock-in) | composable with A-D; tightens behavior even when plugin enabled | small (config bake) | no |
+
+## Codex's existing enforcement infrastructure
+
+What I found in T15a noetic — codex already has machinery for "config keys that user can't change":
+
+`codex-rs/config/src/config_requirements.rs::RequirementSource` enum:
+- `MdmManagedPreferences { domain, key }` — macOS MDM / enterprise device policy
+- `CloudRequirements` — server-pushed enterprise policy
+- `SystemRequirementsToml { file }` — file-based managed config (e.g. `/etc/codex/managed.toml`)
+- `LegacyManagedConfigTomlFromFile`, `LegacyManagedConfigTomlFromMdm` — legacy managed config
+
+These let an enterprise admin pin certain config keys so end users can't override. **ecodex can use SystemRequirementsToml to pin `plugins.empirica.enabled = true`** without modifying any codex source.
+
+## Recommendation: B + E for v1
+
+**B (SystemRequirementsToml lock) plus E (bundled strict defaults).** Together:
+
+1. **B** — ecodex installer drops a `/etc/ecodex/managed.toml` (or similar OS-conventional location) that pins:
+   ```toml
+   [plugins.empirica]
+   enabled = true
+   ```
+   Codex's existing managed-config infrastructure rejects user attempts to override this. **Empirica becomes structurally non-disable-able.** No codex source modification required.
+
+2. **E** — ecodex ships a default `config.toml` with strict empirica defaults:
+   ```toml
+   [empirica]
+   sentinel_fail_open = false              # crashes block instead of allowing
+   sentinel_auto_proceed_threshold = 0.10  # lower — most actions need explicit CHECK
+   sentinel_require_bootstrap = true       # require project-bootstrap before any praxic
+   sentinel_check_expiry_minutes = 15      # CHECK expires faster
+   ```
+   These tighten behavior even when the plugin is on its default settings.
+
+The combination gets us "empirica is on, and on tight" without forking codex-core.
+
+## Deferred: C (refuse-to-start) for v1.1
+
+If telemetry shows users circumventing the SystemRequirementsToml lock (renaming the file, running on systems without managed-config support, etc.), upgrade to **C — refuse to start without empirica responsive**. Modify `cli/src/main.rs` to:
+
+```rust
+fn ensure_empirica_present() -> anyhow::Result<()> {
+    // At startup: check that the empirica plugin is loaded
+    // and that `empirica --version` responds. If not, fail-fast
+    // with a help message: "ecodex requires the empirica plugin.
+    // Reinstall or use upstream codex if you don't want it."
+    ...
+}
+```
+
+This is a fork-source change, but small (one new function in cli/main.rs) and easy to PR upstream as an opt-in feature for any codex distribution that wants to require a particular plugin.
+
+## Rejected: D (core embed)
+
+Embedding empirica logic into codex-core (option D) is **rejected for v1 and most of v2**. Reasons:
+- Largest divergence from upstream — breaks our "fork-and-PR-back-upstream" posture from `architecture.md`
+- Empirica's logic is Python; embedding it in Rust core means PyO3 / IPC complexity we explicitly deferred in T3 architecture decision
+- The plugin layer is *the right architectural seam* for this kind of extension — codex designed it that way
+- Future composability suffers — locking empirica into core makes it harder to evolve independently
+
+**Reconsider D only if** empirica becomes so central to ecodex's identity that the plugin layer's cost outweighs its decoupling benefit. Probably not for at least 12-18 months.
+
+## Composability: A + B + E is the layered v1 stack
+
+| Layer | Purpose |
+|---|---|
+| A — install | Plugin pre-bundled in `~/.codex/plugins/cache/empirica/` |
+| B — lock | SystemRequirementsToml pins `plugins.empirica.enabled = true` |
+| E — defaults | Strict config.toml shipped: no fail-open, tight auto-proceed, etc. |
+
+This stack means:
+- New ecodex user installs and runs — empirica is on
+- User reads docs about how to disable — finds out they can't (config write rejected)
+- User runs anyway — sentinel is in strict mode, fewer auto-proceeds
+- Adversarial user tries to circumvent — needs to remove the managed.toml file or run upstream codex instead
+
+The escape hatch (use upstream codex) is the right answer for users who don't want empirica. We don't need to imprison them in ecodex — we just need to make ecodex's discipline a non-negotiable property of *this distribution*.
+
+## Risks + tradeoffs
+
+| Risk | Mitigation |
+|---|---|
+| **B doesn't apply on platforms without `SystemRequirementsToml` support** | Confirm cross-platform behavior during T15-implementation transaction. If only macOS/MDM-supported, fall back to C earlier than planned. |
+| **B can be circumvented by renaming/deleting the managed.toml file** | Document this honestly. Adversarial users can always circumvent; the goal is to protect the default user from accidentally disabling, not to imprison adversaries. |
+| **E (strict defaults) increases friction for casual users** | Provide a `--permissive` flag or env var (`ECODEX_PERMISSIVE=1`) that opts back into laxer defaults. Surfaces the choice; doesn't hide it. |
+| **C (refuse-to-start) breaks if empirica is unhealthy** | Fail-open at startup if empirica subprocess is reachable but returns errors; only fail-closed if subprocess can't even spawn. Matches the plugin's own fail-open semantics from T7. |
+| **D (core embed) was already rejected** | Re-document why if the question recurs. |
+
+## What needs David's sign-off
+
+1. **Direction confirm:** B + E for v1 OK? Or push to C now (more enforcement, more divergence)?
+2. **Permissive escape hatch:** OK to ship `--permissive` / `ECODEX_PERMISSIVE=1` for users who want laxer defaults? Or pure strict mode only (= aggressive product positioning)?
+3. **`/etc/ecodex/managed.toml` location:** standard `/etc/`-based path, or under `~/.ecodex/` (per-user)? `/etc/` is more enterprise-y; `~/.ecodex/` is friendlier for non-admin installs.
+4. **Marketing posture:** "ecodex is codex with discipline" (soft) vs "ecodex IS the disciplined coding agent" (hard)? The harder we go, the cleaner the brand differentiation but the smaller the addressable market.
+
+## Implementation transaction (future)
+
+Once direction is confirmed, the implementation transaction will:
+
+1. Create `ecodex/managed.toml.example` (or similar) with `[plugins.empirica] enabled = true` pin
+2. Update ecodex installer (when built) to drop this file at the appropriate OS location
+3. Bake strict defaults into the bundled `config.toml` template per E
+4. (If C) Add `ensure_empirica_present()` to `cli/src/main.rs` startup
+5. Document the strict defaults + escape hatches in `docs/ecodex/`
+6. Verify on at least Linux x86_64; flag platform-specific concerns
+
+Estimated ~1 transaction for B+E baseline; ~1 more for C if added.
