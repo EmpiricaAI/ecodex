@@ -34,23 +34,27 @@ if [[ "$SCOPE" == "system" ]]; then
   MANAGED_DIR="/etc/ecodex"
   WRAPPER_DEST="${PREFIX}/bin/ecodex"
   BINARY_DEST="${PREFIX}/lib/ecodex"
+  REQUIREMENTS_PATH="/etc/codex/requirements.toml"
   if [[ "$EUID" -ne 0 ]]; then
     echo "ecodex uninstall --system requires root (rerun with sudo)" >&2
     exit 1
   fi
 else
-  MANAGED_DIR="${HOME}/.ecodex"
   WRAPPER_DEST="${HOME}/.local/bin/ecodex"
   BINARY_DEST="${HOME}/.local/lib/ecodex"
+  REQUIREMENTS_PATH=""
+  # Legacy cleanup: earlier installer used ~/.ecodex/managed.toml
+  rm -f "${HOME}/.ecodex/managed.toml" 2>/dev/null || true
+  rmdir --ignore-fail-on-non-empty "${HOME}/.ecodex" 2>/dev/null || true
 fi
 
 CODEX_CONFIG="${HOME}/.codex/config.toml"
 
-# ─── Remove managed.toml (unlocks plugins.empirica.enabled) ──────────
-if [[ -f "${MANAGED_DIR}/managed.toml" ]]; then
-  echo "→ Removing managed.toml lock from ${MANAGED_DIR}/"
-  rm -f "${MANAGED_DIR}/managed.toml"
-  rmdir --ignore-fail-on-non-empty "$MANAGED_DIR" 2>/dev/null || true
+# ─── Remove requirements.toml lock (system installs only) ────────────
+if [[ -n "$REQUIREMENTS_PATH" && -f "$REQUIREMENTS_PATH" ]]; then
+  echo "→ Removing requirements.toml lock from $REQUIREMENTS_PATH"
+  rm -f "$REQUIREMENTS_PATH"
+  rmdir --ignore-fail-on-non-empty "$(dirname "$REQUIREMENTS_PATH")" 2>/dev/null || true
 fi
 
 # ─── Remove wrapper + binary ─────────────────────────────────────────

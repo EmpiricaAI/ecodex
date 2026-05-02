@@ -179,7 +179,44 @@ Planned goal opened: "Build chat-completions ↔ Responses API translator" (id: 
 
 Codex's existing `responses-api-proxy` crate is OpenAI-only (privilege isolation tool, not a translator). Doesn't solve our problem; we own this layer.
 
-### Other minor observations (logged for future)
+## T23: managed-config lock test (2026-05-02)
+
+### Pre-test discovery
+
+Tried to verify `~/.ecodex/managed.toml` actually prevents AI-runtime disable of the plugin. **Discovered our managed.toml convention was wrong** — codex hardcodes the SystemRequirementsToml path to `/etc/codex/requirements.toml` on Unix (per `codex-rs/config/src/loader/mod.rs:459`). Our `~/.ecodex/managed.toml` was being silently ignored — codex never read it.
+
+### What this means for the B layer
+
+| Install mode | Lock enforced? |
+|---|---|
+| `install.sh --system` (sudo, drops `/etc/codex/requirements.toml`) | ✅ yes |
+| `install.sh --user` (no sudo) | ❌ NO — codex provides no per-user managed-config path on Linux |
+
+### Fixes applied (T23)
+
+- Renamed `ecodex/managed.toml.example` → `ecodex/requirements.toml.example` (codex's conventional filename).
+- Updated `install.sh`: `--system` mode drops to `/etc/codex/requirements.toml`; `--user` mode skips with an honest warning that the lock can't be enforced per-user.
+- Updated `uninstall.sh`: removes `/etc/codex/requirements.toml` for `--system`; cleans up legacy `~/.ecodex/managed.toml` for `--user`.
+- Install summary now says honestly: "On this --user install, a determined AI runtime CAN disable it. Use --system for sudo-installed enforcement."
+
+### v1.1 candidate
+
+Contribute back to upstream codex: an `ECODEX_REQUIREMENTS_TOML` (or analogous) env-var override or a per-user config path so the lock can be enforced for users who can't (or don't want to) install with sudo. Aligns with our fork-and-PR-back posture.
+
+### Test results (after the fix)
+
+| Install mode | Plugin loads? | Lock enforced? |
+|---|---|---|
+| `--user` | ✅ (no plugin-load errors in `RUST_LOG=warn ecodex exec ...`) | ❌ (by design — honest about the limitation) |
+| `--system` | (not tested in T23 — would need sudo + interactive testing) | (would be ✅ — codex's managed-config infrastructure handles enforcement) |
+
+### Discovery-format mistakes recurring
+
+T21 surfaced 3 plugin-discovery format assumptions that didn't survive contact with reality. T23 surfaced one more (managed.toml location). Pattern: assumed paths/conventions without verifying the loader source code first.
+
+Logged as recurring mistake — prevention rule: **before building install logic for any codex artifact (plugin manifest, requirements, hooks, config), grep the loader source for the actual constant or path.** `loader/mod.rs:458-465` is authoritative for requirements; `utils/plugins/src/plugin_namespace.rs` for plugins; `config_toml.rs` for config schema.
+
+## Other minor observations (logged for future)
 
 - `ecodex --version` shows `codex-cli 0.0.0` — Cargo `[package]` name unchanged (T19 finding).
 - `ecodex --help` title still says "Codex CLI" — clap `about` field, separate edit (T19 finding).

@@ -42,8 +42,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ─── Resolve install paths ───────────────────────────────────────────
+# NOTE: codex hardcodes SystemRequirementsToml at /etc/codex/requirements.toml
+# (Unix). Per-user installs cannot enforce the lock without an upstream
+# change. --user mode skips the lock; --system mode installs it.
 if [[ "$SCOPE" == "system" ]]; then
-  MANAGED_DIR="/etc/ecodex"
+  REQUIREMENTS_PATH="/etc/codex/requirements.toml"
   WRAPPER_DEST="${PREFIX}/bin/ecodex"
   BINARY_DEST="${PREFIX}/lib/ecodex/bin/ecodex"
   if [[ "$EUID" -ne 0 ]]; then
@@ -51,7 +54,7 @@ if [[ "$SCOPE" == "system" ]]; then
     exit 1
   fi
 else
-  MANAGED_DIR="${HOME}/.ecodex"
+  REQUIREMENTS_PATH=""    # per-user: no lock enforced (codex limitation)
   WRAPPER_DEST="${HOME}/.local/bin/ecodex"
   BINARY_DEST="${HOME}/.local/lib/ecodex/bin/ecodex"
 fi
@@ -76,10 +79,16 @@ if [[ ! -d "$PLUGIN_SRC" ]]; then
   exit 1
 fi
 
-# ─── Install managed.toml (B layer — the lock) ───────────────────────
-echo "→ Installing managed.toml lock to $MANAGED_DIR/"
-mkdir -p "$MANAGED_DIR"
-cp "${ECODEX_ROOT}/managed.toml.example" "${MANAGED_DIR}/managed.toml"
+# ─── Install requirements.toml (B layer — the lock, system-only) ─────
+if [[ -n "$REQUIREMENTS_PATH" ]]; then
+  echo "→ Installing requirements.toml lock to $REQUIREMENTS_PATH"
+  mkdir -p "$(dirname "$REQUIREMENTS_PATH")"
+  cp "${ECODEX_ROOT}/requirements.toml.example" "$REQUIREMENTS_PATH"
+else
+  echo "→ Per-user install: skipping requirements.toml lock"
+  echo "  (codex hardcodes /etc/codex/requirements.toml as the only managed-config path on Unix)"
+  echo "  (use --system for sudo install if you want the lock enforced)"
+fi
 
 # ─── Install bundled config.toml (A + E layer) — first run only ──────
 mkdir -p "${HOME}/.codex"
@@ -129,14 +138,25 @@ echo "  • binary:        $BINARY_DEST"
 echo "  • wrapper:       $WRAPPER_DEST  (this is what users invoke as 'ecodex')"
 echo "  • plugin cache:  $PLUGIN_DEST_DIR/  (manifest+hooks+mcp+skills)"
 echo "  • plugin binary: $PLUGIN_BIN_DEST  (codex's hooks invoke this)"
-echo "  • managed.toml:  ${MANAGED_DIR}/managed.toml  (locks plugins.empirica.enabled=true)"
+if [[ -n "$REQUIREMENTS_PATH" ]]; then
+  echo "  • lock:          $REQUIREMENTS_PATH  (pins empirica@nubaeon enabled — system-enforced)"
+else
+  echo "  • lock:          (skipped — per-user install; cannot enforce on Linux)"
+fi
 if [[ ! -f "$CODEX_CONFIG.bak" && -f "$CODEX_CONFIG" ]]; then
-  echo "  • config.toml:  $CODEX_CONFIG  (left as-is or freshly installed default)"
+  echo "  • config.toml:   $CODEX_CONFIG  (left as-is or freshly installed default)"
 fi
 echo ""
 echo "Verify: $WRAPPER_DEST --version"
 echo ""
 echo "ecodex is the AI's calibration training environment. The empirica"
-echo "plugin is structurally enabled and cannot be disabled at runtime."
-echo "To opt out, install upstream codex (\`brew install codex\` etc.)"
-echo "instead of ecodex."
+echo "plugin is bundled by default."
+if [[ -n "$REQUIREMENTS_PATH" ]]; then
+  echo "On this --system install the lock at $REQUIREMENTS_PATH"
+  echo "structurally prevents the AI from disabling it at runtime."
+else
+  echo "On this --user install, a determined AI runtime CAN disable it"
+  echo "(per-user installs cannot enforce the lock without an upstream"
+  echo "codex change). Use --system for sudo-installed enforcement."
+fi
+echo "To opt out entirely, install upstream codex instead of ecodex."
