@@ -170,14 +170,14 @@ While testing T21, encountered: `wire_api = "chat" is no longer supported. How t
 
 **Implication for ecodex:** All our curated open-weights providers (DeepSeek, Qwen, GLM, Kimi, Ollama, LMStudio) speak OpenAI-compatible chat completions, NOT the Responses API. **They cannot be configured directly with this codex version**, even with `wire_api = "responses"` set (the file parses, but the endpoint won't actually work because the providers don't speak Responses).
 
-Three options surface (need David's call in next session):
-1. **Pin our fork to a pre-removal codex base** — git revert/older base, lose newer features
-2. **Build a chat-completions ↔ Responses API adapter** — separate crate, bridges open-weights providers to codex's Responses-only client
-3. **Contribute back chat-completions wire support to upstream codex** — aligns with our fork-and-PR-back posture; may or may not be accepted
+Three options surfaced; **David's 2026-05-02 call: Option 2 — build our own translator**, with two added strategic upsides:
 
-Codex's existing `responses-api-proxy` crate is OpenAI-only (privilege isolation tool, not a translator). Doesn't solve our problem.
+- **The translator becomes a value-add, not a workaround.** Upstream removed chat support to focus on ChatGPT integration; our translator restores the open-weights story they removed. That's a distinct ecodex differentiator.
+- **The translator is the natural integration point for Cockpit.** Per David: cockpit either embedded directly in the translator's interface OR optional flag to run cockpit alongside (observing translator request/response stream). Two-for-one — chat support + cockpit observability surface.
 
-This is a **major strategic finding** — affects ecodex's whole open-weights value prop. v1 ship blocked until decided.
+Planned goal opened: "Build chat-completions ↔ Responses API translator" (id: `bca167a1-...`). Refined Cockpit-integration goal references this translator (id: `33cc867c-...`).
+
+Codex's existing `responses-api-proxy` crate is OpenAI-only (privilege isolation tool, not a translator). Doesn't solve our problem; we own this layer.
 
 ### Other minor observations (logged for future)
 
