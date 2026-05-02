@@ -21,6 +21,21 @@ enabled = true
 # ─── Curated provider defaults (open-weights focus) ──────────────────
 # See docs/ecodex/integrations/providers.md for the full set + auth
 # instructions for each.
+#
+# ⚠ WIRE-API STATUS: codex upstream removed `wire_api = "chat"` support
+# (commit d2394a2494, "chore: nuke chat/completions API"). All curated
+# providers below speak chat-completions, NOT Responses API natively, so
+# requests sent directly to their base_url will fail at runtime with an
+# unknown-endpoint error.
+#
+# The fix is `codex-empirica-translator` (planned goal bca167a1, scaffold
+# in codex-rs/codex-empirica-translator/). When that ships:
+#   1. ecodex auto-spawns translator on localhost:18080
+#   2. base_urls below get rewritten to http://localhost:18080/v1
+#   3. translator forwards to the real provider with chat-completions
+#      wire format and converts the SSE stream back
+# Until then: built-in `oss` (Ollama) is the only provider that works
+# out-of-box (Ollama implements Responses API natively).
 
 model = "deepseek-chat"
 model_provider = "deepseek"

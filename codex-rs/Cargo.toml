@@ -50,6 +50,7 @@ members = [
     "lmstudio",
     "login",
     "codex-empirica-plugin",
+    "codex-empirica-translator",
     "codex-mcp",
     "mcp-server",
     "memories/read",
@@ -148,6 +149,7 @@ codex-connectors = { path = "connectors" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-empirica-plugin = { path = "codex-empirica-plugin" }
+codex-empirica-translator = { path = "codex-empirica-translator" }
 codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
 codex-device-key = { path = "device-key" }

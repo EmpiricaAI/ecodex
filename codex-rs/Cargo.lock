@@ -2607,6 +2607,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-empirica-translator"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "codex-exec"
 version = "0.0.0"
 dependencies = [

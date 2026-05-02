@@ -1,0 +1,28 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-empirica-translator"
+version.workspace = true
+
+[[bin]]
+name = "codex-empirica-translator"
+path = "src/main.rs"
+
+[lib]
+name = "codex_empirica_translator"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+# Phase 1 (this commit): scaffold + resurrected source vendored as reference.
+# Phase 2 (next session): wire imports against codex-api/codex-protocol pub
+# surface, add tiny_http server, integration tests.
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tiny_http = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing = { workspace = true }
