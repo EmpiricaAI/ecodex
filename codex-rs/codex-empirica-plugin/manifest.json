@@ -8,8 +8,9 @@
     "longDescription": "Brings Empirica's sentinel/transactions/calibration framework to codex. Gates praxic actions on PREFLIGHT/CHECK gates, captures findings/decisions/dead-ends/mistakes as you work, and calibrates self-assessment against deterministic services (tests, lint, git).",
     "developerName": "Nubaeon",
     "category": "agent-discipline",
-    "capabilities": ["hooks", "epistemic-state", "calibration", "skills"]
+    "capabilities": ["hooks", "epistemic-state", "calibration", "skills", "mcp"]
   },
   "hooks": "./hooks.json",
-  "skills": "./skills"
+  "skills": "./skills",
+  "mcp_servers": "./mcp_servers.json"
 }
