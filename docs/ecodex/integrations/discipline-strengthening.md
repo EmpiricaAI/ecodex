@@ -131,15 +131,18 @@ The point isn't to imprison anyone. It's to make the AI's training environment *
 3. **`managed.toml` location:** **Per-user `~/.ecodex/managed.toml` for v1**, with `/etc/ecodex/managed.toml` honored as well if present (system-wide). Per-user works for individual installs without sudo; system-wide works for shared/multi-user setups. The AI doesn't have a preference; the human collaborator's install context decides.
 4. **Marketing posture:** **Hard — "ecodex IS the AI's calibration training environment."** With the AI as user, this is the honest framing. The differentiator vs vanilla codex isn't "discipline as feature," it's "your AI gets demonstrably better at knowing what it knows over time, measured by Brier score." Smaller TAM is fine — the audience that wants this is the audience that values measurable AI trustworthiness over raw speed.
 
-## Implementation transaction (future)
+## Implementation status (T17, 2026-05-02)
 
-Once direction is confirmed, the implementation transaction will:
+Config artifacts shipped:
 
-1. Create `ecodex/managed.toml.example` (or similar) with `[plugins.empirica] enabled = true` pin
-2. Update ecodex installer (when built) to drop this file at the appropriate OS location
-3. Bake strict defaults into the bundled `config.toml` template per E
-4. (If C) Add `ensure_empirica_present()` to `cli/src/main.rs` startup
-5. Document the strict defaults + escape hatches in `docs/ecodex/`
-6. Verify on at least Linux x86_64; flag platform-specific concerns
+| Artifact | Layer | Installs to | Purpose |
+|---|---|---|---|
+| [`ecodex/managed.toml.example`](../../../ecodex/managed.toml.example) | B | `/etc/ecodex/managed.toml` (system) or `~/.ecodex/managed.toml` (per-user) | Pins `plugins.empirica.enabled = true` so AI runtime can't disable |
+| [`ecodex/config.toml.default`](../../../ecodex/config.toml.default) | A + E | `~/.codex/config.toml` (first run only) | Bundled defaults — empirica enabled, curated providers (DeepSeek default), strict-mode env vars documented |
 
-Estimated ~1 transaction for B+E baseline; ~1 more for C if added.
+Remaining implementation:
+- ecodex installer/wrapper script that drops these into the right OS locations and exports `EMPIRICA_SENTINEL_*` env vars (T18 candidate)
+- (If C escalation needed) `ensure_empirica_present()` in `cli/src/main.rs` startup
+- Cross-platform verification (Linux x86_64 first; macOS / Windows later)
+
+The wrapper script approach (rather than editing codex's config schema to add empirica-specific keys) keeps our changes outside upstream codex source — supports the fork-and-PR-back-upstream posture.

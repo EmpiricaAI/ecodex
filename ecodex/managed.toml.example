@@ -1,0 +1,24 @@
+# ecodex managed config — installs to /etc/ecodex/managed.toml
+# (system-wide) or ~/.ecodex/managed.toml (per-user, takes precedence).
+#
+# This file uses codex's RequirementSource::SystemRequirementsToml
+# infrastructure (codex-rs/config/src/config_requirements.rs) to pin
+# specific config keys so the AI agent's runtime cannot override them
+# via writes to ~/.codex/config.toml.
+#
+# WHY: ecodex is the AI's calibration training environment. The Empirica
+# plugin's hooks fire on every tool use to capture calibration data
+# (Brier-score training). If the AI could disable the plugin at runtime,
+# it would defeat its own training loop. This file makes that
+# structurally impossible from inside the AI's runtime.
+#
+# Humans who want to opt OUT of empirica discipline should use upstream
+# codex (`brew install codex` etc.), not edit this file. ecodex IS the
+# disciplined distribution; the choice is made at install time.
+
+[plugins.empirica]
+# Locked: the empirica plugin must be enabled in any ecodex session.
+# The AI's runtime cannot set this to false via config writes;
+# attempts will be rejected with a "managed by ecodex" error referencing
+# this file's path.
+enabled = true
