@@ -40,12 +40,102 @@ When sentinel-gate.py crashes (no `.empirica/` root, etc.), it returns `permissi
 
 Transaction-enforcer.py accepts the codex Stop payload and returns `{}` for the synthetic session (no active transaction → no enforcement). Exit 0. No translation issues.
 
-## What was NOT tested (deferred to live integration)
+## What was NOT tested at T14 (deferred to live integration — most addressed in T19 below)
 
 - **Strict-gating mode** — would need `EMPIRICA_PROJECT_ROOT` override or fresh empirica install to verify rm/Write actually get blocked when no PREFLIGHT exists for the test session
 - **Latency measurement** — didn't time the subprocess round-trip
 - **All 5 active hooks end-to-end** — only PreToolUse + Stop tested; PostToolUse + SessionStart + UserPromptSubmit follow same pattern but unverified against real scripts
 - **Codex actually loading the plugin** — requires building the codex binary and configuring plugin discovery, deferred to live integration
+
+## T19: Full live integration smoke test (2026-05-02)
+
+### Build
+
+```sh
+cd codex-rs && cargo build --release -p codex-cli
+```
+
+Result: **24m 35s wall-clock** (full release build of codex-cli's transitive workspace, ~110 crates). Produced `target/release/ecodex` (207MB binary). One non-blocking warning about dead code in `codex-app-server` (upstream issue, not ours).
+
+### Install
+
+```sh
+./ecodex/scripts/install.sh --user
+```
+
+Result: ✅ all artifacts landed in expected paths:
+
+| Artifact | Path | Size |
+|---|---|---|
+| Real binary | `~/.local/lib/ecodex/bin/ecodex` | 207MB |
+| Wrapper | `~/.local/bin/ecodex` | 1628B |
+| Managed lock | `~/.ecodex/managed.toml` | 1186B |
+| Default config | `~/.codex/config.toml` (was absent → freshly installed) | 4102B |
+
+The install script correctly:
+- Created the parent dirs without error
+- Detected absent `~/.codex/config.toml` and installed the default
+- Patched the wrapper's binary path placeholder to the resolved install path
+- Printed a clear summary with verification command
+
+### Rebrand verification
+
+```
+$ ~/.local/bin/ecodex --version
+codex-cli 0.0.0
+$ ~/.local/bin/ecodex --help | head -6
+Codex CLI
+
+If no subcommand is specified, options will be forwarded to the interactive CLI.
+
+Usage: ecodex [OPTIONS] [PROMPT]
+       ecodex [OPTIONS] <COMMAND> [ARGS]
+```
+
+✅ **`bin_name = "ecodex"` works at runtime** — usage line shows `ecodex` in both forms.
+
+⚠️ **Two cosmetic followups surfaced:**
+
+1. **`--version` shows `codex-cli 0.0.0`** — that's the Cargo `[package]` name (`codex-cli`), not the `[[bin]]` name. Changing the displayed name would require either renaming the package itself (large blast radius — many internal references) or overriding clap's auto-generated version string. Not blocking but worth a small future transaction.
+2. **Help title is still `Codex CLI`** — that's the clap `about = "..."` attribute (or auto-derived from doc-comment). Would need to set `about = "ecodex CLI"` (or similar) in the same `#[command(...)]` block we already touched in T10. Trivial follow-up.
+
+Neither blocks v1 ship — `ecodex --help` is unambiguously branded in the usage section, and `--version` correctness is a separate dimension. Logging as known nits.
+
+### Subcommand surface intact
+
+Help output lists all expected codex subcommands: `exec`, `review`, `login`, `logout`, `mcp`, `plugin`, `mcp-server`, `app-server`, `completion`, `update`, `sandbox`, `debug`, `apply`, `resume`, `fork`, `cloud`, `exec-server`, `features`, `help`. Rebrand didn't break dispatch.
+
+### What T19 did NOT cover (T20+ candidates)
+
+- **Actual session run** — `ecodex exec "say hi"` against a real model provider (would need DEEPSEEK_API_KEY or similar). Skipped because it needs a live model API key and would consume tokens. Manual test by the human collaborator.
+- **Plugin actually loading at runtime** — requires the empirica plugin to be installed at `~/.codex/plugins/cache/empirica/<version>/`. Plugin install is its own step (the `install.sh` script doesn't yet drop the plugin into the cache dir). T20 candidate: extend install.sh to also install the plugin.
+- **Hooks firing in a real session** — depends on plugin-load (above)
+- **managed.toml lock enforcement** — would need to attempt setting `plugins.empirica.enabled = false` via config and observe rejection. Requires plugin loaded first.
+- **Strict env vars actually altering sentinel behavior** — assumption a_strict_env_overrides (T18) still untested at runtime. Will surface naturally during real session use.
+
+### Cleanup (T19 end)
+
+```sh
+./ecodex/scripts/uninstall.sh   # leaves ~/.codex/config.toml in place
+```
+
+Run after committing T19 docs.
+
+### v1 ship readiness assessment
+
+| Component | Status |
+|---|---|
+| Plugin v1 (5 hooks + 10 skills + MCP server) | ✅ feature-complete |
+| Plugin compiles + smoke tests pass against mocks (T7) | ✅ |
+| Plugin works against real Empirica scripts (T14) | ✅ field-level compatibility confirmed |
+| ecodex binary builds | ✅ T19 (24m cold, 207MB) |
+| ecodex binary launches + branding applied | ✅ T19 |
+| Install script lands all artifacts correctly | ✅ T19 |
+| Plugin actually installed into `~/.codex/plugins/` | ❌ T20 — install.sh missing this step |
+| Hooks fire in a real codex session | ❌ T21 — depends on T20 |
+| managed.toml lock rejects user-config writes | ❌ T22 — depends on T20+T21 |
+
+**v1 is ~85% to ship.** The remaining 15% (T20-T22) is end-to-end runtime verification of what the v1 components were designed to do. Substantively risk-free given everything else has validated, but worth running before declaring v1 done.
 
 ## Action items surfaced
 
