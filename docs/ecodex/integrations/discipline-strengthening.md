@@ -1,13 +1,23 @@
 # Discipline Strengthening: Wiring Empirica Deeper Into ecodex
 
-**Status:** decision-required (architectural; needs David sign-off on direction)
+**Status:** Q1 confirmed (A+B+E direction); Q2-Q4 extrapolated below from project user-model
 **Driver:** "if you can actually wire in the discipline more strongly into ecodex that would be beneficial" (David, 2026-05-02)
+
+## User model (foundational)
+
+In ecodex (and Empirica generally), **the AI agent is the user being disciplined**. Humans are guidance and observation collaborators — they install ecodex, watch the AI work, course-correct, but they are not the disciplined party.
+
+The discipline serves two purposes:
+1. **Compliance** — the AI follows the workflow (PREFLIGHT/CHECK/POSTFLIGHT, artifact logging, transaction discipline).
+2. **Brier-score calibration training** — every transaction with measured prediction-vs-outcome is a calibration data point. Lower Brier = better self-knowledge. **The AI literally gets more trustworthy over time by going through the discipline.**
+
+This recasts everything below. The "lock" isn't enterprise IT preventing employees from disabling security — it's training wheels the AI can't unscrew from itself.
 
 ## The question
 
-Today the model is **`ecodex = codex + bundled empirica plugin (toggleable)`**. The empirica plugin is opt-in: even if ecodex bundles it, a user can `plugins.empirica.enabled = false` in their `config.toml` and the discipline goes away.
+Today the model is **`ecodex = codex + bundled empirica plugin (toggleable)`**. The empirica plugin is opt-in: a sufficiently-determined AI (or its human collaborator on the AI's behalf) can `plugins.empirica.enabled = false` and the discipline — *and the calibration training loop* — disappears.
 
-Should ecodex make empirica discipline harder to disable, deeper in the stack, or both?
+Should ecodex make empirica discipline harder to disable from inside the AI's runtime, deeper in the stack, or both?
 
 ## What's already on our side
 
@@ -39,7 +49,7 @@ What I found in T15a noetic — codex already has machinery for "config keys tha
 
 These let an enterprise admin pin certain config keys so end users can't override. **ecodex can use SystemRequirementsToml to pin `plugins.empirica.enabled = true`** without modifying any codex source.
 
-## Recommendation: B + E for v1
+## Recommendation: A + B + E for v1 (Q1 ✅ confirmed by David 2026-05-02)
 
 **B (SystemRequirementsToml lock) plus E (bundled strict defaults).** Together:
 
@@ -60,7 +70,7 @@ These let an enterprise admin pin certain config keys so end users can't overrid
    ```
    These tighten behavior even when the plugin is on its default settings.
 
-The combination gets us "empirica is on, and on tight" without forking codex-core.
+The combination gets us "empirica is on, and on tight" without forking codex-core. **For the AI, this means the calibration loop runs on every transaction — Brier scores accumulate, calibration improves measurably.** For the human collaborator, this means the AI they're observing is structurally constrained to do its work measurably, not just performatively.
 
 ## Deferred: C (refuse-to-start) for v1.1
 
@@ -90,19 +100,19 @@ Embedding empirica logic into codex-core (option D) is **rejected for v1 and mos
 
 ## Composability: A + B + E is the layered v1 stack
 
-| Layer | Purpose |
-|---|---|
-| A — install | Plugin pre-bundled in `~/.codex/plugins/cache/empirica/` |
-| B — lock | SystemRequirementsToml pins `plugins.empirica.enabled = true` |
-| E — defaults | Strict config.toml shipped: no fail-open, tight auto-proceed, etc. |
+| Layer | Purpose | Effect on the AI |
+|---|---|---|
+| A — install | Plugin pre-bundled in `~/.codex/plugins/cache/empirica/` | Discipline is reachable on first run |
+| B — lock | SystemRequirementsToml pins `plugins.empirica.enabled = true` | AI cannot turn off its own training wheels at runtime |
+| E — defaults | Strict config.toml shipped: no fail-open, tight auto-proceed, etc. | Each fail-open avoided = a calibration data point preserved |
 
 This stack means:
-- New ecodex user installs and runs — empirica is on
-- User reads docs about how to disable — finds out they can't (config write rejected)
-- User runs anyway — sentinel is in strict mode, fewer auto-proceeds
-- Adversarial user tries to circumvent — needs to remove the managed.toml file or run upstream codex instead
+- A new ecodex install boots and the AI is in the discipline by default
+- The AI's runtime attempts to set `plugins.empirica.enabled = false` get rejected by the SystemRequirementsToml layer
+- When sentinel hooks fire, fail-open is off — crashes block instead of silently allowing (so the calibration loop captures the failure as data, not as a hidden permissive default)
+- A determined human collaborator can remove the managed.toml file or switch to vanilla codex if they want to opt the AI out of discipline — the escape hatch is at install/uninstall time, not at AI-runtime
 
-The escape hatch (use upstream codex) is the right answer for users who don't want empirica. We don't need to imprison them in ecodex — we just need to make ecodex's discipline a non-negotiable property of *this distribution*.
+The point isn't to imprison anyone. It's to make the AI's training environment **structurally consistent** so the Brier-score calibration loop has clean data to learn from. An AI that's sometimes-disciplined-sometimes-not produces noisy calibration; an AI that's always-disciplined produces a clean improvement curve.
 
 ## Risks + tradeoffs
 
@@ -114,12 +124,12 @@ The escape hatch (use upstream codex) is the right answer for users who don't wa
 | **C (refuse-to-start) breaks if empirica is unhealthy** | Fail-open at startup if empirica subprocess is reachable but returns errors; only fail-closed if subprocess can't even spawn. Matches the plugin's own fail-open semantics from T7. |
 | **D (core embed) was already rejected** | Re-document why if the question recurs. |
 
-## What needs David's sign-off
+## Sign-off questions — answered after the user-model reframe (2026-05-02)
 
-1. **Direction confirm:** B + E for v1 OK? Or push to C now (more enforcement, more divergence)?
-2. **Permissive escape hatch:** OK to ship `--permissive` / `ECODEX_PERMISSIVE=1` for users who want laxer defaults? Or pure strict mode only (= aggressive product positioning)?
-3. **`/etc/ecodex/managed.toml` location:** standard `/etc/`-based path, or under `~/.ecodex/` (per-user)? `/etc/` is more enterprise-y; `~/.ecodex/` is friendlier for non-admin installs.
-4. **Marketing posture:** "ecodex is codex with discipline" (soft) vs "ecodex IS the disciplined coding agent" (hard)? The harder we go, the cleaner the brand differentiation but the smaller the addressable market.
+1. **Direction:** ✅ **A + B + E for v1 confirmed by David.** C deferred to v1.1 if AI-runtime circumvention shows up in telemetry.
+2. **Permissive escape hatch:** ❌ **No `--permissive` / `ECODEX_PERMISSIVE=1` runtime flag.** With the AI as user, a runtime "permissive" flag is exactly what we don't want — it's a way for the AI to opt out of its own calibration training. The escape hatch is at *install time* (use vanilla codex), not at runtime. Humans who want laxer behavior install vanilla codex; ecodex is opinionated.
+3. **`managed.toml` location:** **Per-user `~/.ecodex/managed.toml` for v1**, with `/etc/ecodex/managed.toml` honored as well if present (system-wide). Per-user works for individual installs without sudo; system-wide works for shared/multi-user setups. The AI doesn't have a preference; the human collaborator's install context decides.
+4. **Marketing posture:** **Hard — "ecodex IS the AI's calibration training environment."** With the AI as user, this is the honest framing. The differentiator vs vanilla codex isn't "discipline as feature," it's "your AI gets demonstrably better at knowing what it knows over time, measured by Brier score." Smaller TAM is fine — the audience that wants this is the audience that values measurable AI trustworthiness over raw speed.
 
 ## Implementation transaction (future)
 
