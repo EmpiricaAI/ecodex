@@ -5,3 +5,4 @@
 //! implements the underlying logic.
 
 pub mod pre_tool_use;
+pub mod stop;

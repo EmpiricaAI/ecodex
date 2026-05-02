@@ -35,4 +35,27 @@ The plugin manifest (`manifest.json`) is loadable by codex's plugin marketplace 
 
 ## Status
 
-**v1 scaffolding** — only `pre-tool-use` is wired through. Other events stub-succeed. See parent goal "Build v1 empirica plugin for codex" for porting plan.
+| Hook event | Status | Backed by |
+|---|---|---|
+| `pre-tool-use` | ✅ wired | `sentinel-gate.py` |
+| `stop` | ✅ wired | `transaction-enforcer.py` |
+| `post-tool-use` | stub | (planned: `tool-failure.py`) |
+| `session-start` | stub | (planned: `session-init.py`) |
+| `user-prompt-submit` | stub | (planned: `tool-router.py`) |
+| `permission-request` | stub | (codex-specific; design TBD) |
+
+See the parent goal "Build v1 empirica plugin for codex" for the full porting plan.
+
+## Future scope (beyond v1)
+
+The codex plugin manifest exposes five extension surfaces — this crate currently uses only `hooks`. Roadmap surfaces:
+
+| Surface | What we'd put there |
+|---|---|
+| `hooks` (in v1) | sentinel firewall, transaction enforcer, calibration capture |
+| `skills` | The Empirica skill set (epistemic-transaction, EPP, brainstorming, debugging, etc.) — port from CC's empirica plugin |
+| `mcp_servers` | Register the existing `mcp__empirica__*` server (already exists; just needs registration) |
+| `apps` / connectors | Possible future home for Cockpit (multi-instance Empirica TUI) integration |
+| `interface` | Done — display name, brand color, etc. |
+
+See [`docs/ecodex/architecture.md`](../../docs/ecodex/architecture.md) for the broader architecture and [`docs/ecodex/integrations/`](../../docs/ecodex/integrations/) for Cockpit/Symphony integration notes (when populated).
