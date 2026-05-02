@@ -9,9 +9,10 @@ use tiny_http::{Request, Response, Server};
 use tracing::{error, info, warn};
 
 use crate::adapters::{chat, responses};
+use crate::tap::{build_request_started, new_request_id, EventEmitter, NoopEmitter, TapEvent};
 
 /// Configuration for the translator server.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ServerConfig {
     /// Upstream provider's chat-completions endpoint base URL.
     pub upstream_base_url: String,
@@ -19,6 +20,30 @@ pub struct ServerConfig {
     pub upstream_api_key: Option<String>,
     /// Address to bind tiny_http on.
     pub bind_addr: String,
+    /// Event tap. None disables emission (NoopEmitter).
+    pub emitter: Arc<dyn EventEmitter>,
+}
+
+impl std::fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("upstream_base_url", &self.upstream_base_url)
+            .field("upstream_api_key", &self.upstream_api_key.as_ref().map(|_| "***"))
+            .field("bind_addr", &self.bind_addr)
+            .finish()
+    }
+}
+
+impl ServerConfig {
+    /// Helper to build a config with the no-op emitter (for tests + simple use).
+    pub fn new(upstream_base_url: String, upstream_api_key: Option<String>, bind_addr: String) -> Self {
+        Self {
+            upstream_base_url,
+            upstream_api_key,
+            bind_addr,
+            emitter: Arc::new(NoopEmitter),
+        }
+    }
 }
 
 pub fn run(config: ServerConfig) -> Result<()> {
@@ -50,21 +75,42 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         return request.respond(response).context("respond 404");
     }
 
+    let request_id = new_request_id();
+    let started = std::time::Instant::now();
+    let emitter = Arc::clone(&cfg.emitter);
+
     let mut body = String::new();
     request
         .as_reader()
         .read_to_string(&mut body)
         .context("read request body")?;
 
-    let body_value: serde_json::Value =
-        serde_json::from_str(&body).context("parse Responses request body")?;
+    let body_value: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            emitter.emit(&TapEvent::RequestErrored {
+                request_id: request_id.clone(),
+                stage: "parse_body".into(),
+                message: e.to_string(),
+                duration_ms: started.elapsed().as_millis() as u64,
+            });
+            return Err(e).context("parse Responses request body");
+        }
+    };
     let cif_request = responses::parse_request(&body_value)?;
-    let chat_body = chat::encode_request(&cif_request);
-
     let upstream_url = format!(
         "{}/chat/completions",
         cfg.upstream_base_url.trim_end_matches('/')
     );
+    emitter.emit(&build_request_started(
+        &request_id,
+        &cif_request,
+        "chat",
+        &upstream_url,
+    ));
+
+    let chat_body = chat::encode_request(&cif_request);
+
     let mut req_builder = reqwest::blocking::Client::new()
         .post(&upstream_url)
         .json(&chat_body);
@@ -79,6 +125,12 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         let status = upstream_resp.status().as_u16();
         let err_body = upstream_resp.text().unwrap_or_default();
         warn!(status, body = %err_body, "upstream returned error");
+        emitter.emit(&TapEvent::RequestErrored {
+            request_id: request_id.clone(),
+            stage: "upstream".into(),
+            message: format!("status {status}: {err_body}"),
+            duration_ms: started.elapsed().as_millis() as u64,
+        });
         let response = Response::from_string(format!("upstream {status}: {err_body}"))
             .with_status_code(status);
         return request.respond(response).context("respond upstream error");
@@ -90,6 +142,8 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         .context("write response headers")?;
 
     let mut state = chat::ChunkState::default();
+    let mut text_chars: usize = 0;
+    let mut tool_calls_count: usize = 0;
     let reader = BufReader::new(upstream_resp);
     for line in reader.lines() {
         let line = line.context("read upstream line")?;
@@ -97,6 +151,17 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
             continue;
         };
         for event in chat::parse_chunk(data, &mut state)? {
+            // Per-event metrics for completed-event payload
+            if let crate::cif::StreamEvent::TextDelta { text } = &event {
+                text_chars += text.chars().count();
+            }
+            if let crate::cif::StreamEvent::Completed { tool_calls, .. } = &event {
+                tool_calls_count = tool_calls.len();
+            }
+            emitter.emit(&TapEvent::StreamEvent {
+                request_id: request_id.clone(),
+                event: event.clone(),
+            });
             if let Some(bytes) = responses::encode_event(&event) {
                 write_chunked(&mut writer, &bytes)?;
             }
@@ -104,6 +169,14 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
     }
     writer.write_all(b"0\r\n\r\n").context("write trailing chunk")?;
     writer.flush().context("flush response")?;
+
+    emitter.emit(&TapEvent::RequestCompleted {
+        request_id,
+        duration_ms: started.elapsed().as_millis() as u64,
+        text_chars,
+        tool_calls_count,
+    });
+
     Ok(())
 }
 

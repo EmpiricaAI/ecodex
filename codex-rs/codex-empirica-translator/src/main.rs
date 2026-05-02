@@ -10,7 +10,9 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use codex_empirica_translator::{run, ServerConfig};
+use codex_empirica_translator::{run, EventEmitter, JsonlFileEmitter, NoopEmitter, ServerConfig};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Translate Responses API ↔ Chat Completions for ecodex")]
@@ -30,6 +32,13 @@ struct Args {
     /// Address to bind the translator server on.
     #[arg(long, env = "ECODEX_TRANSLATOR_BIND", default_value = "127.0.0.1:18080")]
     bind: String,
+
+    /// Event tap path. Translator appends one JSONL line per request lifecycle
+    /// event (request_started, stream_event, request_completed,
+    /// request_errored). Subscribers (Empirica MCP, Cockpit TUI, replay log)
+    /// consume by tailing. Omit to disable the tap.
+    #[arg(long, env = "ECODEX_TRANSLATOR_EVENT_LOG")]
+    event_log: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -44,9 +53,20 @@ fn main() -> Result<()> {
         None => None,
     };
 
+    let emitter: Arc<dyn EventEmitter> = match args.event_log {
+        Some(path) => {
+            let e = JsonlFileEmitter::new(path)
+                .context("initialising event log file")?;
+            tracing::info!(event_log = %e.path().display(), "event tap enabled");
+            Arc::new(e)
+        }
+        None => Arc::new(NoopEmitter),
+    };
+
     run(ServerConfig {
         upstream_base_url: args.upstream_base_url,
         upstream_api_key,
         bind_addr: args.bind,
+        emitter,
     })
 }
