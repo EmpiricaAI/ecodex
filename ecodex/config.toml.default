@@ -69,9 +69,17 @@ env_key_instructions = "Get an API key at https://platform.moonshot.cn/console/a
 wire_api = "responses"
 
 [model_providers.empirica-local]
-name = "empirica-server (local)"
-base_url = "http://empirica-server:8000/v1"
-env_key_instructions = "If empirica-server requires auth, set EMPIRICA_LOCAL_API_KEY and uncomment the env_key line."
+name = "empirica-server (local LAN: Strix Halo, 128GB unified mem)"
+# Verified live 2026-05-02: 192.168.1.68 = empirica-server (via /etc/hosts).
+# Three OpenAI-compat endpoints active:
+#   :11434  Ollama       — qwen3.5:latest, qwen3.5:4b, qwopus:27b-q4,
+#                          huihui_ai/mirothinker1-abliterated:30b-Q4_K_M, …
+#   :8080   llama.cpp    — Qwen3-30B-A3B-Q4_K_M.gguf
+#   :8081   llama.cpp    — Qwen3-30B-A3B-Q4_K_M.gguf (alt instance)
+# Default to Ollama (broadest model selection); switch to :8080 if you want
+# llama.cpp directly (typically lower latency on Strix Halo iGPU via ROCm).
+base_url = "http://empirica-server:11434/v1"
+env_key_instructions = "Local LAN endpoint — no auth required by default. If empirica-server adds auth, set EMPIRICA_LOCAL_API_KEY."
 # env_key = "EMPIRICA_LOCAL_API_KEY"
 wire_api = "responses"
 
