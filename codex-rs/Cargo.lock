@@ -2612,11 +2612,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "reqwest",
  "serde",
  "serde_json",
  "tiny_http",
- "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -1,10 +1,52 @@
-//! ecodex chat-completions ↔ Responses API translator (binary).
+//! ecodex chat-completions ↔ Responses API translator (binary entrypoint).
 //!
-//! Phase 1 stub. See lib.rs and README.md for the resurrection lineage and
-//! the Phase 2 plan.
+//! Usage:
+//!   codex-empirica-translator \
+//!     --upstream-base-url https://api.deepseek.com/v1 \
+//!     --upstream-api-key-env DEEPSEEK_API_KEY \
+//!     --bind 127.0.0.1:18080
+//!
+//! Then point ecodex's provider config at `http://127.0.0.1:18080/v1`.
 
-fn main() -> anyhow::Result<()> {
-    eprintln!("codex-empirica-translator: Phase 1 scaffold — not yet wired.");
-    eprintln!("See codex-rs/codex-empirica-translator/README.md for status.");
-    std::process::exit(0);
+use anyhow::{Context, Result};
+use clap::Parser;
+use codex_empirica_translator::{run, ServerConfig};
+
+#[derive(Parser, Debug)]
+#[command(version, about = "Translate Responses API ↔ Chat Completions for ecodex")]
+struct Args {
+    /// Upstream provider's chat-completions base URL (e.g.
+    /// https://api.deepseek.com/v1, https://api.moonshot.cn/v1,
+    /// http://localhost:11434/v1).
+    #[arg(long, env = "ECODEX_TRANSLATOR_UPSTREAM_BASE_URL")]
+    upstream_base_url: String,
+
+    /// Name of the env var holding the upstream provider's API key. The key
+    /// is read at startup and forwarded as `Authorization: Bearer <key>`.
+    /// Omit for providers that don't require auth (Ollama, LMStudio).
+    #[arg(long, env = "ECODEX_TRANSLATOR_UPSTREAM_API_KEY_ENV")]
+    upstream_api_key_env: Option<String>,
+
+    /// Address to bind the translator server on.
+    #[arg(long, env = "ECODEX_TRANSLATOR_BIND", default_value = "127.0.0.1:18080")]
+    bind: String,
+}
+
+fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+    let args = Args::parse();
+
+    let upstream_api_key = match &args.upstream_api_key_env {
+        Some(var) => Some(
+            std::env::var(var)
+                .with_context(|| format!("upstream API key env var '{var}' is unset"))?,
+        ),
+        None => None,
+    };
+
+    run(ServerConfig {
+        upstream_base_url: args.upstream_base_url,
+        upstream_api_key,
+        bind_addr: args.bind,
+    })
 }

@@ -20,9 +20,10 @@ workspace = true
 # surface, add tiny_http server, integration tests.
 [dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "env"] }
+reqwest = { workspace = true, features = ["blocking", "json", "stream", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tiny_http = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
