@@ -2598,6 +2598,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-empirica-plugin"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-exec"
 version = "0.0.0"
 dependencies = [

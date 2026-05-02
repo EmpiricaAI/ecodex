@@ -49,6 +49,7 @@ members = [
     "linux-sandbox",
     "lmstudio",
     "login",
+    "codex-empirica-plugin",
     "codex-mcp",
     "mcp-server",
     "memories/read",
@@ -146,6 +147,7 @@ codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
+codex-empirica-plugin = { path = "codex-empirica-plugin" }
 codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
 codex-device-key = { path = "device-key" }

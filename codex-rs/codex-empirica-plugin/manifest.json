@@ -1,0 +1,13 @@
+{
+  "name": "empirica",
+  "version": "0.1.0",
+  "description": "Empirica epistemic discipline plugin for codex — sentinel firewall, transaction lifecycle, calibration vectors.",
+  "interface": {
+    "displayName": "Empirica",
+    "shortDescription": "Epistemic discipline for AI coding agents",
+    "longDescription": "Brings Empirica's sentinel/transactions/calibration framework to codex. Gates praxic actions on PREFLIGHT/CHECK gates, captures findings/decisions/dead-ends/mistakes as you work, and calibrates self-assessment against deterministic services (tests, lint, git).",
+    "developerName": "Nubaeon",
+    "category": "agent-discipline",
+    "capabilities": ["hooks", "epistemic-state", "calibration"]
+  }
+}
