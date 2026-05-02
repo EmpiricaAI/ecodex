@@ -16,7 +16,7 @@
 # codex (`brew install codex` etc.), not edit this file. ecodex IS the
 # disciplined distribution; the choice is made at install time.
 
-[plugins.empirica]
+[plugins."empirica@nubaeon"]
 # Locked: the empirica plugin must be enabled in any ecodex session.
 # The AI's runtime cannot set this to false via config writes;
 # attempts will be rejected with a "managed by ecodex" error referencing

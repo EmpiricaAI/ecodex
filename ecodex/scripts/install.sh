@@ -25,6 +25,7 @@ ECODEX_BINARY="${ECODEX_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/ecodex
 PLUGIN_BINARY="${PLUGIN_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/codex-empirica-plugin}"
 PLUGIN_SRC="${WORKSPACE_ROOT}/codex-rs/codex-empirica-plugin"
 PLUGIN_VERSION="0.1.0"
+PLUGIN_KEY="empirica@nubaeon"   # codex requires <plugin>@<marketplace> format
 
 # ─── Parse args ──────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -103,12 +104,16 @@ sed -i.bak "s|^ECODEX_BINARY_PATH=.*|ECODEX_BINARY_PATH=\"$BINARY_DEST\"|" "$WRA
 rm -f "${WRAPPER_DEST}.bak"
 
 # ─── Install empirica plugin (cache + plugin binary on PATH) ─────────
-PLUGIN_DEST_DIR="${HOME}/.codex/plugins/cache/empirica/${PLUGIN_VERSION}"
+# Codex cache layout: ~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/
+PLUGIN_MARKETPLACE="${PLUGIN_KEY##*@}"   # "nubaeon"
+PLUGIN_NAME_ONLY="${PLUGIN_KEY%@*}"      # "empirica"
+PLUGIN_DEST_DIR="${HOME}/.codex/plugins/cache/${PLUGIN_MARKETPLACE}/${PLUGIN_NAME_ONLY}/${PLUGIN_VERSION}"
 PLUGIN_BIN_DEST="$(dirname "$WRAPPER_DEST")/codex-empirica-plugin"
 
 echo "→ Installing empirica plugin to $PLUGIN_DEST_DIR/"
-mkdir -p "$PLUGIN_DEST_DIR"
-cp "${PLUGIN_SRC}/manifest.json"     "${PLUGIN_DEST_DIR}/manifest.json"
+# Codex discovers plugin manifest at <root>/.codex-plugin/plugin.json
+mkdir -p "${PLUGIN_DEST_DIR}/.codex-plugin"
+cp "${PLUGIN_SRC}/manifest.json"     "${PLUGIN_DEST_DIR}/.codex-plugin/plugin.json"
 cp "${PLUGIN_SRC}/hooks.json"        "${PLUGIN_DEST_DIR}/hooks.json"
 cp "${PLUGIN_SRC}/mcp_servers.json"  "${PLUGIN_DEST_DIR}/mcp_servers.json"
 cp -r "${PLUGIN_SRC}/skills"         "${PLUGIN_DEST_DIR}/skills"

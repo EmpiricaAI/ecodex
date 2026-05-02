@@ -28,28 +28,28 @@ name = "DeepSeek"
 base_url = "https://api.deepseek.com/v1"
 env_key = "DEEPSEEK_API_KEY"
 env_key_instructions = "Get an API key at https://platform.deepseek.com/api_keys, then export DEEPSEEK_API_KEY in your shell."
-wire_api = "chat"
+wire_api = "responses"
 
 [model_providers.qwen]
 name = "Qwen (Alibaba Cloud)"
 base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 env_key = "DASHSCOPE_API_KEY"
 env_key_instructions = "Get an API key at https://dashscope.console.aliyun.com/apiKey, then export DASHSCOPE_API_KEY in your shell. Use https://dashscope.aliyuncs.com/compatible-mode/v1 for the China-mainland endpoint."
-wire_api = "chat"
+wire_api = "responses"
 
 [model_providers.glm]
 name = "GLM (Zhipu AI)"
 base_url = "https://open.bigmodel.cn/api/paas/v4"
 env_key = "ZHIPU_API_KEY"
 env_key_instructions = "Get an API key at https://bigmodel.cn/usercenter/proj-mgmt/apikeys, then export ZHIPU_API_KEY in your shell."
-wire_api = "chat"
+wire_api = "responses"
 
 [model_providers.kimi]
 name = "Kimi (Moonshot AI)"
 base_url = "https://api.moonshot.cn/v1"
 env_key = "MOONSHOT_API_KEY"
 env_key_instructions = "Get an API key at https://platform.moonshot.cn/console/api-keys, then export MOONSHOT_API_KEY in your shell."
-wire_api = "chat"
+wire_api = "responses"
 
 # ─── Local LLM hosts ─────────────────────────────────────────────────
 # `oss` (Ollama) and `lmstudio` are built-in providers — codex auto-discovers
@@ -62,7 +62,7 @@ name = "empirica-server (local)"
 base_url = "http://empirica-server:8000/v1"  # adjust port to match your install
 env_key_instructions = "If empirica-server requires auth, set EMPIRICA_LOCAL_API_KEY and uncomment the env_key line below."
 # env_key = "EMPIRICA_LOCAL_API_KEY"
-wire_api = "chat"
+wire_api = "responses"
 ```
 
 ## Recommended models per provider

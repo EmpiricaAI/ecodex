@@ -15,7 +15,7 @@ This recasts everything below. The "lock" isn't enterprise IT preventing employe
 
 ## The question
 
-Today the model is **`ecodex = codex + bundled empirica plugin (toggleable)`**. The empirica plugin is opt-in: a sufficiently-determined AI (or its human collaborator on the AI's behalf) can `plugins.empirica.enabled = false` and the discipline — *and the calibration training loop* — disappears.
+Today the model is **`ecodex = codex + bundled empirica plugin (toggleable)`**. The empirica plugin is opt-in: a sufficiently-determined AI (or its human collaborator on the AI's behalf) can `plugins."empirica@nubaeon".enabled = false` and the discipline — *and the calibration training loop* — disappears.
 
 Should ecodex make empirica discipline harder to disable from inside the AI's runtime, deeper in the stack, or both?
 
@@ -31,8 +31,8 @@ If we just ship that, we have a "codex with discipline pre-installed" — easy t
 
 | Option | Mechanism | Strength | Code change | Forks codex? |
 |---|---|---|---|---|
-| **A. Bundle pre-installed** (status quo plan) | ecodex installer drops plugin into `~/.codex/plugins/cache/empirica/` and sets `plugins.empirica.enabled = true` in default config | weakest — user can flip to false | none | no |
-| **B. SystemRequirementsToml lock** | ecodex ships a managed-config TOML that pins `plugins.empirica.enabled = true` via codex's existing `RequirementSource::SystemRequirementsToml` infrastructure | strong — user-config writes get rejected for that key | small (config bake) | no |
+| **A. Bundle pre-installed** (status quo plan) | ecodex installer drops plugin into `~/.codex/plugins/cache/empirica/` and sets `plugins."empirica@nubaeon".enabled = true` in default config | weakest — user can flip to false | none | no |
+| **B. SystemRequirementsToml lock** | ecodex ships a managed-config TOML that pins `plugins."empirica@nubaeon".enabled = true` via codex's existing `RequirementSource::SystemRequirementsToml` infrastructure | strong — user-config writes get rejected for that key | small (config bake) | no |
 | **C. Refuse to start without empirica** | Modify `cli/src/main.rs` to verify empirica plugin is loaded + responsive at startup; fail-fast with helpful message otherwise | strongest in-process | medium (cli mod) | yes (fork divergence) |
 | **D. Embed empirica into codex-core** | Move empirica logic out of plugin layer into core hook system or sidecar daemon; not user-removable because it's not a plugin | maximum (impossible to disable) | large (core mod) | yes (significant divergence) |
 | **E. Bundle strict defaults** | Ship a `config.toml` with conservative empirica settings (no fail-open, lower auto-proceed thresholds, MDM-ish workflow lock-in) | composable with A-D; tightens behavior even when plugin enabled | small (config bake) | no |
@@ -47,7 +47,7 @@ What I found in T15a noetic — codex already has machinery for "config keys tha
 - `SystemRequirementsToml { file }` — file-based managed config (e.g. `/etc/codex/managed.toml`)
 - `LegacyManagedConfigTomlFromFile`, `LegacyManagedConfigTomlFromMdm` — legacy managed config
 
-These let an enterprise admin pin certain config keys so end users can't override. **ecodex can use SystemRequirementsToml to pin `plugins.empirica.enabled = true`** without modifying any codex source.
+These let an enterprise admin pin certain config keys so end users can't override. **ecodex can use SystemRequirementsToml to pin `plugins."empirica@nubaeon".enabled = true`** without modifying any codex source.
 
 ## Recommendation: A + B + E for v1 (Q1 ✅ confirmed by David 2026-05-02)
 
@@ -55,7 +55,7 @@ These let an enterprise admin pin certain config keys so end users can't overrid
 
 1. **B** — ecodex installer drops a `/etc/ecodex/managed.toml` (or similar OS-conventional location) that pins:
    ```toml
-   [plugins.empirica]
+   [plugins."empirica@nubaeon"]
    enabled = true
    ```
    Codex's existing managed-config infrastructure rejects user attempts to override this. **Empirica becomes structurally non-disable-able.** No codex source modification required.
@@ -103,12 +103,12 @@ Embedding empirica logic into codex-core (option D) is **rejected for v1 and mos
 | Layer | Purpose | Effect on the AI |
 |---|---|---|
 | A — install | Plugin pre-bundled in `~/.codex/plugins/cache/empirica/` | Discipline is reachable on first run |
-| B — lock | SystemRequirementsToml pins `plugins.empirica.enabled = true` | AI cannot turn off its own training wheels at runtime |
+| B — lock | SystemRequirementsToml pins `plugins."empirica@nubaeon".enabled = true` | AI cannot turn off its own training wheels at runtime |
 | E — defaults | Strict config.toml shipped: no fail-open, tight auto-proceed, etc. | Each fail-open avoided = a calibration data point preserved |
 
 This stack means:
 - A new ecodex install boots and the AI is in the discipline by default
-- The AI's runtime attempts to set `plugins.empirica.enabled = false` get rejected by the SystemRequirementsToml layer
+- The AI's runtime attempts to set `plugins."empirica@nubaeon".enabled = false` get rejected by the SystemRequirementsToml layer
 - When sentinel hooks fire, fail-open is off — crashes block instead of silently allowing (so the calibration loop captures the failure as data, not as a hidden permissive default)
 - A determined human collaborator can remove the managed.toml file or switch to vanilla codex if they want to opt the AI out of discipline — the escape hatch is at install/uninstall time, not at AI-runtime
 
@@ -137,7 +137,7 @@ Config artifacts and install/uninstall flow shipped:
 
 | Artifact | Layer | Installs to | Purpose |
 |---|---|---|---|
-| [`ecodex/managed.toml.example`](../../../ecodex/managed.toml.example) | B | `/etc/ecodex/managed.toml` (system) or `~/.ecodex/managed.toml` (per-user) | Pins `plugins.empirica.enabled = true` so AI runtime can't disable |
+| [`ecodex/managed.toml.example`](../../../ecodex/managed.toml.example) | B | `/etc/ecodex/managed.toml` (system) or `~/.ecodex/managed.toml` (per-user) | Pins `plugins."empirica@nubaeon".enabled = true` so AI runtime can't disable |
 | [`ecodex/config.toml.default`](../../../ecodex/config.toml.default) | A + E | `~/.codex/config.toml` (first run only) | Bundled defaults — empirica enabled, curated providers (DeepSeek default), strict-mode env vars documented |
 | [`ecodex/scripts/install.sh`](../../../ecodex/scripts/install.sh) | A+B+E | runs at install | Drops managed.toml, wrapper, and binary; preserves existing user config |
 | [`ecodex/scripts/ecodex-wrapper.sh`](../../../ecodex/scripts/ecodex-wrapper.sh) | E | runs at every invocation | Exports `EMPIRICA_SENTINEL_*` env vars then exec's the real binary |
@@ -173,7 +173,7 @@ Same artifacts but to `/usr/local/{bin,lib}/` and `/etc/ecodex/`.
 ./ecodex/scripts/uninstall.sh --purge   # also removes ~/.codex/config.toml (with backup)
 ```
 
-Removing the managed.toml unlocks the `plugins.empirica.enabled` config key so the user can choose to disable the plugin (or switch to vanilla codex entirely).
+Removing the managed.toml unlocks the `plugins."empirica@nubaeon".enabled` config key so the user can choose to disable the plugin (or switch to vanilla codex entirely).
 
 ### Remaining
 

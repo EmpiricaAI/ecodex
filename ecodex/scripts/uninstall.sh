@@ -65,7 +65,8 @@ fi
 
 # ─── Remove plugin (cache + plugin binary on PATH) ───────────────────
 PLUGIN_BIN_DEST="$(dirname "$WRAPPER_DEST")/codex-empirica-plugin"
-PLUGIN_CACHE_DIR="${HOME}/.codex/plugins/cache/empirica"
+# Cache layout: ~/.codex/plugins/cache/<marketplace>/<plugin>/
+PLUGIN_CACHE_DIR="${HOME}/.codex/plugins/cache/nubaeon"
 
 if [[ -f "$PLUGIN_BIN_DEST" ]]; then
   echo "→ Removing plugin binary $PLUGIN_BIN_DEST"
