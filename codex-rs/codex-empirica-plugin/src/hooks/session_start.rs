@@ -10,9 +10,22 @@
 use std::io::Read;
 use std::process::ExitCode;
 
+use crate::agents_md;
 use crate::empirica_cli;
 
 pub fn handle() -> ExitCode {
+    // Ensure ~/.codex/AGENTS.md carries the empirica system-prompt block so
+    // the codex agent has cognitive priming (identity + 13 vectors +
+    // transaction discipline) when the model loads user_instructions.
+    // Fail-open: if the seed fails, log and proceed — never block session boot.
+    match agents_md::ensure_agents_md_seeded() {
+        Ok(true) => {
+            eprintln!("codex-empirica-plugin: AGENTS.md updated with empirica system prompt")
+        }
+        Ok(false) => {}
+        Err(e) => eprintln!("codex-empirica-plugin: AGENTS.md seed failed (non-fatal): {e}"),
+    }
+
     let mut input = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {
         eprintln!("codex-empirica-plugin session-start: failed to read stdin: {e}");
