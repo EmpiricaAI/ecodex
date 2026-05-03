@@ -14,8 +14,17 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
-/// Default location of Empirica hook scripts when `EMPIRICA_HOOKS_DIR` is unset.
-const DEFAULT_HOOKS_DIR: &str = "~/.claude/plugins/local/empirica/hooks";
+/// Sub-path within the plugin install dir where the bundled hooks live.
+/// Mirrors CC empirica's `hooks/` + `lib/` sibling layout because
+/// `sentinel-gate.py` (and others) compute `Path(__file__).parent.parent /
+/// 'lib'` to find shared modules — bundling preserves that relationship.
+const PLUGIN_HOOKS_SUBPATH: &str = "hooks_scripts/hooks";
+
+/// CC-empirica fallback location used only when neither `EMPIRICA_HOOKS_DIR`
+/// nor `PLUGIN_ROOT` is set. Lets users with both ecodex AND CC empirica
+/// installed still work if the plugin install somehow shipped without the
+/// bundled hooks (e.g. dev-mode running the binary directly).
+const CC_FALLBACK_HOOKS_DIR: &str = "~/.claude/plugins/local/empirica/hooks";
 
 /// Result of running an Empirica hook script via subprocess.
 pub struct HookOutput {
@@ -64,9 +73,23 @@ pub fn run_hook_script(script: &str, input_json: &str) -> Result<HookOutput> {
     })
 }
 
+/// Resolve the directory containing the empirica hook Python scripts.
+///
+/// Priority (highest first):
+/// 1. `$EMPIRICA_HOOKS_DIR` — manual override (dev / debugging / non-standard layouts)
+/// 2. `$PLUGIN_ROOT/hooks_scripts/hooks` — codex sets `PLUGIN_ROOT` when invoking
+///    plugin hook commands (per `codex-rs/hooks/src/engine/discovery.rs:175`).
+///    This is the normal runtime path: plugin install bundled its own copy.
+/// 3. `~/.claude/plugins/local/empirica/hooks` — CC-empirica fallback for
+///    coexisting installs / dev-mode runs of the bare binary.
 fn resolve_hooks_dir() -> PathBuf {
-    let raw = std::env::var("EMPIRICA_HOOKS_DIR").unwrap_or_else(|_| DEFAULT_HOOKS_DIR.to_string());
-    expand_tilde(&raw)
+    if let Ok(raw) = std::env::var("EMPIRICA_HOOKS_DIR") {
+        return expand_tilde(&raw);
+    }
+    if let Ok(plugin_root) = std::env::var("PLUGIN_ROOT") {
+        return PathBuf::from(plugin_root).join(PLUGIN_HOOKS_SUBPATH);
+    }
+    expand_tilde(CC_FALLBACK_HOOKS_DIR)
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
@@ -78,4 +101,82 @@ fn expand_tilde(path: &str) -> PathBuf {
         return buf;
     }
     PathBuf::from(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: run a closure with a clean env (the three vars we read all
+    /// unset), then restore. Avoids cross-test pollution.
+    fn with_clean_env<F: FnOnce()>(f: F) {
+        // SAFETY: tests are single-threaded by default in this crate; if you
+        // ever switch to nextest with parallel test threads, wrap a mutex.
+        let saved = [
+            ("EMPIRICA_HOOKS_DIR", std::env::var_os("EMPIRICA_HOOKS_DIR")),
+            ("PLUGIN_ROOT", std::env::var_os("PLUGIN_ROOT")),
+            ("HOME", std::env::var_os("HOME")),
+        ];
+        unsafe {
+            std::env::remove_var("EMPIRICA_HOOKS_DIR");
+            std::env::remove_var("PLUGIN_ROOT");
+        }
+        f();
+        unsafe {
+            for (k, v) in saved {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_override_wins() {
+        with_clean_env(|| {
+            unsafe {
+                std::env::set_var("EMPIRICA_HOOKS_DIR", "/tmp/manual/hooks");
+                std::env::set_var("PLUGIN_ROOT", "/should/be/ignored");
+            }
+            assert_eq!(resolve_hooks_dir(), PathBuf::from("/tmp/manual/hooks"));
+        });
+    }
+
+    #[test]
+    fn plugin_root_used_when_override_absent() {
+        with_clean_env(|| {
+            unsafe {
+                std::env::set_var("PLUGIN_ROOT", "/var/codex/plugin/install");
+            }
+            assert_eq!(
+                resolve_hooks_dir(),
+                PathBuf::from("/var/codex/plugin/install/hooks_scripts/hooks")
+            );
+        });
+    }
+
+    #[test]
+    fn cc_fallback_when_nothing_set() {
+        with_clean_env(|| {
+            unsafe {
+                std::env::set_var("HOME", "/home/test");
+            }
+            assert_eq!(
+                resolve_hooks_dir(),
+                PathBuf::from("/home/test/.claude/plugins/local/empirica/hooks")
+            );
+        });
+    }
+
+    #[test]
+    fn override_path_with_tilde_expands() {
+        with_clean_env(|| {
+            unsafe {
+                std::env::set_var("HOME", "/home/foo");
+                std::env::set_var("EMPIRICA_HOOKS_DIR", "~/custom/hooks");
+            }
+            assert_eq!(resolve_hooks_dir(), PathBuf::from("/home/foo/custom/hooks"));
+        });
+    }
 }

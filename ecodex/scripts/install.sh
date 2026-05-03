@@ -127,6 +127,16 @@ cp "${PLUGIN_SRC}/hooks.json"        "${PLUGIN_DEST_DIR}/hooks.json"
 cp "${PLUGIN_SRC}/mcp_servers.json"  "${PLUGIN_DEST_DIR}/mcp_servers.json"
 cp -r "${PLUGIN_SRC}/skills"         "${PLUGIN_DEST_DIR}/skills"
 
+# Bundled hook scripts: codex sets PLUGIN_ROOT when invoking plugin hook
+# commands; the plugin binary resolves PLUGIN_ROOT/hooks_scripts/hooks/
+# to find sentinel-gate.py / session-init.py / etc. Self-contained:
+# no dependency on a coexisting CC empirica install at runtime.
+if [[ -d "${PLUGIN_SRC}/assets/hooks_scripts" ]]; then
+  cp -r "${PLUGIN_SRC}/assets/hooks_scripts" "${PLUGIN_DEST_DIR}/hooks_scripts"
+else
+  echo "WARNING: ${PLUGIN_SRC}/assets/hooks_scripts/ missing — plugin will fall back to ~/.claude/...; run scripts/sync-empirica-assets.sh to vendor." >&2
+fi
+
 echo "→ Installing plugin binary to $PLUGIN_BIN_DEST"
 cp "$PLUGIN_BINARY" "$PLUGIN_BIN_DEST"
 chmod +x "$PLUGIN_BIN_DEST"

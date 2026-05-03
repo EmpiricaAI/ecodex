@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# sync-empirica-assets.sh — vendor empirica plugin assets from the
+# CC empirica install (~/.claude/plugins/local/empirica) into the ecodex
+# plugin source tree (codex-rs/codex-empirica-plugin/assets/).
+#
+# Run this after empirica releases new hook scripts / system-prompt /
+# lib changes that the ecodex plugin should track.
+#
+# Vendored layout in plugin source:
+#   codex-rs/codex-empirica-plugin/assets/
+#     empirica-system-prompt.md          (compiled into binary via include_str!)
+#     hooks_scripts/
+#       hooks/                           (subprocess'd at runtime)
+#         sentinel-gate.py
+#         session-init.py
+#         tool-router.py
+#         transaction-enforcer.py
+#         ... (all CC hook scripts)
+#       lib/
+#         project_resolver.py            (sibling lookup by hooks scripts)
+#
+# Maintainer workflow:
+#   1. Pull the latest empirica into ~/.claude/plugins/local/empirica/
+#   2. Run this script
+#   3. Inspect git diff to see what drifted
+#   4. Bump PLUGIN_VERSION in ecodex/scripts/install.sh if hook contract changed
+#   5. Commit + rebuild + reinstall
+#
+# Source path can be overridden via EMPIRICA_PLUGIN_SOURCE (default: CC location).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+ECODEX_ROOT="$(cd -- "${SCRIPT_DIR}/.." &> /dev/null && pwd)"
+PLUGIN_ASSETS="${ECODEX_ROOT}/codex-rs/codex-empirica-plugin/assets"
+SOURCE_ROOT="${EMPIRICA_PLUGIN_SOURCE:-${HOME}/.claude/plugins/local/empirica}"
+SYSTEM_PROMPT_SRC="${HOME}/.claude/empirica-system-prompt.md"
+
+if [[ ! -d "${SOURCE_ROOT}" ]]; then
+  echo "sync-empirica-assets: source not found at ${SOURCE_ROOT}" >&2
+  echo "Set EMPIRICA_PLUGIN_SOURCE to override (e.g. point at a fresh empirica checkout)." >&2
+  exit 1
+fi
+
+if [[ ! -d "${SOURCE_ROOT}/hooks" ]] || [[ ! -d "${SOURCE_ROOT}/lib" ]]; then
+  echo "sync-empirica-assets: ${SOURCE_ROOT} missing expected hooks/ or lib/ subdir" >&2
+  exit 1
+fi
+
+if [[ ! -f "${SYSTEM_PROMPT_SRC}" ]]; then
+  echo "sync-empirica-assets: system prompt missing at ${SYSTEM_PROMPT_SRC}" >&2
+  exit 1
+fi
+
+echo "→ Source:  ${SOURCE_ROOT}"
+echo "→ Target:  ${PLUGIN_ASSETS}"
+echo ""
+
+# ─── 1. System prompt (compiled into plugin binary) ──────────────────
+mkdir -p "${PLUGIN_ASSETS}"
+cp "${SYSTEM_PROMPT_SRC}" "${PLUGIN_ASSETS}/empirica-system-prompt.md"
+echo "✓ empirica-system-prompt.md ($(wc -l < "${PLUGIN_ASSETS}/empirica-system-prompt.md") lines)"
+
+# ─── 2. Hook scripts + shared lib (copied into plugin install at install time) ─
+HOOKS_DEST="${PLUGIN_ASSETS}/hooks_scripts"
+rm -rf "${HOOKS_DEST}"
+mkdir -p "${HOOKS_DEST}"
+
+cp -r "${SOURCE_ROOT}/hooks" "${HOOKS_DEST}/hooks"
+cp -r "${SOURCE_ROOT}/lib"   "${HOOKS_DEST}/lib"
+
+# Strip Python bytecode caches — never want those in source control.
+find "${HOOKS_DEST}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find "${HOOKS_DEST}" -type f -name "*.pyc" -delete 2>/dev/null || true
+
+HOOK_COUNT=$(find "${HOOKS_DEST}/hooks" -type f -name "*.py" | wc -l)
+LIB_COUNT=$(find "${HOOKS_DEST}/lib" -type f -name "*.py" | wc -l)
+TOTAL_SIZE=$(du -sh "${HOOKS_DEST}" | awk '{print $1}')
+
+echo "✓ hooks_scripts/hooks/  (${HOOK_COUNT} python scripts)"
+echo "✓ hooks_scripts/lib/    (${LIB_COUNT} python modules)"
+echo "✓ Total bundled:        ${TOTAL_SIZE}"
+
+# ─── 3. Surface drift for the maintainer to review ───────────────────
+echo ""
+echo "Next: review drift with"
+echo "  git -C \"${ECODEX_ROOT}\" diff --stat codex-rs/codex-empirica-plugin/assets/"
+echo "  git -C \"${ECODEX_ROOT}\" status --short codex-rs/codex-empirica-plugin/assets/"
