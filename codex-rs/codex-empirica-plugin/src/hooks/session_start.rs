@@ -12,6 +12,7 @@ use std::process::ExitCode;
 
 use crate::agents_md;
 use crate::empirica_cli;
+use crate::subagents;
 
 pub fn handle() -> ExitCode {
     // Ensure ~/.codex/AGENTS.md carries the empirica system-prompt block so
@@ -24,6 +25,15 @@ pub fn handle() -> ExitCode {
         }
         Ok(false) => {}
         Err(e) => eprintln!("codex-empirica-plugin: AGENTS.md seed failed (non-fatal): {e}"),
+    }
+
+    // Ensure empirica subagents exist in <codex_home>/agents/empirica/ so the
+    // codex agent can delegate to architecture/security/ux/etc specialists.
+    // Same fail-open semantics as AGENTS.md seeding.
+    match subagents::ensure_subagents_seeded() {
+        Ok(0) => {}
+        Ok(n) => eprintln!("codex-empirica-plugin: synced {n} empirica subagent(s)"),
+        Err(e) => eprintln!("codex-empirica-plugin: subagent seed failed (non-fatal): {e}"),
     }
 
     let mut input = String::new();

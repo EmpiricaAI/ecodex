@@ -137,6 +137,16 @@ else
   echo "WARNING: ${PLUGIN_SRC}/assets/hooks_scripts/ missing — plugin will fall back to ~/.claude/...; run scripts/sync-empirica-assets.sh to vendor." >&2
 fi
 
+# Bundled empirica subagents (architecture, security, ux, etc.):
+# SessionStart hook copies these into <codex_home>/agents/empirica/ at
+# session start so codex can dispatch to specialists. Source dir resolved
+# at runtime via PLUGIN_ROOT/agents.
+if [[ -d "${PLUGIN_SRC}/assets/agents" ]]; then
+  cp -r "${PLUGIN_SRC}/assets/agents" "${PLUGIN_DEST_DIR}/agents"
+else
+  echo "WARNING: ${PLUGIN_SRC}/assets/agents/ missing — subagents won't seed; run scripts/sync-empirica-assets.sh to vendor." >&2
+fi
+
 echo "→ Installing plugin binary to $PLUGIN_BIN_DEST"
 cp "$PLUGIN_BINARY" "$PLUGIN_BIN_DEST"
 chmod +x "$PLUGIN_BIN_DEST"

@@ -81,6 +81,17 @@ echo "✓ hooks_scripts/hooks/  (${HOOK_COUNT} python scripts)"
 echo "✓ hooks_scripts/lib/    (${LIB_COUNT} python modules)"
 echo "✓ Total bundled:        ${TOTAL_SIZE}"
 
+# ─── 3. Subagents (copied into <codex_home>/agents/empirica/ at SessionStart) ─
+AGENTS_DEST="${PLUGIN_ASSETS}/agents"
+if [[ -d "${SOURCE_ROOT}/agents" ]]; then
+  rm -rf "${AGENTS_DEST}"
+  cp -r "${SOURCE_ROOT}/agents" "${AGENTS_DEST}"
+  AGENT_COUNT=$(find "${AGENTS_DEST}" -type f -name "*.md" | wc -l)
+  echo "✓ agents/               (${AGENT_COUNT} subagent definitions)"
+else
+  echo "⚠ agents/ missing at ${SOURCE_ROOT} — skipping (CC empirica may not have shipped subagents)"
+fi
+
 # ─── 3. Surface drift for the maintainer to review ───────────────────
 echo ""
 echo "Next: review drift with"
