@@ -32,6 +32,12 @@ extend-exclude = [
     # Upstream codex Rust crates with bundled Python smoketests
     "codex-rs/windows-sandbox-rs",
 
+    # Vendored CC-empirica hooks (Tx4 self-containment): snapshot of
+    # ~/.claude/plugins/local/empirica/{hooks,lib} maintained upstream
+    # in the empirica repo. Refresh via scripts/sync-empirica-assets.sh,
+    # not by editing in place.
+    "codex-rs/codex-empirica-plugin/assets/hooks_scripts",
+
     # Standard ruff exclusions (build artifacts, caches, etc.)
     ".bazel-out",
     "bazel-bin",
