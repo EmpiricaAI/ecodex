@@ -69,17 +69,32 @@ mkdir -p "${HOOKS_DEST}"
 cp -r "${SOURCE_ROOT}/hooks" "${HOOKS_DEST}/hooks"
 cp -r "${SOURCE_ROOT}/lib"   "${HOOKS_DEST}/lib"
 
+# Vendor the statusline script (Tx6(b)/4): the empirica plugin declares it
+# in manifest.statusline; the codex tui invokes it on a 1.5s tick and
+# renders captured stdout below the prompt.
+if [[ -d "${SOURCE_ROOT}/scripts" ]]; then
+  mkdir -p "${HOOKS_DEST}/scripts"
+  # Be selective — only copy the statusline script, not other scripts/
+  # entries that aren't part of the plugin contract.
+  if [[ -f "${SOURCE_ROOT}/scripts/statusline_empirica.py" ]]; then
+    cp "${SOURCE_ROOT}/scripts/statusline_empirica.py" "${HOOKS_DEST}/scripts/"
+    chmod +x "${HOOKS_DEST}/scripts/statusline_empirica.py"
+  fi
+fi
+
 # Strip Python bytecode caches — never want those in source control.
 find "${HOOKS_DEST}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "${HOOKS_DEST}" -type f -name "*.pyc" -delete 2>/dev/null || true
 
 HOOK_COUNT=$(find "${HOOKS_DEST}/hooks" -type f -name "*.py" | wc -l)
 LIB_COUNT=$(find "${HOOKS_DEST}/lib" -type f -name "*.py" | wc -l)
+SCRIPT_COUNT=$(find "${HOOKS_DEST}/scripts" -type f -name "*.py" 2>/dev/null | wc -l)
 TOTAL_SIZE=$(du -sh "${HOOKS_DEST}" | awk '{print $1}')
 
-echo "✓ hooks_scripts/hooks/  (${HOOK_COUNT} python scripts)"
-echo "✓ hooks_scripts/lib/    (${LIB_COUNT} python modules)"
-echo "✓ Total bundled:        ${TOTAL_SIZE}"
+echo "✓ hooks_scripts/hooks/    (${HOOK_COUNT} python scripts)"
+echo "✓ hooks_scripts/lib/      (${LIB_COUNT} python modules)"
+echo "✓ hooks_scripts/scripts/  (${SCRIPT_COUNT} python scripts — statusline_empirica.py)"
+echo "✓ Total bundled:          ${TOTAL_SIZE}"
 
 # ─── 3. Subagents (copied into <codex_home>/agents/empirica/ at SessionStart) ─
 AGENTS_DEST="${PLUGIN_ASSETS}/agents"
