@@ -10588,7 +10588,7 @@ impl ChatWidget {
     /// them to the background runtime. The runtime aborts tasks whose
     /// plugin_id is no longer present and spawns one tokio task per new
     /// source. Cached outputs for plugins that disappear are cleared so
-    /// the footer (Tx6(b)/3c) doesn't render stale text.
+    /// the footer doesn't render stale text.
     pub(crate) fn on_plugin_statusline_sources_loaded(
         &mut self,
         sources: Vec<PluginStatuslineSource>,
@@ -10599,6 +10599,7 @@ impl ChatWidget {
             .retain(|id, _| active_ids.contains(id));
         self.plugin_statusline_sources = sources.clone();
         self.plugin_statusline_runtime.set_sources(sources);
+        self.recompute_plugin_statusline();
     }
 
     /// Handle a fresh stdout capture from one plugin's statusline command.
@@ -10615,6 +10616,45 @@ impl ChatWidget {
         } else {
             self.plugin_statusline_outputs.insert(plugin_id, output);
         }
+        self.recompute_plugin_statusline();
+    }
+
+    /// Project the cached per-plugin outputs into a single status line
+    /// rendered below the prompt (via the existing `set_status_line`
+    /// pipeline). Plugins are joined in PluginId order so the rendering
+    /// is stable across ticks even when a plugin's output is briefly
+    /// empty.
+    ///
+    /// When the cache becomes empty, `set_status_line(None)` clears our
+    /// override; the codex-managed configured statusline items will
+    /// reappear on the next refresh_status_surfaces tick.
+    ///
+    /// v0 caveat: this OVERRIDES the configured /statusline items when
+    /// any plugin contributes content. A future enhancement (Tx6(b)/3d)
+    /// should render plugin lines as a sibling band below the existing
+    /// status line items rather than replacing them.
+    fn recompute_plugin_statusline(&mut self) {
+        if self.plugin_statusline_outputs.is_empty() {
+            self.set_status_line(None);
+            return;
+        }
+        let mut entries: Vec<(&PluginId, &Vec<u8>)> =
+            self.plugin_statusline_outputs.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        let aggregate: String = entries
+            .into_iter()
+            .filter_map(|(_, bytes)| {
+                let text = String::from_utf8_lossy(bytes).trim().to_string();
+                (!text.is_empty()).then_some(text)
+            })
+            .collect::<Vec<_>>()
+            .join(" │ ");
+        if aggregate.is_empty() {
+            self.set_status_line(None);
+            return;
+        }
+        let line = codex_ansi_escape::ansi_escape_line(&aggregate);
+        self.set_status_line(Some(line));
     }
 
     pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
