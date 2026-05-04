@@ -6,6 +6,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use crate::AppConnectorId;
 use crate::PluginCapabilitySummary;
 use crate::PluginHookSource;
+use crate::PluginStatuslineSource;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
@@ -24,6 +25,9 @@ pub struct LoadedPlugin<M> {
     pub apps: Vec<AppConnectorId>,
     pub hook_sources: Vec<PluginHookSource>,
     pub hook_load_warnings: Vec<String>,
+    /// Plugin-declared statusline command (from `manifest.paths.statusline`).
+    /// `None` when the plugin did not declare one.
+    pub statusline_source: Option<PluginStatuslineSource>,
     pub error: Option<String>,
 }
 
@@ -148,6 +152,17 @@ impl<M: Clone> PluginLoadOutcome<M> {
             .iter()
             .filter(|plugin| plugin.is_active())
             .flat_map(|plugin| plugin.hook_sources.iter().cloned())
+            .collect()
+    }
+
+    /// Plugin statusline commands across all active plugins. Order matches
+    /// plugin load order; the TUI render loop is free to invoke them in
+    /// parallel and assemble outputs in any stable order.
+    pub fn effective_plugin_statusline_sources(&self) -> Vec<PluginStatuslineSource> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .filter_map(|plugin| plugin.statusline_source.clone())
             .collect()
     }
 

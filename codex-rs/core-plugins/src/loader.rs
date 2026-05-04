@@ -27,6 +27,7 @@ use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::PluginLoadOutcome;
+use codex_plugin::PluginStatuslineSource;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -525,6 +526,7 @@ async fn load_plugin(
         apps: Vec::new(),
         hook_sources: Vec::new(),
         hook_load_warnings: Vec::new(),
+        statusline_source: None,
         error: None,
     };
 
@@ -606,6 +608,14 @@ async fn load_plugin(
         loaded_plugin.hook_sources = hook_sources;
         loaded_plugin.hook_load_warnings = hook_load_warnings;
     }
+    // Plugin-contributed statusline (independent of hooks gating — discovery is
+    // cheap and the TUI render runtime decides whether to actually invoke).
+    loaded_plugin.statusline_source = load_plugin_statusline(
+        &plugin_root,
+        &loaded_plugin_id,
+        &store.plugin_data_root(&loaded_plugin_id),
+        manifest_paths,
+    );
     loaded_plugin
 }
 
@@ -862,6 +872,26 @@ fn append_plugin_hook_file(
         source_relative_path,
         hooks: parsed.hooks,
     });
+}
+
+/// Discover a plugin-contributed statusline command from `manifest.statusline`.
+/// Returns `None` when the plugin did not declare one. Discovery is cheap;
+/// invocation is the renderer's responsibility (Tx6(b)/3).
+pub fn load_plugin_statusline(
+    plugin_root: &AbsolutePathBuf,
+    plugin_id: &PluginId,
+    plugin_data_root: &AbsolutePathBuf,
+    manifest_paths: &PluginManifestPaths,
+) -> Option<PluginStatuslineSource> {
+    manifest_paths
+        .statusline
+        .as_ref()
+        .map(|command| PluginStatuslineSource {
+            plugin_id: plugin_id.clone(),
+            plugin_root: plugin_root.clone(),
+            plugin_data_root: plugin_data_root.clone(),
+            command: command.clone(),
+        })
 }
 
 async fn load_apps_from_paths(

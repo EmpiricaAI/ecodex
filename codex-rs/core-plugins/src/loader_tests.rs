@@ -367,3 +367,51 @@ fn materialize_git_subdir_uses_sparse_checkout() {
     assert!(!checkout_root.join("root.txt").exists());
     assert!(!checkout_root.join("plugins/other/marker.txt").exists());
 }
+
+fn load_statusline(plugin_root: &AbsolutePathBuf) -> Option<codex_plugin::PluginStatuslineSource> {
+    let manifest = load_plugin_manifest(plugin_root.as_path()).expect("manifest");
+    let plugin_data_root = AbsolutePathBuf::try_from(
+        plugin_root
+            .as_path()
+            .parent()
+            .expect("plugin root parent")
+            .join("plugin-data"),
+    )
+    .expect("plugin data root");
+    load_plugin_statusline(
+        plugin_root,
+        &plugin_id(),
+        &plugin_data_root,
+        &manifest.paths,
+    )
+}
+
+#[test]
+fn load_plugin_statusline_returns_some_when_field_set() {
+    let (_tmp, plugin_root) = plugin_root();
+    write_manifest(
+        &plugin_root,
+        r#"{
+  "name": "demo-plugin",
+  "statusline": "./scripts/statusline.sh"
+}"#,
+    );
+    fs::create_dir_all(plugin_root.join("scripts")).expect("create scripts dir");
+    fs::write(
+        plugin_root.join("scripts/statusline.sh"),
+        "#!/bin/sh\necho ok\n",
+    )
+    .expect("write statusline script");
+
+    let source = load_statusline(&plugin_root).expect("statusline source");
+    assert_eq!(source.plugin_id, plugin_id());
+    assert!(source.command.as_path().ends_with("scripts/statusline.sh"));
+    assert_eq!(source.plugin_root.as_path(), plugin_root.as_path());
+}
+
+#[test]
+fn load_plugin_statusline_returns_none_when_field_unset() {
+    let (_tmp, plugin_root) = plugin_root();
+    write_manifest(&plugin_root, r#"{ "name": "demo-plugin" }"#);
+    assert!(load_statusline(&plugin_root).is_none());
+}

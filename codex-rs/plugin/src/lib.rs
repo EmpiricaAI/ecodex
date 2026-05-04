@@ -39,6 +39,20 @@ pub struct PluginHookSource {
     pub hooks: HookEventsToml,
 }
 
+/// A plugin-contributed statusline command. The TUI render loop
+/// invokes `command` on a debounced tick and renders the captured
+/// stdout in the bottom pane. `plugin_root` and `plugin_data_root`
+/// are exposed via env vars (PLUGIN_ROOT / CLAUDE_PLUGIN_ROOT /
+/// PLUGIN_DATA / CLAUDE_PLUGIN_DATA) so the script can locate
+/// vendored assets under its own install dir.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginStatuslineSource {
+    pub plugin_id: PluginId,
+    pub plugin_root: AbsolutePathBuf,
+    pub plugin_data_root: AbsolutePathBuf,
+    pub command: AbsolutePathBuf,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginTelemetryMetadata {
     pub plugin_id: PluginId,

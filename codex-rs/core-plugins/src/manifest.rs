@@ -618,8 +618,7 @@ mod tests {
     /// mcpServers / etc are top-level fields, not nested under interface).
     fn write_full_manifest(plugin_root: &Path, contents: &str) {
         fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
-        fs::write(plugin_root.join(".codex-plugin/plugin.json"), contents)
-            .expect("write manifest");
+        fs::write(plugin_root.join(".codex-plugin/plugin.json"), contents).expect("write manifest");
     }
 
     #[test]
