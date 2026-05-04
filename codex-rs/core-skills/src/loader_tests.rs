@@ -322,6 +322,7 @@ async fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 
@@ -472,6 +473,7 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -527,6 +529,7 @@ interface:
             policy: None,
             path_to_skills_md: normalized(skill_path.as_path()),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -680,6 +683,7 @@ async fn accepts_icon_paths_under_assets_dir() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -720,6 +724,7 @@ async fn ignores_invalid_brand_color() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -773,6 +778,7 @@ async fn ignores_default_prompt_over_max_length() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -814,6 +820,7 @@ async fn drops_interface_when_icons_are_invalid() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -858,6 +865,7 @@ async fn loads_skills_via_symlinked_subdir_for_user_scope() {
             policy: None,
             path_to_skills_md: normalized(&shared_skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -917,6 +925,7 @@ async fn does_not_loop_on_symlink_cycle_for_user_scope() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -955,6 +964,7 @@ async fn loads_skills_via_symlinked_subdir_for_admin_scope() {
             policy: None,
             path_to_skills_md: normalized(&shared_skill_path),
             scope: SkillScope::Admin,
+            pinned: false,
         }]
     );
 }
@@ -994,6 +1004,7 @@ async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
             policy: None,
             path_to_skills_md: normalized(&linked_skill_path),
             scope: SkillScope::Repo,
+            pinned: false,
         }]
     );
 }
@@ -1065,6 +1076,7 @@ async fn respects_max_scan_depth_for_user_scope() {
             policy: None,
             path_to_skills_md: normalized(&within_depth_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -1092,6 +1104,7 @@ async fn loads_valid_skill() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -1124,6 +1137,7 @@ async fn falls_back_to_directory_name_when_skill_name_is_missing() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -1167,6 +1181,7 @@ async fn namespaces_plugin_skills_using_plugin_name() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -1198,6 +1213,7 @@ async fn loads_short_description_from_metadata() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
         }]
     );
 }
@@ -1252,6 +1268,49 @@ async fn skips_hidden_and_invalid() {
             .contains("missing YAML frontmatter"),
         "expected frontmatter error"
     );
+}
+
+#[tokio::test]
+async fn parses_pinned_frontmatter_field() {
+    // ecodex extension: skills can mark themselves as `pinned: true` in
+    // SKILL.md frontmatter so build_initial_context re-injects their bodies
+    // post-compact (framework skills like the empirica constitution that
+    // need to remain ambient context across compactions).
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let skills_root = codex_home.path().join("skills");
+
+    write_raw_skill_at(
+        &skills_root,
+        "pinned-skill",
+        "name: pinned-skill\ndescription: a framework skill\npinned: true",
+    );
+    write_raw_skill_at(
+        &skills_root,
+        "default-skill",
+        "name: default-skill\ndescription: a task skill",
+    );
+    write_raw_skill_at(
+        &skills_root,
+        "explicit-unpinned",
+        "name: explicit-unpinned\ndescription: explicitly unpinned\npinned: false",
+    );
+
+    let cfg = make_config(&codex_home).await;
+    let outcome = load_skills_for_test(&cfg).await;
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+
+    let by_name: std::collections::HashMap<&str, bool> = outcome
+        .skills
+        .iter()
+        .map(|s| (s.name.as_str(), s.pinned))
+        .collect();
+    assert_eq!(by_name.get("pinned-skill"), Some(&true));
+    assert_eq!(by_name.get("default-skill"), Some(&false));
+    assert_eq!(by_name.get("explicit-unpinned"), Some(&false));
 }
 
 #[tokio::test]
@@ -1310,6 +1369,7 @@ async fn loads_skills_from_repo_root() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::Repo,
+            pinned: false,
         }]
     );
 }
@@ -1345,6 +1405,7 @@ async fn loads_skills_from_agents_dir_without_codex_dir() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::Repo,
+            pinned: false,
         }]
     );
 }
@@ -1398,6 +1459,7 @@ async fn loads_skills_from_all_codex_dirs_under_project_root() {
                 policy: None,
                 path_to_skills_md: normalized(&nested_skill_path),
                 scope: SkillScope::Repo,
+                pinned: false,
             },
             SkillMetadata {
                 name: "root-skill".to_string(),
@@ -1408,6 +1470,7 @@ async fn loads_skills_from_all_codex_dirs_under_project_root() {
                 policy: None,
                 path_to_skills_md: normalized(&root_skill_path),
                 scope: SkillScope::Repo,
+                pinned: false,
             },
         ]
     );
@@ -1447,6 +1510,7 @@ async fn loads_skills_from_codex_dir_when_not_git_repo() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::Repo,
+            pinned: false,
         }]
     );
 }
@@ -1487,6 +1551,7 @@ async fn deduplicates_by_path_preferring_first_root() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::Repo,
+            pinned: false,
         }]
     );
 }
@@ -1528,6 +1593,7 @@ async fn keeps_duplicate_names_from_repo_and_user() {
                 policy: None,
                 path_to_skills_md: normalized(&repo_skill_path),
                 scope: SkillScope::Repo,
+                pinned: false,
             },
             SkillMetadata {
                 name: "dupe-skill".to_string(),
@@ -1538,6 +1604,7 @@ async fn keeps_duplicate_names_from_repo_and_user() {
                 policy: None,
                 path_to_skills_md: normalized(&user_skill_path),
                 scope: SkillScope::User,
+                pinned: false,
             },
         ]
     );
@@ -1600,6 +1667,7 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
                 policy: None,
                 path_to_skills_md: first_path,
                 scope: SkillScope::Repo,
+                pinned: false,
             },
             SkillMetadata {
                 name: "dupe-skill".to_string(),
@@ -1610,6 +1678,7 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
                 policy: None,
                 path_to_skills_md: second_path,
                 scope: SkillScope::Repo,
+                pinned: false,
             },
         ]
     );
@@ -1681,6 +1750,7 @@ async fn loads_skills_when_cwd_is_file_in_repo() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::Repo,
+            pinned: false,
         }]
     );
 }
@@ -1739,6 +1809,7 @@ async fn loads_skills_from_system_cache_when_present() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::System,
+            pinned: false,
         }]
     );
 }

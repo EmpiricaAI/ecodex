@@ -19,6 +19,12 @@ pub struct SkillMetadata {
     /// Path to the SKILLS.md file that declares this skill.
     pub path_to_skills_md: AbsolutePathBuf,
     pub scope: SkillScope,
+    /// ecodex extension: when true, the skill body is re-injected by
+    /// `build_initial_context` on every call (session start AND post-compact
+    /// recovery), not just on first explicit mention. Use for framework
+    /// skills (e.g. epistemic constitution, transaction lifecycle) that
+    /// need to remain ambient context across compactions.
+    pub pinned: bool,
 }
 
 impl SkillMetadata {

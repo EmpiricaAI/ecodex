@@ -42,6 +42,14 @@ struct SkillFrontmatter {
     description: Option<String>,
     #[serde(default)]
     metadata: SkillFrontmatterMetadata,
+    /// ecodex extension: when true, the skill body is re-injected by
+    /// `build_initial_context` on every call (session start AND post-compact
+    /// recovery), not just on first explicit mention. Use for framework
+    /// skills that the model needs as ambient context (e.g. epistemic
+    /// constitution, transaction lifecycle) rather than progressive-disclosure
+    /// task skills.
+    #[serde(default)]
+    pinned: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -639,6 +647,7 @@ async fn parse_skill_file(
         policy,
         path_to_skills_md: resolved_path,
         scope,
+        pinned: parsed.pinned,
     })
 }
 

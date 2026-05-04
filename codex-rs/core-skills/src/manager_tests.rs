@@ -67,6 +67,7 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
             .canonicalize()
             .expect("skill path should canonicalize"),
         scope: SkillScope::User,
+        pinned: false,
     }
 }
 
