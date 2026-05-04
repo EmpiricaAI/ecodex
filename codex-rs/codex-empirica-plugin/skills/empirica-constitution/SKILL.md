@@ -8,6 +8,7 @@ description: >
   Triggers: 'which mechanism', 'how should I handle', 'what tool for this',
   'empirica constitution', 'decision tree', or any uncertainty about which
   Empirica feature applies to the current situation.
+pinned: true
 ---
 
 # Empirica Constitution

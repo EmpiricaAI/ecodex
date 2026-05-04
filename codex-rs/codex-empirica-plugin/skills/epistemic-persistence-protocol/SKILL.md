@@ -12,6 +12,7 @@ description: >
   pressure) and inverse sycophancy (resisting all pushback uniformly). It replaces
   the Anti-Agreement Protocol (AAP) with a calibrated, evidence-gated approach.
   Part of the Empirica epistemic measurement framework (github.com/Nubaeon/empirica).
+pinned: true
 ---
 
 # Epistemic Persistence Protocol (EPP)

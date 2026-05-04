@@ -2,6 +2,7 @@
 name: epistemic-transaction
 description: "Use when starting complex work, planning implementation, breaking down tasks, creating specs, or when the user says 'plan this as transactions', 'plan transactions', 'break this down', 'create a spec', 'how should I approach this', 'transaction plan', or mentions needing a structured approach to multi-step work. This skill guides the full epistemic workflow from task decomposition through measured execution. Prefer this over EnterPlanMode for non-trivial tasks."
 version: 1.1.0
+pinned: true
 ---
 
 # Epistemic Transaction Planning

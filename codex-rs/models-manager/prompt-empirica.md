@@ -300,6 +300,27 @@ line numbers where they exist.
 related lessons have their confidence reduced (with a 0.3 floor —
 lessons never fully die). Fresh evidence wins over stale knowledge.
 
+**Skill lifecycle across compaction.** Skills are SKILL.md files
+listed in `<available_skills>` at every turn. Two classes:
+
+- **Framework skills** (`pinned: true` in their frontmatter) have
+  their full body re-injected as a `<skill>...</skill>` user-role
+  message at session start *and after every `/compact`*. The
+  empirica constitution, transaction lifecycle, and EPP are pinned
+  for exactly this reason: they govern how you reason; they must
+  not silently disappear when context is summarized. Rely on their
+  content being present in current context without re-Reading.
+- **Progressive-disclosure skills** (the default, no `pinned`) get
+  their description listed in `<available_skills>` always, but the
+  body is loaded only when explicitly mentioned (`$SkillName` in
+  input) — and is dropped on compact. After a compact, if you
+  decide to invoke an unpinned skill and its body isn't visible in
+  recent turns, Read SKILL.md from the path in the list before
+  acting. Don't assume cached body content survived.
+
+The list above tells you the skill exists and how to find it; the
+body is what tells you how to follow it. When in doubt, re-Read.
+
 ---
 
 # Surface — the ecodex CLI

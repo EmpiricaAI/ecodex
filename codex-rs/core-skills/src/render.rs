@@ -40,7 +40,11 @@ pub const SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS: &str = r###"- Discovery: The li
   - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.
   - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
   - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
-- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."###;
+- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+- Skill lifecycle (framework vs progressive — ecodex extension):
+  - Skills with `pinned: true` in their SKILL.md frontmatter are FRAMEWORK skills: their full body is auto-injected as a `<skill>...</skill>` user-role message at session start and after every `/compact`. You can rely on their content being in current context without re-Reading SKILL.md.
+  - Skills without `pinned` (the default) are PROGRESSIVE-DISCLOSURE skills: their description appears in the list above, but the body is loaded into context only when explicitly mentioned (`$SkillName` in input) — and is dropped on compact. To use one after a compact, Read SKILL.md from the path above before invoking it. Don't assume cached body content survived.
+  - Re-Read trigger: if you decide to invoke a skill that isn't pinned and you don't see its `<skill>...</skill>` body in recent turns, open SKILL.md before acting. The list above tells you the skill exists and how to find it; the body is what tells you how to follow it correctly."###;
 pub const SKILLS_HOW_TO_USE_WITH_ALIASES: &str = r###"- Discovery: The list above is the skills available in this session (name + description + short path). Skill bodies live on disk at the listed paths after expanding the matching alias from `### Skill roots`.
 - Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
 - Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.
@@ -57,7 +61,11 @@ pub const SKILLS_HOW_TO_USE_WITH_ALIASES: &str = r###"- Discovery: The list abov
   - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.
   - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
   - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
-- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."###;
+- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+- Skill lifecycle (framework vs progressive — ecodex extension):
+  - Skills with `pinned: true` in their SKILL.md frontmatter are FRAMEWORK skills: their full body is auto-injected as a `<skill>...</skill>` user-role message at session start and after every `/compact`. You can rely on their content being in current context without re-Reading SKILL.md.
+  - Skills without `pinned` (the default) are PROGRESSIVE-DISCLOSURE skills: their description appears in the list above, but the body is loaded into context only when explicitly mentioned (`$SkillName` in input) — and is dropped on compact. To use one after a compact, expand the path via `### Skill roots` and Read SKILL.md before invoking it. Don't assume cached body content survived.
+  - Re-Read trigger: if you decide to invoke a skill that isn't pinned and you don't see its `<skill>...</skill>` body in recent turns, open SKILL.md before acting. The list above tells you the skill exists and how to find it; the body is what tells you how to follow it correctly."###;
 
 pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[String]) -> String {
     let mut lines: Vec<String> = Vec::new();
