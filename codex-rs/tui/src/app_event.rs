@@ -451,6 +451,15 @@ pub(crate) enum AppEvent {
         sources: Vec<PluginStatuslineSource>,
     },
 
+    /// Captured stdout from a single plugin's statusline command, ready
+    /// to be rendered by the footer. `output` is empty on subprocess
+    /// failure (timeout, non-zero exit, spawn error) — the renderer
+    /// should treat empty as "no plugin line for this plugin this tick".
+    PluginStatuslineOutputUpdated {
+        plugin_id: codex_plugin::PluginId,
+        output: Vec<u8>,
+    },
+
     /// Advance the post-install plugin app-auth flow.
     PluginInstallAuthAdvance {
         refresh_connectors: bool,

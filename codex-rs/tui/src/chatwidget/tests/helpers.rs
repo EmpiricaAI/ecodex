@@ -183,6 +183,7 @@ pub(super) async fn make_chatwidget_manual(
     let current_collaboration_mode = base_mode;
     let active_collaboration_mask = collaboration_modes::default_mask(model_catalog.as_ref());
     let effective_service_tier = cfg.service_tier;
+    let plugin_statusline_runtime_tx = app_event_tx.clone();
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_target: super::CodexOpTarget::Direct(op_tx),
@@ -315,6 +316,10 @@ pub(super) async fn make_chatwidget_manual(
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
         plugin_statusline_sources: Vec::new(),
+        plugin_statusline_runtime: crate::plugin_statusline_runtime::PluginStatuslineRuntime::new(
+            plugin_statusline_runtime_tx,
+        ),
+        plugin_statusline_outputs: HashMap::new(),
         current_goal_status_indicator: None,
         current_goal_status: None,
         goal_status_active_turn_started_at: None,

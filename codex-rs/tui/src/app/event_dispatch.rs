@@ -1195,6 +1195,12 @@ impl App {
                 self.chat_widget
                     .on_plugin_statusline_sources_loaded(sources);
             }
+            AppEvent::PluginStatuslineOutputUpdated { plugin_id, output } => {
+                if self.config.features.enabled(Feature::Plugins) {
+                    self.chat_widget
+                        .on_plugin_statusline_output_updated(plugin_id, output);
+                }
+            }
             AppEvent::PersistPersonalitySelection { personality } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)

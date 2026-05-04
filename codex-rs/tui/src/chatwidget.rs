@@ -140,6 +140,7 @@ use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_plugin::PluginCapabilitySummary;
+use codex_plugin::PluginId;
 use codex_plugin::PluginStatuslineSource;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -1004,10 +1005,16 @@ pub(crate) struct ChatWidget {
     status_line_branch_lookup_complete: bool,
     // Plugin-contributed statusline commands collected from active plugin
     // manifests (see core-plugins::loader::load_plugin_statusline). The
-    // render runtime (Tx6(b)/3b/3c) invokes each on a debounced tick and
-    // appends captured output below the existing footer. Empty until the
-    // first PluginStatuslineSourcesLoaded event lands.
+    // render runtime invokes each on a debounced tick (1.5s) and the
+    // captured stdout for each plugin lands in `plugin_statusline_outputs`.
     plugin_statusline_sources: Vec<PluginStatuslineSource>,
+    // Background runtime that owns one tokio task per registered statusline
+    // source. Replaced via set_sources whenever the source set changes.
+    plugin_statusline_runtime: crate::plugin_statusline_runtime::PluginStatuslineRuntime,
+    // Per-plugin cached statusline output (captured stdout from the most
+    // recent invocation). Keyed by PluginId; rendered by the footer
+    // integration in Tx6(b)/3c.
+    plugin_statusline_outputs: HashMap<PluginId, Vec<u8>>,
     // Current thread-goal status shown in the status line when plan mode is inactive.
     current_goal_status_indicator: Option<GoalStatusIndicator>,
     current_goal_status: Option<GoalStatusState>,
@@ -4822,6 +4829,7 @@ impl ChatWidget {
             &chat_keymap.edit_queued_message,
             current_terminal_info,
         );
+        let plugin_statusline_runtime_tx = app_event_tx.clone();
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -4963,6 +4971,11 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             plugin_statusline_sources: Vec::new(),
+            plugin_statusline_runtime:
+                crate::plugin_statusline_runtime::PluginStatuslineRuntime::new(
+                    plugin_statusline_runtime_tx,
+                ),
+            plugin_statusline_outputs: HashMap::new(),
             current_goal_status_indicator: None,
             current_goal_status: None,
             goal_status_active_turn_started_at: None,
@@ -10571,15 +10584,37 @@ impl ChatWidget {
             .send(AppEvent::RefreshPluginStatuslineSources);
     }
 
-    /// Stash the freshly-discovered plugin statusline sources. The render
-    /// runtime (Tx6(b)/3b) reads this field on its tick to decide which
-    /// subprocesses to spawn; the footer integration (Tx6(b)/3c) reads
-    /// the cached output produced by those subprocesses.
+    /// Stash the freshly-discovered plugin statusline sources and hand
+    /// them to the background runtime. The runtime aborts tasks whose
+    /// plugin_id is no longer present and spawns one tokio task per new
+    /// source. Cached outputs for plugins that disappear are cleared so
+    /// the footer (Tx6(b)/3c) doesn't render stale text.
     pub(crate) fn on_plugin_statusline_sources_loaded(
         &mut self,
         sources: Vec<PluginStatuslineSource>,
     ) {
-        self.plugin_statusline_sources = sources;
+        let active_ids: std::collections::HashSet<PluginId> =
+            sources.iter().map(|src| src.plugin_id.clone()).collect();
+        self.plugin_statusline_outputs
+            .retain(|id, _| active_ids.contains(id));
+        self.plugin_statusline_sources = sources.clone();
+        self.plugin_statusline_runtime.set_sources(sources);
+    }
+
+    /// Handle a fresh stdout capture from one plugin's statusline command.
+    /// Empty `output` means the most recent invocation failed (timeout,
+    /// non-zero exit, spawn error) — we still update the cache so the
+    /// renderer reflects the current state rather than holding stale text.
+    pub(crate) fn on_plugin_statusline_output_updated(
+        &mut self,
+        plugin_id: PluginId,
+        output: Vec<u8>,
+    ) {
+        if output.is_empty() {
+            self.plugin_statusline_outputs.remove(&plugin_id);
+        } else {
+            self.plugin_statusline_outputs.insert(plugin_id, output);
+        }
     }
 
     pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
