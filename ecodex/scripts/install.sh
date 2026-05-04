@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # ecodex install script
 #
-# Drops the ecodex config artifacts (managed.toml + config.toml.default)
-# into the appropriate OS locations + installs the wrapper script.
+# Builds (if needed) and installs the ecodex binary + bundled empirica
+# plugin in one shot. Mirrors the "single command, just works" UX of
+# `npm install -g <pkg>` / `pip install <pkg>`.
 #
 # Safe with existing user configs — backs up before touching, never
 # clobbers ~/.codex/config.toml if it already exists.
 #
-# Usage: ./install.sh [--system | --user] [--prefix DIR]
-#   --system  Install managed.toml to /etc/ecodex/ (requires sudo)
-#   --user    Install managed.toml to ~/.ecodex/ (default)
-#   --prefix  Override binary install dir (default: /usr/local)
+# Usage: ./install.sh [--system | --user] [--prefix DIR] [--no-build]
+#   --system    Install managed.toml to /etc/ecodex/ (requires sudo)
+#   --user      Install managed.toml to ~/.ecodex/ (default)
+#   --prefix    Override binary install dir (default: /usr/local)
+#   --no-build  Skip the cargo build step (assume binaries already built)
 
 set -euo pipefail
 
@@ -21,6 +23,7 @@ WORKSPACE_ROOT="$(cd -- "${ECODEX_ROOT}/.." &> /dev/null && pwd)"
 # ─── Defaults ────────────────────────────────────────────────────────
 SCOPE="user"           # system | user
 PREFIX="/usr/local"
+SKIP_BUILD=0
 ECODEX_BINARY="${ECODEX_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/ecodex}"
 PLUGIN_BINARY="${PLUGIN_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/codex-empirica-plugin}"
 PLUGIN_SRC="${WORKSPACE_ROOT}/codex-rs/codex-empirica-plugin"
@@ -30,11 +33,12 @@ PLUGIN_KEY="empirica@nubaeon"   # codex requires <plugin>@<marketplace> format
 # ─── Parse args ──────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --system)  SCOPE="system"; shift ;;
-    --user)    SCOPE="user";   shift ;;
-    --prefix)  PREFIX="$2";    shift 2 ;;
+    --system)    SCOPE="system";  shift ;;
+    --user)      SCOPE="user";    shift ;;
+    --prefix)    PREFIX="$2";     shift 2 ;;
+    --no-build)  SKIP_BUILD=1;    shift ;;
     -h|--help)
-      sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#//'
+      sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#//'
       exit 0
       ;;
     *) echo "ecodex install: unknown arg '$1'" >&2; exit 64 ;;
@@ -61,21 +65,50 @@ fi
 
 CODEX_CONFIG="${HOME}/.codex/config.toml"
 
-# ─── Sanity checks ───────────────────────────────────────────────────
+# ─── Build (auto, unless --no-build) ─────────────────────────────────
+# Run cargo build --release for both targets. cargo is a fast no-op
+# when nothing has changed, so the cost on a clean install is paid
+# once and incremental rebuilds during development are quick.
+#
+# Skip the build if --no-build is set OR if both binaries already
+# exist AND ECODEX_BINARY/PLUGIN_BINARY are explicitly overridden via
+# env (i.e. user is pointing at a pre-built artifact in CI/release).
+ECODEX_BINARY_OVERRIDDEN=${ECODEX_BINARY_OVERRIDDEN:-0}
+PLUGIN_BINARY_OVERRIDDEN=${PLUGIN_BINARY_OVERRIDDEN:-0}
+[[ "${ECODEX_BINARY:-}" != "${WORKSPACE_ROOT}/codex-rs/target/release/ecodex" ]] && ECODEX_BINARY_OVERRIDDEN=1
+[[ "${PLUGIN_BINARY:-}" != "${WORKSPACE_ROOT}/codex-rs/target/release/codex-empirica-plugin" ]] && PLUGIN_BINARY_OVERRIDDEN=1
+
+if [[ ! -d "$PLUGIN_SRC" ]]; then
+  echo "ecodex install: plugin source not found at $PLUGIN_SRC" >&2
+  exit 1
+fi
+
+if [[ "$SKIP_BUILD" -eq 1 ]]; then
+  echo "→ Skipping cargo build (--no-build)"
+elif [[ "$ECODEX_BINARY_OVERRIDDEN" -eq 1 && "$PLUGIN_BINARY_OVERRIDDEN" -eq 1 ]]; then
+  echo "→ Skipping cargo build (ECODEX_BINARY + PLUGIN_BINARY both overridden via env)"
+else
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "ecodex install: cargo not found on PATH" >&2
+    echo "  Install Rust: https://rustup.rs/   then re-run this script." >&2
+    echo "  (Or pre-build elsewhere and re-run with ECODEX_BINARY=... PLUGIN_BINARY=... ./install.sh --no-build)" >&2
+    exit 1
+  fi
+  echo "→ Building ecodex + empirica plugin (cargo build --release; no-op if up-to-date)"
+  (cd "${WORKSPACE_ROOT}/codex-rs" && cargo build --release -p codex-cli -p codex-empirica-plugin)
+fi
+
+# ─── Sanity checks (post-build) ──────────────────────────────────────
 if [[ ! -x "$ECODEX_BINARY" ]]; then
-  echo "ecodex install: binary not found at $ECODEX_BINARY" >&2
-  echo "  Build it first: (cd codex-rs && cargo build --release -p codex-cli)" >&2
-  echo "  Or set ECODEX_BINARY to override." >&2
+  echo "ecodex install: ecodex binary still missing at $ECODEX_BINARY after build" >&2
+  echo "  Run cargo build manually to see errors:" >&2
+  echo "    (cd ${WORKSPACE_ROOT}/codex-rs && cargo build --release -p codex-cli)" >&2
   exit 1
 fi
 if [[ ! -x "$PLUGIN_BINARY" ]]; then
-  echo "ecodex install: plugin binary not found at $PLUGIN_BINARY" >&2
-  echo "  Build it first: (cd codex-rs && cargo build --release -p codex-empirica-plugin)" >&2
-  echo "  Or set PLUGIN_BINARY to override." >&2
-  exit 1
-fi
-if [[ ! -d "$PLUGIN_SRC" ]]; then
-  echo "ecodex install: plugin source not found at $PLUGIN_SRC" >&2
+  echo "ecodex install: plugin binary still missing at $PLUGIN_BINARY after build" >&2
+  echo "  Run cargo build manually to see errors:" >&2
+  echo "    (cd ${WORKSPACE_ROOT}/codex-rs && cargo build --release -p codex-empirica-plugin)" >&2
   exit 1
 fi
 
@@ -151,12 +184,44 @@ echo "→ Installing plugin binary to $PLUGIN_BIN_DEST"
 cp "$PLUGIN_BINARY" "$PLUGIN_BIN_DEST"
 chmod +x "$PLUGIN_BIN_DEST"
 
+# ─── Verify install ──────────────────────────────────────────────────
+# Catch the common "everything copied but it doesn't actually work"
+# failure modes before the user finds them at runtime. Each check is
+# fast; the whole block adds <1s.
+echo ""
+echo "→ Verifying install"
+verify_failures=0
+verify() {
+  local label="$1"; local condition="$2"
+  if eval "$condition" >/dev/null 2>&1; then
+    echo "  ✓ $label"
+  else
+    echo "  ✗ $label  ($condition)" >&2
+    verify_failures=$((verify_failures + 1))
+  fi
+}
+verify "wrapper executable + on PATH"   "[[ -x \"$WRAPPER_DEST\" ]]"
+verify "wrapper resolves the binary"     "grep -q \"^ECODEX_BINARY_PATH=\\\"$BINARY_DEST\\\"\" \"$WRAPPER_DEST\""
+verify "ecodex binary executable"        "[[ -x \"$BINARY_DEST\" ]]"
+verify "plugin binary on PATH"           "[[ -x \"$PLUGIN_BIN_DEST\" ]]"
+verify "plugin manifest readable"        "[[ -r \"${PLUGIN_DEST_DIR}/.codex-plugin/plugin.json\" ]]"
+verify "plugin manifest declares statusline"  "grep -q '\"statusline\"' \"${PLUGIN_DEST_DIR}/.codex-plugin/plugin.json\""
+verify "bundled hooks_scripts/ present"  "[[ -d \"${PLUGIN_DEST_DIR}/hooks_scripts\" ]]"
+verify "bundled agents/ present"          "[[ -d \"${PLUGIN_DEST_DIR}/agents\" ]]"
+verify "statusline script executable"    "[[ -x \"${PLUGIN_DEST_DIR}/hooks_scripts/scripts/statusline_empirica.py\" ]]"
+verify "config.toml has plugins.${PLUGIN_KEY} enabled"  "grep -E '^\\[plugins\\.\"empirica@nubaeon\"\\]' \"$CODEX_CONFIG\""
+if [[ "$verify_failures" -gt 0 ]]; then
+  echo ""
+  echo "✗ Install completed with $verify_failures verification failure(s) above. Inspect before running ecodex." >&2
+  exit 2
+fi
+
 # ─── Done ────────────────────────────────────────────────────────────
 echo ""
 echo "✓ ecodex installed."
 echo "  • binary:        $BINARY_DEST"
 echo "  • wrapper:       $WRAPPER_DEST  (this is what users invoke as 'ecodex')"
-echo "  • plugin cache:  $PLUGIN_DEST_DIR/  (manifest+hooks+mcp+skills)"
+echo "  • plugin cache:  $PLUGIN_DEST_DIR/  (manifest+hooks+mcp+skills+statusline)"
 echo "  • plugin binary: $PLUGIN_BIN_DEST  (codex's hooks invoke this)"
 if [[ -n "$REQUIREMENTS_PATH" ]]; then
   echo "  • lock:          $REQUIREMENTS_PATH  (pins empirica@nubaeon enabled — system-enforced)"
