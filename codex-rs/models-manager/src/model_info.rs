@@ -13,17 +13,21 @@ use crate::config::ModelsManagerConfig;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use tracing::warn;
 
-/// ecodex: substrate identity (epistemic-discipline frame). This precedes
-/// the upstream codex prompt so the model's first-impression identity is
-/// "epistemic-discipline practitioner working through a coding-agent
-/// surface" rather than "generic coding agent who also happens to follow
-/// some empirica rules." The positional ordering is intentional and
-/// load-bearing — see prompt-empirica.md for the rationale.
-pub const BASE_INSTRUCTIONS: &str = concat!(
-    include_str!("../prompt-empirica.md"),
-    "\n",
-    include_str!("../prompt.md"),
-);
+/// ecodex's singular base prompt. Replaces (does not concat with) the
+/// upstream codex prompt.md.
+///
+/// Useful operational sections from the upstream prompt (apply_patch,
+/// update_plan, shell guidelines, coding guidelines, validation
+/// philosophy, formatting rules) have been absorbed into
+/// prompt-empirica.md under the "Surface — the ecodex CLI" chapter,
+/// integrated within the empirica frame rather than appended as a
+/// separate document.
+///
+/// The upstream `prompt.md` is intentionally retained on disk for
+/// upstream-merge tracking — when openai/codex evolves its prompt, the
+/// diff against our retained copy shows what to fold into
+/// prompt-empirica.md. It is NOT loaded by ecodex at runtime.
+pub const BASE_INSTRUCTIONS: &str = include_str!("../prompt-empirica.md");
 const DEFAULT_PERSONALITY_HEADER: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
@@ -73,8 +77,32 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
 }
 
 /// Build a minimal fallback model descriptor for missing/unknown slugs.
+///
+/// ecodex extension: before falling back, check whether the slug matches a
+/// known open-weights model family (qwen, llama, mistral, gemma, deepseek,
+/// gpt-oss, mirothinker, qwopus, kimi, glm, ollama-prefixed, etc.). When
+/// matched, return a tuned descriptor with `used_fallback_model_metadata`
+/// set to false — so the runtime doesn't emit the "Model metadata for X
+/// not found" warning for models we explicitly recognize as a family even
+/// if the exact tag isn't in models.json. Context windows are conservative
+/// per-family defaults; tuning them per-tag would require maintaining a
+/// table per Ollama upstream.
 pub fn model_info_from_slug(slug: &str) -> ModelInfo {
-    warn!("Unknown model {slug} is used. This will use fallback model metadata.");
+    let mut info = build_fallback_model_info(slug);
+    if let Some(known) = recognize_open_weights_family(slug) {
+        info.context_window = Some(known.context_window);
+        info.max_context_window = Some(known.context_window);
+        info.display_name = known.display_name;
+        info.description = Some(known.family_description);
+        info.used_fallback_model_metadata = false;
+        info
+    } else {
+        warn!("Unknown model {slug} is used. This will use fallback model metadata.");
+        info
+    }
+}
+
+fn build_fallback_model_info(slug: &str) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
         display_name: slug.to_string(),
@@ -108,6 +136,69 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         used_fallback_model_metadata: true, // this is the fallback model metadata
         supports_search_tool: false,
     }
+}
+
+/// Tuning known to ecodex's target audience (open-weights operators).
+/// Match is case-insensitive prefix on the slug, after stripping any
+/// `<provider>/` namespace and trimming optional `:tag`. Conservative
+/// context_window defaults — when the actual tag differs, the user can
+/// override via `[model_providers.X.context_window]` in config.toml.
+struct KnownOpenWeightsFamily {
+    display_name: String,
+    family_description: String,
+    /// Tokens, conservative to avoid exceeding the model's actual capacity.
+    context_window: i64,
+}
+
+fn recognize_open_weights_family(slug: &str) -> Option<KnownOpenWeightsFamily> {
+    let normalized = slug
+        .rsplit_once('/')
+        .map(|(_, rest)| rest)
+        .unwrap_or(slug)
+        .split(':')
+        .next()
+        .unwrap_or(slug)
+        .to_ascii_lowercase();
+
+    let (display, family, ctx) = match () {
+        _ if normalized.starts_with("qwen") || normalized.starts_with("qwopus") => {
+            ("Qwen / Qwopus", "Qwen-family open-weights model (Alibaba)", 32_768)
+        }
+        _ if normalized.starts_with("llama") => {
+            ("Llama", "Llama-family open-weights model (Meta)", 128_000)
+        }
+        _ if normalized.starts_with("mistral") || normalized.starts_with("mixtral") => {
+            ("Mistral / Mixtral", "Mistral-family open-weights model", 32_768)
+        }
+        _ if normalized.starts_with("gemma") => {
+            ("Gemma", "Gemma open-weights model (Google)", 8_192)
+        }
+        _ if normalized.starts_with("deepseek") => {
+            ("DeepSeek", "DeepSeek open-weights model", 128_000)
+        }
+        _ if normalized.starts_with("gpt-oss") => {
+            ("GPT-OSS", "GPT-OSS open-weights model", 32_768)
+        }
+        _ if normalized.starts_with("mirothinker") || normalized.starts_with("huihui") => {
+            (
+                "MiroThinker",
+                "MiroThinker reasoning open-weights model",
+                32_768,
+            )
+        }
+        _ if normalized.starts_with("kimi") => ("Kimi", "Moonshot Kimi open-weights model", 200_000),
+        _ if normalized.starts_with("glm") => ("GLM", "Zhipu GLM open-weights model", 32_768),
+        _ if normalized.starts_with("phi") => {
+            ("Phi", "Phi open-weights model (Microsoft)", 16_384)
+        }
+        _ => return None,
+    };
+
+    Some(KnownOpenWeightsFamily {
+        display_name: format!("{display} ({slug})"),
+        family_description: family.to_string(),
+        context_window: ctx,
+    })
 }
 
 fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
