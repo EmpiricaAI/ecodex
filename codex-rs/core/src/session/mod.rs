@@ -29,6 +29,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
+use crate::context::SkillInstructions;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::selected_primary_environment;
 use crate::environment_selection::validate_environment_selections;
@@ -2737,6 +2738,52 @@ impl Session {
                 ])
         {
             items.push(guardian_developer_message);
+        }
+        // ecodex extension: re-inject bodies for skills marked `pinned: true` in
+        // their SKILL.md frontmatter. These are framework skills (epistemic
+        // constitution, transaction lifecycle) that need to remain ambient
+        // context, not progressive-disclosure task skills. Because
+        // build_initial_context runs at session start AND after manual /compact
+        // (via the reference_context_item=None reset in
+        // record_context_updates_and_set_reference_context_item), this gives
+        // pinned skills automatic post-compact recovery — their bodies are
+        // present in the new context window without the user having to
+        // re-mention them.
+        if turn_context.config.include_skill_instructions {
+            let outcome = turn_context.turn_skills.outcome.as_ref();
+            let pinned_skills: Vec<crate::SkillMetadata> = outcome
+                .skills
+                .iter()
+                .filter(|s| s.pinned && outcome.is_skill_enabled(s))
+                .cloned()
+                .collect();
+            if !pinned_skills.is_empty() {
+                let tracking = codex_analytics::build_track_events_context(
+                    turn_context.model_info.slug.clone(),
+                    self.conversation_id.to_string(),
+                    turn_context.sub_id.clone(),
+                );
+                let pinned_injections = crate::skills::injection::build_skill_injections(
+                    &pinned_skills,
+                    Some(outcome),
+                    Some(&self.services.session_telemetry),
+                    &self.services.analytics_events_client,
+                    tracking,
+                )
+                .await;
+                for warning in pinned_injections.warnings {
+                    self.send_event_raw(Event {
+                        id: String::new(),
+                        msg: EventMsg::Warning(WarningEvent { message: warning }),
+                    })
+                    .await;
+                }
+                for injection in pinned_injections.items {
+                    items.push(ContextualUserFragment::into(SkillInstructions::from(
+                        &injection,
+                    )));
+                }
+            }
         }
         items
     }

@@ -5678,6 +5678,98 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
     );
 }
 
+#[tokio::test]
+async fn build_initial_context_reinjects_pinned_skill_bodies() {
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+
+    // ecodex extension: skills marked `pinned: true` in SKILL.md frontmatter
+    // get their bodies re-injected by build_initial_context on every call.
+    // Because build_initial_context runs at session start AND post-/compact
+    // (via reference_context_item=None reset), pinned skill bodies survive
+    // compaction without the user having to re-mention them. This is the
+    // recovery mechanism for framework skills that need to remain ambient
+    // context (epistemic constitution, transaction lifecycle).
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let pinned_dir = tmp.path().join("framework-skill");
+    std::fs::create_dir_all(&pinned_dir).expect("mkdir pinned");
+    let pinned_md = pinned_dir.join("SKILL.md");
+    std::fs::write(
+        &pinned_md,
+        "---\nname: framework-skill\ndescription: framework rules\npinned: true\n---\n\n# Framework body\n\nFRAMEWORK_MARKER_TOKEN\n",
+    )
+    .expect("write pinned SKILL.md");
+
+    let unpinned_dir = tmp.path().join("task-skill");
+    std::fs::create_dir_all(&unpinned_dir).expect("mkdir unpinned");
+    let unpinned_md = unpinned_dir.join("SKILL.md");
+    std::fs::write(
+        &unpinned_md,
+        "---\nname: task-skill\ndescription: progressive disclosure\n---\n\n# Task body\n\nTASK_MARKER_TOKEN\n",
+    )
+    .expect("write unpinned SKILL.md");
+
+    let (session, mut turn_context) = make_session_and_context().await;
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![
+        SkillMetadata {
+            name: "framework-skill".to_string(),
+            description: "framework rules".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: pinned_md.abs(),
+            scope: SkillScope::User,
+            pinned: true,
+        },
+        SkillMetadata {
+            name: "task-skill".to_string(),
+            description: "progressive disclosure".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: unpinned_md.abs(),
+            scope: SkillScope::User,
+            pinned: false,
+        },
+    ];
+    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+
+    // Look for a user-role message containing the pinned skill body marker.
+    let mut found_framework = false;
+    let mut found_task = false;
+    for item in &initial_context {
+        if let ResponseItem::Message { role, content, .. } = item
+            && role == "user"
+        {
+            for c in content {
+                if let ContentItem::InputText { text } = c {
+                    if text.contains("FRAMEWORK_MARKER_TOKEN") {
+                        found_framework = true;
+                    }
+                    if text.contains("TASK_MARKER_TOKEN") {
+                        found_task = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        found_framework,
+        "expected pinned skill body to appear in initial context (look for FRAMEWORK_MARKER_TOKEN), got items: {initial_context:#?}"
+    );
+    assert!(
+        !found_task,
+        "expected unpinned skill body to NOT appear in initial context (TASK_MARKER_TOKEN present means we leaked progressive-disclosure body)"
+    );
+}
+
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();
