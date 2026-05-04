@@ -28,6 +28,13 @@ struct RawPluginManifest {
     apps: Option<String>,
     #[serde(default)]
     hooks: Option<RawPluginManifestHooks>,
+    /// Path (relative `./...`) to an executable the plugin host invokes
+    /// on the TUI render tick to contribute a single line to the bottom
+    /// status bar. Stdout is interpreted as ANSI text (one or more lines
+    /// — each becomes a footer row). Empirica's plugin uses this for
+    /// the live epistemic-state strip; any plugin can register its own.
+    #[serde(default)]
+    statusline: Option<String>,
     #[serde(default)]
     interface: Option<RawPluginManifestInterface>,
 }
@@ -47,6 +54,12 @@ pub struct PluginManifestPaths {
     pub mcp_servers: Option<AbsolutePathBuf>,
     pub apps: Option<AbsolutePathBuf>,
     pub hooks: Option<PluginManifestHooks>,
+    /// Optional executable the TUI invokes on a render tick to render a
+    /// plugin-contributed status line. Resolved relative to the plugin
+    /// root from the manifest's `statusline` field. The host runs the
+    /// command in a debounced subprocess (see TUI render loop) and
+    /// renders stdout below the existing footer status items.
+    pub statusline: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +160,7 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                 mcp_servers,
                 apps,
                 hooks,
+                statusline,
                 interface,
             } = manifest;
             let name = plugin_root
@@ -241,6 +255,11 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                     ),
                     apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
                     hooks: resolve_manifest_hooks(plugin_root, hooks),
+                    statusline: resolve_manifest_path(
+                        plugin_root,
+                        "statusline",
+                        statusline.as_deref(),
+                    ),
                 },
                 interface,
             })
@@ -593,5 +612,66 @@ mod tests {
                 .and_then(|interface| interface.display_name.as_deref()),
             Some("Fallback Plugin")
         );
+    }
+
+    /// Helper: write a top-level plugin manifest (statusline / hooks /
+    /// mcpServers / etc are top-level fields, not nested under interface).
+    fn write_full_manifest(plugin_root: &Path, contents: &str) {
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
+        fs::write(plugin_root.join(".codex-plugin/plugin.json"), contents)
+            .expect("write manifest");
+    }
+
+    #[test]
+    fn plugin_manifest_resolves_statusline_path() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_full_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin",
+  "statusline": "./scripts/statusline.sh"
+}"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+        let statusline = manifest
+            .paths
+            .statusline
+            .as_ref()
+            .expect("statusline resolved");
+        assert!(statusline.as_path().ends_with("scripts/statusline.sh"));
+    }
+
+    #[test]
+    fn plugin_manifest_statusline_absent_when_unset() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_full_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin"
+}"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+        assert!(manifest.paths.statusline.is_none());
+    }
+
+    #[test]
+    fn plugin_manifest_statusline_rejects_non_relative_path() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        // Absolute path — must be rejected (must start with `./`).
+        write_full_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin",
+  "statusline": "/etc/passwd"
+}"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+        assert!(manifest.paths.statusline.is_none());
     }
 }
