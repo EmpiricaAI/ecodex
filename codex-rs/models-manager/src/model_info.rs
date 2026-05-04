@@ -13,7 +13,17 @@ use crate::config::ModelsManagerConfig;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use tracing::warn;
 
-pub const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
+/// ecodex: substrate identity (epistemic-discipline frame). This precedes
+/// the upstream codex prompt so the model's first-impression identity is
+/// "epistemic-discipline practitioner working through a coding-agent
+/// surface" rather than "generic coding agent who also happens to follow
+/// some empirica rules." The positional ordering is intentional and
+/// load-bearing — see prompt-empirica.md for the rationale.
+pub const BASE_INSTRUCTIONS: &str = concat!(
+    include_str!("../prompt-empirica.md"),
+    "\n",
+    include_str!("../prompt.md"),
+);
 const DEFAULT_PERSONALITY_HEADER: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
