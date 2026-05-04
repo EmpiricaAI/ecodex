@@ -319,6 +319,29 @@ impl App {
         });
     }
 
+    /// Async sibling of `refresh_plugin_mentions`: pulls plugin-declared
+    /// statusline commands so the TUI render loop knows what to invoke.
+    /// Sends an empty Vec when the Plugins feature is disabled.
+    pub(super) fn refresh_plugin_statusline_sources(&mut self) {
+        let config = self.config.clone();
+        let app_event_tx = self.app_event_tx.clone();
+        if !config.features.enabled(Feature::Plugins) {
+            app_event_tx.send(AppEvent::PluginStatuslineSourcesLoaded {
+                sources: Vec::new(),
+            });
+            return;
+        }
+
+        tokio::spawn(async move {
+            let plugins_input = config.plugins_config_input();
+            let sources = PluginsManager::new(config.codex_home.to_path_buf())
+                .plugins_for_config(&plugins_input)
+                .await
+                .effective_plugin_statusline_sources();
+            app_event_tx.send(AppEvent::PluginStatuslineSourcesLoaded { sources });
+        });
+    }
+
     pub(super) fn submit_feedback(
         &mut self,
         app_server: &AppServerSession,

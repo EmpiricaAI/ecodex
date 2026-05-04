@@ -41,6 +41,7 @@ use codex_app_server_protocol::AskForApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
+use codex_plugin::PluginStatuslineSource;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
@@ -434,6 +435,20 @@ pub(crate) enum AppEvent {
     /// Result of refreshing plugin mention bindings.
     PluginMentionsLoaded {
         plugins: Option<Vec<PluginCapabilitySummary>>,
+    },
+
+    /// Refresh the set of plugin-contributed statusline commands from the
+    /// current plugin manifests. Triggered at session start (and when plugin
+    /// configuration changes) so the renderer has an up-to-date list to
+    /// invoke. The actual subprocess invocation + render integration lives
+    /// in Tx6(b)/3b/3c — this event only refreshes the source set.
+    RefreshPluginStatuslineSources,
+
+    /// Result of refreshing plugin statusline sources. `sources` is empty
+    /// when the Plugins feature is disabled or no plugins declared a
+    /// `statusline` field in their manifest.
+    PluginStatuslineSourcesLoaded {
+        sources: Vec<PluginStatuslineSource>,
     },
 
     /// Advance the post-install plugin app-auth flow.

@@ -140,6 +140,7 @@ use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_plugin::PluginCapabilitySummary;
+use codex_plugin::PluginStatuslineSource;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::GuardianAssessmentAction;
@@ -1001,6 +1002,12 @@ pub(crate) struct ChatWidget {
     status_line_branch_pending: bool,
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
+    // Plugin-contributed statusline commands collected from active plugin
+    // manifests (see core-plugins::loader::load_plugin_statusline). The
+    // render runtime (Tx6(b)/3b/3c) invokes each on a debounced tick and
+    // appends captured output below the existing footer. Empty until the
+    // first PluginStatuslineSourcesLoaded event lands.
+    plugin_statusline_sources: Vec<PluginStatuslineSource>,
     // Current thread-goal status shown in the status line when plan mode is inactive.
     current_goal_status_indicator: Option<GoalStatusIndicator>,
     current_goal_status: Option<GoalStatusState>,
@@ -2067,6 +2074,7 @@ impl ChatWidget {
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
         self.refresh_plugin_mentions();
+        self.refresh_plugin_statusline_sources();
         if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();
             let show_fast_status =
@@ -4954,6 +4962,7 @@ impl ChatWidget {
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
+            plugin_statusline_sources: Vec::new(),
             current_goal_status_indicator: None,
             current_goal_status: None,
             goal_status_active_turn_started_at: None,
@@ -10546,6 +10555,31 @@ impl ChatWidget {
         plugins: Option<Vec<PluginCapabilitySummary>>,
     ) {
         self.bottom_pane.set_plugin_mentions(plugins);
+    }
+
+    /// Trigger a background refresh of the plugin-contributed statusline
+    /// command set. Result lands as
+    /// `AppEvent::PluginStatuslineSourcesLoaded` and is consumed by
+    /// [`Self::on_plugin_statusline_sources_loaded`]. Sends an empty set
+    /// directly when the Plugins feature is disabled (no async needed).
+    pub(crate) fn refresh_plugin_statusline_sources(&mut self) {
+        if !self.config.features.enabled(Feature::Plugins) {
+            self.plugin_statusline_sources.clear();
+            return;
+        }
+        self.app_event_tx
+            .send(AppEvent::RefreshPluginStatuslineSources);
+    }
+
+    /// Stash the freshly-discovered plugin statusline sources. The render
+    /// runtime (Tx6(b)/3b) reads this field on its tick to decide which
+    /// subprocesses to spawn; the footer integration (Tx6(b)/3c) reads
+    /// the cached output produced by those subprocesses.
+    pub(crate) fn on_plugin_statusline_sources_loaded(
+        &mut self,
+        sources: Vec<PluginStatuslineSource>,
+    ) {
+        self.plugin_statusline_sources = sources;
     }
 
     pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
