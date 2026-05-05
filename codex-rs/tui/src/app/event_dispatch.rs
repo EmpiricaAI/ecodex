@@ -679,27 +679,27 @@ impl App {
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
-                // ecodex extension: when the user picks a curated entry that
-                // routes to a different provider than the session's current
-                // (e.g. picking "kimi-for-coding" while session has
-                // model_provider="empirica-local"), surface a copy-pasteable
-                // config snippet + restart instruction. Provider hot-swap is
-                // not yet wired (see T77 commit history) — exit + restart
-                // ecodex is the supported path.
+                // ecodex extension (T78): when the user picks a curated entry
+                // that routes to a different provider than the session's
+                // current, stage the provider switch to fire on the next
+                // user_turn. The session's SessionConfiguration::apply will
+                // detect the change and hot-swap ModelClient via ArcSwap —
+                // no restart required.
                 if let Some(target_provider) =
                     crate::ecodex_curated_models::provider_for_slug(&model)
                 {
                     let current_provider =
                         self.chat_widget.config_ref().model_provider_id.clone();
                     if target_provider != current_provider {
-                        let hint = format!(
-                            "Add to ~/.codex/config.toml (top-level):\n  model_provider = \"{target_provider}\"\n  model = \"{model}\"\nThen exit ecodex (Ctrl-D) and re-launch. Provider switching mid-session is not yet supported."
-                        );
+                        self.chat_widget
+                            .stage_pending_model_provider(target_provider.to_string());
                         self.chat_widget.add_info_message(
                             format!(
-                                "Selected `{model}` is curated under provider `{target_provider}`, but the current session uses `{current_provider}`."
+                                "Provider switching to `{target_provider}` for `{model}` — takes effect on your next message."
                             ),
-                            Some(hint),
+                            Some(
+                                "Curated model from a different provider than the current session. The hot-swap fires on the first user_turn after this point.".to_string(),
+                            ),
                         );
                     }
                 }

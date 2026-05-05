@@ -6699,6 +6699,10 @@ impl CodexMessageProcessor {
                 || params.sandbox_policy.is_some()
                 || params.permissions.is_some()
                 || params.model.is_some()
+                // ecodex extension (T78): a provider-only swap (model
+                // unchanged, provider differs) must still take the
+                // OverrideTurnContext path so the change reaches core.
+                || params.model_provider.is_some()
                 || params.service_tier.is_some()
                 || params.effort.is_some()
                 || params.summary.is_some()
@@ -6757,6 +6761,11 @@ impl CodexMessageProcessor {
                     (None, None)
                 };
             let model = params.model;
+            // ecodex extension (T78): extract provider override; forwarded
+            // below into Op::UserInputWithTurnContext so core's
+            // SessionConfiguration::apply detects the change and
+            // hot-swaps ModelClient.
+            let model_provider = params.model_provider;
             let effort = params.effort.map(Some);
             let summary = params.summary;
             let service_tier = params.service_tier;
@@ -6803,9 +6812,10 @@ impl CodexMessageProcessor {
                     active_permission_profile,
                     windows_sandbox_level: None,
                     model,
-                    // ecodex extension: app-server doesn't expose provider
-                    // override yet (use OverrideTurnContext for that path).
-                    model_provider: None,
+                    // ecodex extension (T78): forward picker's staged
+                    // provider override; core detects change and
+                    // hot-swaps ModelClient via ArcSwap.
+                    model_provider,
                     effort,
                     summary,
                     service_tier,

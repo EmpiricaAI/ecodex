@@ -592,6 +592,15 @@ impl App {
                         } else {
                             None
                         };
+                    // ecodex extension: pull pending model_provider override
+                    // from chatwidget — set by /model picker when the
+                    // selected entry routes to a different provider than
+                    // the current session's. take_pending_model_provider
+                    // consumes the stored value so each provider switch
+                    // fires exactly once (subsequent turns inherit via the
+                    // session's session_configuration after hot-swap).
+                    let model_provider_override =
+                        self.chat_widget.take_pending_model_provider();
                     app_server
                         .turn_start(
                             thread_id,
@@ -602,6 +611,7 @@ impl App {
                             permission_profile.clone(),
                             active_permission_profile,
                             model.to_string(),
+                            model_provider_override,
                             *effort,
                             *summary,
                             *service_tier,

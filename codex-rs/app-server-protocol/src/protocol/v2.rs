@@ -5564,6 +5564,15 @@ pub struct TurnStartParams {
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
+    /// ecodex extension: override the `model_provider` ID for this turn
+    /// and subsequent turns. When set, the session re-resolves the
+    /// provider from `config.model_providers[<id>]` and hot-swaps the
+    /// session-shared ModelClient (T78). Pair with `model` for atomic
+    /// provider+model swaps from the picker when a curated entry routes
+    /// to a different provider than the current session's. Omit to keep
+    /// the existing provider.
+    #[ts(optional = nullable)]
+    pub model_provider: Option<String>,
     /// Override the service tier for this turn and subsequent turns.
     #[serde(
         default,

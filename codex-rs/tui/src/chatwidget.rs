@@ -756,6 +756,13 @@ pub(crate) struct ChatWidget {
     current_collaboration_mode: CollaborationMode,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
+    /// ecodex extension (T78): when the user picks a curated /model entry
+    /// whose provider differs from the session's current, this holds the
+    /// target provider id until the next user_turn fires. Consumed by
+    /// `take_pending_model_provider` in thread_routing's UserTurn handler,
+    /// which forwards it on TurnStartParams; the core session detects the
+    /// change and hot-swaps ModelClient via ArcSwap.
+    pending_model_provider: Option<String>,
     has_chatgpt_account: bool,
     model_catalog: Arc<ModelCatalog>,
     session_telemetry: SessionTelemetry,
@@ -4852,6 +4859,9 @@ impl ChatWidget {
             skills_initial_state: None,
             current_collaboration_mode,
             active_collaboration_mask,
+            // ecodex extension (T78): set by /model picker when curated
+            // entry crosses providers; consumed on next user_turn.
+            pending_model_provider: None,
             has_chatgpt_account,
             model_catalog,
             session_telemetry,
@@ -9335,6 +9345,27 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         self.refresh_model_dependent_surfaces();
+    }
+
+    /// ecodex extension (T78): stage a provider switch to fire on the next
+    /// user_turn. Called by event_dispatch when the user picks a curated
+    /// /model entry whose provider differs from the session's current.
+    /// The stored value is consumed by `take_pending_model_provider`
+    /// inside the UserTurn handler in thread_routing, which forwards it
+    /// on TurnStartParams.model_provider; the core session's
+    /// SessionConfiguration::apply detects the change and triggers
+    /// ModelClient hot-swap via ArcSwap.
+    pub(crate) fn stage_pending_model_provider(&mut self, provider_id: String) {
+        self.pending_model_provider = Some(provider_id);
+    }
+
+    /// ecodex extension (T78): consume the staged provider override (if any)
+    /// so subsequent turns inherit via the session's session_configuration
+    /// after the hot-swap. Returning Option means the caller passes None
+    /// to TurnStartParams when no swap is pending — preserves the
+    /// current provider.
+    pub(crate) fn take_pending_model_provider(&mut self) -> Option<String> {
+        self.pending_model_provider.take()
     }
 
     fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {

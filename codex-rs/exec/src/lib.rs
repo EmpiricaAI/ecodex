@@ -767,6 +767,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         sandbox_policy: None,
                         permissions: None,
                         model: None,
+                        // ecodex extension: exec mode doesn't expose
+                        // provider override (no picker UI).
+                        model_provider: None,
                         service_tier: None,
                         effort: default_effort,
                         summary: None,

@@ -187,10 +187,10 @@ pub(super) async fn user_input_or_turn_inner(
             active_permission_profile,
             windows_sandbox_level,
             model,
-            // ecodex extension: provider override is plumbed but not yet wired
-            // through SessionSettingsUpdate (Phase 2). Persistent
-            // OverrideTurnContext is the path the picker actually uses.
-            model_provider: _,
+            // ecodex extension (T78): provider override flows through to
+            // SessionSettingsUpdate so apply() detects the change and
+            // update_settings hot-swaps ModelClient via ArcSwap.
+            model_provider,
             effort,
             summary,
             service_tier,
@@ -223,10 +223,10 @@ pub(super) async fn user_input_or_turn_inner(
                     active_permission_profile,
                     windows_sandbox_level,
                     collaboration_mode,
-                    // ecodex extension: UserInputWithTurnContext doesn't
-                    // forward provider override yet; use OverrideTurnContext
-                    // for that path.
-                    model_provider: None,
+                    // ecodex extension (T78): forwards through to apply()
+                    // which resolves and assigns the new provider, then
+                    // update_settings hot-swaps ModelClient via ArcSwap.
+                    model_provider,
                     reasoning_summary: summary,
                     service_tier,
                     final_output_json_schema: Some(final_output_json_schema),

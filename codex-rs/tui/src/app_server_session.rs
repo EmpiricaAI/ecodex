@@ -516,6 +516,7 @@ impl AppServerSession {
         permission_profile: PermissionProfile,
         active_permission_profile: Option<ActivePermissionProfile>,
         model: String,
+        model_provider: Option<String>,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
         summary: Option<codex_protocol::config_types::ReasoningSummary>,
         service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
@@ -544,6 +545,10 @@ impl AppServerSession {
                     sandbox_policy,
                     permissions,
                     model: Some(model),
+                    // ecodex extension: rides through to core, where the
+                    // session detects the provider change and hot-swaps
+                    // ModelClient (T78). None = keep existing provider.
+                    model_provider,
                     service_tier,
                     effort,
                     summary,
