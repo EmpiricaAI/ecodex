@@ -592,15 +592,15 @@ impl App {
                         } else {
                             None
                         };
-                    // ecodex extension: pull pending model_provider override
-                    // from chatwidget — set by /model picker when the
-                    // selected entry routes to a different provider than
-                    // the current session's. take_pending_model_provider
-                    // consumes the stored value so each provider switch
-                    // fires exactly once (subsequent turns inherit via the
-                    // session's session_configuration after hot-swap).
+                    // ecodex extension (T78): pending_model_provider_for_turn
+                    // returns Some only when the staged override differs
+                    // from what the session last dispatched. After the first
+                    // user_turn carries the swap signal, subsequent turns
+                    // short-circuit to None unless the picker stages a new
+                    // cross-provider entry. The active override stays
+                    // persistent on chatwidget (used for picker baseline).
                     let model_provider_override =
-                        self.chat_widget.take_pending_model_provider();
+                        self.chat_widget.pending_model_provider_for_turn();
                     app_server
                         .turn_start(
                             thread_id,

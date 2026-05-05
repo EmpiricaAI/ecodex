@@ -756,13 +756,26 @@ pub(crate) struct ChatWidget {
     current_collaboration_mode: CollaborationMode,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
-    /// ecodex extension (T78): when the user picks a curated /model entry
-    /// whose provider differs from the session's current, this holds the
-    /// target provider id until the next user_turn fires. Consumed by
-    /// `take_pending_model_provider` in thread_routing's UserTurn handler,
-    /// which forwards it on TurnStartParams; the core session detects the
-    /// change and hot-swaps ModelClient via ArcSwap.
-    pending_model_provider: Option<String>,
+    /// ecodex extension (T78): the active provider override. Set when the
+    /// /model picker selects a curated entry whose provider differs from
+    /// the session's. Persistent (does NOT auto-clear) so subsequent
+    /// picker decisions compare against the right "current" provider —
+    /// `chat_widget.config.model_provider_id` is set once at session start
+    /// and stays stale through hot-swaps, so without this field a second
+    /// cross-provider pick would baseline against the original provider
+    /// instead of the actively-swapped one.
+    ///
+    /// Read each user_turn by `pending_model_provider_for_turn` (which
+    /// returns Some only when the override differs from what the session
+    /// already routes to — avoids re-firing the swap path on every
+    /// message after the first).
+    active_provider_override: Option<String>,
+    /// ecodex extension (T78): the provider id we last sent on a user_turn
+    /// (or the session-start default if no swap has happened yet).
+    /// `pending_model_provider_for_turn` returns None when
+    /// `active_provider_override` matches this — the swap already fired
+    /// and the session is correctly routing.
+    last_dispatched_provider: Option<String>,
     has_chatgpt_account: bool,
     model_catalog: Arc<ModelCatalog>,
     session_telemetry: SessionTelemetry,
@@ -4860,8 +4873,10 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             // ecodex extension (T78): set by /model picker when curated
-            // entry crosses providers; consumed on next user_turn.
-            pending_model_provider: None,
+            // entry crosses providers. Persistent so subsequent picker
+            // decisions baseline correctly post-swap.
+            active_provider_override: None,
+            last_dispatched_provider: None,
             has_chatgpt_account,
             model_catalog,
             session_telemetry,
@@ -9349,23 +9364,40 @@ impl ChatWidget {
 
     /// ecodex extension (T78): stage a provider switch to fire on the next
     /// user_turn. Called by event_dispatch when the user picks a curated
-    /// /model entry whose provider differs from the session's current.
-    /// The stored value is consumed by `take_pending_model_provider`
-    /// inside the UserTurn handler in thread_routing, which forwards it
-    /// on TurnStartParams.model_provider; the core session's
-    /// SessionConfiguration::apply detects the change and triggers
-    /// ModelClient hot-swap via ArcSwap.
+    /// /model entry whose provider differs from the active provider.
+    /// Persistent — kept until a different provider is staged or the
+    /// session ends. Used both for picker baseline comparisons and for
+    /// per-turn dispatch.
     pub(crate) fn stage_pending_model_provider(&mut self, provider_id: String) {
-        self.pending_model_provider = Some(provider_id);
+        self.active_provider_override = Some(provider_id);
     }
 
-    /// ecodex extension (T78): consume the staged provider override (if any)
-    /// so subsequent turns inherit via the session's session_configuration
-    /// after the hot-swap. Returning Option means the caller passes None
-    /// to TurnStartParams when no swap is pending — preserves the
-    /// current provider.
-    pub(crate) fn take_pending_model_provider(&mut self) -> Option<String> {
-        self.pending_model_provider.take()
+    /// ecodex extension (T78): the provider id this session is actively
+    /// routing to. Returns the staged override if set, otherwise the
+    /// session-start default from config. Used by the picker to decide
+    /// whether a curated entry's provider differs from the current
+    /// (and therefore needs to stage a swap).
+    pub(crate) fn active_provider_id(&self) -> &str {
+        self.active_provider_override
+            .as_deref()
+            .unwrap_or_else(|| self.config.model_provider_id.as_str())
+    }
+
+    /// ecodex extension (T78): the provider override to forward on the
+    /// next user_turn — Some only when the staged override differs from
+    /// what the session last dispatched. Returns None on subsequent turns
+    /// after the swap has fired (avoids re-firing the swap path on every
+    /// message). Updates `last_dispatched_provider` so future turns short-
+    /// circuit unless the user picks a new cross-provider entry.
+    pub(crate) fn pending_model_provider_for_turn(&mut self) -> Option<String> {
+        let active = self.active_provider_override.clone()?;
+        if self.last_dispatched_provider.as_deref() == Some(active.as_str()) {
+            // Already dispatched at this provider; no override needed.
+            None
+        } else {
+            self.last_dispatched_provider = Some(active.clone());
+            Some(active)
+        }
     }
 
     fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {

@@ -688,8 +688,11 @@ impl App {
                 if let Some(target_provider) =
                     crate::ecodex_curated_models::provider_for_slug(&model)
                 {
+                    // Use active_provider_id (which factors in any prior
+                    // staged override) instead of the config's session-start
+                    // provider — the latter goes stale after the first swap.
                     let current_provider =
-                        self.chat_widget.config_ref().model_provider_id.clone();
+                        self.chat_widget.active_provider_id().to_string();
                     if target_provider != current_provider {
                         self.chat_widget
                             .stage_pending_model_provider(target_provider.to_string());
