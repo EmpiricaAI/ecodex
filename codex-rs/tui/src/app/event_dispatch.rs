@@ -679,6 +679,30 @@ impl App {
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
+                // ecodex extension: when the user picks a curated entry that
+                // routes to a different provider than the session's current
+                // (e.g. picking "kimi-for-coding" while session has
+                // model_provider="empirica-local"), surface a copy-pasteable
+                // config snippet + restart instruction. Provider hot-swap is
+                // not yet wired (see T77 commit history) — exit + restart
+                // ecodex is the supported path.
+                if let Some(target_provider) =
+                    crate::ecodex_curated_models::provider_for_slug(&model)
+                {
+                    let current_provider =
+                        self.chat_widget.config_ref().model_provider_id.clone();
+                    if target_provider != current_provider {
+                        let hint = format!(
+                            "Add to ~/.codex/config.toml (top-level):\n  model_provider = \"{target_provider}\"\n  model = \"{model}\"\nThen exit ecodex (Ctrl-D) and re-launch. Provider switching mid-session is not yet supported."
+                        );
+                        self.chat_widget.add_info_message(
+                            format!(
+                                "Selected `{model}` is curated under provider `{target_provider}`, but the current session uses `{current_provider}`."
+                            ),
+                            Some(hint),
+                        );
+                    }
+                }
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
