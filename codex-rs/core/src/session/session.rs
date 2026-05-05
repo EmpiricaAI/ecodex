@@ -172,6 +172,43 @@ impl SessionConfiguration {
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
             next_configuration.collaboration_mode = collaboration_mode;
         }
+        // ecodex extension: model_provider override. Resolves the new
+        // ModelProviderInfo from config.model_providers[<id>] and assigns
+        // it to next_configuration.provider. Note: codex's ModelClient is
+        // built once at session init from this provider field — it is NOT
+        // rebuilt automatically when the field changes here. The persisted
+        // value drives correct routing on session restart; update_settings
+        // emits a user-facing notice that a restart is required for the
+        // new routing to take effect. Mid-session ModelClient hot-swap is
+        // a future enhancement (would require Services.model_client
+        // mutability + in-flight request handling).
+        //
+        // Unknown provider IDs are warned + skipped rather than hard-failed
+        // because ConstraintError has no free-form variant; the picker is
+        // expected to validate before submitting via the apply config seen
+        // at session start.
+        if let Some(provider_id) = updates.model_provider.as_deref() {
+            match next_configuration
+                .original_config_do_not_use
+                .model_providers
+                .get(provider_id)
+            {
+                Some(provider) => {
+                    next_configuration.provider = provider.clone();
+                }
+                None => {
+                    warn!(
+                        provider_id,
+                        configured = ?next_configuration
+                            .original_config_do_not_use
+                            .model_providers
+                            .keys()
+                            .collect::<Vec<_>>(),
+                        "model_provider override ignored — id not in config.model_providers"
+                    );
+                }
+            }
+        }
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = Some(summary);
         }

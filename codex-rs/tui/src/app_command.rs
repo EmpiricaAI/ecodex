@@ -58,6 +58,12 @@ pub(crate) enum AppCommand {
         permission_profile: Option<PermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
+        /// ecodex extension: provider override for the picker's curated
+        /// model entries (see `tui/src/ecodex_curated_models.rs`). When
+        /// the user selects a curated entry that routes to a different
+        /// `model_providers.<id>` than the current session's, the picker
+        /// emits this field alongside `model`.
+        model_provider: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
         summary: Option<ReasoningSummaryConfig>,
         service_tier: Option<Option<ServiceTier>>,
@@ -189,6 +195,41 @@ impl AppCommand {
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     ) -> Self {
+        Self::override_turn_context_with_provider(
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            permission_profile,
+            windows_sandbox_level,
+            model,
+            /*model_provider*/ None,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+        )
+    }
+
+    /// ecodex extension: variant of `override_turn_context` that also
+    /// emits a `model_provider` override. Used by the picker when a
+    /// curated model entry maps to a different provider than the
+    /// session's current.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn override_turn_context_with_provider(
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+        permission_profile: Option<PermissionProfile>,
+        windows_sandbox_level: Option<WindowsSandboxLevel>,
+        model: Option<String>,
+        model_provider: Option<String>,
+        effort: Option<Option<ReasoningEffortConfig>>,
+        summary: Option<ReasoningSummaryConfig>,
+        service_tier: Option<Option<ServiceTier>>,
+        collaboration_mode: Option<CollaborationMode>,
+        personality: Option<Personality>,
+    ) -> Self {
         Self::OverrideTurnContext {
             cwd,
             approval_policy,
@@ -196,6 +237,7 @@ impl AppCommand {
             permission_profile,
             windows_sandbox_level,
             model,
+            model_provider,
             effort,
             summary,
             service_tier,

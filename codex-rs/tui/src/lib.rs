@@ -135,6 +135,7 @@ pub(crate) mod live_wrap;
 pub use live_wrap::RowBuilder;
 mod local_chatgpt_auth;
 mod markdown;
+mod ecodex_curated_models;
 mod markdown_render;
 mod markdown_stream;
 mod mention_codec;
