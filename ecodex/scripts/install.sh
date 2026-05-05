@@ -158,6 +158,13 @@ mkdir -p "${PLUGIN_DEST_DIR}/.codex-plugin"
 cp "${PLUGIN_SRC}/manifest.json"     "${PLUGIN_DEST_DIR}/.codex-plugin/plugin.json"
 cp "${PLUGIN_SRC}/hooks.json"        "${PLUGIN_DEST_DIR}/hooks.json"
 cp "${PLUGIN_SRC}/mcp_servers.json"  "${PLUGIN_DEST_DIR}/mcp_servers.json"
+# Re-installs need an explicit clean before `cp -r`. Without the rm, GNU cp
+# detects an existing destination directory and copies the source *into* it
+# (creating skills/skills/, hooks_scripts/hooks_scripts/, agents/agents/).
+# The duplicates double the model-visible skill count, blow the 2% skills
+# context budget, and leave stale top-level copies pinned to old content
+# from the first install. Clean each dest before copying.
+rm -rf "${PLUGIN_DEST_DIR}/skills"
 cp -r "${PLUGIN_SRC}/skills"         "${PLUGIN_DEST_DIR}/skills"
 
 # Bundled hook scripts: codex sets PLUGIN_ROOT when invoking plugin hook
@@ -165,6 +172,7 @@ cp -r "${PLUGIN_SRC}/skills"         "${PLUGIN_DEST_DIR}/skills"
 # to find sentinel-gate.py / session-init.py / etc. Self-contained:
 # no dependency on a coexisting CC empirica install at runtime.
 if [[ -d "${PLUGIN_SRC}/assets/hooks_scripts" ]]; then
+  rm -rf "${PLUGIN_DEST_DIR}/hooks_scripts"
   cp -r "${PLUGIN_SRC}/assets/hooks_scripts" "${PLUGIN_DEST_DIR}/hooks_scripts"
 else
   echo "WARNING: ${PLUGIN_SRC}/assets/hooks_scripts/ missing — plugin will fall back to ~/.claude/...; run scripts/sync-empirica-assets.sh to vendor." >&2
@@ -175,6 +183,7 @@ fi
 # session start so codex can dispatch to specialists. Source dir resolved
 # at runtime via PLUGIN_ROOT/agents.
 if [[ -d "${PLUGIN_SRC}/assets/agents" ]]; then
+  rm -rf "${PLUGIN_DEST_DIR}/agents"
   cp -r "${PLUGIN_SRC}/assets/agents" "${PLUGIN_DEST_DIR}/agents"
 else
   echo "WARNING: ${PLUGIN_SRC}/assets/agents/ missing — subagents won't seed; run scripts/sync-empirica-assets.sh to vendor." >&2
