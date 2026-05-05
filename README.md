@@ -1,60 +1,91 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-<p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-</p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+<p align="center"><strong>ecodex</strong> — the epistemic agent environment by Empirica.</p>
+<p align="center"><em>A coding agent that measures what it knows.</em></p>
 
 ---
 
-## Quickstart
+ecodex is a fork of [openai/codex](https://github.com/openai/codex) bundled with the **Empirica** epistemic-discipline framework. Where vanilla codex runs an agent loop and lets the model speak with whatever confidence it generates, ecodex gates the loop on a measured cycle:
 
-### Installing and running Codex CLI
+- Every transaction opens with a **PREFLIGHT** declaring what the agent knows and doesn't.
+- A **CHECK** gate decides whether the agent has enough context to act, or needs to keep investigating.
+- **POSTFLIGHT** closes the loop and grounds the agent's self-assessment against deterministic services (test results, git metrics, artifact counts).
+- A **Sentinel** firewall sits between the model and the tools — actions that would touch state require an open transaction with the right epistemic posture.
 
-Install globally with your preferred package manager:
+The result is an agent that can build a calibration history. Over time, the divergence between what the agent believed and what actually happened becomes a signal you can act on.
+
+This is **not** a drop-in replacement for codex. It is opinionated: the discipline overhead is the point.
+
+---
+
+## Status
+
+Alpha. Daily-driven by the ecodex team but not yet packaged for general install. The repo's main branches:
+
+- `main` — clean tracking branch for upstream `openai/codex/main`. We rebase here and PR fixes upstream.
+- `build/v1-plugin` (default) — the active ecodex work: the empirica plugin, the protocol translator, curated open-weights provider defaults, the koru-spiral welcome screen, and discipline wiring.
+
+Public release timing is gated on T80 (docs suite) and T79 (release pipeline) — see open goals in `empirica goals-list`.
+
+## What ecodex adds on top of codex
+
+Three layers (full architecture: [`docs/ecodex/system-overview.md`](docs/ecodex/system-overview.md)):
+
+| Layer | Owns | Examples |
+|---|---|---|
+| **L1 — codex foundation** | Upstream | Agent runtime, TUI, sandbox, app-server, MCP, plugin host, hook system |
+| **L2 — empirica integration** | Us (`codex-rs/codex-empirica-plugin/`) | Hook routing to Sentinel, transaction lifecycle, calibration grounding |
+| **L3 — specialised ecodex code** | Us | Wire-protocol translator, curated provider defaults, `ecodex` wrapper, install/uninstall, lint scope, marketing surface |
+
+Concretely, what users notice that vanilla codex doesn't do:
+
+- **Curated open-weights provider defaults**: out-of-the-box config for DeepSeek, Qwen3-Coder, Kimi K2.6, GLM, Ollama, LM Studio, llama.cpp. Pick a provider in `/model` and routing swaps mid-session — no restart.
+- **Wire-protocol translator** (`codex-rs/codex-empirica-translator/`): a small `tiny_http` bridge that lets codex's Responses-format API talk to providers that only speak Chat Completions or Anthropic Messages. CIF (Canonical Intermediate Format) validated at N=3 adapters.
+- **Pinned epistemic skills**: framework-level skills (`epistemic-transaction`, `empirica-constitution`, `epistemic-persistence-protocol`) survive `/compact` so the agent retains its own discipline guidance across context boundaries.
+- **Subagent seeding**: empirica's specialised subagents (security, ux, performance, outreach-scout, …) are bundled and dispatched through the standard codex Agent tool.
+- **Statusline + welcome screen**: the koru-spiral animation matches Empirica's marketing identity; statusline shows live epistemic state (phase indicator, intuition-vs-search badge).
+
+## Install
+
+The install script lives at `ecodex/scripts/install.sh`:
 
 ```shell
-# Install using npm
-npm install -g @openai/codex
+git clone https://github.com/Nubaeon/ecodex.git
+cd ecodex
+./ecodex/scripts/install.sh
 ```
+
+This builds the Rust workspace (`-p codex-cli --release`) and installs:
+
+- `~/.local/bin/ecodex` — the wrapper
+- `~/.local/lib/ecodex/bin/ecodex` — the binary
+- `~/.local/bin/codex-empirica-plugin` — the plugin binary
+- `~/.codex/plugins/cache/nubaeon/empirica/0.1.0/` — bundled hooks, MCP, skills, statusline
+
+Empirica must be installed separately (the plugin shells out to its CLI). See [Empirica](https://github.com/Nubaeon/empirica) for the framework itself.
+
+## Run
 
 ```shell
-# Install using Homebrew
-brew install --cask codex
+ecodex
 ```
 
-Then simply run `codex` to get started.
+The first run creates `~/.codex/config.toml` with the curated provider defaults. Add your API keys (see `~/.codex/.env.example`), pick a model with `/model`, and start a session.
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+## Documentation
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+- [`docs/ecodex/system-overview.md`](docs/ecodex/system-overview.md) — three-layer architecture, runtime composition, file layout
+- [`docs/ecodex/architecture.md`](docs/ecodex/architecture.md) — T3 decision record (distribution model, fork posture, integration strategy)
+- [`docs/ecodex/inspection.md`](docs/ecodex/inspection.md) — T2 inspection of codex-rs (hook system, plugin marketplace, thread-scoped goals)
+- [`codex-rs/codex-empirica-plugin/README.md`](codex-rs/codex-empirica-plugin/README.md) — plugin architecture, hook-by-hook status
+- [`codex-rs/codex-empirica-translator/README.md`](codex-rs/codex-empirica-translator/README.md) — translator design, CIF, adapter map
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+## Relationship to upstream codex
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+ecodex is a **product fork**, not a derivative. Upstream improvements flow into us via `main` rebase; our hardening fixes go back via PRs against `openai/codex`. Branding is rebadged; the agent runtime, sandbox, RPC protocol, and plugin host are all upstream.
 
-</details>
+We do not rename, reorganize, or break upstream APIs. We add layers and curated defaults; we do not divert.
 
-### Using Codex with your ChatGPT plan
+## License
 
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Business, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
+Apache-2.0 (inherited from `openai/codex`). See [`LICENSE`](LICENSE).
 
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
-
-## Docs
-
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
-
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+ecodex is built by [Empirica](https://github.com/Nubaeon/empirica). Upstream codex is built by [OpenAI](https://github.com/openai/codex).
