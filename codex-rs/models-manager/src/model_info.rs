@@ -160,8 +160,34 @@ fn recognize_open_weights_family(slug: &str) -> Option<KnownOpenWeightsFamily> {
         .unwrap_or(slug)
         .to_ascii_lowercase();
 
+    // Match order matters: more-specific prefixes must come before more-general
+    // ones. qwen3-coder must be checked before qwen, otherwise the bare "qwen"
+    // branch would shadow it and assign the small 32K default.
     let (display, family, ctx) = match () {
+        _ if normalized.starts_with("qwen3-coder")
+            || normalized.starts_with("qwen-coder")
+            || normalized.starts_with("qwen2.5-coder")
+            || normalized.starts_with("qwencoder") =>
+        {
+            (
+                "Qwen Coder",
+                "Qwen-Coder open-weights model (Alibaba) — purpose-built for coding agents, 256K native context",
+                262_144,
+            )
+        }
+        _ if normalized.starts_with("qwen3-next") => (
+            "Qwen3-Next",
+            "Qwen3-Next open-weights model (Alibaba) — extended-context variant, 256K native",
+            262_144,
+        ),
+        _ if normalized.starts_with("qwen2.5") => (
+            "Qwen2.5",
+            "Qwen2.5-family open-weights model (Alibaba) — 128K native context",
+            131_072,
+        ),
         _ if normalized.starts_with("qwen") || normalized.starts_with("qwopus") => {
+            // Generic Qwen / Qwopus fallback — Qwen3 base / community distills
+            // typically max out at 32K without YaRN extension.
             ("Qwen / Qwopus", "Qwen-family open-weights model (Alibaba)", 32_768)
         }
         _ if normalized.starts_with("llama") => {

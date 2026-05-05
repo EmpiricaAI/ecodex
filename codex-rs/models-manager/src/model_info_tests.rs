@@ -72,3 +72,56 @@ fn model_context_window_uses_model_value_without_override() {
 
     assert_eq!(updated, model);
 }
+
+#[test]
+fn open_weights_recognizer_distinguishes_qwen_coder_from_generic_qwen() {
+    // Qwen Coder family has 256K native context (purpose-built for agent
+    // workflows on long codebases). Generic Qwen3 / Qwen distills only get
+    // 32K. Without specific recognition, qwen3-coder:latest would have been
+    // assigned the 32K default, blowing the 2% skill metadata budget on
+    // hosts running it via Ollama.
+    for slug in [
+        "qwen3-coder:latest",
+        "qwen3-coder",
+        "qwen-coder",
+        "qwen2.5-coder",
+        "qwen3-coder-30b-a3b",
+        "qwencoder",
+        "ollama/qwen3-coder:30b-q4",
+    ] {
+        let model = model_info_from_slug(slug);
+        assert_eq!(
+            model.context_window,
+            Some(262_144),
+            "expected 256K context for slug `{slug}`, got {:?}",
+            model.context_window
+        );
+        assert!(
+            !model.used_fallback_model_metadata,
+            "qwen-coder slug `{slug}` should be recognized (no fallback warning)"
+        );
+    }
+
+    // qwen3-next gets the same 256K bucket
+    assert_eq!(
+        model_info_from_slug("qwen3-next:latest").context_window,
+        Some(262_144)
+    );
+
+    // qwen2.5 (non-coder) gets 128K
+    assert_eq!(
+        model_info_from_slug("qwen2.5:14b").context_window,
+        Some(131_072)
+    );
+
+    // Generic qwen / qwopus stays at 32K (the conservative fallback for
+    // base models / community distills).
+    for slug in ["qwen3:8b", "qwen3.5:latest", "qwopus:27b-q4"] {
+        let model = model_info_from_slug(slug);
+        assert_eq!(
+            model.context_window,
+            Some(32_768),
+            "expected 32K conservative default for generic qwen slug `{slug}`"
+        );
+    }
+}
