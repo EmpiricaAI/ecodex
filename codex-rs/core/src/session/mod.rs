@@ -270,11 +270,11 @@ pub(crate) struct PreviousTurnSettings {
 /// a `model_provider` change. Held outside the state lock so the actual
 /// ModelClient rebuild (which may do disk + DNS work) doesn't block other
 /// state readers. Consumed by `Session::swap_model_client_to_provider`.
-struct ProviderSwapPlan {
-    new_provider: codex_model_provider_info::ModelProviderInfo,
-    new_provider_name: String,
-    config: std::sync::Arc<crate::config::Config>,
-    session_source: codex_protocol::protocol::SessionSource,
+pub(crate) struct ProviderSwapPlan {
+    pub(crate) new_provider: codex_model_provider_info::ModelProviderInfo,
+    pub(crate) new_provider_name: String,
+    pub(crate) config: std::sync::Arc<crate::config::Config>,
+    pub(crate) session_source: codex_protocol::protocol::SessionSource,
 }
 
 use crate::SkillError;
@@ -1397,7 +1397,7 @@ impl Session {
     /// (built via `model_client.new_session()`) keep using their snapshot
     /// because they captured an `Arc<ModelClient>` before the swap; new
     /// turns pick up the new client via `services.model_client.load()`.
-    async fn swap_model_client_to_provider(&self, plan: ProviderSwapPlan) {
+    pub(crate) async fn swap_model_client_to_provider(&self, plan: ProviderSwapPlan) {
         let conversation_id = self.conversation_id;
         let installation_id =
             match crate::installation_id::resolve_installation_id(&plan.config.codex_home).await {
@@ -1433,6 +1433,19 @@ impl Session {
         self.services
             .model_client
             .store(std::sync::Arc::new(new_client));
+        // Invalidate any startup prewarm that was built against the OLD
+        // provider. Without this, the next regular turn would consume the
+        // prewarm (built against e.g. empirica-server) instead of loading
+        // the fresh model_client from `services.model_client.load()`, and
+        // the provider swap would silently no-op for the first turn.
+        // Aborting the prewarm task here causes the consumer to take the
+        // Unavailable branch and fall back to the swapped client.
+        if let Some(prewarm) = self.take_session_startup_prewarm().await {
+            drop(prewarm);
+            tracing::info!(
+                "ecodex T78: invalidated startup prewarm so next turn picks up swapped model_client"
+            );
+        }
         tracing::info!(
             provider = %plan.new_provider_name,
             "swapped model_client to new provider"
@@ -1458,6 +1471,15 @@ impl Session {
     pub(crate) async fn take_session_startup_prewarm(&self) -> Option<SessionStartupPrewarmHandle> {
         let mut state = self.state.lock().await;
         state.take_session_startup_prewarm()
+    }
+
+    /// Test-only: report whether a startup prewarm handle is currently
+    /// present on the session, without consuming it. Used by the T78
+    /// regression test to assert swap-time invalidation.
+    #[cfg(test)]
+    pub(crate) async fn peek_session_startup_prewarm_present_for_tests(&self) -> bool {
+        let state = self.state.lock().await;
+        state.peek_session_startup_prewarm_present_for_tests()
     }
 
     pub(crate) async fn get_config(&self) -> std::sync::Arc<Config> {

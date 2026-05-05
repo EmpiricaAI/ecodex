@@ -3313,6 +3313,78 @@ async fn session_update_settings_keeps_runtime_cwds_absolute() {
     assert_eq!(next_turn.config.cwd, updated_cwd);
 }
 
+/// ecodex T78 regression: when `swap_model_client_to_provider` runs, it MUST
+/// invalidate any startup prewarm that was captured against the old provider.
+/// Without this, the first regular turn after a provider swap consumes the
+/// stale prewarm via `consume_startup_prewarm_for_regular_turn` instead of
+/// loading the swapped client from `services.model_client.load()`, and the
+/// swap silently no-ops for that turn. Canonical case: ecodex T78 hot-swap,
+/// where the swap log fired but the first request still went to the old
+/// provider's endpoint because the prewarm carried it through.
+///
+/// This test guards against a future contributor adding a NEW prewarm/cache
+/// mechanism that delivers a ModelClient to a turn without going through
+/// `services.model_client.load()`. If that happens, this test still
+/// passes — but a parallel regression test for the new mechanism should be
+/// added alongside whatever invalidation hook ships with it.
+#[tokio::test]
+async fn t78_swap_model_client_to_provider_invalidates_startup_prewarm() {
+    let (sess, _tc) = make_session_and_context().await;
+
+    // Set up a startup prewarm so we have something to invalidate.
+    let (_tx, startup_prewarm_rx) = tokio::sync::oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let _ = startup_prewarm_rx.await;
+        Ok(test_model_client_session())
+    });
+    sess.set_session_startup_prewarm(
+        crate::session_startup_prewarm::SessionStartupPrewarmHandle::new(
+            handle,
+            std::time::Instant::now(),
+            crate::client::WEBSOCKET_CONNECT_TIMEOUT,
+        ),
+    )
+    .await;
+
+    // Sanity: prewarm IS present before swap.
+    assert!(
+        sess.peek_session_startup_prewarm_present_for_tests().await,
+        "test setup invariant: prewarm should be present before swap fires"
+    );
+
+    // Build a ProviderSwapPlan for the swap. Reuse the session's existing
+    // provider so ModelClient::new doesn't hit network — same provider name
+    // is fine for this test because we're asserting the prewarm-invalidation
+    // contract, not the rebuild itself.
+    let (provider, config, session_source) = {
+        let state = sess.state.lock().await;
+        (
+            state.session_configuration.provider.clone(),
+            std::sync::Arc::clone(&state.session_configuration.original_config_do_not_use),
+            state.session_configuration.session_source.clone(),
+        )
+    };
+    let plan = crate::session::ProviderSwapPlan {
+        new_provider_name: provider.name.clone(),
+        new_provider: provider,
+        config,
+        session_source,
+    };
+
+    sess.swap_model_client_to_provider(plan).await;
+
+    // Contract: prewarm has been taken + dropped during the swap. The next
+    // turn's `consume_startup_prewarm_for_regular_turn` will see no handle
+    // and fall through to `services.model_client.load().new_session()`.
+    assert!(
+        !sess.peek_session_startup_prewarm_present_for_tests().await,
+        "T78 regression: swap_model_client_to_provider must invalidate the \
+         startup prewarm so the next regular turn loads the swapped \
+         model_client instead of consuming a stale prewarm pointed at the \
+         old provider"
+    );
+}
+
 #[tokio::test]
 async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let codex_home = tempfile::tempdir().expect("create temp dir");

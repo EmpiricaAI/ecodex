@@ -186,6 +186,11 @@ impl SessionState {
         self.startup_prewarm.take()
     }
 
+    #[cfg(test)]
+    pub(crate) fn peek_session_startup_prewarm_present_for_tests(&self) -> bool {
+        self.startup_prewarm.is_some()
+    }
+
     // Adds connector IDs to the active set and returns the merged selection.
     pub(crate) fn merge_connector_selection<I>(&mut self, connector_ids: I) -> HashSet<String>
     where

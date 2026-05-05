@@ -20,6 +20,7 @@ fn blocking_set_model_top_level() {
         &[ConfigEdit::SetModel {
             model: Some("gpt-5.4".to_string()),
             effort: Some(ReasoningEffort::High),
+            provider: None,
         }],
     )
     .expect("persist");
@@ -319,6 +320,7 @@ profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
         &[ConfigEdit::SetModel {
             model: Some("o4-mini".to_string()),
             effort: None,
+            provider: None,
         }],
     )
     .expect("persist");
@@ -364,6 +366,7 @@ fn blocking_set_model_writes_through_symlink_chain() {
         &[ConfigEdit::SetModel {
             model: Some("gpt-5.4".to_string()),
             effort: Some(ReasoningEffort::High),
+            provider: None,
         }],
     )
     .expect("persist");
@@ -397,6 +400,7 @@ fn blocking_set_model_replaces_symlink_on_cycle() {
         &[ConfigEdit::SetModel {
             model: Some("gpt-5.4".to_string()),
             effort: None,
+            provider: None,
         }],
     )
     .expect("persist");
@@ -491,6 +495,7 @@ profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
         &[ConfigEdit::SetModel {
             model: None,
             effort: Some(ReasoningEffort::High),
+            provider: None,
         }],
     )
     .expect("persist");
@@ -525,6 +530,7 @@ model_reasoning_effort = "low"
         &[ConfigEdit::SetModel {
             model: Some("o5-preview".to_string()),
             effort: Some(ReasoningEffort::Minimal),
+            provider: None,
         }],
     )
     .expect("persist");
@@ -557,6 +563,7 @@ model = "gpt-5.4"
         &[ConfigEdit::SetModel {
             model: Some("o4-mini".to_string()),
             effort: None,
+            provider: None,
         }],
     )
     .expect("persist");
