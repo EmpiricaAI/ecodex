@@ -562,6 +562,8 @@ impl Session {
     ) -> CodexResult<Arc<TurnContext>> {
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
+            let previous_provider_name =
+                state.session_configuration.provider.name.clone();
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
                     let effective_environments = updates
@@ -578,6 +580,28 @@ impl Session {
                         previous_permission_profile != next_permission_profile;
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
+                    // ecodex extension (T78): detect provider hot-swap. Same
+                    // pattern as `Session::update_settings` — capture the swap
+                    // plan inside the lock, execute the rebuild outside it so
+                    // DNS/auth work doesn't block other state readers. Without
+                    // this, a picker-staged provider override updated only the
+                    // SessionConfiguration's `provider` field while
+                    // `services.model_client` kept routing to the old provider.
+                    let provider_swap = if next.provider.name != previous_provider_name {
+                        tracing::info!(
+                            previous_provider = %previous_provider_name,
+                            new_provider = %next.provider.name,
+                            "ecodex T78: provider change detected in new_turn_with_sub_id — scheduling ModelClient swap"
+                        );
+                        Some(super::ProviderSwapPlan {
+                            new_provider: next.provider.clone(),
+                            new_provider_name: next.provider.name.clone(),
+                            config: Arc::clone(&next.original_config_do_not_use),
+                            session_source: next.session_source.clone(),
+                        })
+                    } else {
+                        None
+                    };
                     state.session_configuration = next.clone();
                     Ok((
                         next,
@@ -586,6 +610,7 @@ impl Session {
                         previous_cwd,
                         codex_home,
                         session_source,
+                        provider_swap,
                     ))
                 }
                 Err(err) => Err(CodexErr::InvalidRequest(err.to_string())),
@@ -599,6 +624,7 @@ impl Session {
             previous_cwd,
             codex_home,
             session_source,
+            provider_swap,
         ) = match update_result {
             Ok(update) => update,
             Err(err) => {
@@ -614,6 +640,10 @@ impl Session {
                 return Err(CodexErr::InvalidRequest(message));
             }
         };
+
+        if let Some(plan) = provider_swap {
+            self.swap_model_client_to_provider(plan).await;
+        }
 
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,

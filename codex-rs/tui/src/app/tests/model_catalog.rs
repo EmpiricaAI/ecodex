@@ -224,7 +224,7 @@ async fn accepted_model_migration_persists_target_default_reasoning_effort() {
     let persist_selection = rx.try_recv().expect("persist model selection event");
     assert_matches!(
         persist_selection,
-        AppEvent::PersistModelSelection { model, effort }
+        AppEvent::PersistModelSelection { model, effort, .. }
             if model == "gpt-5.4" && effort == Some(ReasoningEffortConfig::Medium)
     );
 }

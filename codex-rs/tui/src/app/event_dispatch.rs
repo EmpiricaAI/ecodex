@@ -685,17 +685,31 @@ impl App {
                 // user_turn. The session's SessionConfiguration::apply will
                 // detect the change and hot-swap ModelClient via ArcSwap —
                 // no restart required.
-                if let Some(target_provider) =
-                    crate::ecodex_curated_models::provider_for_slug(&model)
-                {
+                let curated_lookup =
+                    crate::ecodex_curated_models::provider_for_slug(&model);
+                tracing::info!(
+                    model = %model,
+                    curated_provider = ?curated_lookup,
+                    "ecodex T78: UpdateModel received — checking curated provider routing"
+                );
+                if let Some(target_provider) = curated_lookup {
                     // Use active_provider_id (which factors in any prior
                     // staged override) instead of the config's session-start
                     // provider — the latter goes stale after the first swap.
                     let current_provider =
                         self.chat_widget.active_provider_id().to_string();
+                    tracing::info!(
+                        target_provider = %target_provider,
+                        current_provider = %current_provider,
+                        "ecodex T78: provider comparison"
+                    );
                     if target_provider != current_provider {
                         self.chat_widget
                             .stage_pending_model_provider(target_provider.to_string());
+                        tracing::info!(
+                            target_provider = %target_provider,
+                            "ecodex T78: staged pending model provider — will fire on next user_turn"
+                        );
                         self.chat_widget.add_info_message(
                             format!(
                                 "Provider switching to `{target_provider}` for `{model}` — takes effect on your next message."

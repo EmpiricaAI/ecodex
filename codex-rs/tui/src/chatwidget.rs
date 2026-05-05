@@ -7866,6 +7866,16 @@ impl ChatWidget {
         effort_for_action: Option<ReasoningEffortConfig>,
         should_prompt_plan_mode_scope: bool,
     ) -> Vec<SelectionAction> {
+        // ecodex extension (T78): when the slug maps to a curated entry
+        // with a known provider, persist that provider alongside the
+        // model so saved config stays consistent across restarts.
+        // Without this, picking Kimi (provider=kimi) on top of a
+        // session whose config.model_provider="empirica-local" would
+        // poison config: model="kimi-for-coding" + provider="empirica-local",
+        // routing requests to the wrong endpoint after restart.
+        let curated_provider =
+            crate::ecodex_curated_models::provider_for_slug(model_for_action.as_str())
+                .map(|s| s.to_string());
         vec![Box::new(move |tx| {
             if should_prompt_plan_mode_scope {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
@@ -7880,13 +7890,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
-                // Static helper — no &self. The UpdateModel above stages
-                // the picker's provider override on chat_widget; the
-                // separate apply_model_and_effort path (which DOES have
-                // &self) reads it back for persistence. None here is
-                // safe because the persistence-edit treats None as "leave
-                // model_provider unchanged."
-                model_provider: None,
+                model_provider: curated_provider.clone(),
             });
         })]
     }
@@ -7959,6 +7963,10 @@ impl ChatWidget {
                 tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
             }
         })];
+        // ecodex T78: persist curated provider alongside the slug so saved
+        // config doesn't go inconsistent on restart.
+        let curated_provider = crate::ecodex_curated_models::provider_for_slug(model.as_str())
+            .map(|s| s.to_string());
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::UpdateModel(model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort));
@@ -7967,10 +7975,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model.clone(),
                 effort,
-                // Closure context — no &self. UpdateModel above stages the
-                // picker's provider override; apply_model_and_effort path
-                // persists it (with &self).
-                model_provider: None,
+                model_provider: curated_provider.clone(),
             });
         })];
 
@@ -8127,6 +8132,10 @@ impl ChatWidget {
             let choice_effort = choice.stored;
             let should_prompt_plan_mode_scope =
                 self.should_prompt_plan_mode_reasoning_scope(model_slug.as_str(), choice_effort);
+            // ecodex T78: persist curated provider alongside the slug.
+            let curated_provider =
+                crate::ecodex_curated_models::provider_for_slug(model_slug.as_str())
+                    .map(|s| s.to_string());
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 if should_prompt_plan_mode_scope {
                     tx.send(AppEvent::OpenPlanReasoningScopePrompt {
@@ -8139,9 +8148,7 @@ impl ChatWidget {
                     tx.send(AppEvent::PersistModelSelection {
                         model: model_for_action.clone(),
                         effort: choice_effort,
-                        // Closure context — no &self. UpdateModel above
-                        // stages the picker's provider override.
-                        model_provider: None,
+                        model_provider: curated_provider.clone(),
                     });
                 }
             })];
