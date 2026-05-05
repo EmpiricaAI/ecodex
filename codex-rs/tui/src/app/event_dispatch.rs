@@ -1134,11 +1134,19 @@ impl App {
                     let _ = (preset, mode);
                 }
             }
-            AppEvent::PersistModelSelection { model, effort } => {
+            AppEvent::PersistModelSelection {
+                model,
+                effort,
+                model_provider,
+            } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_model(Some(model.as_str()), effort)
+                    .set_model_with_provider(
+                        Some(model.as_str()),
+                        effort,
+                        model_provider.as_deref(),
+                    )
                     .apply()
                     .await
                 {

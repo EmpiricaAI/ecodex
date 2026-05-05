@@ -27,9 +27,16 @@ const NOTICE_TABLE_KEY: &str = "notice";
 #[derive(Clone, Debug)]
 pub enum ConfigEdit {
     /// Update the active (or default) model selection and optional reasoning effort.
+    ///
+    /// `provider` is the ecodex T78 extension: when Some, also writes the
+    /// `model_provider` key alongside `model` so saved state stays
+    /// consistent (model + provider both reflect the picker's selection).
+    /// When None, the existing `model_provider` is left untouched. Use
+    /// `provider: Some("")` semantics: see set_model builder below.
     SetModel {
         model: Option<String>,
         effort: Option<ReasoningEffort>,
+        provider: Option<String>,
     },
     /// Update the service tier preference for future turns.
     SetServiceTier { service_tier: Option<ServiceTier> },
@@ -513,7 +520,11 @@ impl ConfigDocument {
 
     fn apply(&mut self, edit: &ConfigEdit) -> anyhow::Result<bool> {
         match edit {
-            ConfigEdit::SetModel { model, effort } => Ok({
+            ConfigEdit::SetModel {
+                model,
+                effort,
+                provider,
+            } => Ok({
                 let mut mutated = false;
                 mutated |= self.write_profile_value(
                     &["model"],
@@ -523,6 +534,14 @@ impl ConfigDocument {
                     &["model_reasoning_effort"],
                     effort.map(|effort| value(effort.to_string())),
                 );
+                // ecodex T78: also write model_provider when set so saved
+                // state stays consistent (model + provider together).
+                if let Some(provider_id) = provider.as_ref() {
+                    mutated |= self.write_profile_value(
+                        &["model_provider"],
+                        Some(value(provider_id.clone())),
+                    );
+                }
                 mutated
             }),
             ConfigEdit::SetServiceTier { service_tier } => Ok(self.write_profile_value(
@@ -1101,6 +1120,25 @@ impl ConfigEditsBuilder {
         self.edits.push(ConfigEdit::SetModel {
             model: model.map(ToOwned::to_owned),
             effort,
+            provider: None,
+        });
+        self
+    }
+
+    /// ecodex T78 extension: set model + effort + provider together.
+    /// Used by the picker's PersistModelSelection path so the saved
+    /// `model` and `model_provider` always agree (avoids the "saved
+    /// kimi-for-coding routes to empirica-server" failure mode).
+    pub fn set_model_with_provider(
+        mut self,
+        model: Option<&str>,
+        effort: Option<ReasoningEffort>,
+        provider: Option<&str>,
+    ) -> Self {
+        self.edits.push(ConfigEdit::SetModel {
+            model: model.map(ToOwned::to_owned),
+            effort,
+            provider: provider.map(ToOwned::to_owned),
         });
         self
     }

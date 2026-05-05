@@ -542,9 +542,13 @@ pub(crate) enum AppEvent {
     UpdatePersonality(Personality),
 
     /// Persist the selected model and reasoning effort to the appropriate config.
+    /// ecodex T78: optionally carries a `model_provider` so picker selections
+    /// of curated cross-provider entries persist BOTH model and provider
+    /// atomically (saved state stays consistent across restarts).
     PersistModelSelection {
         model: String,
         effort: Option<ReasoningEffort>,
+        model_provider: Option<String>,
     },
 
     /// Persist the selected personality to the appropriate config.

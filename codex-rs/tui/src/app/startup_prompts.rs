@@ -158,6 +158,9 @@ pub(super) fn apply_accepted_model_migration(
     app_event_tx.send(AppEvent::PersistModelSelection {
         model: target_model,
         effort: Some(target_default_effort),
+        // Startup-prompt path runs at session init; no picker override to
+        // persist. Provider stays as configured in config.toml.
+        model_provider: None,
     });
 }
 

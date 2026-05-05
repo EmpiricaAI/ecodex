@@ -7880,6 +7880,13 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
+                // Static helper — no &self. The UpdateModel above stages
+                // the picker's provider override on chat_widget; the
+                // separate apply_model_and_effort path (which DOES have
+                // &self) reads it back for persistence. None here is
+                // safe because the persistence-edit treats None as "leave
+                // model_provider unchanged."
+                model_provider: None,
             });
         })]
     }
@@ -7960,6 +7967,10 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model.clone(),
                 effort,
+                // Closure context — no &self. UpdateModel above stages the
+                // picker's provider override; apply_model_and_effort path
+                // persists it (with &self).
+                model_provider: None,
             });
         })];
 
@@ -8128,6 +8139,9 @@ impl ChatWidget {
                     tx.send(AppEvent::PersistModelSelection {
                         model: model_for_action.clone(),
                         effort: choice_effort,
+                        // Closure context — no &self. UpdateModel above
+                        // stages the picker's provider override.
+                        model_provider: None,
                     });
                 }
             })];
@@ -8180,8 +8194,15 @@ impl ChatWidget {
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
         self.apply_model_and_effort_without_persist(model.clone(), effort);
-        self.app_event_tx
-            .send(AppEvent::PersistModelSelection { model, effort });
+        self.app_event_tx.send(AppEvent::PersistModelSelection {
+            model,
+            effort,
+            // ecodex T78: persist active provider override so saved state
+            // stays consistent (model + provider both reflect the picker's
+            // selection — fixes the "saved kimi-for-coding routes to
+            // empirica-server" failure mode after restart).
+            model_provider: self.active_provider_override.clone(),
+        });
     }
 
     /// Open the permissions popup (alias for /permissions).
