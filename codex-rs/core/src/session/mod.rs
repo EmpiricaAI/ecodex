@@ -266,6 +266,17 @@ pub(crate) struct PreviousTurnSettings {
     pub(crate) realtime_active: Option<bool>,
 }
 
+/// ecodex extension (T78): captured at the moment `update_settings` detects
+/// a `model_provider` change. Held outside the state lock so the actual
+/// ModelClient rebuild (which may do disk + DNS work) doesn't block other
+/// state readers. Consumed by `Session::swap_model_client_to_provider`.
+struct ProviderSwapPlan {
+    new_provider: codex_model_provider_info::ModelProviderInfo,
+    new_provider_name: String,
+    config: std::sync::Arc<crate::config::Config>,
+    session_source: codex_protocol::protocol::SessionSource,
+}
+
 use crate::SkillError;
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
@@ -1307,8 +1318,16 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let (previous_cwd, permission_profile_changed, next_cwd, codex_home, session_source) = {
+        let (
+            previous_cwd,
+            permission_profile_changed,
+            next_cwd,
+            codex_home,
+            session_source,
+            provider_swap,
+        ) = {
             let mut state = self.state.lock().await;
+            let previous_provider_name = state.session_configuration.provider.name.clone();
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
                 Err(err) => {
@@ -1325,6 +1344,21 @@ impl Session {
             let next_cwd = updated.cwd.clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
+
+            // ecodex extension (T78): detect provider hot-swap so we can
+            // rebuild ModelClient AFTER releasing the state lock. Compare
+            // names because ModelProviderInfo doesn't impl PartialEq.
+            let provider_swap = if updated.provider.name != previous_provider_name {
+                Some(ProviderSwapPlan {
+                    new_provider: updated.provider.clone(),
+                    new_provider_name: updated.provider.name.clone(),
+                    config: Arc::clone(&updated.original_config_do_not_use),
+                    session_source: updated.session_source.clone(),
+                })
+            } else {
+                None
+            };
+
             state.session_configuration = updated;
             (
                 previous_cwd,
@@ -1332,8 +1366,16 @@ impl Session {
                 next_cwd,
                 codex_home,
                 session_source,
+                provider_swap,
             )
         };
+
+        // Provider swap happens outside the state lock — building a new
+        // ModelClient may take time (DNS, auth setup) and we don't want to
+        // block other state readers.
+        if let Some(plan) = provider_swap {
+            self.swap_model_client_to_provider(plan).await;
+        }
 
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
@@ -1347,6 +1389,54 @@ impl Session {
         }
 
         Ok(())
+    }
+
+    /// ecodex extension (T78): hot-swap the session-shared ModelClient with
+    /// one bound to a new provider. Called after `SessionConfiguration::apply`
+    /// detects a `model_provider` change. Existing turn-scoped sessions
+    /// (built via `model_client.new_session()`) keep using their snapshot
+    /// because they captured an `Arc<ModelClient>` before the swap; new
+    /// turns pick up the new client via `services.model_client.load()`.
+    async fn swap_model_client_to_provider(&self, plan: ProviderSwapPlan) {
+        let conversation_id = self.conversation_id;
+        let installation_id =
+            match crate::installation_id::resolve_installation_id(&plan.config.codex_home).await {
+                Ok(id) => id,
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        "could not resolve installation_id for provider swap; aborting swap"
+                    );
+                    return;
+                }
+            };
+        let auth_manager = Arc::clone(&self.services.auth_manager);
+        let new_client = crate::client::ModelClient::new(
+            Some(auth_manager),
+            conversation_id,
+            installation_id,
+            plan.new_provider,
+            plan.session_source,
+            plan.config.model_verbosity,
+            plan.config
+                .features
+                .enabled(codex_features::Feature::EnableRequestCompression),
+            plan.config
+                .features
+                .enabled(codex_features::Feature::RuntimeMetrics),
+            Self::build_model_client_beta_features_header(plan.config.as_ref()),
+        );
+        // The new client starts at window_generation 0 (fresh WebSocket
+        // session generation for the new provider). Old turn-scoped
+        // sessions kept their snapshot via Arc, so existing in-flight work
+        // is unaffected by the swap.
+        self.services
+            .model_client
+            .store(std::sync::Arc::new(new_client));
+        tracing::info!(
+            provider = %plan.new_provider_name,
+            "swapped model_client to new provider"
+        );
     }
 
     pub(crate) async fn validate_settings(
@@ -2493,7 +2583,7 @@ impl Session {
             self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
                 .await;
         }
-        self.services.model_client.advance_window_generation();
+        self.services.model_client.load().advance_window_generation();
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {

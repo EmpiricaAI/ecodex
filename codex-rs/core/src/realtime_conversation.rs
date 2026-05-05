@@ -604,6 +604,7 @@ async fn prepare_realtime_start(
     let auth_manager = sess
         .services
         .model_client
+        .load()
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
     let auth = auth_manager.auth().await;
@@ -778,7 +779,13 @@ async fn handle_start_inner(
         api_provider,
         extra_headers,
         session_config,
-        model_client: sess.services.model_client.clone(),
+        // Realtime conversation captures a snapshot of the current
+        // ModelClient. ArcSwap.load() returns a Guard<Arc<ModelClient>>;
+        // dereffing once gives Arc<ModelClient>, dereffing again gives
+        // ModelClient — we then .clone() the ModelClient (cheap, Arc-internal)
+        // so the realtime session keeps its snapshot even if the user
+        // hot-swaps the session-shared client.
+        model_client: (**sess.services.model_client.load()).clone(),
         sdp,
     };
     let start_output = sess.conversation.start(start).await?;

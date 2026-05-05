@@ -886,7 +886,7 @@ impl Session {
                 state_db: state_db_ctx.clone(),
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
-                model_client: ModelClient::new(
+                model_client: arc_swap::ArcSwap::from_pointee(ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     conversation_id,
                     installation_id,
@@ -896,12 +896,13 @@ impl Session {
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
-                ),
+                )),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
             };
             services
                 .model_client
+                .load()
                 .set_window_generation(window_generation);
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);

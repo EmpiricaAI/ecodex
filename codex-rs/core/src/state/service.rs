@@ -67,7 +67,15 @@ pub(crate) struct SessionServices {
     pub(crate) live_thread: Option<LiveThread>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     /// Session-scoped model client shared across turns.
-    pub(crate) model_client: ModelClient,
+    ///
+    /// Wrapped in `ArcSwap` (matching the `hooks` field above) so that the
+    /// session can hot-swap to a freshly-constructed client when the user
+    /// changes `model_provider` mid-session via the `/model` picker
+    /// (T78 — ecodex extension). Reads return a `Guard<Arc<ModelClient>>`
+    /// that derefs transparently to `&ModelClient`, so existing call sites
+    /// only need a `.load()` insertion. Writes (rare provider swaps) go
+    /// through `Services::swap_model_client`.
+    pub(crate) model_client: ArcSwap<ModelClient>,
     pub(crate) code_mode_service: CodeModeService,
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.
