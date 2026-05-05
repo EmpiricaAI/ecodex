@@ -155,17 +155,82 @@ fn serialize_output(v: &Value) -> String {
 
 // ─────────────────────────── ENCODE PATH ───────────────────────────────
 
-/// Encode a single CIF StreamEvent as Responses-format SSE bytes.
-/// Returns `None` for events that don't produce a wire emission for this
-/// adapter (e.g. ReasoningDelta when the downstream codex didn't ask for
-/// reasoning visibility).
-pub fn encode_event(event: &StreamEvent) -> Option<Vec<u8>> {
-    let (event_name, payload) = match event {
-        StreamEvent::TextDelta { text } if !text.is_empty() => (
-            "response.output_text.delta",
-            json!({"type": "response.output_text.delta", "delta": text}),
-        ),
-        StreamEvent::TextDelta { .. } => return None,
+/// Per-stream state carried across `encode_event` calls. Tracks whether a
+/// `response.output_item.added` (assistant message) has been emitted for the
+/// current turn so we know when to open / close it.
+///
+/// Codex's Responses-format parser (`session/turn.rs:OutputTextDelta`) requires
+/// that every `response.output_text.delta` arrive while an active item is
+/// open — that item is established by `response.output_item.added`. Without
+/// the open, codex errors `OutputTextDelta without active item` and silently
+/// drops the assistant text. The state machine here ensures the open/close
+/// envelope wraps every delta sequence.
+#[derive(Default)]
+pub struct EncoderState {
+    /// Some(id) once a `response.output_item.added` for the assistant message
+    /// has been emitted in the current stream. Cleared when the matching
+    /// `response.output_item.done` is emitted (at Completed).
+    message_item_id: Option<String>,
+    /// Accumulated text so the closing `response.output_item.done` carries
+    /// the full content (codex's parser uses this to seed the item's text).
+    accumulated_text: String,
+    /// Counter for generating unique message ids per stream. The id format
+    /// matches codex's test fixtures (`msg-N`); codex doesn't validate the
+    /// format strictly, but stable ids help log readability.
+    next_message_seq: u32,
+}
+
+impl EncoderState {
+    fn open_message_item(&mut self) -> String {
+        self.next_message_seq += 1;
+        let id = format!("msg-{}", self.next_message_seq);
+        self.message_item_id = Some(id.clone());
+        id
+    }
+}
+
+/// Format a single SSE frame.
+fn sse_frame(event_name: &str, payload: &Value) -> Vec<u8> {
+    let body = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
+    format!("event: {event_name}\ndata: {body}\n\n").into_bytes()
+}
+
+/// Encode a CIF StreamEvent as a sequence of Responses-format SSE frames.
+///
+/// Returns zero or more frames per call. Most events produce exactly one
+/// frame; the FIRST `TextDelta` in a stream produces TWO (an opening
+/// `response.output_item.added` followed by the actual delta), and
+/// `Completed` produces TWO (a closing `response.output_item.done` followed
+/// by `response.completed`) when an item was opened during the stream.
+///
+/// Empty `TextDelta` events produce zero frames (filter no-op).
+pub fn encode_events(event: &StreamEvent, state: &mut EncoderState) -> Vec<Vec<u8>> {
+    let mut frames: Vec<Vec<u8>> = Vec::new();
+
+    match event {
+        StreamEvent::TextDelta { text } if !text.is_empty() => {
+            // Open an assistant-message item if this is the first text-delta
+            // in the stream. Codex needs the item before any delta to set
+            // active_item; without it, deltas error as "OutputTextDelta
+            // without active item" and silently drop.
+            if state.message_item_id.is_none() {
+                let id = state.open_message_item();
+                let added = json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "id": id,
+                        "content": []
+                    }
+                });
+                frames.push(sse_frame("response.output_item.added", &added));
+            }
+            state.accumulated_text.push_str(text);
+            let payload = json!({"type": "response.output_text.delta", "delta": text});
+            frames.push(sse_frame("response.output_text.delta", &payload));
+        }
+        StreamEvent::TextDelta { .. } => {} // empty text — filter
         StreamEvent::ToolCallDelta {
             index,
             id,
@@ -185,18 +250,39 @@ pub fn encode_event(event: &StreamEvent) -> Option<Vec<u8>> {
             if let Some(args) = arguments_delta {
                 payload["arguments_delta"] = json!(args);
             }
-            ("response.function_call.delta", payload)
+            frames.push(sse_frame("response.function_call.delta", &payload));
         }
-        StreamEvent::ReasoningDelta { text } => (
-            "response.reasoning.delta",
-            json!({"type": "response.reasoning.delta", "delta": text}),
-        ),
+        StreamEvent::ReasoningDelta { text } => {
+            let payload =
+                json!({"type": "response.reasoning.delta", "delta": text});
+            frames.push(sse_frame("response.reasoning.delta", &payload));
+        }
         StreamEvent::Completed {
             text,
             tool_calls,
             finish_reason,
             response_id,
         } => {
+            // Close the assistant-message item if one was opened during this
+            // stream. The done event carries the full accumulated text so
+            // codex can seed the item content.
+            if let Some(id) = state.message_item_id.take() {
+                let final_text = if !text.is_empty() {
+                    text.clone()
+                } else {
+                    std::mem::take(&mut state.accumulated_text)
+                };
+                let done = json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "id": id,
+                        "content": [{"type": "output_text", "text": final_text}]
+                    }
+                });
+                frames.push(sse_frame("response.output_item.done", &done));
+            }
             let mut output = vec![json!({
                 "type": "message",
                 "role": "assistant",
@@ -210,27 +296,44 @@ pub fn encode_event(event: &StreamEvent) -> Option<Vec<u8>> {
                     "arguments": tc.arguments,
                 }));
             }
-            (
-                "response.completed",
-                json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": response_id.clone().unwrap_or_default(),
-                        "status": "completed",
-                        "finish_reason": finish_reason_str(finish_reason),
-                        "output": output,
-                    },
-                }),
-            )
+            let payload = json!({
+                "type": "response.completed",
+                "response": {
+                    "id": response_id.clone().unwrap_or_default(),
+                    "status": "completed",
+                    "finish_reason": finish_reason_str(finish_reason),
+                    "output": output,
+                },
+            });
+            frames.push(sse_frame("response.completed", &payload));
         }
-        StreamEvent::Error { message } => (
-            "response.error",
-            json!({"type": "response.error", "message": message}),
-        ),
-    };
+        StreamEvent::Error { message } => {
+            let payload = json!({"type": "response.error", "message": message});
+            frames.push(sse_frame("response.error", &payload));
+        }
+    }
 
-    let body = serde_json::to_string(&payload).ok()?;
-    Some(format!("event: {event_name}\ndata: {body}\n\n").into_bytes())
+    frames
+}
+
+/// Backwards-compatible single-frame encoder. Returns the LAST frame produced
+/// by `encode_events` if any (most events produce exactly one frame). Kept
+/// for existing call sites (e.g. tests) that don't carry stream state.
+///
+/// New call sites in the streaming server path should use `encode_events`
+/// with an `EncoderState` so the open/close item envelope is emitted
+/// correctly. This single-frame variant cannot emit the
+/// `response.output_item.added` that the FIRST text-delta needs, so it's
+/// only suitable for unit tests that don't exercise the active-item
+/// requirement.
+#[cfg(test)]
+pub fn encode_event(event: &StreamEvent) -> Option<Vec<u8>> {
+    let mut state = EncoderState::default();
+    let frames = encode_events(event, &mut state);
+    // For TextDelta, encode_events produces [output_item.added, text.delta] —
+    // the test wants the delta itself, so return the last frame. For other
+    // events, there's exactly one frame so .last() is always correct.
+    frames.into_iter().last()
 }
 
 fn finish_reason_str(fr: &FinishReason) -> &str {
@@ -302,5 +405,111 @@ mod tests {
         assert!(s.contains("response.completed"));
         assert!(s.contains("\"finish_reason\":\"stop\""));
         assert!(s.contains("\"id\":\"r_1\""));
+    }
+
+    /// Regression: codex's parser errors "OutputTextDelta without active item"
+    /// if a text-delta arrives before the matching `response.output_item.added`.
+    /// `encode_events` must wrap the first text-delta in an item.added, and
+    /// emit a closing item.done before `response.completed`. Diagnosis canon:
+    /// translator caused silent-quit on Kimi responses because deltas reached
+    /// codex without an open item — content was visible in raw logs but
+    /// dropped by the parser.
+    #[test]
+    fn encode_events_wraps_text_deltas_with_open_close_item_envelope() {
+        let mut state = EncoderState::default();
+
+        let frames_a = encode_events(&StreamEvent::TextDelta { text: "Hello".into() }, &mut state);
+        let frames_b = encode_events(&StreamEvent::TextDelta { text: " world".into() }, &mut state);
+        let frames_c = encode_events(
+            &StreamEvent::Completed {
+                text: "Hello world".into(),
+                tool_calls: vec![],
+                finish_reason: FinishReason::Stop,
+                response_id: Some("r-1".into()),
+            },
+            &mut state,
+        );
+
+        let s = |fs: &[Vec<u8>]| -> Vec<String> {
+            fs.iter()
+                .map(|f| String::from_utf8(f.clone()).unwrap())
+                .collect()
+        };
+        let a = s(&frames_a);
+        let b = s(&frames_b);
+        let c = s(&frames_c);
+
+        // First text-delta produces TWO frames: the item.added envelope, then
+        // the actual delta. Order matters — codex requires the item open
+        // before any delta references its slot.
+        assert_eq!(a.len(), 2, "first text-delta must emit item.added + delta");
+        assert!(
+            a[0].starts_with("event: response.output_item.added\n"),
+            "first frame must be item.added; got: {}",
+            a[0]
+        );
+        assert!(
+            a[0].contains("\"type\":\"message\"")
+                && a[0].contains("\"role\":\"assistant\""),
+            "item.added must declare an assistant message item; got: {}",
+            a[0]
+        );
+        assert!(
+            a[1].starts_with("event: response.output_text.delta\n"),
+            "second frame must be text.delta; got: {}",
+            a[1]
+        );
+
+        // Subsequent text-deltas produce ONE frame — item is already open.
+        assert_eq!(b.len(), 1, "subsequent text-delta must emit only the delta");
+        assert!(b[0].starts_with("event: response.output_text.delta\n"));
+
+        // Completed produces TWO frames: item.done envelope (carrying full
+        // text) + response.completed. Same order requirement, reversed.
+        assert_eq!(c.len(), 2, "completed must emit item.done + response.completed");
+        assert!(
+            c[0].starts_with("event: response.output_item.done\n"),
+            "first frame must be item.done; got: {}",
+            c[0]
+        );
+        assert!(
+            c[0].contains("\"text\":\"Hello world\""),
+            "item.done must carry the full accumulated text; got: {}",
+            c[0]
+        );
+        assert!(
+            c[1].starts_with("event: response.completed\n"),
+            "second frame must be response.completed; got: {}",
+            c[1]
+        );
+
+        // After Completed, the encoder state is cleared so a follow-up turn
+        // would open a fresh item.
+        assert!(
+            state.message_item_id.is_none(),
+            "Completed must close out the message item from state"
+        );
+    }
+
+    /// Streams that produce no text (e.g. tool-only turns) must not emit a
+    /// stray item.done. Currently we only open an item on the first
+    /// text-delta, so this should be naturally true — but guard against
+    /// future regressions.
+    #[test]
+    fn encode_events_no_orphan_item_done_when_no_text() {
+        let mut state = EncoderState::default();
+        let frames = encode_events(
+            &StreamEvent::Completed {
+                text: "".into(),
+                tool_calls: vec![],
+                finish_reason: FinishReason::Stop,
+                response_id: Some("r-2".into()),
+            },
+            &mut state,
+        );
+        // Only the response.completed frame; no item.done since no item was opened.
+        assert_eq!(frames.len(), 1);
+        let s = String::from_utf8(frames[0].clone()).unwrap();
+        assert!(s.starts_with("event: response.completed\n"));
     }
 }

@@ -200,6 +200,12 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
     // adapter is active.
     let mut chat_state = chat::ChunkState::default();
     let mut anthropic_state = anthropic::ChunkState::default();
+    // Per-stream encoder state. Tracks whether we've opened an
+    // assistant-message item via response.output_item.added so the matching
+    // response.output_item.done emits at Completed. Without this state,
+    // codex's response parser drops every text delta with the silent error
+    // "OutputTextDelta without active item" because no item was ever opened.
+    let mut response_encoder = responses::EncoderState::default();
     let mut text_chars: usize = 0;
     let mut tool_calls_count: usize = 0;
     let reader = BufReader::new(upstream_resp);
@@ -230,7 +236,7 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
                 request_id: request_id.clone(),
                 event: event.clone(),
             });
-            if let Some(bytes) = responses::encode_event(&event) {
+            for bytes in responses::encode_events(&event, &mut response_encoder) {
                 write_chunked(&mut writer, &bytes)?;
             }
         }
