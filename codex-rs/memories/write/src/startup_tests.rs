@@ -251,6 +251,7 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
             permission_profile: None,
             windows_sandbox_level: None,
             model: None,
+            model_provider: None,
             effort: None,
             summary: None,
             service_tier: Some(Some(ServiceTier::Fast)),

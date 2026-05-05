@@ -836,6 +836,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
             permission_profile: None,
             windows_sandbox_level: None,
             model: None,
+            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,

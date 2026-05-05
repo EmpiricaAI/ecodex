@@ -1703,6 +1703,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             permission_profile: None,
             windows_sandbox_level: None,
             model: None,
+            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,
@@ -3548,7 +3549,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
         )),
-        model_client: ModelClient::new(
+        model_client: arc_swap::ArcSwap::from_pointee(ModelClient::new(
             Some(auth_manager.clone()),
             conversation_id,
             /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
@@ -3558,7 +3559,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
-        ),
+        )),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
@@ -4226,6 +4227,7 @@ fn op_kind_distinguishes_turn_ops() {
             permission_profile: None,
             windows_sandbox_level: None,
             model: None,
+            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,
@@ -4259,6 +4261,7 @@ fn op_kind_distinguishes_turn_ops() {
             active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
+            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,
@@ -4987,7 +4990,7 @@ where
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
         )),
-        model_client: ModelClient::new(
+        model_client: arc_swap::ArcSwap::from_pointee(ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             conversation_id,
             /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
@@ -4997,7 +5000,7 @@ where
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
-        ),
+        )),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };

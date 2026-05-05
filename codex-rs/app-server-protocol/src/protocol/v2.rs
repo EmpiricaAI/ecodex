@@ -11202,6 +11202,7 @@ mod tests {
             sandbox_policy: None,
             permissions: None,
             model: None,
+            model_provider: None,
             service_tier: None,
             effort: None,
             summary: None,

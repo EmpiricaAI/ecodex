@@ -194,6 +194,9 @@ pub(super) async fn make_chatwidget_manual(
         effective_service_tier,
         current_collaboration_mode,
         active_collaboration_mask,
+        // ecodex extension (T78): test fixture starts with no override.
+        active_provider_override: None,
+        last_dispatched_provider: None,
         has_chatgpt_account: false,
         model_catalog,
         session_telemetry,
