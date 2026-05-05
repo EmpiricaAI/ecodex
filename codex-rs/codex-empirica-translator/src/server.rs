@@ -8,16 +8,48 @@ use std::sync::Arc;
 use tiny_http::{Request, Response, Server};
 use tracing::{error, info, warn};
 
-use crate::adapters::{chat, responses};
+use crate::adapters::{anthropic, chat, responses};
 use crate::tap::{build_request_started, new_request_id, EventEmitter, NoopEmitter, TapEvent};
+
+/// Wire format the translator speaks to the upstream provider. The codex-side
+/// (request in / response out) is always Responses API; only the provider-side
+/// changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpstreamProtocol {
+    /// OpenAI Chat Completions: POST `<base>/chat/completions`, Bearer auth.
+    /// Default. Covers DeepSeek, Qwen, GLM, Ollama, LMStudio, vLLM, etc.
+    Chat,
+    /// Anthropic Messages API: POST `<base>/messages`, x-api-key auth +
+    /// `anthropic-version` header. Covers Anthropic direct and providers that
+    /// expose Anthropic-compat surfaces — notably Kimi For Coding, whose
+    /// OpenAI endpoint enforces an X-Msh-Platform allowlist that the
+    /// Anthropic endpoint does not.
+    Anthropic,
+}
+
+impl UpstreamProtocol {
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "chat" | "openai" | "chat-completions" => Ok(Self::Chat),
+            "anthropic" | "messages" => Ok(Self::Anthropic),
+            other => anyhow::bail!(
+                "unknown upstream protocol `{other}` — expected `chat` or `anthropic`"
+            ),
+        }
+    }
+}
 
 /// Configuration for the translator server.
 #[derive(Clone)]
 pub struct ServerConfig {
-    /// Upstream provider's chat-completions endpoint base URL.
+    /// Upstream provider's endpoint base URL. The protocol-specific suffix
+    /// (`/chat/completions` or `/messages`) is appended at request time.
     pub upstream_base_url: String,
-    /// Optional bearer token forwarded as `Authorization: Bearer <token>`.
+    /// Optional API key. Forwarded as `Authorization: Bearer` for Chat,
+    /// `x-api-key` for Anthropic.
     pub upstream_api_key: Option<String>,
+    /// Wire format the upstream speaks. Defaults to Chat for backward compat.
+    pub upstream_protocol: UpstreamProtocol,
     /// Address to bind tiny_http on.
     pub bind_addr: String,
     /// Event tap. None disables emission (NoopEmitter).
@@ -29,6 +61,7 @@ impl std::fmt::Debug for ServerConfig {
         f.debug_struct("ServerConfig")
             .field("upstream_base_url", &self.upstream_base_url)
             .field("upstream_api_key", &self.upstream_api_key.as_ref().map(|_| "***"))
+            .field("upstream_protocol", &self.upstream_protocol)
             .field("bind_addr", &self.bind_addr)
             .finish()
     }
@@ -40,6 +73,7 @@ impl ServerConfig {
         Self {
             upstream_base_url,
             upstream_api_key,
+            upstream_protocol: UpstreamProtocol::Chat,
             bind_addr,
             emitter: Arc::new(NoopEmitter),
         }
@@ -98,27 +132,46 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         }
     };
     let cif_request = responses::parse_request(&body_value)?;
-    let upstream_url = format!(
-        "{}/chat/completions",
-        cfg.upstream_base_url.trim_end_matches('/')
-    );
+
+    // Per-protocol request shape: URL suffix, auth header, body encoder, and
+    // — separately, below — chunk-state + parser. Branching here keeps the
+    // shared SSE plumbing (chunked HTTP write, CIF event re-encoding via
+    // responses adapter) protocol-agnostic.
+    let (upstream_url, protocol_label) = match cfg.upstream_protocol {
+        UpstreamProtocol::Chat => (
+            format!("{}/chat/completions", cfg.upstream_base_url.trim_end_matches('/')),
+            "chat",
+        ),
+        UpstreamProtocol::Anthropic => (
+            format!("{}/messages", cfg.upstream_base_url.trim_end_matches('/')),
+            "anthropic",
+        ),
+    };
     emitter.emit(&build_request_started(
         &request_id,
         &cif_request,
-        "chat",
+        protocol_label,
         &upstream_url,
     ));
 
-    let chat_body = chat::encode_request(&cif_request);
+    let upstream_body = match cfg.upstream_protocol {
+        UpstreamProtocol::Chat => chat::encode_request(&cif_request),
+        UpstreamProtocol::Anthropic => anthropic::encode_request(&cif_request),
+    };
 
     let mut req_builder = reqwest::blocking::Client::new()
         .post(&upstream_url)
-        .json(&chat_body);
+        .json(&upstream_body);
     if let Some(key) = &cfg.upstream_api_key {
-        req_builder = req_builder.bearer_auth(key);
+        req_builder = match cfg.upstream_protocol {
+            UpstreamProtocol::Chat => req_builder.bearer_auth(key),
+            UpstreamProtocol::Anthropic => req_builder
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01"),
+        };
     }
 
-    info!(upstream = %upstream_url, "forwarding to provider");
+    info!(upstream = %upstream_url, protocol = ?cfg.upstream_protocol, "forwarding to provider");
     let upstream_resp = req_builder.send().context("upstream request")?;
 
     if !upstream_resp.status().is_success() {
@@ -141,16 +194,31 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n\r\n")
         .context("write response headers")?;
 
-    let mut state = chat::ChunkState::default();
+    // Per-protocol SSE chunk state. Both adapters expose the same shape:
+    // `parse_chunk(data: &str, state: &mut ChunkState) -> Result<Vec<StreamEvent>>`,
+    // which keeps the inner per-line loop identical regardless of which
+    // adapter is active.
+    let mut chat_state = chat::ChunkState::default();
+    let mut anthropic_state = anthropic::ChunkState::default();
     let mut text_chars: usize = 0;
     let mut tool_calls_count: usize = 0;
     let reader = BufReader::new(upstream_resp);
     for line in reader.lines() {
         let line = line.context("read upstream line")?;
-        let Some(data) = line.strip_prefix("data: ") else {
+        // Per W3C SSE spec, the space after `data:` is optional. Strip the
+        // colon, then trim a single leading space if present. Kimi's
+        // Anthropic-protocol endpoint emits `data:{...}` (no space); the
+        // OpenAI / Anthropic-direct endpoints emit `data: {...}` (with
+        // space). Both must parse.
+        let Some(data) = line.strip_prefix("data:") else {
             continue;
         };
-        for event in chat::parse_chunk(data, &mut state)? {
+        let data = data.strip_prefix(' ').unwrap_or(data);
+        let events = match cfg.upstream_protocol {
+            UpstreamProtocol::Chat => chat::parse_chunk(data, &mut chat_state)?,
+            UpstreamProtocol::Anthropic => anthropic::parse_chunk(data, &mut anthropic_state)?,
+        };
+        for event in events {
             // Per-event metrics for completed-event payload
             if let crate::cif::StreamEvent::TextDelta { text } = &event {
                 text_chars += text.chars().count();

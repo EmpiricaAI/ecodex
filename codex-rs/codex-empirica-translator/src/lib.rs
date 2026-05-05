@@ -20,5 +20,5 @@ pub mod cif;
 pub mod server;
 pub mod tap;
 
-pub use server::{run, ServerConfig};
+pub use server::{run, ServerConfig, UpstreamProtocol};
 pub use tap::{EventEmitter, JsonlFileEmitter, NoopEmitter, TapEvent};
