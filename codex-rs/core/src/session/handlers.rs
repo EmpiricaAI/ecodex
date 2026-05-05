@@ -163,6 +163,10 @@ pub(super) async fn user_input_or_turn_inner(
                     active_permission_profile: None,
                     windows_sandbox_level: None,
                     collaboration_mode,
+                    // ecodex extension: UserTurn doesn't carry a provider
+                    // override — use OverrideTurnContext (persistent) for
+                    // provider switching.
+                    model_provider: None,
                     reasoning_summary: summary,
                     service_tier,
                     final_output_json_schema: Some(final_output_json_schema),
@@ -183,6 +187,10 @@ pub(super) async fn user_input_or_turn_inner(
             active_permission_profile,
             windows_sandbox_level,
             model,
+            // ecodex extension: provider override is plumbed but not yet wired
+            // through SessionSettingsUpdate (Phase 2). Persistent
+            // OverrideTurnContext is the path the picker actually uses.
+            model_provider: _,
             effort,
             summary,
             service_tier,
@@ -215,6 +223,10 @@ pub(super) async fn user_input_or_turn_inner(
                     active_permission_profile,
                     windows_sandbox_level,
                     collaboration_mode,
+                    // ecodex extension: UserInputWithTurnContext doesn't
+                    // forward provider override yet; use OverrideTurnContext
+                    // for that path.
+                    model_provider: None,
                     reasoning_summary: summary,
                     service_tier,
                     final_output_json_schema: Some(final_output_json_schema),
@@ -1017,6 +1029,7 @@ pub(super) async fn submission_loop(
                     permission_profile,
                     windows_sandbox_level,
                     model,
+                    model_provider,
                     effort,
                     summary,
                     service_tier,
@@ -1044,6 +1057,7 @@ pub(super) async fn submission_loop(
                             permission_profile,
                             windows_sandbox_level,
                             collaboration_mode: Some(collaboration_mode),
+                            model_provider,
                             reasoning_summary: summary,
                             service_tier,
                             personality,

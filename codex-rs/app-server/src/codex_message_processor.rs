@@ -6803,6 +6803,9 @@ impl CodexMessageProcessor {
                     active_permission_profile,
                     windows_sandbox_level: None,
                     model,
+                    // ecodex extension: app-server doesn't expose provider
+                    // override yet (use OverrideTurnContext for that path).
+                    model_provider: None,
                     effort,
                     summary,
                     service_tier,

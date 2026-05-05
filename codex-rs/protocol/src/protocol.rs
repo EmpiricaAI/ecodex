@@ -497,6 +497,16 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         model: Option<String>,
 
+        /// ecodex extension: updated `model_provider` ID for routing future
+        /// turns. When set, the session re-resolves the provider from
+        /// `config.model_providers[<id>]` and rebuilds the ModelClient.
+        ///
+        /// Pair with `model` for atomic provider+model swaps from the picker
+        /// when a curated entry routes to a different provider than the
+        /// current session's. Omit to keep the existing provider.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_provider: Option<String>,
+
         /// Updated reasoning effort (honored only for reasoning-capable models).
         ///
         /// Use `Some(Some(_))` to set a specific effort, `Some(None)` to clear
@@ -634,6 +644,16 @@ pub enum Op {
         /// automatically.
         #[serde(skip_serializing_if = "Option::is_none")]
         model: Option<String>,
+
+        /// ecodex extension: updated `model_provider` ID for routing future
+        /// turns. When set, the session re-resolves the provider from
+        /// `config.model_providers[<id>]` and rebuilds the ModelClient.
+        ///
+        /// Pair with `model` for atomic provider+model swaps from the picker
+        /// when a curated entry routes to a different provider than the
+        /// current session's. Omit to keep the existing provider.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_provider: Option<String>,
 
         /// Updated reasoning effort (honored only for reasoning-capable models).
         ///

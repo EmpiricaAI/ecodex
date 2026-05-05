@@ -306,6 +306,11 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
+    /// ecodex extension: when set, the next override_turn_context call
+    /// re-resolves the provider from `config.model_providers[<id>]` and
+    /// rebuilds the ModelClient for subsequent turns. Pair with
+    /// `collaboration_mode.model` for atomic provider+model swaps.
+    pub(crate) model_provider: Option<String>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) service_tier: Option<Option<ServiceTier>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
