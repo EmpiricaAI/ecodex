@@ -13,5 +13,6 @@
   "hooks": "./hooks.json",
   "skills": "./skills",
   "mcp_servers": "./mcp_servers.json",
-  "statusline": "./hooks_scripts/scripts/statusline_empirica.py"
+  "statusline": "./hooks_scripts/scripts/statusline_empirica.py",
+  "writableRoots": ["~/.empirica"]
 }
