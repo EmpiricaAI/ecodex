@@ -25,15 +25,19 @@ use crate::cif::{Content, FinishReason, Message, Request, StreamEvent, ToolCall}
 ///   - Tool definitions use `input_schema` (not `parameters`).
 ///   - `max_tokens` is required (Anthropic enforces); we default if absent.
 pub fn encode_request(req: &Request) -> Value {
-    let mut messages: Vec<Value> = Vec::new();
+    // First pass: convert CIF messages to (role, content-blocks) pairs.
+    // Each CIF message produces exactly one (role, blocks) entry — the
+    // merging happens in the second pass.
+    let mut staged: Vec<(&'static str, Vec<Value>)> = Vec::new();
 
     for m in &req.messages {
         match m {
             Message::User { content } => {
-                messages.push(json!({
-                    "role": "user",
-                    "content": content_to_anthropic(content),
-                }));
+                let blocks: Vec<Value> = match content_to_anthropic(content) {
+                    Value::Array(a) => a,
+                    other => vec![other],
+                };
+                staged.push(("user", blocks));
             }
             Message::Assistant { content, tool_calls } => {
                 let mut blocks = content_to_anthropic_assistant(content);
@@ -47,34 +51,68 @@ pub fn encode_request(req: &Request) -> Value {
                         "input": input,
                     }));
                 }
-                messages.push(json!({"role": "assistant", "content": blocks}));
+                staged.push(("assistant", blocks));
             }
             Message::Tool { tool_call_id, content } => {
                 // Anthropic tool results live inside a USER turn, not a tool role.
-                messages.push(json!({
-                    "role": "user",
-                    "content": [{
+                staged.push((
+                    "user",
+                    vec![json!({
                         "type": "tool_result",
                         "tool_use_id": tool_call_id,
                         "content": content,
-                    }],
-                }));
+                    })],
+                ));
             }
             Message::Reasoning { content, .. } => {
                 // Anthropic round-trips reasoning as `thinking` blocks on
                 // assistant turns. CIF stores them as standalone Reasoning
-                // messages — re-fold into the next assistant turn for fidelity.
-                // Phase 4 will handle the merge; for now emit a thinking-only
-                // assistant turn (Anthropic accepts this).
-                messages.push(json!({
-                    "role": "assistant",
-                    "content": [{
-                        "type": "thinking",
-                        "thinking": content,
-                    }],
-                }));
+                // messages; the merge pass below folds them into adjacent
+                // assistant turns automatically.
+                staged.push((
+                    "assistant",
+                    vec![json!({"type": "thinking", "thinking": content})],
+                ));
             }
         }
+    }
+
+    // Second pass: merge consecutive same-role messages.
+    //
+    // Anthropic's /v1/messages API rejects any sequence where two assistant
+    // messages are adjacent or two user messages are adjacent (it expects a
+    // strict user/assistant alternation). When the model issues parallel
+    // tool calls, codex emits one `function_call` ResponseItem per call —
+    // each becomes a separate CIF Assistant message — which without merging
+    // produces N consecutive assistant entries. Anthropic's validator then
+    // complains that the tool_call_ids "did not have response messages",
+    // because it can only pair the FIRST assistant's tool_use blocks with
+    // the matching user tool_result blocks; the second assistant looks
+    // unanswered.
+    //
+    // Same logic applies to consecutive `function_call_output` items
+    // (multiple tool results in a row) — those collapse into a single user
+    // message with multiple tool_result content blocks.
+    //
+    // Diagnosis case: ecodex T81 Tx-S, 2026-05-06. Translator emitted two
+    // consecutive assistant messages (one tool_use each) followed by two
+    // consecutive user messages (one tool_result each). Kimi rejected with
+    // "tool_call_ids did not have response messages: exec_command:0".
+    let mut messages: Vec<Value> = Vec::new();
+    for (role, blocks) in staged {
+        if blocks.is_empty() {
+            continue;
+        }
+        if let Some(last) = messages.last_mut()
+            && last.get("role").and_then(Value::as_str) == Some(role)
+            && let Some(content_arr) = last
+                .get_mut("content")
+                .and_then(|c| c.as_array_mut())
+        {
+            content_arr.extend(blocks);
+            continue;
+        }
+        messages.push(json!({"role": role, "content": blocks}));
     }
 
     let mut out = json!({
@@ -375,6 +413,113 @@ mod tests {
         assert_eq!(body["messages"][0]["content"][0]["type"], "tool_result");
         assert_eq!(body["messages"][0]["content"][0]["tool_use_id"], "t_1");
         assert_eq!(body["messages"][0]["content"][0]["content"], "result");
+    }
+
+    /// Regression (ecodex T81 Tx-S): parallel tool calls from one assistant
+    /// turn must encode as ONE assistant message with multiple tool_use
+    /// blocks and ONE following user message with multiple tool_result
+    /// blocks — not as N consecutive assistant + N consecutive user
+    /// messages. Anthropic's /v1/messages API rejects consecutive same-role
+    /// messages with "tool_call_ids did not have response messages".
+    /// Diagnosis case 2026-05-06: Kimi 400 on follow-up turn after parallel
+    /// `find` + `Read` tool calls.
+    #[test]
+    fn parallel_tool_calls_merge_into_one_assistant_then_one_user() {
+        use crate::cif::ToolCall;
+        let req = Request {
+            model: "x".into(),
+            system: None,
+            messages: vec![
+                Message::User { content: vec![Content::Text { text: "do two things".into() }] },
+                // Codex emits one Assistant per function_call ResponseItem,
+                // so parallel tool calls arrive as TWO consecutive Assistants.
+                Message::Assistant {
+                    content: vec![],
+                    tool_calls: vec![ToolCall { id: "tool_a".into(), name: "exec".into(), arguments: "{}".into() }],
+                },
+                Message::Assistant {
+                    content: vec![],
+                    tool_calls: vec![ToolCall { id: "tool_b".into(), name: "exec".into(), arguments: "{}".into() }],
+                },
+                // And TWO consecutive Tools for the matching results.
+                Message::Tool { tool_call_id: "tool_a".into(), content: "result-a".into() },
+                Message::Tool { tool_call_id: "tool_b".into(), content: "result-b".into() },
+            ],
+            tools: vec![],
+            temperature: None,
+            max_output_tokens: None,
+            stream: false,
+        };
+        let body = encode_request(&req);
+        let messages = body["messages"].as_array().expect("messages array");
+
+        // Expected after merge: 3 messages — user (initial), assistant (two
+        // tool_use blocks), user (two tool_result blocks).
+        assert_eq!(
+            messages.len(),
+            3,
+            "merge must collapse consecutive same-role messages; got {} messages: {}",
+            messages.len(),
+            serde_json::to_string_pretty(&messages).unwrap_or_default()
+        );
+
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"][0]["type"], "text");
+
+        // Assistant message: ONE message containing TWO tool_use blocks in order.
+        assert_eq!(messages[1]["role"], "assistant");
+        let asst_blocks = messages[1]["content"].as_array().unwrap();
+        assert_eq!(asst_blocks.len(), 2, "merged assistant must hold both tool_use blocks");
+        assert_eq!(asst_blocks[0]["type"], "tool_use");
+        assert_eq!(asst_blocks[0]["id"], "tool_a");
+        assert_eq!(asst_blocks[1]["type"], "tool_use");
+        assert_eq!(asst_blocks[1]["id"], "tool_b");
+
+        // User message: ONE message containing TWO tool_result blocks linked by
+        // tool_use_id, in the same order as the tool_use blocks above.
+        assert_eq!(messages[2]["role"], "user");
+        let user_blocks = messages[2]["content"].as_array().unwrap();
+        assert_eq!(user_blocks.len(), 2, "merged user must hold both tool_result blocks");
+        assert_eq!(user_blocks[0]["type"], "tool_result");
+        assert_eq!(user_blocks[0]["tool_use_id"], "tool_a");
+        assert_eq!(user_blocks[0]["content"], "result-a");
+        assert_eq!(user_blocks[1]["type"], "tool_result");
+        assert_eq!(user_blocks[1]["tool_use_id"], "tool_b");
+        assert_eq!(user_blocks[1]["content"], "result-b");
+    }
+
+    /// Sanity: a sequential turn pattern (assistant text → user → assistant)
+    /// must NOT merge across the user boundary. Only adjacent same-role
+    /// pairs collapse.
+    #[test]
+    fn merge_does_not_collapse_across_role_boundaries() {
+        let req = Request {
+            model: "x".into(),
+            system: None,
+            messages: vec![
+                Message::User { content: vec![Content::Text { text: "hi".into() }] },
+                Message::Assistant {
+                    content: vec![Content::Text { text: "hello".into() }],
+                    tool_calls: vec![],
+                },
+                Message::User { content: vec![Content::Text { text: "more".into() }] },
+                Message::Assistant {
+                    content: vec![Content::Text { text: "ok".into() }],
+                    tool_calls: vec![],
+                },
+            ],
+            tools: vec![],
+            temperature: None,
+            max_output_tokens: None,
+            stream: false,
+        };
+        let body = encode_request(&req);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 4, "no merging when roles alternate");
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[3]["role"], "assistant");
     }
 
     #[test]

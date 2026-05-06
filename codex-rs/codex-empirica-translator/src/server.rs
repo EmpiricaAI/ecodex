@@ -172,6 +172,20 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
     }
 
     info!(upstream = %upstream_url, protocol = ?cfg.upstream_protocol, "forwarding to provider");
+    // ecodex T81 Tx-S diagnostic: log the full upstream body so we can verify
+    // that prior assistant tool_use blocks are being followed by user tool_result
+    // blocks in the right shape. Symptom we're chasing: Kimi rejects with
+    // "an assistant message with tool_calls must be followed by tool messages".
+    // TODO: gate this behind a --debug-bodies flag once we've root-caused.
+    // Log just the messages array tail (where tool_use/tool_result blocks
+    // live) — the system prompts at the front bloat the body to >100KB and
+    // we only need the conversation lifecycle to diagnose Tx-S.
+    if let Some(messages) = upstream_body.get("messages").and_then(|v| v.as_array()) {
+        let last_n = messages.iter().rev().take(8).rev().collect::<Vec<_>>();
+        if let Ok(tail_str) = serde_json::to_string_pretty(&last_n) {
+            info!(messages_tail = %tail_str, "upstream messages tail (Tx-S diagnostic)");
+        }
+    }
     let upstream_resp = req_builder.send().context("upstream request")?;
 
     if !upstream_resp.status().is_success() {
