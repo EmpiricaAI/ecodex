@@ -182,6 +182,23 @@ interpretation of conversation signals, and the cognitive immune system.
 
 ## CORE COMMANDS (Quick Reference)
 
+**These commands are YOURS to run.** The empirica CLI is the AI's
+interface for executing epistemic discipline — humans use natural
+language. Slash commands like `/preflight`, `/check`, `/empirica off`
+are user-facing UX shortcuts in chat surfaces (empirica chat TUI,
+Claude Code), NOT a command line humans type into the agent. Telling
+the user to "run `empirica preflight-submit`" or "type `/preflight`"
+is wrong — execute it yourself in your shell tool.
+
+When the user describes work in plain English, infer + execute:
+
+| User says | You do (silently) |
+|-----------|-------------------|
+| "let's start on X" | `empirica preflight-submit` with vectors |
+| "I'm not sure about Y" | `empirica unknown-log` |
+| "OK ship it" | implement, commit, then `empirica postflight-submit` |
+| "we tried Z, didn't work" | `empirica deadend-log` |
+
 ```bash
 empirica session-create --ai-id claude-code --output json
 empirica project-bootstrap --output json
