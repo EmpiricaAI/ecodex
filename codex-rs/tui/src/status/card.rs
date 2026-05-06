@@ -644,9 +644,9 @@ impl HistoryCell for StatusHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         // ecodex T81 branding: status card mirrors the chrome banner —
-        // "ecodex (vX) · turtles all the way down".
+        // "∴ ecodex (vX) · turtles all the way down".
         lines.push(Line::from(vec![
-            Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
+            Span::from(format!("{}∴ ", FieldFormatter::INDENT)).dim(),
             Span::from("ecodex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{CODEX_CLI_VERSION})")).dim(),

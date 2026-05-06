@@ -1470,12 +1470,13 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ ecodex (vX) · turtles all the way down"
-        // ecodex T81 branding: replace upstream "OpenAI Codex" with our name +
-        // tagline. The middle dot keeps the tagline visually attached without
-        // adding a second line.
+        // Title line rendered inside the box: "∴ ecodex (vX) · turtles all the way down"
+        // ecodex T81 branding: '∴' (therefore) glyph replaces the upstream
+        // shell-prompt '>_'. Pairs with the tagline ("therefore... turtles all
+        // the way down") and signals the epistemic-discipline framing without
+        // shouting it.
         let title_spans: Vec<Span<'static>> = vec![
-            Span::from(">_ ").dim(),
+            Span::from("∴ ").dim(),
             Span::from("ecodex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
