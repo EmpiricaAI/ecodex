@@ -35,6 +35,24 @@ struct RawPluginManifest {
     /// the live epistemic-state strip; any plugin can register its own.
     #[serde(default)]
     statusline: Option<String>,
+    /// Filesystem paths the plugin needs to write to that lie OUTSIDE the
+    /// session cwd (which is already writable under WorkspaceWrite). Each
+    /// entry is either:
+    ///   * `~/...` — expanded against the user's HOME at load time
+    ///   * absolute path (`/...`) — used verbatim
+    /// Relative paths are rejected (plugin authors should use absolute
+    /// paths or `~/`-prefixed ones; anything else is ambiguous against
+    /// the agent's mutable cwd).
+    ///
+    /// Plugins declare these so the codex sandbox layer can grant the
+    /// minimum cross-cwd write access the plugin's runtime actually
+    /// needs — e.g. Empirica needs `~/.empirica` for its global state
+    /// (sessions DB, instance pointers, transaction state) since its
+    /// project lifecycle exists outside any single cwd by design.
+    ///
+    /// Empty/unset → no additional writable roots from this plugin.
+    #[serde(default)]
+    writable_roots: Option<Vec<String>>,
     #[serde(default)]
     interface: Option<RawPluginManifestInterface>,
 }
@@ -60,6 +78,13 @@ pub struct PluginManifestPaths {
     /// command in a debounced subprocess (see TUI render loop) and
     /// renders stdout below the existing footer status items.
     pub statusline: Option<AbsolutePathBuf>,
+    /// Cross-cwd writable roots the plugin's runtime needs (e.g.
+    /// `~/.empirica` for Empirica's global state). Resolved at manifest
+    /// load time: tilde paths are expanded against the user's HOME;
+    /// absolute paths are kept verbatim. The plugin host merges these
+    /// into the active SandboxPolicy's writable_roots. Empty when the
+    /// plugin doesn't declare any.
+    pub writable_roots: Vec<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +186,7 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                 apps,
                 hooks,
                 statusline,
+                writable_roots,
                 interface,
             } = manifest;
             let name = plugin_root
@@ -259,6 +285,10 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                         plugin_root,
                         "statusline",
                         statusline.as_deref(),
+                    ),
+                    writable_roots: resolve_manifest_runtime_paths(
+                        "writableRoots",
+                        writable_roots.as_deref(),
                     ),
                 },
                 interface,
@@ -406,6 +436,85 @@ fn json_value_type(value: &JsonValue) -> &'static str {
         JsonValue::Array(_) => "array",
         JsonValue::Object(_) => "object",
     }
+}
+
+/// Resolve plugin manifest paths that name *runtime* filesystem locations
+/// outside the plugin install dir (e.g. writable_roots like `~/.empirica`).
+/// Unlike `resolve_manifest_path` (which constrains paths to live inside
+/// the plugin root via `./...`), this accepts:
+///   * `~/...` — expanded against `$HOME`
+///   * absolute paths (`/...`) — kept verbatim
+/// Relative paths and paths containing `..` are rejected with a warning.
+/// Empty/missing input returns an empty Vec.
+fn resolve_manifest_runtime_paths(field: &'static str, paths: Option<&[String]>) -> Vec<AbsolutePathBuf> {
+    let Some(paths) = paths else {
+        return Vec::new();
+    };
+    let mut resolved = Vec::with_capacity(paths.len());
+    for raw in paths {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            tracing::warn!("ignoring {field}: entry must not be empty");
+            continue;
+        }
+        // Reject any explicit relative paths — `./` and `../` would be
+        // ambiguous against the agent's mutable cwd.
+        if raw.starts_with("./") || raw.starts_with("../") || raw == "." || raw == ".." {
+            tracing::warn!(
+                "ignoring {field} entry {raw:?}: relative paths are rejected; use ~/ or absolute"
+            );
+            continue;
+        }
+        let expanded = if let Some(rest) = raw.strip_prefix("~/") {
+            let Some(home) = std::env::var_os("HOME") else {
+                tracing::warn!(
+                    "ignoring {field} entry {raw:?}: HOME is not set, cannot expand `~/`"
+                );
+                continue;
+            };
+            let mut buf = std::path::PathBuf::from(home);
+            buf.push(rest);
+            buf
+        } else if raw == "~" {
+            let Some(home) = std::env::var_os("HOME") else {
+                tracing::warn!(
+                    "ignoring {field} entry {raw:?}: HOME is not set, cannot expand `~`"
+                );
+                continue;
+            };
+            std::path::PathBuf::from(home)
+        } else {
+            std::path::PathBuf::from(raw)
+        };
+        // Reject any `..` components after expansion — keeps the path
+        // contract auditable (no traversal escapes from declared roots).
+        if expanded
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+        {
+            tracing::warn!(
+                "ignoring {field} entry {raw:?}: path must not contain '..' components"
+            );
+            continue;
+        }
+        // Reject anything that's not absolute after expansion — relative
+        // entries like "relative/path" would otherwise resolve against
+        // the agent's cwd via AbsolutePathBuf and silently grant scope
+        // we never declared.
+        if !expanded.is_absolute() {
+            tracing::warn!(
+                "ignoring {field} entry {raw:?}: must be absolute or `~/`-prefixed"
+            );
+            continue;
+        }
+        match AbsolutePathBuf::try_from(expanded) {
+            Ok(abs) => resolved.push(abs),
+            Err(err) => {
+                tracing::warn!("ignoring {field} entry {raw:?}: {err}");
+            }
+        }
+    }
+    resolved
 }
 
 fn resolve_manifest_path(
@@ -672,5 +781,163 @@ mod tests {
 
         let manifest = load_manifest(&plugin_root);
         assert!(manifest.paths.statusline.is_none());
+    }
+
+    /// HOME mutation must be serialized — cargo runs tests in parallel by
+    /// default, and any unsynchronized HOME swap will race with sibling
+    /// tests reading $HOME for tilde expansion.
+    fn home_test_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    /// Helper: temporarily set $HOME for a closure (writable_roots tests
+    /// rely on tilde expansion). Restores HOME after the closure runs.
+    /// Holds `home_test_lock()` for the duration so concurrent HOME-mutating
+    /// tests serialize.
+    fn with_home<F: FnOnce() -> R, R>(home: &Path, f: F) -> R {
+        let _guard = home_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("HOME");
+        // SAFETY: HOME mutation is serialized via home_test_lock() above.
+        unsafe {
+            std::env::set_var("HOME", home);
+        }
+        let result = f();
+        unsafe {
+            match saved {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn plugin_manifest_resolves_writable_roots_tilde_and_absolute() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).expect("create home");
+        write_full_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin",
+  "writableRoots": ["~/.empirica", "/var/lib/demo-plugin"]
+}"#,
+        );
+
+        let manifest = with_home(&home, || load_manifest(&plugin_root));
+        let roots = manifest.paths.writable_roots;
+        assert_eq!(roots.len(), 2, "expected both entries to resolve");
+        assert_eq!(roots[0].as_path(), home.join(".empirica"));
+        assert_eq!(roots[1].as_path(), Path::new("/var/lib/demo-plugin"));
+    }
+
+    #[test]
+    fn plugin_manifest_writable_roots_rejects_relative_paths() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).expect("create home");
+        write_full_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin",
+  "writableRoots": ["./scoped", "../escape", ".", "..", "relative/path"]
+}"#,
+        );
+
+        let manifest = with_home(&home, || load_manifest(&plugin_root));
+        // `./`, `../`, `.`, and `..` are explicitly rejected. A bare
+        // `relative/path` is treated as a path string by AbsolutePathBuf
+        // and rejected because it isn't absolute — confirms the contract:
+        // no relative entries survive.
+        assert!(
+            manifest.paths.writable_roots.is_empty(),
+            "expected all relative entries to be rejected, got {:?}",
+            manifest.paths.writable_roots
+        );
+    }
+
+    #[test]
+    fn plugin_manifest_writable_roots_rejects_parent_dir_components() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).expect("create home");
+        // `~/` expansion that contains `..` AFTER expansion must still
+        // be rejected — we check the resolved PathBuf for ParentDir.
+        write_full_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin",
+  "writableRoots": ["~/foo/../bar", "/etc/../passwd"]
+}"#,
+        );
+
+        let manifest = with_home(&home, || load_manifest(&plugin_root));
+        assert!(
+            manifest.paths.writable_roots.is_empty(),
+            "expected `..`-containing entries to be rejected, got {:?}",
+            manifest.paths.writable_roots
+        );
+    }
+
+    #[test]
+    fn plugin_manifest_writable_roots_absent_when_unset() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_full_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin"
+}"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+        assert!(
+            manifest.paths.writable_roots.is_empty(),
+            "expected empty Vec when field is absent"
+        );
+    }
+
+    #[test]
+    fn plugin_manifest_writable_roots_skips_empty_strings() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).expect("create home");
+        write_full_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin",
+  "writableRoots": ["", "   ", "/var/valid"]
+}"#,
+        );
+
+        let manifest = with_home(&home, || load_manifest(&plugin_root));
+        let roots = manifest.paths.writable_roots;
+        assert_eq!(roots.len(), 1, "expected only the valid entry to remain");
+        assert_eq!(roots[0].as_path(), Path::new("/var/valid"));
+    }
+
+    #[test]
+    fn plugin_manifest_writable_roots_handles_bare_tilde() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).expect("create home");
+        write_full_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin",
+  "writableRoots": ["~"]
+}"#,
+        );
+
+        let manifest = with_home(&home, || load_manifest(&plugin_root));
+        let roots = manifest.paths.writable_roots;
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].as_path(), home.as_path());
     }
 }
