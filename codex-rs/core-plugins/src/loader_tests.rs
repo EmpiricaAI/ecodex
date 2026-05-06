@@ -415,3 +415,38 @@ fn load_plugin_statusline_returns_none_when_field_unset() {
     write_manifest(&plugin_root, r#"{ "name": "demo-plugin" }"#);
     assert!(load_statusline(&plugin_root).is_none());
 }
+
+fn load_writable_roots(
+    plugin_root: &AbsolutePathBuf,
+) -> Vec<codex_plugin::PluginWritableRootSource> {
+    let manifest = load_plugin_manifest(plugin_root.as_path()).expect("manifest");
+    load_plugin_writable_roots(plugin_root, &plugin_id(), &manifest.paths)
+}
+
+#[test]
+fn load_plugin_writable_roots_emits_one_source_per_declared_root() {
+    let (_tmp, plugin_root) = plugin_root();
+    write_manifest(
+        &plugin_root,
+        r#"{
+  "name": "demo-plugin",
+  "writableRoots": ["/var/lib/demo-a", "/var/lib/demo-b"]
+}"#,
+    );
+
+    let sources = load_writable_roots(&plugin_root);
+    assert_eq!(sources.len(), 2);
+    for source in &sources {
+        assert_eq!(source.plugin_id, plugin_id());
+        assert_eq!(source.plugin_root.as_path(), plugin_root.as_path());
+    }
+    assert_eq!(sources[0].root.as_path(), Path::new("/var/lib/demo-a"));
+    assert_eq!(sources[1].root.as_path(), Path::new("/var/lib/demo-b"));
+}
+
+#[test]
+fn load_plugin_writable_roots_returns_empty_when_field_unset() {
+    let (_tmp, plugin_root) = plugin_root();
+    write_manifest(&plugin_root, r#"{ "name": "demo-plugin" }"#);
+    assert!(load_writable_roots(&plugin_root).is_empty());
+}

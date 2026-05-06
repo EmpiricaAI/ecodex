@@ -24,6 +24,7 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::LoadedPlugin;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginHookSource;
+use codex_plugin::PluginWritableRootSource;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::PluginLoadOutcome;
@@ -527,6 +528,7 @@ async fn load_plugin(
         hook_sources: Vec::new(),
         hook_load_warnings: Vec::new(),
         statusline_source: None,
+        writable_root_sources: Vec::new(),
         error: None,
     };
 
@@ -614,6 +616,16 @@ async fn load_plugin(
         &plugin_root,
         &loaded_plugin_id,
         &store.plugin_data_root(&loaded_plugin_id),
+        manifest_paths,
+    );
+    // Plugin-declared writable roots (cross-cwd carve-outs). Discovery is
+    // independent of hooks gating: the SandboxPolicy assembly site is what
+    // decides whether to merge them, and that decision is keyed on the
+    // active permission profile (WorkspaceWrite gets carve-outs, ReadOnly
+    // and DangerFullAccess do not need them for opposite reasons).
+    loaded_plugin.writable_root_sources = load_plugin_writable_roots(
+        &plugin_root,
+        &loaded_plugin_id,
         manifest_paths,
     );
     loaded_plugin
@@ -892,6 +904,28 @@ pub fn load_plugin_statusline(
             plugin_data_root: plugin_data_root.clone(),
             command: command.clone(),
         })
+}
+
+/// Discover plugin-declared writable roots from `manifest.writable_roots`.
+/// Each entry yields one `PluginWritableRootSource` so downstream auditing
+/// can attribute each granted carve-out to its declaring plugin. Returns
+/// an empty Vec when the plugin did not declare any. Discovery only —
+/// the SandboxPolicy merge happens at session-start config assembly
+/// (Tx-AI/3).
+pub fn load_plugin_writable_roots(
+    plugin_root: &AbsolutePathBuf,
+    plugin_id: &PluginId,
+    manifest_paths: &PluginManifestPaths,
+) -> Vec<PluginWritableRootSource> {
+    manifest_paths
+        .writable_roots
+        .iter()
+        .map(|root| PluginWritableRootSource {
+            plugin_id: plugin_id.clone(),
+            plugin_root: plugin_root.clone(),
+            root: root.clone(),
+        })
+        .collect()
 }
 
 async fn load_apps_from_paths(

@@ -7,6 +7,7 @@ use crate::AppConnectorId;
 use crate::PluginCapabilitySummary;
 use crate::PluginHookSource;
 use crate::PluginStatuslineSource;
+use crate::PluginWritableRootSource;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
@@ -28,6 +29,10 @@ pub struct LoadedPlugin<M> {
     /// Plugin-declared statusline command (from `manifest.paths.statusline`).
     /// `None` when the plugin did not declare one.
     pub statusline_source: Option<PluginStatuslineSource>,
+    /// Plugin-declared writable roots (from `manifest.paths.writable_roots`).
+    /// Empty when the plugin did not declare any. Each entry is a fully-
+    /// resolved absolute path (tilde already expanded at manifest load).
+    pub writable_root_sources: Vec<PluginWritableRootSource>,
     pub error: Option<String>,
 }
 
@@ -163,6 +168,21 @@ impl<M: Clone> PluginLoadOutcome<M> {
             .iter()
             .filter(|plugin| plugin.is_active())
             .filter_map(|plugin| plugin.statusline_source.clone())
+            .collect()
+    }
+
+    /// Plugin-declared writable roots across all active plugins. The
+    /// SandboxPolicy assembly site (config-time) merges these into the
+    /// active workspace-write profile so the agent's shell-tool calls
+    /// can write to plugin-required cross-cwd locations (e.g. Empirica's
+    /// `~/.empirica` global state). Order matches plugin load order;
+    /// the merger should de-duplicate (`with_additional_writable_roots`
+    /// already drops paths already covered by cwd / existing roots).
+    pub fn effective_plugin_writable_roots(&self) -> Vec<PluginWritableRootSource> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.writable_root_sources.iter().cloned())
             .collect()
     }
 
