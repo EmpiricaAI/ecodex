@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader, Read, Write};
+use std::str::FromStr;
 use std::sync::Arc;
 use tiny_http::{Request, Response, Server};
 use tracing::{error, info, warn};
@@ -103,6 +104,24 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
     let url = request.url().to_string();
     let method = format!("{}", request.method());
     info!(%method, %url, "incoming request");
+
+    // ecodex T81: /healthz probe surface for `empirica diagnose --frontend
+    // ecodex` and other liveness checkers. Returns 200 with a tiny JSON
+    // body identifying the upstream protocol so a probe can verify both
+    // "translator alive" and "translator pointed at the right provider".
+    if method == "GET" && url == "/healthz" {
+        let body = serde_json::json!({
+            "status": "ok",
+            "upstream_protocol": format!("{:?}", cfg.upstream_protocol).to_lowercase(),
+        })
+        .to_string();
+        let response = Response::from_string(body)
+            .with_status_code(200)
+            .with_header(
+                tiny_http::Header::from_str("Content-Type: application/json").unwrap(),
+            );
+        return request.respond(response).context("respond /healthz");
+    }
 
     if !(method == "POST" && (url == "/v1/responses" || url == "/responses")) {
         let response = Response::from_string("not found").with_status_code(404);

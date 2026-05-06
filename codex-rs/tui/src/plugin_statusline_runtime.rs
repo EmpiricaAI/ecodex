@@ -147,31 +147,157 @@ async fn run_plugin_statusline_loop(source: PluginStatuslineSource, tx: AppEvent
     }
 }
 
-/// Spawn the plugin command, capture stdout up to the timeout. Returns
-/// an empty Vec on any failure (spawn error, non-zero exit, timeout) so
-/// the renderer can simply skip empty cells.
+/// Spawn the plugin command, write the empirica-session JSON context to
+/// its stdin, capture stdout up to the timeout. Returns an empty Vec on
+/// any failure (spawn error, non-zero exit, timeout) so the renderer can
+/// simply skip empty cells.
+///
+/// **ecodex T81 Tx-W fix**: previously this used `Stdio::null()`, which
+/// meant the bundled `statusline_empirica.py` saw no input on stdin and
+/// always rendered `[ecodex:inactive]` — every empirica session lookup
+/// path requires a `session_id` (or at least a `cwd`) on stdin to
+/// resolve. The fix is to discover the active empirica_session_id from
+/// `~/.empirica/instance_projects/tmux_<TMUX_PANE>.json` (or by cwd
+/// match across all instance_projects entries) and pipe a small JSON
+/// context to the script. The doctor's
+/// `check_ecodex_statusline_runtime_stdin` regression-tests this.
 async fn invoke_once(
     command: &std::path::Path,
     plugin_root: &str,
     plugin_data_root: &str,
 ) -> Vec<u8> {
+    let stdin_payload = build_statusline_stdin_payload();
+
     let spawn_result = tokio::process::Command::new(command)
         .env("PLUGIN_ROOT", plugin_root)
         .env("CLAUDE_PLUGIN_ROOT", plugin_root)
         .env("PLUGIN_DATA", plugin_data_root)
         .env("CLAUDE_PLUGIN_DATA", plugin_data_root)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
-        .output();
+        .spawn();
 
-    match tokio::time::timeout(SUBPROCESS_TIMEOUT, spawn_result).await {
+    let mut child = match spawn_result {
+        Ok(child) => child,
+        Err(_) => return Vec::new(),
+    };
+
+    // Feed the JSON context, then close stdin so the script's stdin.read()
+    // returns. We swallow the write error: the child still has the env
+    // vars (PLUGIN_ROOT et al.), so even if the pipe write fails the
+    // script can still produce a degraded result on its own.
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        let _ = stdin.write_all(stdin_payload.as_bytes()).await;
+        // Dropping `stdin` here closes the pipe — the script's blocking
+        // `sys.stdin.read()` unblocks with the bytes it received.
+        drop(stdin);
+    }
+
+    let wait_result = child.wait_with_output();
+    match tokio::time::timeout(SUBPROCESS_TIMEOUT, wait_result).await {
         Ok(Ok(output)) if output.status.success() => output.stdout,
         // Either the subprocess produced an error exit code or we hit
-        // an io error while spawning. Either way: empty output.
+        // an io error while waiting. Either way: empty output.
         Ok(_) => Vec::new(),
         // Timeout: the inner future is dropped, kill_on_drop fires.
         Err(_) => Vec::new(),
     }
+}
+
+/// Build the JSON payload piped to plugin statusline scripts.
+///
+/// Resolution strategy for `session_id`:
+///   1. `~/.empirica/instance_projects/tmux_<TMUX_PANE>.json` — direct
+///      pane bind written by the empirica session-init hook
+///   2. Any `~/.empirica/instance_projects/*.json` whose `project_path`
+///      matches the current cwd — fallback when TMUX_PANE isn't set
+///      (e.g. running outside tmux)
+///   3. Empty payload — script renders `[ecodex:inactive]`, which is the
+///      correct UX signal that no session is bound to this shell
+fn build_statusline_stdin_payload() -> String {
+    let session_id = resolve_empirica_session_id_for_current_shell();
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string));
+
+    let mut obj = serde_json::Map::new();
+    if let Some(sid) = session_id {
+        obj.insert("session_id".into(), serde_json::Value::String(sid));
+    }
+    if let Some(c) = cwd {
+        obj.insert("cwd".into(), serde_json::Value::String(c));
+    }
+    if obj.is_empty() {
+        // Still produce valid JSON ({}) so scripts that strict-parse stdin
+        // don't error.
+        return "{}".to_string();
+    }
+    serde_json::Value::Object(obj).to_string()
+}
+
+fn resolve_empirica_session_id_for_current_shell() -> Option<String> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    let instance_dir = home.join(".empirica").join("instance_projects");
+
+    // 1. Direct pane bind via TMUX_PANE.
+    if let Ok(pane) = std::env::var("TMUX_PANE") {
+        // TMUX_PANE is e.g. "%31" — empirica writes tmux_<num>.json
+        let pane_num = pane.trim_start_matches('%');
+        let path = instance_dir.join(format!("tmux_{pane_num}.json"));
+        if let Some(sid) = read_session_id_from_instance_file(&path) {
+            return Some(sid);
+        }
+    }
+
+    // 2. Cwd match across all instance entries — picks the most recently
+    // written file whose project_path equals (or is a parent of) current cwd.
+    let cwd = std::env::current_dir().ok()?;
+    let cwd_str = cwd.to_str()?;
+
+    let entries = std::fs::read_dir(&instance_dir).ok()?;
+    let mut best: Option<(std::time::SystemTime, String)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.extension().is_some_and(|e| e == "json") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        let project_path = json.get("project_path").and_then(|v| v.as_str());
+        let session_id = json
+            .get("empirica_session_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| json.get("session_id").and_then(|v| v.as_str()));
+        let (Some(pp), Some(sid)) = (project_path, session_id) else {
+            continue;
+        };
+        if cwd_str.starts_with(pp) {
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            match &best {
+                None => best = Some((mtime, sid.to_string())),
+                Some((bt, _)) if &mtime > bt => best = Some((mtime, sid.to_string())),
+                _ => {}
+            }
+        }
+    }
+    best.map(|(_, sid)| sid)
+}
+
+fn read_session_id_from_instance_file(path: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    json.get("empirica_session_id")
+        .or_else(|| json.get("session_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
 }
