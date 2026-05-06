@@ -605,6 +605,24 @@ impl Codex {
             account_plan_type,
             config.features.enabled(Feature::FastMode),
         );
+
+        // Tx-AI/3: Enrich the session's PermissionProfile with plugin-declared
+        // writable_roots. Plugins like Empirica need cross-cwd write access
+        // (e.g. ~/.empirica for global session DB / instance pointers /
+        // transaction state) by design — the project lifecycle exists outside
+        // any single cwd. Without this carve-out, landlock blocks every plugin
+        // state write with EROFS and the plugin's runtime silently fails.
+        //
+        // Only applies under Restricted file system profiles (the
+        // `with_additional_writable_roots` builder is a no-op for unrestricted
+        // and external-sandbox profiles). When no plugin declares roots, the
+        // base profile is cloned through unchanged.
+        let permission_profile = enrich_permission_profile_with_plugin_writable_roots(
+            &config.permissions.permission_profile,
+            &plugin_outcome,
+            config.cwd.as_path(),
+        );
+
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -617,7 +635,7 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
-            permission_profile: config.permissions.permission_profile.clone(),
+            permission_profile,
             active_permission_profile: config.permissions.active_permission_profile(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
@@ -3500,6 +3518,50 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 }
 
 use codex_memories_read::build_memory_tool_developer_instructions;
+
+/// Tx-AI/3: Merge plugin-declared `writableRoots` into the session's
+/// `PermissionProfile` so the codex sandbox honors plugin-required cross-cwd
+/// write access. Mirrors the `from_runtime_permissions_with_enforcement`
+/// pattern in `core/src/config/mod.rs` (which already injects `memories_root`
+/// for codex's own subsystem). When the plugin set declares no roots, the
+/// base profile is cloned through unchanged.
+///
+/// `with_additional_writable_roots` is a structural no-op for unrestricted /
+/// external-sandbox profiles, so this is safe to apply unconditionally —
+/// non-WorkspaceWrite policies are unaffected.
+fn enrich_permission_profile_with_plugin_writable_roots(
+    base: &Constrained<PermissionProfile>,
+    plugin_outcome: &codex_core_plugins::PluginLoadOutcome,
+    cwd: &Path,
+) -> Constrained<PermissionProfile> {
+    let plugin_roots: Vec<AbsolutePathBuf> = plugin_outcome
+        .effective_plugin_writable_roots()
+        .into_iter()
+        .map(|src| src.root)
+        .collect();
+    if plugin_roots.is_empty() {
+        return base.clone();
+    }
+    let current = base.get();
+    let enriched_fs = current
+        .file_system_sandbox_policy()
+        .with_additional_writable_roots(cwd, &plugin_roots);
+    let enriched_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        current.enforcement(),
+        &enriched_fs,
+        current.network_sandbox_policy(),
+    );
+    let mut next = base.clone();
+    if let Err(err) = next.set(enriched_profile) {
+        tracing::warn!(
+            "ignoring plugin-declared writable_roots: constraint validation \
+             rejected enriched profile ({err}); plugin contributions will not \
+             extend sandbox scope this session"
+        );
+        return base.clone();
+    }
+    next
+}
 
 /// Builds the hook engine for one config snapshot, including any enabled plugin hooks.
 async fn build_hooks_for_config(
