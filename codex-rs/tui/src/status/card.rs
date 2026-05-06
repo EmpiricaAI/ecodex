@@ -643,11 +643,15 @@ fn status_approval_label(
 impl HistoryCell for StatusHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
+        // ecodex T81 branding: status card mirrors the chrome banner —
+        // "ecodex (vX) · turtles all the way down".
         lines.push(Line::from(vec![
             Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
-            Span::from("OpenAI Codex").bold(),
+            Span::from("ecodex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{CODEX_CLI_VERSION})")).dim(),
+            Span::from("  ·  ").dim(),
+            Span::from("turtles all the way down").dim().italic(),
         ]));
         lines.push(Line::from(Vec::<Span<'static>>::new()));
 

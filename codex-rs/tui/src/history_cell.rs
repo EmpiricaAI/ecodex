@@ -934,7 +934,7 @@ pub fn new_approval_decision_cell(
                 vec![
                     actor.subject().into(),
                     "persisted".bold(),
-                    " Codex network access to ".into(),
+                    " ecodex network access to ".into(),
                     Span::from(network_policy_amendment.host).dim(),
                 ],
             ),
@@ -943,7 +943,7 @@ pub fn new_approval_decision_cell(
                 vec![
                     actor.subject().into(),
                     "denied".bold(),
-                    " codex network access to ".into(),
+                    " ecodex network access to ".into(),
                     Span::from(network_policy_amendment.host).dim(),
                     " and saved that rule".into(),
                 ],
@@ -1278,7 +1278,7 @@ pub(crate) fn new_session_info(
             Line::from(vec![
                 "  ".into(),
                 "/init".into(),
-                " - create an AGENTS.md file with instructions for Codex".dim(),
+                " - create an AGENTS.md file with instructions for ecodex".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -1288,7 +1288,7 @@ pub(crate) fn new_session_info(
             Line::from(vec![
                 "  ".into(),
                 "/permissions".into(),
-                " - choose what Codex is allowed to do".dim(),
+                " - choose what ecodex is allowed to do".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -1470,12 +1470,17 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
+        // Title line rendered inside the box: ">_ ecodex (vX) · turtles all the way down"
+        // ecodex T81 branding: replace upstream "OpenAI Codex" with our name +
+        // tagline. The middle dot keeps the tagline visually attached without
+        // adding a second line.
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
-            Span::from("OpenAI Codex").bold(),
+            Span::from("ecodex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
+            Span::from("  ·  ").dim(),
+            Span::from("turtles all the way down").dim().italic(),
         ];
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
