@@ -283,6 +283,41 @@ pub fn encode_events(event: &StreamEvent, state: &mut EncoderState) -> Vec<Vec<u
                 });
                 frames.push(sse_frame("response.output_item.done", &done));
             }
+            // ecodex T81 fix (tool-call SSE envelope): for each tool_call,
+            // emit a complete output_item.added/done lifecycle BEFORE the
+            // response.completed envelope. Without this, codex's parser sees
+            // function_call.delta events with no active item (since codex
+            // sets active_tool_argument_diff_consumer in OutputItemAdded only
+            // when the item is a CustomToolCall or FunctionCall), and the
+            // tool calls silently drop. Symptom: model says "I'll run X" then
+            // hangs because the dispatched call never reached codex's tool
+            // runtime. Diagnosis case: Kimi sent two exec_command calls,
+            // event-tap captured them, codex saw nothing actionable.
+            //
+            // Item shape matches codex/tests/common/responses.rs::ev_function_call:
+            // {"type":"function_call","call_id":..,"name":..,"arguments":..}
+            for tc in tool_calls {
+                let added = json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "function_call",
+                        "call_id": tc.id,
+                        "name": tc.name,
+                        "arguments": "",
+                    }
+                });
+                frames.push(sse_frame("response.output_item.added", &added));
+                let done = json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "function_call",
+                        "call_id": tc.id,
+                        "name": tc.name,
+                        "arguments": tc.arguments,
+                    }
+                });
+                frames.push(sse_frame("response.output_item.done", &done));
+            }
             let mut output = vec![json!({
                 "type": "message",
                 "role": "assistant",
@@ -511,5 +546,110 @@ mod tests {
         assert_eq!(frames.len(), 1);
         let s = String::from_utf8(frames[0].clone()).unwrap();
         assert!(s.starts_with("event: response.completed\n"));
+    }
+
+    /// Regression (ecodex T81): Kimi-style tool-only turns must produce a
+    /// complete output_item.added/done lifecycle for each tool_call BEFORE
+    /// response.completed. Without this lifecycle, codex's parser silently
+    /// drops the tool calls (`active_tool_argument_diff_consumer` is only
+    /// set in OutputItemAdded for FunctionCall items), and the agent loop
+    /// hangs because the dispatched tools never reached codex's runtime.
+    /// Diagnosis case: Kimi sent two exec_command calls via the translator,
+    /// event-tap captured them, codex saw nothing actionable.
+    #[test]
+    fn encode_events_emits_lifecycle_for_each_tool_call_before_completed() {
+        use crate::cif::ToolCall;
+        let mut state = EncoderState::default();
+        let frames = encode_events(
+            &StreamEvent::Completed {
+                text: "".into(),
+                tool_calls: vec![
+                    ToolCall {
+                        id: "tool_aaa".into(),
+                        name: "exec_command".into(),
+                        arguments: "{\"cmd\":\"ls\"}".into(),
+                    },
+                    ToolCall {
+                        id: "tool_bbb".into(),
+                        name: "exec_command".into(),
+                        arguments: "{\"cmd\":\"pwd\"}".into(),
+                    },
+                ],
+                finish_reason: FinishReason::ToolCalls,
+                response_id: Some("r-3".into()),
+            },
+            &mut state,
+        );
+
+        let s: Vec<String> = frames
+            .iter()
+            .map(|f| String::from_utf8(f.clone()).unwrap())
+            .collect();
+
+        // Expected order: added(aaa), done(aaa), added(bbb), done(bbb), completed.
+        assert_eq!(
+            s.len(),
+            5,
+            "tool-only stream with 2 tool_calls must emit 5 frames \
+             (added+done per call + completed); got {}",
+            s.len()
+        );
+
+        // Frame 0: added for aaa, function_call shape with empty args.
+        assert!(s[0].starts_with("event: response.output_item.added\n"), "frame 0 must be added; got: {}", s[0]);
+        assert!(s[0].contains("\"type\":\"function_call\""), "frame 0 must declare function_call item; got: {}", s[0]);
+        assert!(s[0].contains("\"call_id\":\"tool_aaa\""), "frame 0 must carry call_id; got: {}", s[0]);
+        assert!(s[0].contains("\"name\":\"exec_command\""), "frame 0 must carry name; got: {}", s[0]);
+
+        // Frame 1: done for aaa with full arguments.
+        assert!(s[1].starts_with("event: response.output_item.done\n"), "frame 1 must be done; got: {}", s[1]);
+        assert!(s[1].contains("\"call_id\":\"tool_aaa\""));
+        assert!(s[1].contains("\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\""), "frame 1 must carry full arguments; got: {}", s[1]);
+
+        // Frames 2-3: same pair for bbb.
+        assert!(s[2].starts_with("event: response.output_item.added\n") && s[2].contains("tool_bbb"));
+        assert!(s[3].starts_with("event: response.output_item.done\n") && s[3].contains("tool_bbb") && s[3].contains("pwd"));
+
+        // Frame 4: response.completed (the last frame, after all tool lifecycles).
+        assert!(s[4].starts_with("event: response.completed\n"), "frame 4 must be response.completed; got: {}", s[4]);
+        assert!(s[4].contains("\"finish_reason\":\"tool_calls\""));
+    }
+
+    /// Mixed turn (assistant text AND tool_calls): the message item.done
+    /// closes first, then each tool_call lifecycle, then response.completed.
+    #[test]
+    fn encode_events_mixed_text_and_tools_orders_message_first_then_tools() {
+        use crate::cif::ToolCall;
+        let mut state = EncoderState::default();
+
+        // Open with a text-delta so the message item gets opened.
+        let _ = encode_events(&StreamEvent::TextDelta { text: "Running...".into() }, &mut state);
+
+        // Then a Completed event with both text and tool_calls.
+        let frames = encode_events(
+            &StreamEvent::Completed {
+                text: "Running...".into(),
+                tool_calls: vec![ToolCall {
+                    id: "tool_ccc".into(),
+                    name: "shell".into(),
+                    arguments: "{\"cmd\":\"echo hi\"}".into(),
+                }],
+                finish_reason: FinishReason::ToolCalls,
+                response_id: Some("r-4".into()),
+            },
+            &mut state,
+        );
+
+        let s: Vec<String> = frames
+            .iter()
+            .map(|f| String::from_utf8(f.clone()).unwrap())
+            .collect();
+
+        // Order: message done, tool added, tool done, response.completed.
+        assert_eq!(s.len(), 4, "expected 4 frames (msg.done + tool.added + tool.done + completed); got {}", s.len());
+        assert!(s[0].starts_with("event: response.output_item.done\n") && s[0].contains("\"type\":\"message\""), "frame 0 must close the message item: {}", s[0]);
+        assert!(s[1].starts_with("event: response.output_item.added\n") && s[1].contains("\"type\":\"function_call\""), "frame 1 must open the tool: {}", s[1]);
+        assert!(s[2].starts_with("event: response.output_item.done\n") && s[2].contains("\"type\":\"function_call\""), "frame 2 must close the tool: {}", s[2]);
+        assert!(s[3].starts_with("event: response.completed\n"), "frame 3 must be completed: {}", s[3]);
     }
 }
