@@ -23,6 +23,23 @@ The plugin currently invokes Empirica's existing Python hook scripts (e.g. `sent
 
 **The single optimization target** is `src/empirica_cli.rs`. Future versions can replace the `python3 <script>` subprocess with PyO3 in-process embedding or a long-running Empirica sidecar daemon over UDS — without changing the hook handlers or the codex-side wiring.
 
+## Sandbox carve-out (writableRoots)
+
+The plugin's manifest declares `writableRoots: ["~/.empirica"]`. This is by design — Empirica's project lifecycle is **deliberately cross-cwd**:
+
+- `~/.empirica/instance_projects/<key>.json` — instance↔project pointers
+- `~/.empirica/sessions/sessions.db` — per-user session DB across all projects
+- `~/.empirica/workspace/workspace.db` — cross-project workspace state
+- `~/.empirica/active_transaction*.json` — open-transaction state
+- `~/.empirica/sentinel_paused*` — `/empirica off` toggle markers
+- `~/.empirica/voice/`, `ref-docs/`, `epp/` — subsystem state
+
+Without this declaration, codex's `WorkspaceWrite` sandbox blocks every empirica state write with `EROFS`, `sentinel-gate.py:2808` catches the exception and silently fail-opens (`allow`), and the entire discipline framework runs as a no-op while *appearing* healthy.
+
+Codex's plugin loader honors the declaration by merging it into the active `SandboxPolicy.writable_roots` at session bootstrap. See [`docs/ecodex/api/plugin-writable-roots.md`](../../docs/ecodex/api/plugin-writable-roots.md) for the full contract, including the audit-attribution model and limitations.
+
+The doctor regression check `ecodex plugin writable_roots declared` (run via `empirica diagnose --frontend ecodex`) verifies the declaration is intact in the installed cache.
+
 ## Configuration
 
 | Variable | Default | Purpose |
