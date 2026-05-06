@@ -111,3 +111,10 @@ wire_api = "responses"
 #
 # These are NOT set in this TOML file; the wrapper script handles them.
 # Documented here so users know what ecodex's strict mode means.
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+env_key_instructions = "Get an API key at https://openrouter.ai/keys, then export OPENROUTER_API_KEY in your shell or add to ~/.codex/.env."
+wire_api = "responses"
