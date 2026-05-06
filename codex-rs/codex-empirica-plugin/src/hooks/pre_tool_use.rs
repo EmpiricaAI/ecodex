@@ -13,6 +13,7 @@ use std::io::Read;
 use std::process::ExitCode;
 
 use crate::empirica_cli;
+use crate::translate_output;
 
 pub fn handle() -> ExitCode {
     let mut input = String::new();
@@ -23,7 +24,11 @@ pub fn handle() -> ExitCode {
 
     match empirica_cli::run_hook_script("sentinel-gate.py", &input) {
         Ok(output) => {
-            print!("{}", output.stdout);
+            // ecodex T81 Tx-AE: translate CC-shape output (decision/stopReason/
+            // suppressOutput at top level) into codex-shape (permissionDecision/
+            // permissionDecisionReason inside hookSpecificOutput, suppressOutput
+            // dropped). codex's PreToolUse schema rejects suppressOutput.
+            print!("{}", translate_output::translate("PreToolUse", &output.stdout));
             eprint!("{}", output.stderr);
             match output.exit_code {
                 0 => ExitCode::SUCCESS,

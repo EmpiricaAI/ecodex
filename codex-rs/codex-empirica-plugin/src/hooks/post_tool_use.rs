@@ -11,6 +11,7 @@ use std::io::Read;
 use std::process::ExitCode;
 
 use crate::empirica_cli;
+use crate::translate_output;
 
 pub fn handle() -> ExitCode {
     let mut input = String::new();
@@ -21,7 +22,8 @@ pub fn handle() -> ExitCode {
 
     match empirica_cli::run_hook_script("tool-failure.py", &input) {
         Ok(output) => {
-            print!("{}", output.stdout);
+            // ecodex T81 Tx-AE: CC→codex shape translation.
+            print!("{}", translate_output::translate("PostToolUse", &output.stdout));
             eprint!("{}", output.stderr);
             match output.exit_code {
                 0 => ExitCode::SUCCESS,

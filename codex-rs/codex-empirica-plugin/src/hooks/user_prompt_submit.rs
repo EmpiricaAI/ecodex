@@ -11,6 +11,7 @@ use std::io::Read;
 use std::process::ExitCode;
 
 use crate::empirica_cli;
+use crate::translate_output;
 
 pub fn handle() -> ExitCode {
     let mut input = String::new();
@@ -21,7 +22,11 @@ pub fn handle() -> ExitCode {
 
     match empirica_cli::run_hook_script("tool-router.py", &input) {
         Ok(output) => {
-            print!("{}", output.stdout);
+            // ecodex T81 Tx-AE: translate CC-shape JSON ({continue, context})
+            // into codex-shape ({continue, hookSpecificOutput:{...}}). Codex's
+            // hook output schema is `additionalProperties: false`; raw CC
+            // output gets rejected as "invalid user prompt submit JSON".
+            print!("{}", translate_output::translate("UserPromptSubmit", &output.stdout));
             eprint!("{}", output.stderr);
             match output.exit_code {
                 0 => ExitCode::SUCCESS,

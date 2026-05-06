@@ -15,6 +15,7 @@ mod agents_md;
 mod empirica_cli;
 mod hooks;
 mod subagents;
+mod translate_output;
 
 const USAGE: &str = "\
 codex-empirica-plugin <hook-event>

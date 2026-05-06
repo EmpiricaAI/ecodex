@@ -44,7 +44,13 @@ pub fn handle() -> ExitCode {
 
     match empirica_cli::run_hook_script("session-init.py", &input) {
         Ok(output) => {
-            print!("{}", output.stdout);
+            // ecodex T81 Tx-AE: SessionStart codex schema requires
+            // hookSpecificOutput.{hookEventName,additionalContext} instead
+            // of CC's flat `context` field.
+            print!(
+                "{}",
+                crate::translate_output::translate("SessionStart", &output.stdout)
+            );
             eprint!("{}", output.stderr);
             match output.exit_code {
                 0 => ExitCode::SUCCESS,
