@@ -48,11 +48,32 @@ pub fn run_hook_script(script: &str, input_json: &str) -> Result<HookOutput> {
         anyhow::bail!("hook script not found: {}", script_path.display());
     }
 
-    let mut child = Command::new("python3")
+    // ecodex T81 Tx-Z: propagate codex's session_id (thread_id UUID) as
+    // EMPIRICA_INSTANCE_ID for the hook subprocess. Empirica's
+    // get_instance_id() priority list reads EMPIRICA_INSTANCE_ID first,
+    // so this gives every empirica artifact (sentinel state, session
+    // bind, statusline) the same identity as codex's session — works
+    // identically in tmux, non-tmux, ssh, container, headless. Without
+    // this, empirica falls back to TMUX_PANE/TERM_SESSION_ID/WINDOWID
+    // (none of which codex propagates) and silently fails to write the
+    // instance file in non-tmux contexts. Caller doesn't have to set
+    // EMPIRICA_INSTANCE_ID — we extract from the input JSON. Empty
+    // session_id (e.g. legacy non-codex caller) leaves the env unset
+    // and empirica falls back to its other priority keys.
+    let codex_session_id =
+        extract_session_id_from_input(input_json).unwrap_or_default();
+
+    let mut command = Command::new("python3");
+    command
         .arg(&script_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    if !codex_session_id.is_empty() {
+        command.env("EMPIRICA_INSTANCE_ID", &codex_session_id);
+    }
+
+    let mut child = command
         .spawn()
         .with_context(|| format!("spawn python3 {}", script_path.display()))?;
 
@@ -90,6 +111,24 @@ fn resolve_hooks_dir() -> PathBuf {
         return PathBuf::from(plugin_root).join(PLUGIN_HOOKS_SUBPATH);
     }
     expand_tilde(CC_FALLBACK_HOOKS_DIR)
+}
+
+/// Pluck the `session_id` field out of the codex hook input JSON.
+///
+/// Codex's hook payload schema (per
+/// `codex-rs/hooks/schema/generated/session-start.command.input.schema.json`
+/// and the matching ones for PreToolUse / PostToolUse / etc.) carries
+/// `session_id` at the top level — the per-session UUID codex uses as
+/// `ThreadId`. We don't want a serde dependency just for this one read,
+/// so use `serde_json::Value` directly. Returns `None` on parse failure
+/// (caller falls back to env-unset + empirica's TMUX_PANE/TTY-key path).
+fn extract_session_id_from_input(input_json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(input_json).ok()?;
+    value
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn expand_tilde(path: &str) -> PathBuf {

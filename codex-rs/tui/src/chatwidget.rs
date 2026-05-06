@@ -2043,6 +2043,26 @@ impl ChatWidget {
         if previous_thread_id != self.thread_id {
             self.recent_auto_review_denials = RecentAutoReviewDenials::default();
         }
+        // ecodex T81 Tx-Z: propagate codex's thread_id as EMPIRICA_INSTANCE_ID
+        // in the TUI process env so all subprocess spawns (statusline,
+        // plugin hooks invoked downstream) inherit it. Empirica's
+        // get_instance_id() priority list reads EMPIRICA_INSTANCE_ID first,
+        // making codex's session UUID the canonical instance key — works
+        // identically across tmux, non-tmux, ssh, container, headless.
+        // Without this, empirica falls back to TMUX_PANE/TERM_SESSION_ID/
+        // WINDOWID and silently fails to write the per-session bind file
+        // outside tmux. The plugin's empirica_cli also reads session_id
+        // from each hook's stdin payload as a complement, so even hooks
+        // that codex invokes directly (not via this process) get the same
+        // identity.
+        //
+        // SAFETY: setenv is called from a single point in single-threaded
+        // ChatWidget setup; all subsequent subprocess spawns happen later
+        // and inherit this env. If codex ever moves chatwidget setup to a
+        // multi-threaded context, this needs a Mutex or one-shot init.
+        unsafe {
+            std::env::set_var("EMPIRICA_INSTANCE_ID", session.thread_id.to_string());
+        }
         self.refresh_plan_mode_nudge();
         self.last_turn_id = None;
         self.thread_name = session.thread_name.clone();

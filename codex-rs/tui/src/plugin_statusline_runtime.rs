@@ -242,21 +242,51 @@ fn resolve_empirica_session_id_for_current_shell() -> Option<String> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
     let instance_dir = home.join(".empirica").join("instance_projects");
 
-    // 1. Direct pane bind via TMUX_PANE.
+    // Mirrors empirica/plugins/claude-code-integration/lib/project_resolver.py
+    // ::get_instance_id() priority list. Order:
+    //   1. EMPIRICA_INSTANCE_ID (explicit override / codex thread_id, set by
+    //      Tx-Z's plugin propagation). Stored as `<id>.json` literally.
+    //   2. TMUX_PANE → tmux_<num>.json
+    //   3. TERM_SESSION_ID → term_<sanitized>.json (macOS Terminal.app)
+    //   4. WINDOWID → wid_<num>.json (X11)
+    //   5. cwd-prefix match across all instance files (last resort, ambiguous
+    //      for multi-instance same-cwd; documented gap pending Tx-Z's plugin
+    //      side landing on every install).
+    if let Ok(explicit) = std::env::var("EMPIRICA_INSTANCE_ID")
+        && !explicit.is_empty()
+    {
+        let path = instance_dir.join(format!("{explicit}.json"));
+        if let Some(sid) = read_session_id_from_instance_file(&path) {
+            return Some(sid);
+        }
+    }
     if let Ok(pane) = std::env::var("TMUX_PANE") {
-        // TMUX_PANE is e.g. "%31" — empirica writes tmux_<num>.json
         let pane_num = pane.trim_start_matches('%');
         let path = instance_dir.join(format!("tmux_{pane_num}.json"));
         if let Some(sid) = read_session_id_from_instance_file(&path) {
             return Some(sid);
         }
     }
+    if let Ok(term) = std::env::var("TERM_SESSION_ID") {
+        let safe = term.replace('/', "_");
+        let path = instance_dir.join(format!("term_{safe}.json"));
+        if let Some(sid) = read_session_id_from_instance_file(&path) {
+            return Some(sid);
+        }
+    }
+    if let Ok(wid) = std::env::var("WINDOWID") {
+        let path = instance_dir.join(format!("wid_{wid}.json"));
+        if let Some(sid) = read_session_id_from_instance_file(&path) {
+            return Some(sid);
+        }
+    }
 
-    // 2. Cwd match across all instance entries — picks the most recently
-    // written file whose project_path equals (or is a parent of) current cwd.
+    // Cwd-prefix match across all instance entries — picks the most recently
+    // written file whose project_path is a prefix of current cwd. Fragile
+    // for multi-instance same-cwd; only reached when none of the explicit
+    // identity keys above resolved.
     let cwd = std::env::current_dir().ok()?;
     let cwd_str = cwd.to_str()?;
-
     let entries = std::fs::read_dir(&instance_dir).ok()?;
     let mut best: Option<(std::time::SystemTime, String)> = None;
     for entry in entries.flatten() {
