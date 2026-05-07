@@ -31,6 +31,7 @@ Related but NOT consumed here:
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -430,6 +431,8 @@ EMPIRICA_TIER1_PREFIXES = (
     'empirica issue-list',
     'empirica docs-assess',  # Documentation assessment - read-only investigation tool
     'empirica calibration-report',  # Calibration analysis - read-only
+    'empirica compact-analysis',  # Compact event analysis - read-only
+    'empirica commit-context',  # Per-commit artifact aggregator - read-only
     'empirica lesson-list', 'empirica lesson-search', 'empirica lesson-recommend',
     'empirica lesson-stats',  # Lesson queries - read-only
     'empirica sentinel-status', 'empirica sentinel-check',  # Sentinel queries - read-only
@@ -1231,11 +1234,16 @@ def _has_dangerous_operators(command: str) -> bool:
 
 
 def _has_dangerous_redirects(command: str) -> bool:
-    """Check for file redirection (dangerous) vs stderr suppression (safe)."""
+    """Check for file redirection (dangerous) vs stderr suppression (safe).
+
+    Quote-aware: a `>` or `<` inside a quoted argument (e.g. python3 -c
+    "if len(body) > 3000:" or jq '.x > 5') is data, not a redirect. Only
+    redirects appearing OUTSIDE quoted regions are flagged.
+    """
     cmd_clean = SAFE_REDIRECT_PATTERN.sub('', command)
-    if '>' in cmd_clean or '>>' in cmd_clean:
+    if _contains_outside_quotes(cmd_clean, '>>') or _contains_outside_quotes(cmd_clean, '>'):
         return True
-    return '<' in cmd_clean and '<<' not in command
+    return _contains_outside_quotes(cmd_clean, '<') and '<<' not in command
 
 
 def _maybe_nudge_remote_ops(cmd: str) -> None:
@@ -1945,46 +1953,45 @@ def _detect_subagent(claude_session_id: str) -> bool:
             # File exists but no is_subagent flag → parent session
             return False
 
-        # Path 2: absence-based fallback (pre-fix subagents, broken session-init)
-        if True:
-            # No active_work file for this claude_session_id — likely a subagent
-            # (or session-init failed / project initialized mid-session)
-            #
-            # TIGHTENED CHECK (fixes #68): Don't just check if active_session exists —
-            # verify its session matches the current transaction. Stale active_session
-            # files from other projects/sessions cause false positive subagent detection.
-            from empirica.utils.session_resolver import InstanceResolver as R
-            _as_suffix = R.instance_suffix()
-            _as_file = Path.home() / '.empirica' / f'active_session{_as_suffix}'
-            if _as_file.exists():
-                # Read the active_session to get its empirica_session_id
-                try:
-                    with open(_as_file) as _asf:
-                        _as_data = json.load(_asf)
-                    _as_session_id = _as_data.get('empirica_session_id')
+        # Path 2: absence-based fallback (pre-fix subagents, broken session-init).
+        # No active_work file for this claude_session_id — likely a subagent
+        # (or session-init failed / project initialized mid-session).
+        #
+        # TIGHTENED CHECK (fixes #68): Don't just check if active_session exists —
+        # verify its session matches the current transaction. Stale active_session
+        # files from other projects/sessions cause false positive subagent detection.
+        from empirica.utils.session_resolver import InstanceResolver as R
+        _as_suffix = R.instance_suffix()
+        _as_file = Path.home() / '.empirica' / f'active_session{_as_suffix}'
+        if _as_file.exists():
+            # Read the active_session to get its empirica_session_id
+            try:
+                with open(_as_file) as _asf:
+                    _as_data = json.load(_asf)
+                _as_session_id = _as_data.get('empirica_session_id')
 
-                    # Find the current transaction to compare session IDs
-                    _tx_session_match = False
-                    if _as_session_id:
-                        # Check if any active_work file has this session
-                        for _aw_candidate in Path.home().glob('.empirica/active_work_*.json'):
-                            try:
-                                with open(_aw_candidate) as _awf:
-                                    _aw_data = json.load(_awf)
-                                if _aw_data.get('empirica_session_id') == _as_session_id:
-                                    _tx_session_match = True
-                                    break
-                            except Exception:
-                                continue
+                # Find the current transaction to compare session IDs
+                _tx_session_match = False
+                if _as_session_id:
+                    # Check if any active_work file has this session
+                    for _aw_candidate in Path.home().glob('.empirica/active_work_*.json'):
+                        try:
+                            with open(_aw_candidate) as _awf:
+                                _aw_data = json.load(_awf)
+                            if _aw_data.get('empirica_session_id') == _as_session_id:
+                                _tx_session_match = True
+                                break
+                        except Exception:
+                            continue
 
-                    if _tx_session_match:
-                        # Parent session is active AND has a matching active_work file
-                        # This session doesn't → confirmed subagent
-                        return True
-                except Exception:
-                    pass  # Can't read active_session → not confident it's a subagent
-            # Not a confirmed subagent → fall through to normal gating
-            # (covers: broken session-init, mid-session project init, stale files)
+                if _tx_session_match:
+                    # Parent session is active AND has a matching active_work file
+                    # This session doesn't → confirmed subagent
+                    return True
+            except Exception:
+                pass  # Can't read active_session → not confident it's a subagent
+        # Not a confirmed subagent → fall through to normal gating
+        # (covers: broken session-init, mid-session project init, stale files)
     except Exception:
         pass  # Detection failure → continue with normal sentinel logic
     return False
@@ -2767,6 +2774,75 @@ def _run_authorization_pipeline(hook_input: dict, tool_name: str, tool_input: di
         db.close()
 
 
+def _proportionality_state_path(session_id: str) -> Path:
+    """Mirror tool-router.py's path computation. The pair must agree on
+    the same key per session for the budget to function."""
+    safe_sid = "".join(c if c.isalnum() or c in "-_" else "_" for c in (session_id or "no-sid"))
+    return Path.home() / ".empirica" / "state" / f"proportionality_{safe_sid}.json"
+
+
+def _check_proportionality_budget(hook_input: dict, tool_name: str) -> str | None:
+    """Tx-AG: enforce investigation-proportionality budget.
+
+    tool-router.py arms the budget when the proportionality block fires
+    on a hypothesis-bearing prompt. This function increments a counter
+    on each Read/Grep/Glob and returns a deny reason once the limit is
+    exceeded — turning a soft context-injection block into a runtime
+    constraint the model can't ignore.
+
+    Returns None to allow (default), a string reason to deny.
+
+    Fail-quiet: any IO/JSON/path error returns None — we never block on
+    our own state plumbing.
+    """
+    if tool_name not in ('Read', 'Grep', 'Glob'):
+        return None
+    session_id = hook_input.get('session_id', '')
+    if not session_id:
+        return None
+    path = _proportionality_state_path(session_id)
+    try:
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    # Stale armings shouldn't block forever. 1h timeout matches the
+    # implicit "this turn" framing — if the model hasn't acted on the
+    # block within an hour, the conversational context is gone.
+    armed_at = data.get("armed_at", 0)
+    if time.time() - armed_at > 3600:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
+
+    count = int(data.get("tool_count", 0)) + 1
+    limit = int(data.get("limit", 5))
+    data["tool_count"] = count
+    try:
+        path.write_text(json.dumps(data))
+    except OSError:
+        pass
+
+    if count > limit:
+        return (
+            f"Investigation-proportionality budget exceeded "
+            f"({count} read/grep/glob calls since the hypothesis-bearing prompt; "
+            f"limit={limit}). The user gave you a hypothesis to test. "
+            f"Your next action MUST be: (1) state the hypothesis explicitly "
+            f"in your reply (\"Hypothesis: ...\"), (2) run a single "
+            f"bash/grep/read that confirms or disconfirms it. "
+            f"Survey-mode is blocked until the next user prompt resets "
+            f"the budget. If you genuinely need to map this subsystem first, "
+            f"answer the user with the hypothesis-test result and ask them "
+            f"whether to expand."
+        )
+    return None
+
+
 def main():
     try:
         hook_input = json.loads(sys.stdin.read() or '{}')
@@ -2777,6 +2853,16 @@ def main():
     tool_input = hook_input.get('tool_input', {})
 
     _track_tool_usage(hook_input, tool_name, tool_input)
+
+    # Tx-AG: investigation-proportionality budget enforcement. When
+    # tool-router.py armed the budget on a hypothesis-bearing prompt,
+    # deny Read/Grep/Glob once the limit is exceeded. Soft text blocks
+    # were empirically insufficient (model ignored them); this is the
+    # runtime constraint that makes the discipline real.
+    proportionality_deny = _check_proportionality_budget(hook_input, tool_name)
+    if proportionality_deny:
+        respond("deny", proportionality_deny)
+        sys.exit(0)
 
     # Noetic firewall: whitelist-based access control
     noetic_result = _noetic_firewall_check(tool_name, tool_input, hook_input)
@@ -2800,9 +2886,29 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as e:
-        # Fail-open: if sentinel crashes, allow the action but warn
-        # This prevents transient errors (DB lock, import race) from blocking work
+        # Crash recovery: the outermost catch handles transient errors (DB
+        # lock, import race, path resolution bug) so a sentinel crash doesn't
+        # strand every tool invocation. Default behavior is fail-OPEN — allow
+        # the action but emit SENTINEL_CRASH on stderr so failures are
+        # visible without blocking work.
+        #
+        # Tx-AJ: opt-in fail-CLOSED mode for hardened deployments.
+        # Set EMPIRICA_SENTINEL_FAIL_CLOSED=1 (or "true"/"yes") to flip the
+        # default — sentinel crashes will then DENY the action with a reason,
+        # producing a hard error the user can investigate. Suitable for
+        # production agentic frameworks where a silent fail-open is a worse
+        # failure mode than a noisy block. Default unchanged for dev.
+        import os as _os
         import sys as _sys
         _sys.stderr.write(f"SENTINEL_CRASH: {type(e).__name__}: {e}\n")
+        fail_closed = _os.environ.get("EMPIRICA_SENTINEL_FAIL_CLOSED", "").strip().lower() in {"1", "true", "yes"}
+        if fail_closed:
+            respond(
+                "deny",
+                f"Sentinel internal error (fail-closed mode): {type(e).__name__}: {e}. "
+                "Investigate via SENTINEL_CRASH stderr; unset "
+                "EMPIRICA_SENTINEL_FAIL_CLOSED to revert to fail-open default.",
+            )
+            _sys.exit(2)
         respond("allow", f"Sentinel error (fail-open): {type(e).__name__}: {e}")
         _sys.exit(0)

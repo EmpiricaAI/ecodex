@@ -20,6 +20,7 @@ Performance target: < 2 seconds (runs on every prompt).
 
 import json
 import sys
+import time
 from pathlib import Path
 
 # ============================================================================
@@ -171,6 +172,172 @@ def build_semantic_pushback_check(prompt: str) -> str | None:
 
 # ============================================================================
 # End EPP block
+# ============================================================================
+
+
+# ============================================================================
+# Investigation Depth Proportionality (Tx-AB)
+# ============================================================================
+#
+# Symptom this block addresses: agent runs 30+ file reads on a question where
+# the user already supplied the hypothesis ("might need to create a session",
+# "I think it's the X path", "probably the config"). Reading 30 files looks
+# diligent but burns context and delays the actual hypothesis-test. The
+# proportional response is one targeted probe.
+#
+# Diagnosis case 2026-05-06: Kimi/Sonnet/Opus all show this pattern in
+# ecodex; default-mode bias from upstream training treats every prompt as
+# deep-research even when the user's framing is "quick check, I think X".
+#
+# Trigger detection is regex-based on hypothesis markers + scope-shaping
+# verbs. The block doesn't disable investigation — it asks the agent to
+# size the probe to the hypothesis BEFORE branching wider.
+
+INVESTIGATION_PROPORTIONALITY_BLOCK = """<investigation-proportionality>
+**STOP.** The user's prompt contains a hypothesis marker or
+proportional-scope cue ("I think...", "maybe...", "might need...",
+"check on...", "verify", "quick look").
+
+**Your FIRST action MUST be the smallest disconfirming probe** — a
+single bash / grep / read that would prove the user's hypothesis wrong
+if wrong, or confirm a key prediction if right. Not a survey. Not a
+mental model. One probe.
+
+Required sequence:
+1. **NAME the hypothesis** in your reply (one sentence: "Hypothesis: X").
+2. **RUN the disconfirming probe** as your next tool call.
+3. ONLY IF the probe disconfirms or surfaces a new question, expand
+   investigation. Otherwise, answer.
+
+**Hard rule:** the Sentinel firewall is now armed. After 5 read/grep/glob
+tool calls without naming a hypothesis and running a probe, further
+investigation tools will be DENIED with the same reasoning. This is
+not a soft suggestion — it's a runtime constraint. Survey-mode is
+explicitly blocked here because the user already gave you the
+hypothesis to test.
+
+Anti-patterns this block kills:
+- Reading the entire subsystem to verify a one-line config change.
+- Running grep across the codebase before checking if the answer is in
+  the user's own message.
+- Building a mental model of code you haven't touched, when one command
+  would tell you which path to look at.
+
+This is NOT a ban on thorough work — depth is fine AFTER the probe.
+The discipline is "test first, expand on evidence", not "skim and
+assume". When you genuinely need to map an unfamiliar subsystem, the
+prompt won't trigger this block. When the user hands you a hypothesis,
+test it.
+</investigation-proportionality>"""
+
+
+# Hypothesis markers — phrases that signal the user has a working theory.
+# Detection is regex-based + lower-cased + word-boundary anchored to avoid
+# false positives like "thinking about" or "check this code". We catch the
+# common framings that came up in real usage 2026-05-06.
+PROPORTIONALITY_HYPOTHESIS_PATTERNS = [
+    r"\bi think\b",
+    r"\bi suspect\b",
+    r"\bi believe\b",
+    r"\bmaybe\b",
+    r"\bmight (be|need|have|require)\b",
+    r"\bprobably\b",
+    r"\blikely\b",
+    r"\bI'?d guess\b",
+    r"\bmy hunch\b",
+    r"\bsuspect (it'?s|the)\b",
+    r"\bcould be\b",
+]
+
+# Proportional-scope phrasing — "test the hypothesis with a small probe"
+# rather than "do a full audit". Same regex shape as above.
+PROPORTIONALITY_SCOPE_PATTERNS = [
+    r"\bquick (check|look|test|peek|sanity)\b",
+    r"\bjust (check|verify|confirm|look)\b",
+    r"\bsanity check\b",
+    r"\bsmoke test\b",
+    r"\bcheck on (this|that|the)\b",
+    r"\bjust to (verify|confirm)\b",
+    r"\bcan you (check|verify|confirm)\b",
+]
+
+# Min length filters trivial inputs ("ok", "yes", "continue") but stays low
+# enough that genuine probe prompts ("sanity check please", "quick check"
+# alone) still match. EPP threshold is 20 because pushback semantics need
+# longer context; proportionality cues are usually shorter.
+PROPORTIONALITY_MIN_LENGTH = 12
+
+
+def _proportionality_state_path(session_id: str) -> Path:
+    """Where the Sentinel-side investigation budget counter lives.
+
+    Keyed by codex/claude session_id so multiple concurrent sessions
+    don't share a budget. Lives under ~/.empirica/state/ (pre-existing
+    transient-state dir; sentinel-gate writes other state files here).
+    """
+    safe_sid = "".join(c if c.isalnum() or c in "-_" else "_" for c in (session_id or "no-sid"))
+    return Path.home() / ".empirica" / "state" / f"proportionality_{safe_sid}.json"
+
+
+def _arm_proportionality_budget(session_id: str, limit: int = 5) -> None:
+    """Tx-AG: arm the read/grep/glob budget so sentinel-gate can deny
+    investigation-as-procrastination after `limit` tool calls.
+
+    Called from the UserPromptSubmit handler when the proportionality
+    block fires. Sentinel-gate reads this file in PreToolUse to track
+    counts. State decays naturally — overwritten on each new
+    hypothesis-bearing prompt; stale files (>1h old) are ignored by
+    the reader. Fail-quiet: if state dir isn't writable, tool-router
+    just emits the soft-block context and continues.
+    """
+    if not session_id:
+        return
+    try:
+        path = _proportionality_state_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "armed_at": time.time(),
+            "tool_count": 0,
+            "limit": limit,
+            "session_id": session_id,
+        }
+        path.write_text(json.dumps(payload))
+    except OSError:
+        # Hard fail-quiet: budget arming is best-effort. If the disk is
+        # full or the state dir is unwritable, the soft-block context
+        # already shipped above is the fallback.
+        pass
+
+
+def build_investigation_proportionality_check(prompt: str) -> str | None:
+    """Return the proportionality block for prompts containing hypothesis or
+    quick-scope markers, None otherwise.
+
+    Detection is intentionally regex + word-boundary on a small curated list,
+    NOT semantic. Goal: catch the obvious cases without false-positiving on
+    every prompt. The block itself acknowledges nuance ("This is NOT a ban on
+    thorough work") so a false positive only adds 10 lines of context — same
+    cost-of-being-wrong as the existing EPP semantic-pushback block.
+    """
+    import re as _re
+
+    if len(prompt) < PROPORTIONALITY_MIN_LENGTH:
+        return None
+    if prompt.startswith("/"):
+        return None
+    lowered = prompt.lower()
+    has_marker = any(
+        _re.search(pat, lowered) for pat in PROPORTIONALITY_HYPOTHESIS_PATTERNS
+    ) or any(
+        _re.search(pat, lowered) for pat in PROPORTIONALITY_SCOPE_PATTERNS
+    )
+    if not has_marker:
+        return None
+    return INVESTIGATION_PROPORTIONALITY_BLOCK
+
+
+# ============================================================================
+# End Investigation Depth Proportionality block
 # ============================================================================
 
 
@@ -530,17 +697,36 @@ def main():
     # AAP hedge detection
     aap_context = _build_aap_context(prompt)
 
+    # Investigation depth proportionality (Tx-AB) — fires on hypothesis
+    # markers and proportional-scope phrasing ("I think", "maybe", "quick
+    # check", etc.). Counters the over-investigation pattern where agents
+    # read 30+ files on a question the user already framed with a working
+    # theory. Cheap detection (regex + word-boundary) so misses are
+    # graceful. Block acknowledges nuance internally so false positives
+    # cost ~10 lines of context, no behavior break.
+    proportionality_check = build_investigation_proportionality_check(prompt)
+    if proportionality_check:
+        # Tx-AG: also arm the Sentinel-side budget so the discipline is
+        # enforceable, not just suggested. Empirically, the soft block
+        # alone got ignored (8 searches in David's 2026-05-06 test).
+        # Codex hook payload uses session_id at the top level.
+        _arm_proportionality_budget(input_data.get("session_id", ""))
+
     # EPP semantic pushback check — always-on for substantive prompts.
     # Injected LAST in context_parts to exploit attention recency bias.
     # Phase 0 (2026-04-07) verified effect across Opus/Sonnet/Haiku.
     semantic_check = build_semantic_pushback_check(prompt)
 
-    # Combine contexts
+    # Combine contexts. Order matters: routing first (high-level mode),
+    # then aap (hedge correction), then proportionality (scope sizing),
+    # then EPP (pushback handling) LAST for attention-recency.
     context_parts = []
     if advice:
         context_parts.append(f"<epistemic-routing>\n{advice}\n</epistemic-routing>")
     if aap_context:
         context_parts.append(aap_context)
+    if proportionality_check:
+        context_parts.append(proportionality_check)
     if semantic_check:
         # Placed LAST — highest attention weight in the injected context window
         context_parts.append(semantic_check)

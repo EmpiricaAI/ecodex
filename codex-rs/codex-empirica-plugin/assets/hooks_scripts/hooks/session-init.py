@@ -338,6 +338,30 @@ def create_session_and_bootstrap(ai_id: str, project_id: str | None = None) -> d
     return result
 
 
+def _v2_supplemental_safe(project_context: dict | None) -> str:
+    """Render v2 bootstrap supplemental sections (persistent_reference +
+    topic_relevant_backlog).
+
+    Wrapped in broad try/except — bootstrap aggregator is new (v0.6 spec)
+    and must NOT break SessionStart on any failure. Returns empty string
+    if anything goes wrong.
+
+    See docs/specs/PROPOSAL_BOOTSTRAP_AGGREGATOR.md.
+    """
+    if not project_context:
+        return ""
+    project_path = project_context.get("project_path") if isinstance(project_context, dict) else None
+    if not project_path:
+        return ""
+    try:
+        from empirica.core.bootstrap import build_bootstrap_payload
+        from empirica.core.bootstrap.render import render_v2_supplemental
+        payload = build_bootstrap_payload(project_path=project_path)
+        return render_v2_supplemental(payload)
+    except Exception:
+        return ""
+
+
 def format_context(ctx: dict) -> str:
     """Format project context for prompt."""
     if not ctx:
@@ -994,6 +1018,14 @@ def main():
 
     # Build output
     context_text = format_context(result.get("project_context"))
+
+    # v2 supplemental: append persistent_reference + topic_relevant_backlog
+    # sections to the SessionStart additionalContext. See
+    # docs/specs/PROPOSAL_BOOTSTRAP_AGGREGATOR.md.
+    v2_supplemental = _v2_supplemental_safe(result.get("project_context"))
+    if v2_supplemental:
+        context_text = f"{context_text}\n\n{v2_supplemental}"
+
     prompt = _build_preflight_prompt(session_id, context_text)
 
     output = {
