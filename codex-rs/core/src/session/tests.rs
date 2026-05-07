@@ -6305,6 +6305,7 @@ async fn build_initial_context_reinjects_pinned_skill_bodies() {
             path_to_skills_md: pinned_md.abs(),
             scope: SkillScope::User,
             pinned: true,
+            plugin_id: None,
         },
         SkillMetadata {
             name: "task-skill".to_string(),
@@ -6316,6 +6317,7 @@ async fn build_initial_context_reinjects_pinned_skill_bodies() {
             path_to_skills_md: unpinned_md.abs(),
             scope: SkillScope::User,
             pinned: false,
+            plugin_id: None,
         },
     ];
     turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
