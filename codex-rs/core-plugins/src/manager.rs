@@ -63,6 +63,7 @@ use codex_plugin::PluginIdError;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::PluginSkillRoot;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -222,6 +223,7 @@ pub struct PluginDetail {
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
+    pub keywords: Vec<String>,
     pub installed: bool,
     pub enabled: bool,
     pub skills: Vec<SkillMetadata>,
@@ -251,6 +253,7 @@ pub struct ConfiguredMarketplacePlugin {
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
+    pub keywords: Vec<String>,
     pub installed: bool,
     pub enabled: bool,
 }
@@ -540,10 +543,10 @@ impl PluginsManager {
         &self,
         config_layer_stack: &ConfigLayerStack,
         config: &PluginsConfigInput,
-    ) -> Vec<AbsolutePathBuf> {
+    ) -> Vec<PluginSkillRoot> {
         self.plugins_for_layer_stack(config_layer_stack, config, config.plugin_hooks_enabled)
             .await
-            .effective_skill_roots()
+            .effective_plugin_skill_roots()
     }
 
     fn cached_enabled_outcome(
@@ -1195,6 +1198,7 @@ impl PluginsManager {
                             source: plugin.source,
                             policy: plugin.policy,
                             interface: plugin.interface,
+                            keywords: plugin.keywords,
                         })
                     })
                     .collect::<Vec<_>>();
@@ -1244,6 +1248,11 @@ impl PluginsManager {
                     source: plugin.source,
                     policy: plugin.policy,
                     interface: plugin.interface,
+                    keywords: plugin
+                        .manifest
+                        .as_ref()
+                        .map(|manifest| manifest.keywords.clone())
+                        .unwrap_or_default(),
                     installed: installed_plugins.contains(&plugin_key),
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
@@ -1286,6 +1295,7 @@ impl PluginsManager {
                 source: plugin.source,
                 policy: plugin.policy,
                 interface: plugin.interface,
+                keywords: plugin.keywords,
                 installed: plugin.installed,
                 enabled: plugin.enabled,
                 skills: Vec::new(),
@@ -1339,6 +1349,7 @@ impl PluginsManager {
         );
         let resolved_skills = load_plugin_skills(
             &source_path,
+            &plugin_id,
             &manifest.paths,
             self.restriction_product,
             &codex_core_skills::config_rules::skill_config_rules_from_stack(
@@ -1361,6 +1372,7 @@ impl PluginsManager {
             source: plugin.source,
             policy: plugin.policy,
             interface,
+            keywords: manifest.keywords,
             installed: plugin.installed,
             enabled: plugin.enabled,
             skills: resolved_skills.skills,

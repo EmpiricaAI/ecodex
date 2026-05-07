@@ -931,6 +931,7 @@ mod tests {
             path_to_skills_md: test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
             scope,
             pinned: false,
+            plugin_id: None,
         }
     }
 

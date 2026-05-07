@@ -235,6 +235,7 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata
         path_to_skills_md: skill.path.clone(),
         scope,
         pinned: false,
+        plugin_id: None,
     })
 }
 

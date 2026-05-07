@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::Prompt;
+use crate::client::CompactConversationRequestSettings;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::InitialContextInjection;
 use crate::compact::compaction_status_from_result;
@@ -171,8 +172,11 @@ async fn run_remote_compact_task_inner_impl(
         .compact_conversation_history(
             &prompt,
             &turn_context.model_info,
-            turn_context.reasoning_effort,
-            turn_context.reasoning_summary,
+            CompactConversationRequestSettings {
+                effort: turn_context.reasoning_effort,
+                summary: turn_context.reasoning_summary,
+                service_tier: turn_context.config.service_tier.clone(),
+            },
             &turn_context.session_telemetry,
             &compaction_trace,
         )
@@ -269,7 +273,7 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         }
         ResponseItem::Message { role, .. } if role == "assistant" => true,
         ResponseItem::Message { .. } => false,
-        ResponseItem::Compaction { .. } => true,
+        ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
@@ -285,11 +289,11 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
 }
 
 #[derive(Debug)]
-struct CompactRequestLogData {
+pub(crate) struct CompactRequestLogData {
     failing_compaction_request_model_visible_bytes: i64,
 }
 
-fn build_compact_request_log_data(
+pub(crate) fn build_compact_request_log_data(
     input: &[ResponseItem],
     instructions: &str,
 ) -> CompactRequestLogData {
@@ -306,7 +310,7 @@ fn build_compact_request_log_data(
     }
 }
 
-fn log_remote_compact_failure(
+pub(crate) fn log_remote_compact_failure(
     turn_context: &TurnContext,
     log_data: &CompactRequestLogData,
     total_usage_breakdown: TotalTokenUsageBreakdown,
@@ -325,7 +329,7 @@ fn log_remote_compact_failure(
     );
 }
 
-fn trim_function_call_history_to_fit_context_window(
+pub(crate) fn trim_function_call_history_to_fit_context_window(
     history: &mut ContextManager,
     turn_context: &TurnContext,
     base_instructions: &BaseInstructions,

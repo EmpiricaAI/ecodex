@@ -12,6 +12,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use codex_utils_plugins::PluginSkillRoot;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use std::fs;
@@ -68,6 +69,7 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
             .expect("skill path should canonicalize"),
         scope: SkillScope::User,
         pinned: false,
+        plugin_id: None,
     }
 }
 
@@ -147,7 +149,14 @@ async fn skills_for_config_with_stack(
 ) -> SkillLoadOutcome {
     let skills_input = SkillsLoadInput::new(
         cwd.path().abs(),
-        effective_skill_roots.to_vec(),
+        effective_skill_roots
+            .iter()
+            .cloned()
+            .map(|path| PluginSkillRoot {
+                path,
+                plugin_id: "test-plugin@test".to_string(),
+            })
+            .collect(),
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(config_layer_stack),
     );

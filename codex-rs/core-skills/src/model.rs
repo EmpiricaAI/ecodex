@@ -25,6 +25,7 @@ pub struct SkillMetadata {
     /// skills (e.g. epistemic constitution, transaction lifecycle) that
     /// need to remain ambient context across compactions.
     pub pinned: bool,
+    pub plugin_id: Option<String>,
 }
 
 impl SkillMetadata {

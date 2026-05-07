@@ -420,7 +420,13 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
         .iter()
         .enumerate()
         .rev()
-        .find_map(|(i, item)| matches!(item, ResponseItem::Compaction { .. }).then_some(i));
+        .find_map(|(i, item)| {
+            matches!(
+                item,
+                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+            )
+            .then_some(i)
+        });
     let insertion_index = last_real_user_index
         .or(last_user_or_summary_index)
         .or(last_compaction_index);
@@ -518,7 +524,7 @@ async fn drain_to_completed(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
-            turn_context.config.service_tier,
+            turn_context.config.service_tier.clone(),
             turn_metadata_header,
             // Rollout tracing currently models remote compaction only; local compaction streams
             // are left untraced until the reducer has a first-class local compaction lifecycle.
