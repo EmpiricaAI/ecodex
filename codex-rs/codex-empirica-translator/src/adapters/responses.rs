@@ -4,7 +4,7 @@
 //! `encode_event`:  CIF StreamEvent → Responses-format SSE bytes.
 
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::cif::{Content, FinishReason, Message, Request, StreamEvent, Tool, ToolCall};
 
@@ -44,7 +44,10 @@ pub fn parse_request(body: &Value) -> Result<Request> {
         system,
         messages,
         tools,
-        temperature: body.get("temperature").and_then(Value::as_f64).map(|v| v as f32),
+        temperature: body
+            .get("temperature")
+            .and_then(Value::as_f64)
+            .map(|v| v as f32),
         max_output_tokens: body
             .get("max_output_tokens")
             .and_then(Value::as_u64)
@@ -54,7 +57,10 @@ pub fn parse_request(body: &Value) -> Result<Request> {
 }
 
 fn parse_input_item(item: &Value) -> Result<Option<Message>> {
-    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("message");
+    let item_type = item
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("message");
     match item_type {
         "message" => {
             let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
@@ -69,21 +75,41 @@ fn parse_input_item(item: &Value) -> Result<Option<Message>> {
             }))
         }
         "function_call" => {
-            let id = item.get("call_id").and_then(Value::as_str).unwrap_or("").to_string();
-            let name = item.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-            let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("{}").to_string();
+            let id = item
+                .get("call_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let arguments = item
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}")
+                .to_string();
             Ok(Some(Message::Assistant {
                 content: Vec::new(),
-                tool_calls: vec![ToolCall { id, name, arguments }],
+                tool_calls: vec![ToolCall {
+                    id,
+                    name,
+                    arguments,
+                }],
             }))
         }
         "function_call_output" => {
-            let tool_call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("").to_string();
-            let content = item
-                .get("output")
-                .map(serialize_output)
-                .unwrap_or_default();
-            Ok(Some(Message::Tool { tool_call_id, content }))
+            let tool_call_id = item
+                .get("call_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let content = item.get("output").map(serialize_output).unwrap_or_default();
+            Ok(Some(Message::Tool {
+                tool_call_id,
+                content,
+            }))
         }
         "reasoning" => {
             let content = item
@@ -106,7 +132,9 @@ fn parse_content(value: Option<&Value>) -> Vec<Content> {
         return Vec::new();
     };
     if let Some(s) = v.as_str() {
-        return vec![Content::Text { text: s.to_string() }];
+        return vec![Content::Text {
+            text: s.to_string(),
+        }];
     }
     if let Some(arr) = v.as_array() {
         return arr
@@ -117,7 +145,9 @@ fn parse_content(value: Option<&Value>) -> Vec<Content> {
                     "input_text" | "output_text" | "text" => piece
                         .get("text")
                         .and_then(Value::as_str)
-                        .map(|t| Content::Text { text: t.to_string() }),
+                        .map(|t| Content::Text {
+                            text: t.to_string(),
+                        }),
                     "input_image" | "image" | "image_url" => {
                         let url = piece
                             .get("image_url")
@@ -142,9 +172,16 @@ fn parse_content(value: Option<&Value>) -> Vec<Content> {
 fn parse_tool(t: &Value) -> Option<Tool> {
     // Responses tool shape: {type:"function", name, description, parameters}
     let name = t.get("name").and_then(Value::as_str)?.to_string();
-    let description = t.get("description").and_then(Value::as_str).map(str::to_string);
+    let description = t
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let parameters = t.get("parameters").cloned().unwrap_or(json!({}));
-    Some(Tool { name, description, parameters })
+    Some(Tool {
+        name,
+        description,
+        parameters,
+    })
 }
 
 fn serialize_output(v: &Value) -> String {
@@ -253,8 +290,7 @@ pub fn encode_events(event: &StreamEvent, state: &mut EncoderState) -> Vec<Vec<u
             frames.push(sse_frame("response.function_call.delta", &payload));
         }
         StreamEvent::ReasoningDelta { text } => {
-            let payload =
-                json!({"type": "response.reasoning.delta", "delta": text});
+            let payload = json!({"type": "response.reasoning.delta", "delta": text});
             frames.push(sse_frame("response.reasoning.delta", &payload));
         }
         StreamEvent::Completed {
@@ -453,8 +489,18 @@ mod tests {
     fn encode_events_wraps_text_deltas_with_open_close_item_envelope() {
         let mut state = EncoderState::default();
 
-        let frames_a = encode_events(&StreamEvent::TextDelta { text: "Hello".into() }, &mut state);
-        let frames_b = encode_events(&StreamEvent::TextDelta { text: " world".into() }, &mut state);
+        let frames_a = encode_events(
+            &StreamEvent::TextDelta {
+                text: "Hello".into(),
+            },
+            &mut state,
+        );
+        let frames_b = encode_events(
+            &StreamEvent::TextDelta {
+                text: " world".into(),
+            },
+            &mut state,
+        );
         let frames_c = encode_events(
             &StreamEvent::Completed {
                 text: "Hello world".into(),
@@ -484,8 +530,7 @@ mod tests {
             a[0]
         );
         assert!(
-            a[0].contains("\"type\":\"message\"")
-                && a[0].contains("\"role\":\"assistant\""),
+            a[0].contains("\"type\":\"message\"") && a[0].contains("\"role\":\"assistant\""),
             "item.added must declare an assistant message item; got: {}",
             a[0]
         );
@@ -501,7 +546,11 @@ mod tests {
 
         // Completed produces TWO frames: item.done envelope (carrying full
         // text) + response.completed. Same order requirement, reversed.
-        assert_eq!(c.len(), 2, "completed must emit item.done + response.completed");
+        assert_eq!(
+            c.len(),
+            2,
+            "completed must emit item.done + response.completed"
+        );
         assert!(
             c[0].starts_with("event: response.output_item.done\n"),
             "first frame must be item.done; got: {}",
@@ -596,22 +645,56 @@ mod tests {
         );
 
         // Frame 0: added for aaa, function_call shape with empty args.
-        assert!(s[0].starts_with("event: response.output_item.added\n"), "frame 0 must be added; got: {}", s[0]);
-        assert!(s[0].contains("\"type\":\"function_call\""), "frame 0 must declare function_call item; got: {}", s[0]);
-        assert!(s[0].contains("\"call_id\":\"tool_aaa\""), "frame 0 must carry call_id; got: {}", s[0]);
-        assert!(s[0].contains("\"name\":\"exec_command\""), "frame 0 must carry name; got: {}", s[0]);
+        assert!(
+            s[0].starts_with("event: response.output_item.added\n"),
+            "frame 0 must be added; got: {}",
+            s[0]
+        );
+        assert!(
+            s[0].contains("\"type\":\"function_call\""),
+            "frame 0 must declare function_call item; got: {}",
+            s[0]
+        );
+        assert!(
+            s[0].contains("\"call_id\":\"tool_aaa\""),
+            "frame 0 must carry call_id; got: {}",
+            s[0]
+        );
+        assert!(
+            s[0].contains("\"name\":\"exec_command\""),
+            "frame 0 must carry name; got: {}",
+            s[0]
+        );
 
         // Frame 1: done for aaa with full arguments.
-        assert!(s[1].starts_with("event: response.output_item.done\n"), "frame 1 must be done; got: {}", s[1]);
+        assert!(
+            s[1].starts_with("event: response.output_item.done\n"),
+            "frame 1 must be done; got: {}",
+            s[1]
+        );
         assert!(s[1].contains("\"call_id\":\"tool_aaa\""));
-        assert!(s[1].contains("\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\""), "frame 1 must carry full arguments; got: {}", s[1]);
+        assert!(
+            s[1].contains("\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\""),
+            "frame 1 must carry full arguments; got: {}",
+            s[1]
+        );
 
         // Frames 2-3: same pair for bbb.
-        assert!(s[2].starts_with("event: response.output_item.added\n") && s[2].contains("tool_bbb"));
-        assert!(s[3].starts_with("event: response.output_item.done\n") && s[3].contains("tool_bbb") && s[3].contains("pwd"));
+        assert!(
+            s[2].starts_with("event: response.output_item.added\n") && s[2].contains("tool_bbb")
+        );
+        assert!(
+            s[3].starts_with("event: response.output_item.done\n")
+                && s[3].contains("tool_bbb")
+                && s[3].contains("pwd")
+        );
 
         // Frame 4: response.completed (the last frame, after all tool lifecycles).
-        assert!(s[4].starts_with("event: response.completed\n"), "frame 4 must be response.completed; got: {}", s[4]);
+        assert!(
+            s[4].starts_with("event: response.completed\n"),
+            "frame 4 must be response.completed; got: {}",
+            s[4]
+        );
         assert!(s[4].contains("\"finish_reason\":\"tool_calls\""));
     }
 
@@ -623,7 +706,12 @@ mod tests {
         let mut state = EncoderState::default();
 
         // Open with a text-delta so the message item gets opened.
-        let _ = encode_events(&StreamEvent::TextDelta { text: "Running...".into() }, &mut state);
+        let _ = encode_events(
+            &StreamEvent::TextDelta {
+                text: "Running...".into(),
+            },
+            &mut state,
+        );
 
         // Then a Completed event with both text and tool_calls.
         let frames = encode_events(
@@ -646,10 +734,34 @@ mod tests {
             .collect();
 
         // Order: message done, tool added, tool done, response.completed.
-        assert_eq!(s.len(), 4, "expected 4 frames (msg.done + tool.added + tool.done + completed); got {}", s.len());
-        assert!(s[0].starts_with("event: response.output_item.done\n") && s[0].contains("\"type\":\"message\""), "frame 0 must close the message item: {}", s[0]);
-        assert!(s[1].starts_with("event: response.output_item.added\n") && s[1].contains("\"type\":\"function_call\""), "frame 1 must open the tool: {}", s[1]);
-        assert!(s[2].starts_with("event: response.output_item.done\n") && s[2].contains("\"type\":\"function_call\""), "frame 2 must close the tool: {}", s[2]);
-        assert!(s[3].starts_with("event: response.completed\n"), "frame 3 must be completed: {}", s[3]);
+        assert_eq!(
+            s.len(),
+            4,
+            "expected 4 frames (msg.done + tool.added + tool.done + completed); got {}",
+            s.len()
+        );
+        assert!(
+            s[0].starts_with("event: response.output_item.done\n")
+                && s[0].contains("\"type\":\"message\""),
+            "frame 0 must close the message item: {}",
+            s[0]
+        );
+        assert!(
+            s[1].starts_with("event: response.output_item.added\n")
+                && s[1].contains("\"type\":\"function_call\""),
+            "frame 1 must open the tool: {}",
+            s[1]
+        );
+        assert!(
+            s[2].starts_with("event: response.output_item.done\n")
+                && s[2].contains("\"type\":\"function_call\""),
+            "frame 2 must close the tool: {}",
+            s[2]
+        );
+        assert!(
+            s[3].starts_with("event: response.completed\n"),
+            "frame 3 must be completed: {}",
+            s[3]
+        );
     }
 }

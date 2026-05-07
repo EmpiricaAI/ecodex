@@ -7985,8 +7985,8 @@ impl ChatWidget {
         })];
         // ecodex T78: persist curated provider alongside the slug so saved
         // config doesn't go inconsistent on restart.
-        let curated_provider = crate::ecodex_curated_models::provider_for_slug(model.as_str())
-            .map(|s| s.to_string());
+        let curated_provider =
+            crate::ecodex_curated_models::provider_for_slug(model.as_str()).map(|s| s.to_string());
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::UpdateModel(model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort));

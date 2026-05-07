@@ -24,12 +24,12 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::LoadedPlugin;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginHookSource;
-use codex_plugin::PluginWritableRootSource;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::PluginLoadOutcome;
 use codex_plugin::PluginStatuslineSource;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_plugin::PluginWritableRootSource;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -623,11 +623,8 @@ async fn load_plugin(
     // decides whether to merge them, and that decision is keyed on the
     // active permission profile (WorkspaceWrite gets carve-outs, ReadOnly
     // and DangerFullAccess do not need them for opposite reasons).
-    loaded_plugin.writable_root_sources = load_plugin_writable_roots(
-        &plugin_root,
-        &loaded_plugin_id,
-        manifest_paths,
-    );
+    loaded_plugin.writable_root_sources =
+        load_plugin_writable_roots(&plugin_root, &loaded_plugin_id, manifest_paths);
     loaded_plugin
 }
 

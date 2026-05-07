@@ -562,8 +562,7 @@ impl Session {
     ) -> CodexResult<Arc<TurnContext>> {
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
-            let previous_provider_name =
-                state.session_configuration.provider.name.clone();
+            let previous_provider_name = state.session_configuration.provider.name.clone();
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
                     let effective_environments = updates

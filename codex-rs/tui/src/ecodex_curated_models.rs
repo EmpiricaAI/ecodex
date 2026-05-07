@@ -203,7 +203,10 @@ mod tests {
     #[test]
     fn provider_for_slug_resolves_curated_entries() {
         assert_eq!(provider_for_slug("kimi-for-coding"), Some("kimi"));
-        assert_eq!(provider_for_slug("qwen3-coder:latest"), Some("empirica-local"));
+        assert_eq!(
+            provider_for_slug("qwen3-coder:latest"),
+            Some("empirica-local")
+        );
         assert_eq!(provider_for_slug("openrouter/auto"), Some("openrouter"));
         assert_eq!(provider_for_slug("not-in-curated"), None);
     }

@@ -28,7 +28,10 @@ pub fn handle() -> ExitCode {
             // suppressOutput at top level) into codex-shape (permissionDecision/
             // permissionDecisionReason inside hookSpecificOutput, suppressOutput
             // dropped). codex's PreToolUse schema rejects suppressOutput.
-            print!("{}", translate_output::translate("PreToolUse", &output.stdout));
+            print!(
+                "{}",
+                translate_output::translate("PreToolUse", &output.stdout)
+            );
             eprint!("{}", output.stderr);
             match output.exit_code {
                 0 => ExitCode::SUCCESS,

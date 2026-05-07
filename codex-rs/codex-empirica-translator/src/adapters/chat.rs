@@ -4,7 +4,7 @@
 //! `parse_chunk`:    one chat-completions SSE chunk → CIF StreamEvents.
 
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::cif::{Content, FinishReason, Message, Request, StreamEvent, ToolCall};
 
@@ -21,7 +21,10 @@ pub fn encode_request(req: &Request) -> Value {
             Message::User { content } => {
                 messages.push(json!({"role": "user", "content": content_to_chat(content)}));
             }
-            Message::Assistant { content, tool_calls } => {
+            Message::Assistant {
+                content,
+                tool_calls,
+            } => {
                 let mut msg = json!({"role": "assistant"});
                 let text = flatten_text(content);
                 if !text.is_empty() {
@@ -30,18 +33,23 @@ pub fn encode_request(req: &Request) -> Value {
                     msg["content"] = Value::Null;
                 }
                 if !tool_calls.is_empty() {
-                    msg["tool_calls"] = json!(tool_calls
-                        .iter()
-                        .map(|tc| json!({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.name, "arguments": tc.arguments},
-                        }))
-                        .collect::<Vec<_>>());
+                    msg["tool_calls"] = json!(
+                        tool_calls
+                            .iter()
+                            .map(|tc| json!({
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {"name": tc.name, "arguments": tc.arguments},
+                            }))
+                            .collect::<Vec<_>>()
+                    );
                 }
                 messages.push(msg);
             }
-            Message::Tool { tool_call_id, content } => {
+            Message::Tool {
+                tool_call_id,
+                content,
+            } => {
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
@@ -62,14 +70,19 @@ pub fn encode_request(req: &Request) -> Value {
         "stream": req.stream,
     });
     if !req.tools.is_empty() {
-        out["tools"] = json!(req.tools.iter().map(|t| json!({
-            "type": "function",
-            "function": {
-                "name": t.name,
-                "description": t.description,
-                "parameters": t.parameters,
-            },
-        })).collect::<Vec<_>>());
+        out["tools"] = json!(
+            req.tools
+                .iter()
+                .map(|t| json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
+                }))
+                .collect::<Vec<_>>()
+        );
     }
     if let Some(t) = req.temperature {
         out["temperature"] = json!(t);
@@ -149,7 +162,9 @@ pub fn parse_chunk(data: &str, state: &mut ChunkState) -> Result<Vec<StreamEvent
         if let Some(text) = delta.get("content").and_then(Value::as_str) {
             if !text.is_empty() {
                 state.text.push_str(text);
-                events.push(StreamEvent::TextDelta { text: text.to_string() });
+                events.push(StreamEvent::TextDelta {
+                    text: text.to_string(),
+                });
             }
         }
 
@@ -349,7 +364,9 @@ mod tests {
         };
         let events = parse_chunk("[DONE]", &mut state).unwrap();
         match &events[0] {
-            StreamEvent::Completed { text, response_id, .. } => {
+            StreamEvent::Completed {
+                text, response_id, ..
+            } => {
                 assert_eq!(text, "hello world");
                 assert_eq!(response_id.as_deref(), Some("r_1"));
             }

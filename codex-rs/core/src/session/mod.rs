@@ -2623,7 +2623,10 @@ impl Session {
             self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
                 .await;
         }
-        self.services.model_client.load().advance_window_generation();
+        self.services
+            .model_client
+            .load()
+            .advance_window_generation();
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {

@@ -13,7 +13,7 @@
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -182,7 +182,10 @@ mod tests {
         emitter.emit(&event);
 
         let mut contents = String::new();
-        File::open(&path).unwrap().read_to_string(&mut contents).unwrap();
+        File::open(&path)
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
         let line = contents.lines().next().unwrap();
         let parsed: Value = serde_json::from_str(line).unwrap();
         assert_eq!(parsed["kind"], "request_started");
@@ -214,7 +217,10 @@ mod tests {
         });
 
         let mut contents = String::new();
-        File::open(&path).unwrap().read_to_string(&mut contents).unwrap();
+        File::open(&path)
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
         let lines: Vec<_> = contents.lines().collect();
         assert_eq!(lines.len(), 2);
         let first: Value = serde_json::from_str(lines[0]).unwrap();

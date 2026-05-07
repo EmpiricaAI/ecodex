@@ -446,7 +446,10 @@ fn json_value_type(value: &JsonValue) -> &'static str {
 ///   * absolute paths (`/...`) — kept verbatim
 /// Relative paths and paths containing `..` are rejected with a warning.
 /// Empty/missing input returns an empty Vec.
-fn resolve_manifest_runtime_paths(field: &'static str, paths: Option<&[String]>) -> Vec<AbsolutePathBuf> {
+fn resolve_manifest_runtime_paths(
+    field: &'static str,
+    paths: Option<&[String]>,
+) -> Vec<AbsolutePathBuf> {
     let Some(paths) = paths else {
         return Vec::new();
     };
@@ -492,9 +495,7 @@ fn resolve_manifest_runtime_paths(field: &'static str, paths: Option<&[String]>)
             .components()
             .any(|c| matches!(c, Component::ParentDir))
         {
-            tracing::warn!(
-                "ignoring {field} entry {raw:?}: path must not contain '..' components"
-            );
+            tracing::warn!("ignoring {field} entry {raw:?}: path must not contain '..' components");
             continue;
         }
         // Reject anything that's not absolute after expansion — relative
@@ -502,9 +503,7 @@ fn resolve_manifest_runtime_paths(field: &'static str, paths: Option<&[String]>)
         // the agent's cwd via AbsolutePathBuf and silently grant scope
         // we never declared.
         if !expanded.is_absolute() {
-            tracing::warn!(
-                "ignoring {field} entry {raw:?}: must be absolute or `~/`-prefixed"
-            );
+            tracing::warn!("ignoring {field} entry {raw:?}: must be absolute or `~/`-prefixed");
             continue;
         }
         match AbsolutePathBuf::try_from(expanded) {

@@ -188,35 +188,37 @@ fn recognize_open_weights_family(slug: &str) -> Option<KnownOpenWeightsFamily> {
         _ if normalized.starts_with("qwen") || normalized.starts_with("qwopus") => {
             // Generic Qwen / Qwopus fallback — Qwen3 base / community distills
             // typically max out at 32K without YaRN extension.
-            ("Qwen / Qwopus", "Qwen-family open-weights model (Alibaba)", 32_768)
+            (
+                "Qwen / Qwopus",
+                "Qwen-family open-weights model (Alibaba)",
+                32_768,
+            )
         }
         _ if normalized.starts_with("llama") => {
             ("Llama", "Llama-family open-weights model (Meta)", 128_000)
         }
-        _ if normalized.starts_with("mistral") || normalized.starts_with("mixtral") => {
-            ("Mistral / Mixtral", "Mistral-family open-weights model", 32_768)
-        }
+        _ if normalized.starts_with("mistral") || normalized.starts_with("mixtral") => (
+            "Mistral / Mixtral",
+            "Mistral-family open-weights model",
+            32_768,
+        ),
         _ if normalized.starts_with("gemma") => {
             ("Gemma", "Gemma open-weights model (Google)", 8_192)
         }
         _ if normalized.starts_with("deepseek") => {
             ("DeepSeek", "DeepSeek open-weights model", 128_000)
         }
-        _ if normalized.starts_with("gpt-oss") => {
-            ("GPT-OSS", "GPT-OSS open-weights model", 32_768)
+        _ if normalized.starts_with("gpt-oss") => ("GPT-OSS", "GPT-OSS open-weights model", 32_768),
+        _ if normalized.starts_with("mirothinker") || normalized.starts_with("huihui") => (
+            "MiroThinker",
+            "MiroThinker reasoning open-weights model",
+            32_768,
+        ),
+        _ if normalized.starts_with("kimi") => {
+            ("Kimi", "Moonshot Kimi open-weights model", 200_000)
         }
-        _ if normalized.starts_with("mirothinker") || normalized.starts_with("huihui") => {
-            (
-                "MiroThinker",
-                "MiroThinker reasoning open-weights model",
-                32_768,
-            )
-        }
-        _ if normalized.starts_with("kimi") => ("Kimi", "Moonshot Kimi open-weights model", 200_000),
         _ if normalized.starts_with("glm") => ("GLM", "Zhipu GLM open-weights model", 32_768),
-        _ if normalized.starts_with("phi") => {
-            ("Phi", "Phi open-weights model (Microsoft)", 16_384)
-        }
+        _ if normalized.starts_with("phi") => ("Phi", "Phi open-weights model (Microsoft)", 16_384),
         _ => return None,
     };
 

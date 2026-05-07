@@ -11,13 +11,16 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use codex_empirica_translator::{
-    run, EventEmitter, JsonlFileEmitter, NoopEmitter, ServerConfig, UpstreamProtocol,
+    EventEmitter, JsonlFileEmitter, NoopEmitter, ServerConfig, UpstreamProtocol, run,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Translate Responses API ↔ {chat,anthropic} for ecodex")]
+#[command(
+    version,
+    about = "Translate Responses API ↔ {chat,anthropic} for ecodex"
+)]
 struct Args {
     /// Upstream provider's base URL (without the per-protocol path suffix).
     /// Examples:
@@ -38,11 +41,19 @@ struct Args {
     /// Messages API to `<base>/messages` — required for Kimi For Coding
     /// because the OpenAI endpoint enforces an X-Msh-Platform allowlist that
     /// blocks unregistered clients (see HKUDS/nanobot#354).
-    #[arg(long, env = "ECODEX_TRANSLATOR_UPSTREAM_PROTOCOL", default_value = "chat")]
+    #[arg(
+        long,
+        env = "ECODEX_TRANSLATOR_UPSTREAM_PROTOCOL",
+        default_value = "chat"
+    )]
     upstream_protocol: String,
 
     /// Address to bind the translator server on.
-    #[arg(long, env = "ECODEX_TRANSLATOR_BIND", default_value = "127.0.0.1:18080")]
+    #[arg(
+        long,
+        env = "ECODEX_TRANSLATOR_BIND",
+        default_value = "127.0.0.1:18080"
+    )]
     bind: String,
 
     /// Event tap path. Translator appends one JSONL line per request lifecycle
@@ -69,8 +80,7 @@ fn main() -> Result<()> {
 
     let emitter: Arc<dyn EventEmitter> = match args.event_log {
         Some(path) => {
-            let e = JsonlFileEmitter::new(path)
-                .context("initialising event log file")?;
+            let e = JsonlFileEmitter::new(path).context("initialising event log file")?;
             tracing::info!(event_log = %e.path().display(), "event tap enabled");
             Arc::new(e)
         }

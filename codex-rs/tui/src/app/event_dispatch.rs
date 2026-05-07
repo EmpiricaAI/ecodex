@@ -685,8 +685,7 @@ impl App {
                 // user_turn. The session's SessionConfiguration::apply will
                 // detect the change and hot-swap ModelClient via ArcSwap —
                 // no restart required.
-                let curated_lookup =
-                    crate::ecodex_curated_models::provider_for_slug(&model);
+                let curated_lookup = crate::ecodex_curated_models::provider_for_slug(&model);
                 tracing::info!(
                     model = %model,
                     curated_provider = ?curated_lookup,
@@ -696,8 +695,7 @@ impl App {
                     // Use active_provider_id (which factors in any prior
                     // staged override) instead of the config's session-start
                     // provider — the latter goes stale after the first swap.
-                    let current_provider =
-                        self.chat_widget.active_provider_id().to_string();
+                    let current_provider = self.chat_widget.active_provider_id().to_string();
                     tracing::info!(
                         target_provider = %target_provider,
                         current_provider = %current_provider,

@@ -10,7 +10,7 @@ use tiny_http::{Request, Response, Server};
 use tracing::{error, info, warn};
 
 use crate::adapters::{anthropic, chat, responses};
-use crate::tap::{build_request_started, new_request_id, EventEmitter, NoopEmitter, TapEvent};
+use crate::tap::{EventEmitter, NoopEmitter, TapEvent, build_request_started, new_request_id};
 
 /// Wire format the translator speaks to the upstream provider. The codex-side
 /// (request in / response out) is always Responses API; only the provider-side
@@ -61,7 +61,10 @@ impl std::fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerConfig")
             .field("upstream_base_url", &self.upstream_base_url)
-            .field("upstream_api_key", &self.upstream_api_key.as_ref().map(|_| "***"))
+            .field(
+                "upstream_api_key",
+                &self.upstream_api_key.as_ref().map(|_| "***"),
+            )
             .field("upstream_protocol", &self.upstream_protocol)
             .field("bind_addr", &self.bind_addr)
             .finish()
@@ -70,7 +73,11 @@ impl std::fmt::Debug for ServerConfig {
 
 impl ServerConfig {
     /// Helper to build a config with the no-op emitter (for tests + simple use).
-    pub fn new(upstream_base_url: String, upstream_api_key: Option<String>, bind_addr: String) -> Self {
+    pub fn new(
+        upstream_base_url: String,
+        upstream_api_key: Option<String>,
+        bind_addr: String,
+    ) -> Self {
         Self {
             upstream_base_url,
             upstream_api_key,
@@ -117,9 +124,7 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         .to_string();
         let response = Response::from_string(body)
             .with_status_code(200)
-            .with_header(
-                tiny_http::Header::from_str("Content-Type: application/json").unwrap(),
-            );
+            .with_header(tiny_http::Header::from_str("Content-Type: application/json").unwrap());
         return request.respond(response).context("respond /healthz");
     }
 
@@ -158,7 +163,10 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
     // responses adapter) protocol-agnostic.
     let (upstream_url, protocol_label) = match cfg.upstream_protocol {
         UpstreamProtocol::Chat => (
-            format!("{}/chat/completions", cfg.upstream_base_url.trim_end_matches('/')),
+            format!(
+                "{}/chat/completions",
+                cfg.upstream_base_url.trim_end_matches('/')
+            ),
             "chat",
         ),
         UpstreamProtocol::Anthropic => (
@@ -274,7 +282,9 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
             }
         }
     }
-    writer.write_all(b"0\r\n\r\n").context("write trailing chunk")?;
+    writer
+        .write_all(b"0\r\n\r\n")
+        .context("write trailing chunk")?;
     writer.flush().context("flush response")?;
 
     emitter.emit(&TapEvent::RequestCompleted {

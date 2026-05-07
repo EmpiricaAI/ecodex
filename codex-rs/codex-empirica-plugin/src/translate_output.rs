@@ -25,7 +25,7 @@
 //! returned unsupported suppressOutput" — both fixed by routing every
 //! handler's output through this translator.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 /// Translate empirica/CC-shape JSON to codex-shape for the given event.
 ///
@@ -169,7 +169,10 @@ mod tests {
         let out = translate("SessionStart", r#"{"continue":true,"context":"hello"}"#);
         let v = parse(&out);
         assert_eq!(v["continue"], json!(true));
-        assert_eq!(v["hookSpecificOutput"]["hookEventName"], json!("SessionStart"));
+        assert_eq!(
+            v["hookSpecificOutput"]["hookEventName"],
+            json!("SessionStart")
+        );
         assert_eq!(v["hookSpecificOutput"]["additionalContext"], json!("hello"));
     }
 
@@ -180,7 +183,10 @@ mod tests {
             r#"{"continue":true,"context":"<x>","decision":"block","reason":"why"}"#,
         );
         let v = parse(&out);
-        assert_eq!(v["hookSpecificOutput"]["hookEventName"], json!("UserPromptSubmit"));
+        assert_eq!(
+            v["hookSpecificOutput"]["hookEventName"],
+            json!("UserPromptSubmit")
+        );
         assert_eq!(v["hookSpecificOutput"]["additionalContext"], json!("<x>"));
         assert_eq!(v["decision"], json!("block"));
         assert_eq!(v["reason"], json!("why"));
@@ -197,8 +203,14 @@ mod tests {
         );
         let v = parse(&out);
         assert_eq!(v["continue"], json!(true));
-        assert_eq!(v["hookSpecificOutput"]["hookEventName"], json!("PreToolUse"));
-        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], json!("block"));
+        assert_eq!(
+            v["hookSpecificOutput"]["hookEventName"],
+            json!("PreToolUse")
+        );
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecision"],
+            json!("block")
+        );
         assert_eq!(
             v["hookSpecificOutput"]["permissionDecisionReason"],
             json!("praxic without check")
@@ -216,7 +228,10 @@ mod tests {
             r#"{"continue":true,"decision":"approve","stopReason":"sentinel allowed"}"#,
         );
         let v = parse(&out);
-        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], json!("approve"));
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecision"],
+            json!("approve")
+        );
         assert_eq!(
             v["hookSpecificOutput"]["permissionDecisionReason"],
             json!("sentinel allowed")
@@ -229,7 +244,10 @@ mod tests {
         let v = parse(&out);
         assert_eq!(v["continue"], json!(true));
         // hookSpecificOutput is still present so codex can route it as a SessionStart
-        assert_eq!(v["hookSpecificOutput"]["hookEventName"], json!("SessionStart"));
+        assert_eq!(
+            v["hookSpecificOutput"]["hookEventName"],
+            json!("SessionStart")
+        );
     }
 
     #[test]

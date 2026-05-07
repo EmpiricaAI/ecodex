@@ -11,7 +11,7 @@
 //! `parse_chunk`:    one Anthropic SSE event payload → CIF StreamEvents.
 
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::cif::{Content, FinishReason, Message, Request, StreamEvent, ToolCall};
 
@@ -39,11 +39,14 @@ pub fn encode_request(req: &Request) -> Value {
                 };
                 staged.push(("user", blocks));
             }
-            Message::Assistant { content, tool_calls } => {
+            Message::Assistant {
+                content,
+                tool_calls,
+            } => {
                 let mut blocks = content_to_anthropic_assistant(content);
                 for tc in tool_calls {
-                    let input: Value = serde_json::from_str(&tc.arguments)
-                        .unwrap_or_else(|_| json!({}));
+                    let input: Value =
+                        serde_json::from_str(&tc.arguments).unwrap_or_else(|_| json!({}));
                     blocks.push(json!({
                         "type": "tool_use",
                         "id": tc.id,
@@ -53,7 +56,10 @@ pub fn encode_request(req: &Request) -> Value {
                 }
                 staged.push(("assistant", blocks));
             }
-            Message::Tool { tool_call_id, content } => {
+            Message::Tool {
+                tool_call_id,
+                content,
+            } => {
                 // Anthropic tool results live inside a USER turn, not a tool role.
                 staged.push((
                     "user",
@@ -105,9 +111,7 @@ pub fn encode_request(req: &Request) -> Value {
         }
         if let Some(last) = messages.last_mut()
             && last.get("role").and_then(Value::as_str) == Some(role)
-            && let Some(content_arr) = last
-                .get_mut("content")
-                .and_then(|c| c.as_array_mut())
+            && let Some(content_arr) = last.get_mut("content").and_then(|c| c.as_array_mut())
         {
             content_arr.extend(blocks);
             continue;
@@ -125,11 +129,16 @@ pub fn encode_request(req: &Request) -> Value {
         out["system"] = json!(system);
     }
     if !req.tools.is_empty() {
-        out["tools"] = json!(req.tools.iter().map(|t| json!({
-            "name": t.name,
-            "description": t.description,
-            "input_schema": t.parameters,
-        })).collect::<Vec<_>>());
+        out["tools"] = json!(
+            req.tools
+                .iter()
+                .map(|t| json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.parameters,
+                }))
+                .collect::<Vec<_>>()
+        );
     }
     if let Some(t) = req.temperature {
         out["temperature"] = json!(t);
@@ -212,8 +221,16 @@ pub fn parse_chunk(payload: &str, state: &mut ChunkState) -> Result<Vec<StreamEv
             state.blocks[index as usize].kind = block_type.to_string();
             // tool_use block carries its id+name in the start event
             if block_type == "tool_use" {
-                let id = block.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-                let name = block.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                let id = block
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let name = block
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
                 state.blocks[index as usize].tool_id = id.clone();
                 state.blocks[index as usize].tool_name = name.clone();
                 events.push(StreamEvent::ToolCallDelta {
@@ -236,7 +253,9 @@ pub fn parse_chunk(payload: &str, state: &mut ChunkState) -> Result<Vec<StreamEv
                                 b.text.push_str(text);
                             }
                             state.text.push_str(text);
-                            events.push(StreamEvent::TextDelta { text: text.to_string() });
+                            events.push(StreamEvent::TextDelta {
+                                text: text.to_string(),
+                            });
                         }
                     }
                 }
@@ -256,7 +275,9 @@ pub fn parse_chunk(payload: &str, state: &mut ChunkState) -> Result<Vec<StreamEv
                 "thinking_delta" => {
                     if let Some(thinking) = delta.get("thinking").and_then(Value::as_str) {
                         if !thinking.is_empty() {
-                            events.push(StreamEvent::ReasoningDelta { text: thinking.to_string() });
+                            events.push(StreamEvent::ReasoningDelta {
+                                text: thinking.to_string(),
+                            });
                         }
                     }
                 }
@@ -430,20 +451,38 @@ mod tests {
             model: "x".into(),
             system: None,
             messages: vec![
-                Message::User { content: vec![Content::Text { text: "do two things".into() }] },
+                Message::User {
+                    content: vec![Content::Text {
+                        text: "do two things".into(),
+                    }],
+                },
                 // Codex emits one Assistant per function_call ResponseItem,
                 // so parallel tool calls arrive as TWO consecutive Assistants.
                 Message::Assistant {
                     content: vec![],
-                    tool_calls: vec![ToolCall { id: "tool_a".into(), name: "exec".into(), arguments: "{}".into() }],
+                    tool_calls: vec![ToolCall {
+                        id: "tool_a".into(),
+                        name: "exec".into(),
+                        arguments: "{}".into(),
+                    }],
                 },
                 Message::Assistant {
                     content: vec![],
-                    tool_calls: vec![ToolCall { id: "tool_b".into(), name: "exec".into(), arguments: "{}".into() }],
+                    tool_calls: vec![ToolCall {
+                        id: "tool_b".into(),
+                        name: "exec".into(),
+                        arguments: "{}".into(),
+                    }],
                 },
                 // And TWO consecutive Tools for the matching results.
-                Message::Tool { tool_call_id: "tool_a".into(), content: "result-a".into() },
-                Message::Tool { tool_call_id: "tool_b".into(), content: "result-b".into() },
+                Message::Tool {
+                    tool_call_id: "tool_a".into(),
+                    content: "result-a".into(),
+                },
+                Message::Tool {
+                    tool_call_id: "tool_b".into(),
+                    content: "result-b".into(),
+                },
             ],
             tools: vec![],
             temperature: None,
@@ -469,7 +508,11 @@ mod tests {
         // Assistant message: ONE message containing TWO tool_use blocks in order.
         assert_eq!(messages[1]["role"], "assistant");
         let asst_blocks = messages[1]["content"].as_array().unwrap();
-        assert_eq!(asst_blocks.len(), 2, "merged assistant must hold both tool_use blocks");
+        assert_eq!(
+            asst_blocks.len(),
+            2,
+            "merged assistant must hold both tool_use blocks"
+        );
         assert_eq!(asst_blocks[0]["type"], "tool_use");
         assert_eq!(asst_blocks[0]["id"], "tool_a");
         assert_eq!(asst_blocks[1]["type"], "tool_use");
@@ -479,7 +522,11 @@ mod tests {
         // tool_use_id, in the same order as the tool_use blocks above.
         assert_eq!(messages[2]["role"], "user");
         let user_blocks = messages[2]["content"].as_array().unwrap();
-        assert_eq!(user_blocks.len(), 2, "merged user must hold both tool_result blocks");
+        assert_eq!(
+            user_blocks.len(),
+            2,
+            "merged user must hold both tool_result blocks"
+        );
         assert_eq!(user_blocks[0]["type"], "tool_result");
         assert_eq!(user_blocks[0]["tool_use_id"], "tool_a");
         assert_eq!(user_blocks[0]["content"], "result-a");
@@ -497,12 +544,20 @@ mod tests {
             model: "x".into(),
             system: None,
             messages: vec![
-                Message::User { content: vec![Content::Text { text: "hi".into() }] },
+                Message::User {
+                    content: vec![Content::Text { text: "hi".into() }],
+                },
                 Message::Assistant {
-                    content: vec![Content::Text { text: "hello".into() }],
+                    content: vec![Content::Text {
+                        text: "hello".into(),
+                    }],
                     tool_calls: vec![],
                 },
-                Message::User { content: vec![Content::Text { text: "more".into() }] },
+                Message::User {
+                    content: vec![Content::Text {
+                        text: "more".into(),
+                    }],
+                },
                 Message::Assistant {
                     content: vec![Content::Text { text: "ok".into() }],
                     tool_calls: vec![],
@@ -578,7 +633,11 @@ mod tests {
         .unwrap();
         let final_events = parse_chunk(r#"{"type":"message_stop"}"#, &mut state).unwrap();
         match &final_events[0] {
-            StreamEvent::Completed { tool_calls, finish_reason, .. } => {
+            StreamEvent::Completed {
+                tool_calls,
+                finish_reason,
+                ..
+            } => {
                 assert_eq!(tool_calls.len(), 1);
                 assert_eq!(tool_calls[0].id, "t_1");
                 assert_eq!(tool_calls[0].name, "shell");

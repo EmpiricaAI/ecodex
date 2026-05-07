@@ -60,8 +60,7 @@ pub fn run_hook_script(script: &str, input_json: &str) -> Result<HookOutput> {
     // EMPIRICA_INSTANCE_ID — we extract from the input JSON. Empty
     // session_id (e.g. legacy non-codex caller) leaves the env unset
     // and empirica falls back to its other priority keys.
-    let codex_session_id =
-        extract_session_id_from_input(input_json).unwrap_or_default();
+    let codex_session_id = extract_session_id_from_input(input_json).unwrap_or_default();
 
     let mut command = Command::new("python3");
     command

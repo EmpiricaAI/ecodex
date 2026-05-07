@@ -26,7 +26,10 @@ pub fn handle() -> ExitCode {
             // into codex-shape ({continue, hookSpecificOutput:{...}}). Codex's
             // hook output schema is `additionalProperties: false`; raw CC
             // output gets rejected as "invalid user prompt submit JSON".
-            print!("{}", translate_output::translate("UserPromptSubmit", &output.stdout));
+            print!(
+                "{}",
+                translate_output::translate("UserPromptSubmit", &output.stdout)
+            );
             eprint!("{}", output.stderr);
             match output.exit_code {
                 0 => ExitCode::SUCCESS,
