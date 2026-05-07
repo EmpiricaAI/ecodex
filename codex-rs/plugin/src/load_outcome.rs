@@ -263,6 +263,8 @@ mod tests {
             apps: Vec::new(),
             hook_sources: Vec::new(),
             hook_load_warnings: Vec::new(),
+            statusline_source: None,
+            writable_root_sources: Vec::new(),
             error: None,
         }
     }

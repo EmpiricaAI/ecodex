@@ -1199,11 +1199,8 @@ async fn namespaces_plugin_skills_using_plugin_name() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
-<<<<<<< HEAD
             pinned: false,
-=======
             plugin_id: Some("sample@test".to_string()),
->>>>>>> upstream/main
         }]
     );
 }
@@ -1484,11 +1481,8 @@ async fn loads_skills_from_all_codex_dirs_under_project_root() {
                 policy: None,
                 path_to_skills_md: normalized(&nested_skill_path),
                 scope: SkillScope::Repo,
-<<<<<<< HEAD
                 pinned: false,
-=======
                 plugin_id: None,
->>>>>>> upstream/main
             },
             SkillMetadata {
                 name: "root-skill".to_string(),
@@ -1499,11 +1493,8 @@ async fn loads_skills_from_all_codex_dirs_under_project_root() {
                 policy: None,
                 path_to_skills_md: normalized(&root_skill_path),
                 scope: SkillScope::Repo,
-<<<<<<< HEAD
                 pinned: false,
-=======
                 plugin_id: None,
->>>>>>> upstream/main
             },
         ]
     );
@@ -1630,11 +1621,8 @@ async fn keeps_duplicate_names_from_repo_and_user() {
                 policy: None,
                 path_to_skills_md: normalized(&repo_skill_path),
                 scope: SkillScope::Repo,
-<<<<<<< HEAD
                 pinned: false,
-=======
                 plugin_id: None,
->>>>>>> upstream/main
             },
             SkillMetadata {
                 name: "dupe-skill".to_string(),
@@ -1645,11 +1633,8 @@ async fn keeps_duplicate_names_from_repo_and_user() {
                 policy: None,
                 path_to_skills_md: normalized(&user_skill_path),
                 scope: SkillScope::User,
-<<<<<<< HEAD
                 pinned: false,
-=======
                 plugin_id: None,
->>>>>>> upstream/main
             },
         ]
     );
@@ -1712,11 +1697,8 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
                 policy: None,
                 path_to_skills_md: first_path,
                 scope: SkillScope::Repo,
-<<<<<<< HEAD
                 pinned: false,
-=======
                 plugin_id: None,
->>>>>>> upstream/main
             },
             SkillMetadata {
                 name: "dupe-skill".to_string(),
@@ -1727,11 +1709,8 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
                 policy: None,
                 path_to_skills_md: second_path,
                 scope: SkillScope::Repo,
-<<<<<<< HEAD
                 pinned: false,
-=======
                 plugin_id: None,
->>>>>>> upstream/main
             },
         ]
     );
