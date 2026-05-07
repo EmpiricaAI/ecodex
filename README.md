@@ -5,10 +5,10 @@
 
 ecodex is a fork of [openai/codex](https://github.com/openai/codex) bundled with the **Empirica** epistemic-discipline framework. Where vanilla codex runs an agent loop and lets the model speak with whatever confidence it generates, ecodex gates the loop on a measured cycle:
 
-- Every transaction opens with a **PREFLIGHT** declaring what the agent knows and doesn't.
-- A **CHECK** gate decides whether the agent has enough context to act, or needs to keep investigating.
-- **POSTFLIGHT** closes the loop and grounds the agent's self-assessment against deterministic services (test results, git metrics, artifact counts).
-- A **Sentinel** firewall sits between the model and the tools — actions that would touch state require an open transaction with the right epistemic posture.
+- Every **transaction** (a unit of measured agent work) opens with a **PREFLIGHT**, where the agent declares what it knows and doesn't via 13 calibration vectors.
+- A **CHECK** gate decides whether the agent has enough context to act (transition into the **praxic** phase) or needs to keep investigating (stay in the **noetic** phase).
+- **POSTFLIGHT** closes the loop and grounds the agent's self-assessment against deterministic services — test results, git metrics, artifact counts — so the divergence between belief and outcome is recorded.
+- A **Sentinel** firewall sits between the model and the tools. Actions that would change state (Edit, Write, Bash on non-read commands) require an open transaction with a CHECK in `proceed`. Investigation tools (Read, Grep, Glob) flow freely — until a hypothesis-bearing prompt arms the **investigation-proportionality budget**, which caps survey-mode after a configurable threshold.
 
 The result is an agent that can build a calibration history. Over time, the divergence between what the agent believed and what actually happened becomes a signal you can act on.
 
@@ -45,22 +45,13 @@ Concretely, what users notice that vanilla codex doesn't do:
 
 ## Install
 
-The install script lives at `ecodex/scripts/install.sh`:
-
 ```shell
 git clone https://github.com/Nubaeon/ecodex.git
 cd ecodex
 ./ecodex/scripts/install.sh
 ```
 
-This builds the Rust workspace (`-p codex-cli --release`) and installs:
-
-- `~/.local/bin/ecodex` — the wrapper
-- `~/.local/lib/ecodex/bin/ecodex` — the binary
-- `~/.local/bin/codex-empirica-plugin` — the plugin binary
-- `~/.codex/plugins/cache/nubaeon/empirica/0.1.0/` — bundled hooks, MCP, skills, statusline
-
-Empirica must be installed separately (the plugin shells out to its CLI). See [Empirica](https://github.com/Nubaeon/empirica) for the framework itself.
+This builds the Rust workspace, installs the binaries, vendors the plugin assets, and seeds `~/.codex/config.toml` with curated provider defaults if no config exists. The empirica CLI must also be on `PATH` — install from [`Nubaeon/empirica`](https://github.com/Nubaeon/empirica). See [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) for system vs user install, prerequisites, troubleshooting, and provider configuration.
 
 ## Run
 
@@ -68,21 +59,43 @@ Empirica must be installed separately (the plugin shells out to its CLI). See [E
 ecodex
 ```
 
-The first run creates `~/.codex/config.toml` with the curated provider defaults. Add your API keys (see `~/.codex/.env.example`), pick a model with `/model`, and start a session.
+The first run uses the curated `config.toml` defaults. Add your API keys (per-provider env vars are documented in the seeded config), pick a model with `/model`, and start a session. Hot-swap to a different provider mid-session via `/model` — no restart needed.
+
+## Glossary
+
+| Term | What it means |
+|---|---|
+| **transaction** | One measured chunk of agent work, framed by PREFLIGHT → (CHECK → praxic) → POSTFLIGHT. Linked to one or more goals. |
+| **PREFLIGHT** | The transaction-opening assessment: declares 13 calibration vectors (`know`, `uncertainty`, `do`, `clarity`, …) representing the agent's belief about its current epistemic state. |
+| **CHECK** | The gate that decides whether the agent transitions from the noetic (investigation) phase into the praxic (action) phase. Returns `proceed` or `investigate`. |
+| **POSTFLIGHT** | The transaction-closing reflection: re-declares vectors, gets compared against deterministic service observations (lint, tests, git metrics) to compute calibration deltas. |
+| **noetic** | Investigation phase. Read/Grep/Glob always allowed. The agent is building understanding. |
+| **praxic** | Action phase. Edit/Write/Bash require an open transaction with CHECK=proceed. The agent is committing to a path. |
+| **Sentinel** | The firewall component that gates praxic tool calls on transaction state. Lives in `sentinel-gate.py`, runs as a codex `PreToolUse` hook subprocess. |
+| **calibration** | The divergence between an agent's stated vector and the deterministic-service observation. Brier-scored. The signal that improves over time. |
+| **artifact** | A logged epistemic unit: finding (verified discovery), unknown (open question), assumption (unverified belief), decision (chosen path), dead-end (failed approach), mistake (recognized error), goal (target). |
+| **investigation-proportionality budget** | A per-session counter that caps Read/Grep/Glob calls after a hypothesis-bearing prompt fires the budget. Prevents investigation-as-procrastination. |
+
+For the full vocabulary + how the pieces compose, see [`docs/ecodex/system-overview.md`](docs/ecodex/system-overview.md).
 
 ## Documentation
 
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — three-layer contribution model, dev workflow, conventions
+- [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) — install modes, providers, troubleshooting
 - [`docs/ecodex/system-overview.md`](docs/ecodex/system-overview.md) — three-layer architecture, runtime composition, file layout
 - [`docs/ecodex/architecture.md`](docs/ecodex/architecture.md) — T3 decision record (distribution model, fork posture, integration strategy)
 - [`docs/ecodex/inspection.md`](docs/ecodex/inspection.md) — T2 inspection of codex-rs (hook system, plugin marketplace, thread-scoped goals)
+- [`docs/ecodex/api/`](docs/ecodex/api/) — plugin API contracts (`hooks.md`, `skills.md`, `mcp.md`, `plugin-statusline.md`, `plugin-writable-roots.md`, `integration-tests.md`)
 - [`codex-rs/codex-empirica-plugin/README.md`](codex-rs/codex-empirica-plugin/README.md) — plugin architecture, hook-by-hook status
 - [`codex-rs/codex-empirica-translator/README.md`](codex-rs/codex-empirica-translator/README.md) — translator design, CIF, adapter map
 
 ## Relationship to upstream codex
 
-ecodex is a **product fork**, not a derivative. Upstream improvements flow into us via `main` rebase; our hardening fixes go back via PRs against `openai/codex`. Branding is rebadged; the agent runtime, sandbox, RPC protocol, and plugin host are all upstream.
+ecodex is a **product fork**, not a derivative. Upstream improvements flow into us via `main` rebase; our hardening fixes go back via PRs against `openai/codex`. The agent runtime, sandbox, RPC protocol, plugin host, and hook system all come from upstream — unchanged.
 
-We do not rename, reorganize, or break upstream APIs. We add layers and curated defaults; we do not divert.
+What ecodex adds is *additive*: new crates (`codex-empirica-plugin`, `codex-empirica-translator`), new manifest fields (`writableRoots`, `statusline`), new provider entries, an install script that handles bundled-plugin layout. We do **not** rename, reorganize, or break upstream APIs. We add layers and curated defaults; we do not divert.
+
+The only special-case patch we maintain inside upstream code is the `ECODEX_AUTO_TRUSTED_PLUGIN_IDS` allowlist in `codex-rs/hooks/src/engine/discovery.rs` — first-party plugin trust on first install, in lieu of upstream's user-trust review flow. When empirica becomes a marketplace plugin, this comes off and we use the upstream-intended flow.
 
 ## License
 
