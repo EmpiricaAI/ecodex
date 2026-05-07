@@ -13,6 +13,17 @@
 # `managed.toml.example` and is installed separately at /etc/ecodex/
 # or ~/.ecodex/.
 
+# ─── Feature gates (A — these unlock the plugin host) ────────────────
+# Without these the plugin host is dark and ALL plugin hooks silently
+# no-op (sentinel firewall, session bind, transaction enforcer, the
+# whole empirica integration). The doctor (`empirica diagnose-ecodex`)
+# also FAILs on a missing plugin_hooks flag.
+suppress_unstable_features_warning = true
+
+[features]
+plugins = true
+plugin_hooks = true
+
 # ─── Plugin enablement (A) ───────────────────────────────────────────
 
 [plugins."empirica@nubaeon"]

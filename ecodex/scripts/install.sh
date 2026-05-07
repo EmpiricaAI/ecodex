@@ -133,12 +133,55 @@ else
   cp "${ECODEX_ROOT}/config.toml.default" "$CODEX_CONFIG"
 fi
 
+# ─── Idempotent feature-flag patch (A — unlocks plugin host) ─────────
+# Without `[features] plugin_hooks = true` the plugin host is DARK and
+# every empirica hook (sentinel-gate, session-init, tool-router, etc.)
+# silently no-ops. We discovered this 4 days late on a previous run.
+# This block is a no-op when the keys are already present, so it's
+# safe to run on every install.
+patch_feature_keys() {
+  local cfg="$1"
+  local needs_patch=0
+  grep -qE '^[[:space:]]*plugin_hooks[[:space:]]*=[[:space:]]*true' "$cfg" || needs_patch=1
+  grep -qE '^[[:space:]]*plugins[[:space:]]*=[[:space:]]*true' "$cfg" || needs_patch=1
+  if [[ "$needs_patch" -eq 0 ]]; then
+    echo "  ✓ [features] plugin_hooks + plugins already set"
+    return
+  fi
+  echo "  → Appending [features] block to $cfg (plugin_hooks=true, plugins=true)"
+  {
+    echo ""
+    echo "# ─── Feature gates (added by ecodex install.sh) ───────────────────"
+    echo "# Without these the plugin host is dark and ALL plugin hooks no-op."
+    echo "# Re-run install.sh to re-apply if you remove these by accident."
+    grep -qE '^[[:space:]]*suppress_unstable_features_warning' "$cfg" \
+      || echo "suppress_unstable_features_warning = true"
+    echo ""
+    echo "[features]"
+    grep -qE '^[[:space:]]*plugins[[:space:]]*=[[:space:]]*true' "$cfg" \
+      || echo "plugins = true"
+    grep -qE '^[[:space:]]*plugin_hooks[[:space:]]*=[[:space:]]*true' "$cfg" \
+      || echo "plugin_hooks = true"
+  } >> "$cfg"
+}
+echo "→ Verifying [features] gates in $CODEX_CONFIG"
+patch_feature_keys "$CODEX_CONFIG"
+
 # ─── Install wrapper script + binary ─────────────────────────────────
+# `cp` over a binary that's currently executing fails with ETXTBSY
+# ("Text file busy") on Linux. Linux holds the inode alive via the
+# running process's FD even after the directory entry is removed, so
+# `rm -f` then `cp` is the safe pattern: existing sessions keep
+# running, new launches pick up the fresh binary.
+install_binary() {
+  local src="$1" dst="$2"
+  rm -f "$dst" 2>/dev/null || true
+  cp "$src" "$dst"
+  chmod +x "$dst"
+}
 mkdir -p "$(dirname "$WRAPPER_DEST")" "$(dirname "$BINARY_DEST")"
-cp "${ECODEX_ROOT}/scripts/ecodex-wrapper.sh" "$WRAPPER_DEST"
-chmod +x "$WRAPPER_DEST"
-cp "$ECODEX_BINARY" "$BINARY_DEST"
-chmod +x "$BINARY_DEST"
+install_binary "${ECODEX_ROOT}/scripts/ecodex-wrapper.sh" "$WRAPPER_DEST"
+install_binary "$ECODEX_BINARY" "$BINARY_DEST"
 
 # Patch the wrapper's BINARY_PATH to point at the installed binary.
 # (The shipped wrapper has a placeholder; we resolve it at install time.)
@@ -190,8 +233,8 @@ else
 fi
 
 echo "→ Installing plugin binary to $PLUGIN_BIN_DEST"
-cp "$PLUGIN_BINARY" "$PLUGIN_BIN_DEST"
-chmod +x "$PLUGIN_BIN_DEST"
+# Same ETXTBSY safety as the ecodex binary above.
+install_binary "$PLUGIN_BINARY" "$PLUGIN_BIN_DEST"
 
 # ─── Verify install ──────────────────────────────────────────────────
 # Catch the common "everything copied but it doesn't actually work"
@@ -243,6 +286,16 @@ fi
 echo ""
 echo "Verify: $WRAPPER_DEST --version"
 echo ""
+# Running ecodex sessions still hold the OLD binary's inode (the
+# rm-then-cp pattern above lets the install succeed without ETXTBSY,
+# but in-flight sessions are unaffected). New behavior — including any
+# fresh hooks, plugin updates, or feature-gate changes from this run —
+# only takes effect on session restart.
+if pgrep -f "${BINARY_DEST}\|${WRAPPER_DEST}" >/dev/null 2>&1; then
+  echo "⚠ Restart any running ecodex sessions to pick up this build."
+  echo "  In-flight sessions keep the previous binary via inherited FD."
+  echo ""
+fi
 echo "ecodex is the AI's calibration training environment. The empirica"
 echo "plugin is bundled by default."
 if [[ -n "$REQUIREMENTS_PATH" ]]; then
