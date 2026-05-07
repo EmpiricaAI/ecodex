@@ -850,3 +850,119 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
 
     assert_eq!(engine.warnings(), &["failed plugin hook".to_string()]);
 }
+
+/// ecodex Tx-AT regression: empirica@nubaeon plugin hooks must be classified
+/// as `Managed` (not `Untrusted`) without any prior `trusted_hash` entry in
+/// `config.toml`. The auto-trust allowlist in `discovery::append_plugin_hook_sources`
+/// is what restores first-install runnability after upstream PR #20321 introduced
+/// the trust gate. If this test fails, sentinel-gate.py + session-init.py + the
+/// other empirica hooks will silently no-op on fresh installs.
+#[test]
+fn empirica_plugin_hooks_are_auto_trusted_without_config_state() {
+    let temp = tempdir().expect("create temp dir");
+    let plugin_root =
+        AbsolutePathBuf::try_from(temp.path().join("empirica-plugin")).expect("plugin root");
+    let plugin_data_root =
+        AbsolutePathBuf::try_from(temp.path().join("empirica-data")).expect("plugin data root");
+    fs::create_dir_all(plugin_root.join("hooks")).expect("create hooks dir");
+    let source_path = plugin_root.join("hooks/hooks.json");
+
+    let plugin_id = PluginId::parse("empirica@nubaeon").expect("plugin id");
+    let plugin_hook_sources = vec![PluginHookSource {
+        plugin_id,
+        plugin_root,
+        plugin_data_root,
+        source_path: source_path.clone(),
+        source_relative_path: "hooks/hooks.json".to_string(),
+        hooks: HookEventsToml {
+            pre_tool_use: vec![MatcherGroup {
+                matcher: Some("Bash".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command: "true".to_string(),
+                    timeout_sec: Some(5),
+                    r#async: false,
+                    status_message: None,
+                }],
+            }],
+            ..Default::default()
+        },
+    }];
+
+    let listed = crate::list_hooks(crate::HooksConfig {
+        legacy_notify_argv: None,
+        feature_enabled: true,
+        config_layer_stack: None,
+        plugin_hook_sources,
+        plugin_hook_load_warnings: Vec::new(),
+        shell_program: None,
+        shell_args: Vec::new(),
+    });
+
+    assert_eq!(listed.hooks.len(), 1, "one hook entry expected");
+    assert_eq!(
+        listed.hooks[0].plugin_id.as_deref(),
+        Some("empirica@nubaeon")
+    );
+    assert!(
+        listed.hooks[0].is_managed,
+        "empirica@nubaeon hooks must be marked managed via the auto-trust allowlist",
+    );
+    assert!(
+        matches!(listed.hooks[0].trust_status, HookTrustStatus::Managed),
+        "empirica@nubaeon hooks must report Managed trust status without config.toml hook_states; got {:?}",
+        listed.hooks[0].trust_status,
+    );
+}
+
+/// Negative control: a plugin NOT on the auto-trust allowlist still requires
+/// explicit user trust on first install. Locks in the principle that
+/// `ECODEX_AUTO_TRUSTED_PLUGIN_IDS` is an allowlist, not a blanket exemption.
+#[test]
+fn unlisted_plugin_hooks_remain_untrusted_without_config_state() {
+    let temp = tempdir().expect("create temp dir");
+    let plugin_root =
+        AbsolutePathBuf::try_from(temp.path().join("random-plugin")).expect("plugin root");
+    let plugin_data_root =
+        AbsolutePathBuf::try_from(temp.path().join("random-data")).expect("plugin data root");
+    fs::create_dir_all(plugin_root.join("hooks")).expect("create hooks dir");
+    let source_path = plugin_root.join("hooks/hooks.json");
+
+    let plugin_id = PluginId::parse("random-plugin@some-marketplace").expect("plugin id");
+    let plugin_hook_sources = vec![PluginHookSource {
+        plugin_id,
+        plugin_root,
+        plugin_data_root,
+        source_path: source_path.clone(),
+        source_relative_path: "hooks/hooks.json".to_string(),
+        hooks: HookEventsToml {
+            pre_tool_use: vec![MatcherGroup {
+                matcher: Some("Bash".to_string()),
+                hooks: vec![HookHandlerConfig::Command {
+                    command: "true".to_string(),
+                    timeout_sec: Some(5),
+                    r#async: false,
+                    status_message: None,
+                }],
+            }],
+            ..Default::default()
+        },
+    }];
+
+    let listed = crate::list_hooks(crate::HooksConfig {
+        legacy_notify_argv: None,
+        feature_enabled: true,
+        config_layer_stack: None,
+        plugin_hook_sources,
+        plugin_hook_load_warnings: Vec::new(),
+        shell_program: None,
+        shell_args: Vec::new(),
+    });
+
+    assert_eq!(listed.hooks.len(), 1);
+    assert!(!listed.hooks[0].is_managed);
+    assert!(
+        matches!(listed.hooks[0].trust_status, HookTrustStatus::Untrusted),
+        "non-allowlisted plugin must require trust review; got {:?}",
+        listed.hooks[0].trust_status,
+    );
+}

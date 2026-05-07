@@ -158,6 +158,16 @@ fn append_managed_requirement_handlers(
     );
 }
 
+/// ecodex extension (Tx-AT): plugins on this allowlist are treated as
+/// `managed` for trust purposes — their hooks become runnable on first
+/// install without requiring user trust review. This restores the pre-PR-#20321
+/// behavior for first-party Empirica integration where the plugin ships in the
+/// ecodex distribution and is implicitly trusted by the user choosing ecodex.
+///
+/// Adding a plugin here is a deliberate ecosystem-trust decision; do not extend
+/// without an explicit policy review.
+const ECODEX_AUTO_TRUSTED_PLUGIN_IDS: &[&str] = &["empirica@nubaeon"];
+
 fn append_plugin_hook_sources(
     handlers: &mut Vec<ConfiguredHandler>,
     hook_entries: &mut Vec<HookListEntry>,
@@ -185,6 +195,7 @@ fn append_plugin_hook_sources(
         // For OOTB compat with existing plugins that use this env var.
         env.insert("CLAUDE_PLUGIN_DATA".to_string(), plugin_data_root_value);
         let plugin_id = plugin_id.as_key();
+        let is_managed = ECODEX_AUTO_TRUSTED_PLUGIN_IDS.contains(&plugin_id.as_str());
         append_hook_events(
             handlers,
             hook_entries,
@@ -194,7 +205,7 @@ fn append_plugin_hook_sources(
                 path: &source_path,
                 key_source: format!("{plugin_id}:{source_relative_path}"),
                 source: HookSource::Plugin,
-                is_managed: false,
+                is_managed,
                 hook_states,
                 env,
                 plugin_id: Some(plugin_id),
