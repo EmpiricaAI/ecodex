@@ -122,9 +122,14 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
             "upstream_protocol": format!("{:?}", cfg.upstream_protocol).to_lowercase(),
         })
         .to_string();
-        let response = Response::from_string(body)
-            .with_status_code(200)
-            .with_header(tiny_http::Header::from_str("Content-Type: application/json").unwrap());
+        // `Header::from_str` only fails on malformed input; this literal is
+        // statically valid, so a match-with-no-header fallback is fine.
+        let mut response = Response::from_string(body).with_status_code(200);
+        if let Ok(content_type) =
+            tiny_http::Header::from_str("Content-Type: application/json")
+        {
+            response = response.with_header(content_type);
+        }
         return request.respond(response).context("respond /healthz");
     }
 
@@ -147,7 +152,7 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         Ok(v) => v,
         Err(e) => {
             emitter.emit(&TapEvent::RequestErrored {
-                request_id: request_id.clone(),
+                request_id,
                 stage: "parse_body".into(),
                 message: e.to_string(),
                 duration_ms: started.elapsed().as_millis() as u64,
@@ -220,7 +225,7 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         let err_body = upstream_resp.text().unwrap_or_default();
         warn!(status, body = %err_body, "upstream returned error");
         emitter.emit(&TapEvent::RequestErrored {
-            request_id: request_id.clone(),
+            request_id,
             stage: "upstream".into(),
             message: format!("status {status}: {err_body}"),
             duration_ms: started.elapsed().as_millis() as u64,

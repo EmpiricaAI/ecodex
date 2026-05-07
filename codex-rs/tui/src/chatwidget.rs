@@ -7968,7 +7968,7 @@ impl ChatWidget {
         // routing requests to the wrong endpoint after restart.
         let curated_provider =
             crate::ecodex_curated_models::provider_for_slug(model_for_action.as_str())
-                .map(|s| s.to_string());
+                .map(String::from);
         vec![Box::new(move |tx| {
             if should_prompt_plan_mode_scope {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
@@ -8059,7 +8059,7 @@ impl ChatWidget {
         // ecodex T78: persist curated provider alongside the slug so saved
         // config doesn't go inconsistent on restart.
         let curated_provider =
-            crate::ecodex_curated_models::provider_for_slug(model.as_str()).map(|s| s.to_string());
+            crate::ecodex_curated_models::provider_for_slug(model.as_str()).map(String::from);
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::UpdateModel(model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort));
@@ -8228,7 +8228,7 @@ impl ChatWidget {
             // ecodex T78: persist curated provider alongside the slug.
             let curated_provider =
                 crate::ecodex_curated_models::provider_for_slug(model_slug.as_str())
-                    .map(|s| s.to_string());
+                    .map(String::from);
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 if should_prompt_plan_mode_scope {
                     tx.send(AppEvent::OpenPlanReasoningScopePrompt {
@@ -9511,7 +9511,7 @@ impl ChatWidget {
     pub(crate) fn active_provider_id(&self) -> &str {
         self.active_provider_override
             .as_deref()
-            .unwrap_or_else(|| self.config.model_provider_id.as_str())
+            .unwrap_or(self.config.model_provider_id.as_str())
     }
 
     /// ecodex extension (T78): the provider override to forward on the

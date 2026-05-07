@@ -822,7 +822,9 @@ mod tests {
     /// Holds `home_test_lock()` for the duration so concurrent HOME-mutating
     /// tests serialize.
     fn with_home<F: FnOnce() -> R, R>(home: &Path, f: F) -> R {
-        let _guard = home_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = home_test_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let saved = std::env::var_os("HOME");
         // SAFETY: HOME mutation is serialized via home_test_lock() above.
         unsafe {

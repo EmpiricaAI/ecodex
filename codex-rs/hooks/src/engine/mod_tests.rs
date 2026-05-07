@@ -872,7 +872,7 @@ fn empirica_plugin_hooks_are_auto_trusted_without_config_state() {
         plugin_id,
         plugin_root,
         plugin_data_root,
-        source_path: source_path.clone(),
+        source_path,
         source_relative_path: "hooks/hooks.json".to_string(),
         hooks: HookEventsToml {
             pre_tool_use: vec![MatcherGroup {
@@ -932,7 +932,7 @@ fn unlisted_plugin_hooks_remain_untrusted_without_config_state() {
         plugin_id,
         plugin_root,
         plugin_data_root,
-        source_path: source_path.clone(),
+        source_path,
         source_relative_path: "hooks/hooks.json".to_string(),
         hooks: HookEventsToml {
             pre_tool_use: vec![MatcherGroup {
