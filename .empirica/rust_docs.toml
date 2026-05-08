@@ -1,0 +1,25 @@
+# ecodex rust-docs-assess scope
+#
+# Walks Rust pub items + /// docstrings to compute documentation
+# coverage. Used by `empirica rust-docs-assess` and by compliance-report
+# when .empirica/compliance.yaml selects `tech_docs.tool = rust-docs-assess`.
+#
+# include is an allowlist of path prefixes (relative to project root).
+# When set, ONLY these crates are walked. exclude wins when there's
+# a conflict — safety bias is to skip rather than over-walk.
+#
+# For ecodex: we own L2 (codex-empirica-plugin) and L3 (codex-empirica-translator).
+# Upstream codex crates (codex-rs/cli, codex-rs/tui, codex-rs/core, etc.) are
+# their owners' responsibility — measuring their docstring coverage would
+# inflate our denominator with surface we don't author.
+
+[rust_docs]
+include = [
+    "codex-rs/codex-empirica-plugin",
+    "codex-rs/codex-empirica-translator",
+]
+
+# exclude is empty because include is exhaustive for the v0 scope.
+# Add here if you want to skip e.g. test-only crates within the
+# included paths.
+exclude = []
