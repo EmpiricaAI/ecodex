@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ecodex release pipeline
 #
-# Phase 1 (this script — Tx-BC): version bump → CHANGELOG roll → commit → tag.
-# Phase 2 (planned, Tx-BD): build/test/clippy gates + push + gh release.
+# Phase 1 (Tx-BC): version bump → CHANGELOG roll → commit → tag.
+# Phase 2 (Tx-BD, this script): opt-in build/test/clippy gates + push + gh release.
 # Phase 3 (planned, Tx-BE): cargo publish (own crates), homebrew, npm channels.
 #
 # Replaces the placeholder stub from Tx-AY (which exit-64'd with a "not yet
@@ -19,6 +19,16 @@
 #   ./scripts/release.sh --patch --skip-tag     Bump + commit only, no tag
 #   ./scripts/release.sh --patch --skip-commit  Edit files in place, leave
 #                                               for manual commit + review.
+#   ./scripts/release.sh --patch --gate-all     Bump + roll + run cargo
+#                                               build + test + clippy as
+#                                               gates BEFORE commit/tag.
+#                                               Failure leaves dirty tree
+#                                               for review.
+#   ./scripts/release.sh --patch --gate-all --push --create-gh-release
+#                                               Full Phase 1+2 flow:
+#                                               bump → roll → gates →
+#                                               commit → tag → push →
+#                                               gh release create.
 #
 # Required state at invocation:
 #   - working tree clean (no unstaged or uncommitted changes outside the
@@ -44,6 +54,11 @@ DRY_RUN=0
 SKIP_TAG=0
 SKIP_COMMIT=0
 SKIP_CHANGELOG=0
+GATE_BUILD=0
+GATE_TEST=0
+GATE_CLIPPY=0
+PUSH=0
+CREATE_GH_RELEASE=0
 
 # ─── Parse args ──────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -60,6 +75,17 @@ while [[ $# -gt 0 ]]; do
     --skip-tag)      SKIP_TAG=1;                shift ;;
     --skip-commit)   SKIP_COMMIT=1;             shift ;;
     --skip-changelog) SKIP_CHANGELOG=1;         shift ;;
+    --gate-build)    GATE_BUILD=1;              shift ;;
+    --gate-test)     GATE_TEST=1;               shift ;;
+    --gate-clippy)   GATE_CLIPPY=1;             shift ;;
+    --gate-all)
+      GATE_BUILD=1
+      GATE_TEST=1
+      GATE_CLIPPY=1
+      shift
+      ;;
+    --push)             PUSH=1;                 shift ;;
+    --create-gh-release) CREATE_GH_RELEASE=1;   shift ;;
     -h|--help)
       sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#//'
       exit 0
@@ -280,6 +306,49 @@ PY
   fi
 fi
 
+# ─── Gates (Phase 2 — opt-in) ────────────────────────────────────────
+# Run AFTER bump + changelog roll (so the version under test is the
+# version that's about to be tagged) and BEFORE commit + tag (so a
+# failed gate leaves the working tree dirty for review — `git checkout
+# -- codex-rs/Cargo.toml CHANGELOG.md` reverts cleanly).
+#
+# Each gate exits non-zero on failure. Cargo invocations stream output
+# directly to the user's terminal so the failure is legible.
+gate_build() {
+  log "[gate-build] cargo build --release -p codex-cli -p codex-empirica-plugin -p codex-empirica-translator"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '  [dry-run] cargo build --release ...\n' >&2
+    return 0
+  fi
+  (cd "${ECODEX_ROOT}/codex-rs" && \
+    cargo build --release -p codex-cli -p codex-empirica-plugin -p codex-empirica-translator) \
+    || error "gate-build failed — review cargo output, fix, then re-run"
+}
+
+gate_test() {
+  log "[gate-test] cargo test --workspace --lib"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '  [dry-run] cargo test --workspace --lib\n' >&2
+    return 0
+  fi
+  (cd "${ECODEX_ROOT}/codex-rs" && cargo test --workspace --lib) \
+    || error "gate-test failed — review failures, fix, then re-run"
+}
+
+gate_clippy() {
+  log "[gate-clippy] cargo clippy --workspace --all-targets"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '  [dry-run] cargo clippy --workspace --all-targets\n' >&2
+    return 0
+  fi
+  (cd "${ECODEX_ROOT}/codex-rs" && cargo clippy --workspace --all-targets) \
+    || error "gate-clippy failed — fix lints, then re-run"
+}
+
+if [[ "$GATE_BUILD" -eq 1 ]]; then gate_build; fi
+if [[ "$GATE_TEST"  -eq 1 ]]; then gate_test;  fi
+if [[ "$GATE_CLIPPY" -eq 1 ]]; then gate_clippy; fi
+
 # ─── Commit ──────────────────────────────────────────────────────────
 if [[ "$SKIP_COMMIT" -eq 0 ]]; then
   log "Staging + committing"
@@ -291,6 +360,41 @@ fi
 if [[ "$SKIP_TAG" -eq 0 && "$SKIP_COMMIT" -eq 0 ]]; then
   log "Tagging v${new_version}"
   run_or_dry git tag -a "v${new_version}" -m "ecodex v${new_version}"
+fi
+
+# ─── Push (Phase 2 — opt-in) ─────────────────────────────────────────
+# Pushes the release commit on the current branch + the new tag. We
+# do NOT push --follow-tags because that's all-or-nothing; an explicit
+# two-step is more debuggable when the network or remote rejects.
+if [[ "$PUSH" -eq 1 ]]; then
+  if [[ "$SKIP_COMMIT" -eq 1 ]]; then
+    warn "--push skipped because --skip-commit was passed (nothing to push)"
+  else
+    log "Pushing $current_branch + tag v${new_version} to origin"
+    run_or_dry git push origin "$current_branch"
+    if [[ "$SKIP_TAG" -eq 0 ]]; then
+      run_or_dry git push origin "v${new_version}"
+    fi
+  fi
+fi
+
+# ─── GitHub release (Phase 2 — opt-in, requires gh CLI) ──────────────
+# Creates the release shell with --generate-notes (gh derives notes
+# from commits since the previous tag). For binary asset uploads, run
+# `gh release upload v${new_version} <files>` separately after the
+# Phase 2 build artifacts are produced. We don't auto-upload here
+# because asset selection is too project-specific for a generic flag.
+if [[ "$CREATE_GH_RELEASE" -eq 1 ]]; then
+  if [[ "$SKIP_TAG" -eq 1 || "$SKIP_COMMIT" -eq 1 || "$PUSH" -eq 0 ]]; then
+    warn "--create-gh-release requires committed + tagged + pushed state (skipping)"
+  elif ! command -v gh >/dev/null 2>&1; then
+    warn "gh CLI not found on PATH — install from https://cli.github.com/ to auto-create the release"
+  else
+    log "Creating GitHub release v${new_version}"
+    run_or_dry gh release create "v${new_version}" \
+      --title "ecodex v${new_version}" \
+      --generate-notes
+  fi
 fi
 
 # ─── Done ────────────────────────────────────────────────────────────
@@ -309,9 +413,13 @@ else
   fi
 fi
 echo ""
-echo "Next (Phase 2 — not yet implemented):"
-echo "  • cargo build --release -p codex-cli -p codex-empirica-plugin -p codex-empirica-translator"
-echo "  • cargo test --workspace --lib (gate on green)"
-echo "  • cargo clippy --workspace --all-targets (gate on clean)"
-echo "  • git push origin <branch> --tags"
-echo "  • gh release create v${new_version} --notes-from-tag"
+echo "Phase 2 surfaces (opt-in via flags, all default off):"
+echo "  --gate-build / --gate-test / --gate-clippy / --gate-all"
+echo "  --push                   git push <branch> + tag"
+echo "  --create-gh-release      gh release create with --generate-notes"
+echo ""
+echo "Phase 3 (still TODO):"
+echo "  • cargo publish for own crates (codex-empirica-plugin, codex-empirica-translator)"
+echo "  • homebrew Formula update (when we have a Tap)"
+echo "  • npm package publish (if we ship a wrapper there)"
+echo "  • binary asset uploads to the GH release (gh release upload v${new_version} <files>)"
