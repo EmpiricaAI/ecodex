@@ -500,6 +500,23 @@ strip = "symbols"
 # See https://github.com/openai/codex/issues/1411 for details.
 codegen-units = 1
 
+# ecodex T79 — fast-release profile for dev iteration.
+#
+# release build with `lto = "fat"` + `codegen-units = 1` takes ~15–20 min for
+# a clean cli link on this codebase, which is painful when iterating on
+# TUI / picker / translator / plugin features. fast-release drops LTO to
+# "thin" and lifts codegen-units, cutting clean rebuild to ~3–5 min while
+# still producing a runtime-fast binary (opt-level inherited from release).
+# Trade: slightly larger binary, slightly slower runtime than the shipping
+# release. Use for `cargo build --profile fast-release ...` during
+# development; ship via `--release` (which keeps LTO=fat).
+[profile.fast-release]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+# Keep symbols for backtraces during dev. Shipping release strips them.
+strip = "none"
+
 [profile.ci-test]
 debug = 1         # Reduce debug symbol size
 inherits = "test"

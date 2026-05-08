@@ -8,11 +8,13 @@
 # Safe with existing user configs — backs up before touching, never
 # clobbers ~/.codex/config.toml if it already exists.
 #
-# Usage: ./install.sh [--system | --user] [--prefix DIR] [--no-build]
+# Usage: ./install.sh [--system | --user] [--prefix DIR] [--no-build] [--fast]
 #   --system    Install managed.toml to /etc/ecodex/ (requires sudo)
 #   --user      Install managed.toml to ~/.ecodex/ (default)
 #   --prefix    Override binary install dir (default: /usr/local)
 #   --no-build  Skip the cargo build step (assume binaries already built)
+#   --fast      Build with [profile.fast-release] (lto=thin, codegen-units=16)
+#               for faster dev iteration. Use --release builds for shipping.
 
 set -euo pipefail
 
@@ -24,6 +26,8 @@ WORKSPACE_ROOT="$(cd -- "${ECODEX_ROOT}/.." &> /dev/null && pwd)"
 SCOPE="user"           # system | user
 PREFIX="/usr/local"
 SKIP_BUILD=0
+BUILD_PROFILE="release"   # release | fast-release  (T79 — --fast flag flips this)
+CARGO_TARGET_DIR_NAME="release"   # cargo's directory name for the chosen profile
 ECODEX_BINARY="${ECODEX_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/ecodex}"
 PLUGIN_BINARY="${PLUGIN_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/codex-empirica-plugin}"
 PLUGIN_SRC="${WORKSPACE_ROOT}/codex-rs/codex-empirica-plugin"
@@ -37,6 +41,13 @@ while [[ $# -gt 0 ]]; do
     --user)      SCOPE="user";    shift ;;
     --prefix)    PREFIX="$2";     shift 2 ;;
     --no-build)  SKIP_BUILD=1;    shift ;;
+    --fast)
+      BUILD_PROFILE="fast-release"
+      CARGO_TARGET_DIR_NAME="fast-release"
+      ECODEX_BINARY="${WORKSPACE_ROOT}/codex-rs/target/fast-release/ecodex"
+      PLUGIN_BINARY="${WORKSPACE_ROOT}/codex-rs/target/fast-release/codex-empirica-plugin"
+      shift
+      ;;
     -h|--help)
       sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#//'
       exit 0
@@ -94,8 +105,8 @@ else
     echo "  (Or pre-build elsewhere and re-run with ECODEX_BINARY=... PLUGIN_BINARY=... ./install.sh --no-build)" >&2
     exit 1
   fi
-  echo "→ Building ecodex + empirica plugin (cargo build --release; no-op if up-to-date)"
-  (cd "${WORKSPACE_ROOT}/codex-rs" && cargo build --release -p codex-cli -p codex-empirica-plugin)
+  echo "→ Building ecodex + empirica plugin (cargo build --profile=${BUILD_PROFILE}; no-op if up-to-date)"
+  (cd "${WORKSPACE_ROOT}/codex-rs" && cargo build --profile="${BUILD_PROFILE}" -p codex-cli -p codex-empirica-plugin)
 fi
 
 # ─── Sanity checks (post-build) ──────────────────────────────────────
