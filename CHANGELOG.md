@@ -1,1 +1,37 @@
-The changelog can be found on the [releases page](https://github.com/openai/codex/releases).
+# Changelog
+
+All notable ecodex-specific changes are documented here. ecodex is a fork of [openai/codex](https://github.com/openai/codex); upstream codex changes are tracked at the [openai/codex releases](https://github.com/openai/codex/releases) page.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+`scripts/release.sh` rolls the [Unreleased] section under a new version stamp on each release. Add entries to [Unreleased] as you ship; the release script promotes them.
+
+## [Unreleased]
+
+### Added
+- **Tx-BC** (`scripts/release.sh`): Phase 1 of the release pipeline — version bump, CHANGELOG roll, commit, tag. Replaces the prior placeholder stub.
+- **Tx-BB**: rustdoc on `codex-empirica-plugin` (47% → 100%) and `codex-empirica-translator` (56% → 64%); overall owned-crate docs coverage 53.6% → 75.0%.
+- **Tx-BA** (`empirica rust-docs-assess`): Rust-aware docstring-coverage measurement on Cargo.toml workspace members. Replaces docpistemic for forks where Python-discovery inflates the denominator with upstream noise.
+- **Tx-AY**: `[features] plugin_hooks=true` + `plugins=true` seeded by `install.sh` on first install. Cargo.toml recognized by empirica's repo_hygiene `version_file` check.
+- **Tx-AW** (`scripts/install.sh`): `--fast` flag (T79) flips builds to `[profile.fast-release]`. Idempotent `[features]` block append for existing configs. `rm`-then-`cp` pattern dodges ETXTBSY on running ecodex sessions. Post-install `pgrep` warning when in-flight sessions need restart.
+- **Tx-AT**: empirica plugin auto-trusted on first install via `ECODEX_AUTO_TRUSTED_PLUGIN_IDS` allowlist in upstream's hook discovery (codex-rs/hooks/src/engine/discovery.rs). Restores pre-PR-#20321 first-install runnability.
+- **Tx-AO**: upstream codex sync — 162 commits forward-ported. T78 `ArcSwap<ModelClient>` hot-swap pattern preserved against upstream's reverted `client_session` shape.
+- **Tx-AI**: plugin manifest `writableRoots` contribution surface. Plugins declare cross-cwd writable scope; codex's SandboxPolicy honors them at session bootstrap.
+- **Tx-AG**: investigation-proportionality budget enforcement. `tool-router.py` arms a per-session counter on hypothesis-bearing prompts; `sentinel-gate.py` denies Read/Grep/Glob after the configured limit (default 5) until the next user prompt resets.
+- **Tx-AJ**: `EMPIRICA_SENTINEL_FAIL_CLOSED` env opt-in for hardened deployments — outermost catch flips from fail-open allow to fail-closed deny.
+- **CONTRIBUTING.md**: three-layer contribution model (L1 codex foundation / L2 empirica plugin / L3 ecodex-specific) with concrete routing.
+- **docs/ecodex/INSTALL.md**: prerequisites, --user vs --system, providers config, hot-swap semantics, idempotent reinstall.
+
+### Changed
+- **README.md**: sharper transaction-lifecycle phrasing (PREFLIGHT / CHECK / POSTFLIGHT defined inline with the noetic↔praxic distinction). New Glossary section. Relationship-to-codex section now names the one upstream patch we maintain (Tx-AT allowlist).
+
+### Fixed
+- **Tx-AU**: workspace test fixtures resolved post-Tx-AO — `TurnStartParams` literal in v2/tests.rs gained `model_provider`; `LoadedPlugin` test fixture gained extension fields; 7 conflict markers in core-skills/loader_tests.rs resolved.
+- **Tx-AV**: `cargo clippy --workspace --all-targets` from 28 errors → 0 after rust 1.93's stricter lints landed via the upstream sync.
+
+## [0.0.0]
+
+Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/Nubaeon/ecodex/commits/build/v1-plugin).
+
+[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.0.0...HEAD
+[0.0.0]: https://github.com/Nubaeon/ecodex/releases/tag/v0.0.0
