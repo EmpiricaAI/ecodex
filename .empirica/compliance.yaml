@@ -1,0 +1,22 @@
+# ecodex compliance overrides
+#
+# Per-project tuning of `empirica compliance-report` — see
+# empirica/cli/command_handlers/compliance_report_commands.py:_load_compliance_config
+# for the full schema.
+
+# tech_docs is currently skipped because docpistemic auto-discovers
+# upstream codex internals (CLI commands like generate-batch/stage-sdk,
+# env vars like USERPROFILE/EMPIRICA_USER) as "undocumented features",
+# inflating the denominator with surface that doesn't need user-facing
+# docs. Documenting those would be busywork; the right fix is a
+# Rust-aware tech_docs check that walks Cargo.toml workspaces + clap
+# subcommands + serde config keys instead of Python's discovery
+# patterns.
+#
+# Tracked under goal "Tx-AX/2: scope docpistemic auto-discovery for
+# ecodex compliance". Re-enable this check once that lands (likely
+# via a `tech_docs.tool: rust-docpistemic` selector or by docpistemic
+# itself gaining per-project excludes).
+skip_checks:
+  - tech_docs
+  - tech_docs_links  # depends on tech_docs surface; re-enable together
