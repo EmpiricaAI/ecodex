@@ -13,6 +13,17 @@ use std::process::ExitCode;
 use crate::empirica_cli;
 use crate::translate_output;
 
+/// Run the PostToolUse hook against the current invocation.
+///
+/// Fires after codex executes a tool call. Forwards the codex payload
+/// (tool result + duration + status) to `tool-failure.py` (legacy name;
+/// the script handles success too). Updates noetic vs praxic counters,
+/// tracks edited file paths for non-git change detection, surfaces
+/// re-read advisories.
+///
+/// Always exits `0` for infrastructure failures — PostToolUse is
+/// observation-only, it can't undo a tool call that already ran.
+/// Intentional script blocks (`exit 2` + structured stderr) propagate.
 pub fn handle() -> ExitCode {
     let mut input = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {

@@ -15,6 +15,20 @@ use std::process::ExitCode;
 use crate::empirica_cli;
 use crate::translate_output;
 
+/// Run the PreToolUse hook against the current invocation.
+///
+/// Reads codex's hook payload from stdin, dispatches it to
+/// `sentinel-gate.py`, translates the script's CC-shape JSON output to
+/// codex's `hookSpecificOutput.permissionDecision` form, and propagates
+/// stderr + exit code unchanged.
+///
+/// Exit code semantics (matched to codex's PreToolUse contract):
+/// - `0` → allow the tool call.
+/// - `2` → deny the tool call (fail-closed). Codex emits the script's
+///   stdout to the model as the rejection reason.
+/// - any other → treated as allow (fail-open). The plugin is the
+///   firewall; a crash inside the python script must not silently
+///   block legit tool calls. Discipline relies on explicit `2`.
 pub fn handle() -> ExitCode {
     let mut input = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {

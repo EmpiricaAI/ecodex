@@ -14,6 +14,19 @@ use std::process::ExitCode;
 use crate::empirica_cli;
 use crate::translate_output;
 
+/// Run the Stop hook against the current invocation.
+///
+/// Fires when codex ends a session or turn. Forwards the payload to
+/// `transaction-enforcer.py`, which decides whether the session has an
+/// open transaction past the hard POSTFLIGHT threshold and should be
+/// blocked from ending until measurement closes.
+///
+/// Exit code semantics:
+/// - `0` → allow the stop (no open transaction OR within grace period).
+/// - `2` → block the stop. Codex emits the script's stderr to the
+///   model with instructions to POSTFLIGHT before ending.
+/// - any other → fail-open. Plugin infrastructure failures must not
+///   strand the session.
 pub fn handle() -> ExitCode {
     let mut input = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {

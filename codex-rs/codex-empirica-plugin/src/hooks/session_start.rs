@@ -14,6 +14,25 @@ use crate::agents_md;
 use crate::empirica_cli;
 use crate::subagents;
 
+/// Run the SessionStart hook against the current invocation.
+///
+/// Fires once when codex starts a new session (or resumes one). Three
+/// side effects, in order:
+/// 1. **AGENTS.md seed** — ensures `~/.codex/AGENTS.md` carries the
+///    empirica system-prompt block so the model has discipline priming
+///    when codex loads `user_instructions`. Idempotent; only writes
+///    when content drift is detected.
+/// 2. **Subagent seed** — copies bundled empirica subagents
+///    (architecture, security, ux, etc.) into
+///    `<codex_home>/agents/empirica/` so codex's Agent tool can
+///    dispatch to them.
+/// 3. **`session-init.py`** — bootstraps empirica's session-level
+///    state (writes the active-work pointer, loads project context,
+///    detects existing/orphaned sessions, returns the
+///    `additionalContext` block injected into the agent's first turn).
+///
+/// All three are fail-open: a write/seed failure logs to stderr and
+/// the session continues.
 pub fn handle() -> ExitCode {
     // Ensure ~/.codex/AGENTS.md carries the empirica system-prompt block so
     // the codex agent has cognitive priming (identity + 13 vectors +

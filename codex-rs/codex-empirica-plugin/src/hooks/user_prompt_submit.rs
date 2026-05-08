@@ -13,6 +13,22 @@ use std::process::ExitCode;
 use crate::empirica_cli;
 use crate::translate_output;
 
+/// Run the UserPromptSubmit hook against the current invocation.
+///
+/// Fires when the user submits a prompt. Forwards the payload to
+/// `tool-router.py`, which:
+/// - Loads the active empirica session's vector state.
+/// - Detects hedging language ("I think", "maybe", "might need") that
+///   often signals investigation-as-procrastination — injects an
+///   epistemic-discipline reminder.
+/// - Detects hypothesis-bearing prompts and arms the
+///   investigation-proportionality budget so the Sentinel can deny
+///   over-broad Read/Grep/Glob after a configurable threshold.
+/// - Injects EWM protocol + project context as
+///   `additionalContext` for the model's first response in this turn.
+///
+/// Always fail-open. Returns whatever the script's stdout produces,
+/// translated to codex's `hookSpecificOutput.additionalContext` shape.
 pub fn handle() -> ExitCode {
     let mut input = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {
