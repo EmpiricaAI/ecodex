@@ -2,8 +2,10 @@
 # ecodex release pipeline
 #
 # Phase 1 (Tx-BC): version bump → CHANGELOG roll → commit → tag.
-# Phase 2 (Tx-BD, this script): opt-in build/test/clippy gates + push + gh release.
-# Phase 3 (planned, Tx-BE): cargo publish (own crates), homebrew, npm channels.
+# Phase 2 (Tx-BD): opt-in build/test/clippy gates + push + gh release.
+# Phase 3 (Tx-BE, this script): cargo publish own crates + binary asset uploads;
+#   homebrew + npm informative stubs (require Tap repo + npm package setup we
+#   don't yet have).
 #
 # Replaces the placeholder stub from Tx-AY (which exit-64'd with a "not yet
 # implemented" message). Phase 1 is the deterministic, reversible part of
@@ -29,6 +31,14 @@
 #                                               bump → roll → gates →
 #                                               commit → tag → push →
 #                                               gh release create.
+#   ./scripts/release.sh --patch --gate-all --push --create-gh-release \
+#                        --upload-assets --publish-crates
+#                                               Full Phase 1+2+3 flow.
+#                                               Requires: gh CLI auth'd,
+#                                               cargo build artifacts in
+#                                               target/release/, and
+#                                               CARGO_REGISTRY_TOKEN env
+#                                               for crates.io publish.
 #
 # Required state at invocation:
 #   - working tree clean (no unstaged or uncommitted changes outside the
@@ -59,6 +69,10 @@ GATE_TEST=0
 GATE_CLIPPY=0
 PUSH=0
 CREATE_GH_RELEASE=0
+UPLOAD_ASSETS=0
+PUBLISH_CRATES=0
+PUBLISH_HOMEBREW=0
+PUBLISH_NPM=0
 
 # ─── Parse args ──────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -86,6 +100,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --push)             PUSH=1;                 shift ;;
     --create-gh-release) CREATE_GH_RELEASE=1;   shift ;;
+    --upload-assets)    UPLOAD_ASSETS=1;        shift ;;
+    --publish-crates)   PUBLISH_CRATES=1;       shift ;;
+    --publish-homebrew) PUBLISH_HOMEBREW=1;     shift ;;
+    --publish-npm)      PUBLISH_NPM=1;          shift ;;
     -h|--help)
       sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#//'
       exit 0
@@ -397,6 +415,101 @@ if [[ "$CREATE_GH_RELEASE" -eq 1 ]]; then
   fi
 fi
 
+# ─── Phase 3: binary asset uploads (opt-in, requires gh release exists) ──
+# Uploads the standard ecodex binary set from codex-rs/target/release/
+# to the GH release shell created above. Asset paths must exist —
+# users are responsible for running cargo build --release first (or
+# combining with --gate-build, which produces these binaries as a side
+# effect). Skipped with warning when prerequisites aren't met.
+ECODEX_RELEASE_BIN="${ECODEX_ROOT}/codex-rs/target/release/ecodex"
+PLUGIN_RELEASE_BIN="${ECODEX_ROOT}/codex-rs/target/release/codex-empirica-plugin"
+TRANSLATOR_RELEASE_BIN="${ECODEX_ROOT}/codex-rs/target/release/codex-empirica-translator"
+
+if [[ "$UPLOAD_ASSETS" -eq 1 ]]; then
+  if [[ "$CREATE_GH_RELEASE" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
+    warn "--upload-assets needs --create-gh-release (or an existing release) — skipping"
+  elif ! command -v gh >/dev/null 2>&1; then
+    warn "gh CLI not found — skipping asset upload"
+  else
+    log "Uploading binary assets to v${new_version}"
+    asset_args=()
+    for asset in "$ECODEX_RELEASE_BIN" "$PLUGIN_RELEASE_BIN" "$TRANSLATOR_RELEASE_BIN"; do
+      if [[ -f "$asset" ]]; then
+        asset_args+=("$asset")
+      else
+        warn "missing build artifact: $asset (run cargo build --release or --gate-build first)"
+      fi
+    done
+    if [[ "${#asset_args[@]}" -gt 0 ]]; then
+      run_or_dry gh release upload "v${new_version}" "${asset_args[@]}" --clobber
+    else
+      warn "no assets to upload — skipping"
+    fi
+  fi
+fi
+
+# ─── Phase 3: cargo publish (opt-in, requires CARGO_REGISTRY_TOKEN) ──
+# Publishes ecodex's own crates to crates.io. We deliberately list the
+# crates we author — never auto-iterate workspace members because most
+# of the workspace is upstream codex's surface (their owners' choice
+# what to publish + when). Order matters: dependencies-first.
+PUBLISH_ORDER=("codex-empirica-translator" "codex-empirica-plugin")
+
+if [[ "$PUBLISH_CRATES" -eq 1 ]]; then
+  if [[ -z "${CARGO_REGISTRY_TOKEN:-}" && "$DRY_RUN" -eq 0 ]]; then
+    warn "CARGO_REGISTRY_TOKEN not set — get one at https://crates.io/me + export, or skip --publish-crates"
+  else
+    for crate in "${PUBLISH_ORDER[@]}"; do
+      log "[publish-crates] cargo publish -p ${crate}"
+      if [[ "$DRY_RUN" -eq 1 ]]; then
+        printf '  [dry-run] cargo publish -p %s\n' "$crate" >&2
+      else
+        (cd "${ECODEX_ROOT}/codex-rs" && cargo publish -p "$crate") \
+          || error "cargo publish $crate failed — fix metadata gaps then re-run with --publish-crates only (other phases are idempotent or already done)"
+      fi
+    done
+  fi
+fi
+
+# ─── Phase 3: homebrew Formula update (stub — needs Tap repo) ────────
+if [[ "$PUBLISH_HOMEBREW" -eq 1 ]]; then
+  cat <<'EOF_HB' >&2
+
+⚠ --publish-homebrew is not yet implemented.
+
+Setup needed:
+  1. Create github.com/Nubaeon/homebrew-ecodex Tap repository.
+  2. Add Formula/ecodex.rb with the standard formula shape (url to
+     tagged release tarball, sha256, install instructions).
+  3. Wire the formula update into this script: bump url to the new
+     tag, recompute sha256 from the GH release tarball, push to the
+     Tap repo.
+
+For now, post-release you can manually update the Formula and push.
+EOF_HB
+fi
+
+# ─── Phase 3: npm package publish (stub — needs package.json) ────────
+if [[ "$PUBLISH_NPM" -eq 1 ]]; then
+  cat <<'EOF_NPM' >&2
+
+⚠ --publish-npm is not yet implemented.
+
+Setup needed:
+  1. Decide on the npm wrapper shape (probably a postinstall script
+     that downloads the platform-specific binary from the GH release,
+     mirroring openai/codex's @openai/codex npm package).
+  2. Create npm/ subdirectory with package.json (name = @nubaeon/ecodex
+     or similar), bin entry, postinstall script.
+  3. NPM_TOKEN env for npm publish auth.
+  4. Wire `npm publish --access public` into this script.
+
+For now, post-release you can manually publish from npm/ after
+preparing the wrapper. The GH release binary uploads (--upload-assets)
+provide the binaries the wrapper would download.
+EOF_NPM
+fi
+
 # ─── Done ────────────────────────────────────────────────────────────
 echo ""
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -418,8 +531,8 @@ echo "  --gate-build / --gate-test / --gate-clippy / --gate-all"
 echo "  --push                   git push <branch> + tag"
 echo "  --create-gh-release      gh release create with --generate-notes"
 echo ""
-echo "Phase 3 (still TODO):"
-echo "  • cargo publish for own crates (codex-empirica-plugin, codex-empirica-translator)"
-echo "  • homebrew Formula update (when we have a Tap)"
-echo "  • npm package publish (if we ship a wrapper there)"
-echo "  • binary asset uploads to the GH release (gh release upload v${new_version} <files>)"
+echo "Phase 3 surfaces:"
+echo "  --upload-assets          gh release upload <ecodex,plugin,translator> binaries"
+echo "  --publish-crates         cargo publish own crates (translator + plugin)"
+echo "  --publish-homebrew       NOT YET IMPLEMENTED (needs Tap repo)"
+echo "  --publish-npm            NOT YET IMPLEMENTED (needs npm wrapper package)"
