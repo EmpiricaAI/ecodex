@@ -431,13 +431,37 @@ if [[ "$UPLOAD_ASSETS" -eq 1 ]]; then
   elif ! command -v gh >/dev/null 2>&1; then
     warn "gh CLI not found — skipping asset upload"
   else
-    log "Uploading binary assets to v${new_version}"
+    # Asset names embed the platform slug so the npm postinstall
+    # (npm/scripts/postinstall.js) can fetch the right binary per-OS.
+    # Slug shape: <os>-<arch> matching the postinstall's mapping.
+    case "$(uname -s)" in
+      Linux)  os_slug="linux" ;;
+      Darwin) os_slug="macos" ;;
+      *)      error "unsupported OS for asset upload: $(uname -s)" ;;
+    esac
+    case "$(uname -m)" in
+      x86_64|amd64)  arch_slug="x86_64" ;;
+      arm64|aarch64) arch_slug="aarch64" ;;
+      *)             error "unsupported arch for asset upload: $(uname -m)" ;;
+    esac
+    platform_slug="${os_slug}-${arch_slug}"
+    log "Uploading binary assets to v${new_version} (platform: ${platform_slug})"
+
+    # Build asset list. Each binary gets renamed via gh's local#alias
+    # form (gh release upload <tag> path/to/file#alias-name).
     asset_args=()
-    for asset in "$ECODEX_RELEASE_BIN" "$PLUGIN_RELEASE_BIN" "$TRANSLATOR_RELEASE_BIN"; do
-      if [[ -f "$asset" ]]; then
-        asset_args+=("$asset")
+    for src_path in \
+      "$ECODEX_RELEASE_BIN:ecodex" \
+      "$PLUGIN_RELEASE_BIN:codex-empirica-plugin" \
+      "$TRANSLATOR_RELEASE_BIN:codex-empirica-translator"
+    do
+      file="${src_path%%:*}"
+      base="${src_path##*:}"
+      if [[ -f "$file" ]]; then
+        # gh release upload syntax: file#displayname
+        asset_args+=("${file}#${base}-${platform_slug}")
       else
-        warn "missing build artifact: $asset (run cargo build --release or --gate-build first)"
+        warn "missing build artifact: $file (run cargo build --release or --gate-build first)"
       fi
     done
     if [[ "${#asset_args[@]}" -gt 0 ]]; then
@@ -471,43 +495,111 @@ if [[ "$PUBLISH_CRATES" -eq 1 ]]; then
   fi
 fi
 
-# ─── Phase 3: homebrew Formula update (stub — needs Tap repo) ────────
+# ─── Phase 3: homebrew Formula update ────────────────────────────────
+# Updates Formula/ecodex.rb in Nubaeon/homebrew-tap to point at the new
+# release tarball. Requires the GH release to exist (sha256 is computed
+# against the tarball gh auto-generates from the tag). Clones the Tap
+# into a temp dir, edits the formula, commits + pushes.
+HOMEBREW_TAP="Nubaeon/homebrew-tap"
+HOMEBREW_FORMULA="ecodex.rb"
+
 if [[ "$PUBLISH_HOMEBREW" -eq 1 ]]; then
-  cat <<'EOF_HB' >&2
+  if [[ "$CREATE_GH_RELEASE" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
+    warn "--publish-homebrew needs --create-gh-release (sha256 derived from the release tarball) — skipping"
+  elif ! command -v gh >/dev/null 2>&1; then
+    warn "gh CLI not found — skipping homebrew update"
+  else
+    log "Updating $HOMEBREW_TAP/Formula/$HOMEBREW_FORMULA → v${new_version}"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      printf '  [dry-run] clone %s, write Formula/%s pointing at v%s, commit + push\n' \
+        "$HOMEBREW_TAP" "$HOMEBREW_FORMULA" "$new_version" >&2
+    else
+      tap_dir="$(mktemp -d)"
+      trap 'rm -rf "$tap_dir"' EXIT INT TERM
+      git clone --depth 1 "https://github.com/${HOMEBREW_TAP}.git" "$tap_dir" \
+        || error "couldn't clone $HOMEBREW_TAP — does it exist?"
+      mkdir -p "$tap_dir/Formula"
 
-⚠ --publish-homebrew is not yet implemented.
+      tarball_url="https://github.com/Nubaeon/ecodex/archive/refs/tags/v${new_version}.tar.gz"
+      log "  computing sha256 of $tarball_url"
+      sha256="$(curl -fsSL "$tarball_url" | sha256sum | awk '{print $1}')" \
+        || error "couldn't fetch tarball for sha256 — is the GH release published?"
 
-Setup needed:
-  1. Create github.com/Nubaeon/homebrew-ecodex Tap repository.
-  2. Add Formula/ecodex.rb with the standard formula shape (url to
-     tagged release tarball, sha256, install instructions).
-  3. Wire the formula update into this script: bump url to the new
-     tag, recompute sha256 from the GH release tarball, push to the
-     Tap repo.
+      cat >"$tap_dir/Formula/${HOMEBREW_FORMULA}" <<EOF_RUBY
+class Ecodex < Formula
+  desc "Empirica's epistemic agent environment — a fork of openai/codex with measured discipline"
+  homepage "https://github.com/Nubaeon/ecodex"
+  url "${tarball_url}"
+  sha256 "${sha256}"
+  license "Apache-2.0"
+  head "https://github.com/Nubaeon/ecodex.git", branch: "build/v1-plugin"
 
-For now, post-release you can manually update the Formula and push.
-EOF_HB
+  depends_on "rust" => :build
+
+  def install
+    cd "codex-rs" do
+      system "cargo", "install", *std_cargo_args(path: "cli")
+    end
+  end
+
+  test do
+    assert_match "ecodex", shell_output("#{bin}/ecodex --version")
+  end
+end
+EOF_RUBY
+
+      (cd "$tap_dir" && \
+        git add "Formula/${HOMEBREW_FORMULA}" && \
+        git commit -m "ecodex v${new_version}" && \
+        git push) || error "homebrew tap push failed — check Nubaeon/homebrew-tap permissions"
+      rm -rf "$tap_dir"
+      trap - EXIT INT TERM
+    fi
+  fi
 fi
 
-# ─── Phase 3: npm package publish (stub — needs package.json) ────────
+# ─── Phase 3: npm package publish ────────────────────────────────────
+# Syncs npm/package.json version to the release version and runs
+# `npm publish --access public`. The wrapper (npm/bin/ecodex.js) execs
+# into a binary that npm/scripts/postinstall.js downloads from the GH
+# release on install. So the GH release MUST exist with binary assets
+# (--upload-assets) before this step runs in anger.
+NPM_DIR="${ECODEX_ROOT}/npm"
+
 if [[ "$PUBLISH_NPM" -eq 1 ]]; then
-  cat <<'EOF_NPM' >&2
+  if [[ ! -d "$NPM_DIR" ]]; then
+    warn "npm/ directory missing — skipping npm publish"
+  elif ! command -v npm >/dev/null 2>&1; then
+    warn "npm not found on PATH — install Node.js to publish, or skip --publish-npm"
+  elif [[ "$UPLOAD_ASSETS" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
+    warn "--publish-npm needs --upload-assets (postinstall downloads binaries from the release) — skipping"
+  else
+    log "Syncing $NPM_DIR/package.json version to ${new_version}"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      printf '  [dry-run] sed-update package.json "version" → "%s"\n' "$new_version" >&2
+      printf '  [dry-run] (cd %s && npm publish --access public)\n' "$NPM_DIR" >&2
+    else
+      python3 - "$NPM_DIR/package.json" "$new_version" <<'PY'
+import json
+import sys
+from pathlib import Path
 
-⚠ --publish-npm is not yet implemented.
+path, new_version = sys.argv[1], sys.argv[2]
+data = json.loads(Path(path).read_text())
+data["version"] = new_version
+Path(path).write_text(json.dumps(data, indent=2) + "\n")
+PY
+      log "Publishing @nubaeon/ecodex@${new_version}"
+      (cd "$NPM_DIR" && npm publish --access public) \
+        || error "npm publish failed — check NPM_TOKEN env, npm whoami, package.json"
 
-Setup needed:
-  1. Decide on the npm wrapper shape (probably a postinstall script
-     that downloads the platform-specific binary from the GH release,
-     mirroring openai/codex's @openai/codex npm package).
-  2. Create npm/ subdirectory with package.json (name = @nubaeon/ecodex
-     or similar), bin entry, postinstall script.
-  3. NPM_TOKEN env for npm publish auth.
-  4. Wire `npm publish --access public` into this script.
-
-For now, post-release you can manually publish from npm/ after
-preparing the wrapper. The GH release binary uploads (--upload-assets)
-provide the binaries the wrapper would download.
-EOF_NPM
+      # Re-stage + commit the version bump in npm/package.json so the
+      # repo state matches the published version. Folded into the
+      # release commit on the next run.
+      (cd "$ECODEX_ROOT" && git add "$NPM_DIR/package.json")
+      log "npm/package.json version sync staged — fold into next release commit if needed"
+    fi
+  fi
 fi
 
 # ─── Done ────────────────────────────────────────────────────────────
@@ -534,5 +626,5 @@ echo ""
 echo "Phase 3 surfaces:"
 echo "  --upload-assets          gh release upload <ecodex,plugin,translator> binaries"
 echo "  --publish-crates         cargo publish own crates (translator + plugin)"
-echo "  --publish-homebrew       NOT YET IMPLEMENTED (needs Tap repo)"
-echo "  --publish-npm            NOT YET IMPLEMENTED (needs npm wrapper package)"
+echo "  --publish-homebrew       Update Formula in Nubaeon/homebrew-tap"
+echo "  --publish-npm            npm publish @nubaeon/ecodex (postinstall fetches binary from GH release)"
