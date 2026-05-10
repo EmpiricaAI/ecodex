@@ -42,10 +42,12 @@ Canonical install paths for ecodex:
 
 | Channel | Command | Status |
 |---|---|---|
-| `cargo install` | `cargo install ecodex` (once published) | wired via `--publish-crates` |
 | Homebrew | `brew install nubaeon/tap/ecodex` | wired via `--publish-homebrew` |
 | GitHub Releases binary | manual download | wired via `--upload-assets` |
-| `curl ... \| sh` installer | (planned) | TBD post-v0.0.1 |
+| `cargo install --git` (Rust devs, source build) | `cargo install --git https://github.com/Nubaeon/ecodex codex-cli` | works today, no publish needed |
+| `curl … \| sh` installer | (planned) | TBD post-v0.0.1 |
+
+Note: the codex-cli crate (which produces the `ecodex` binary) is **not** published to crates.io — it has many path-deps on upstream codex internals. The `--publish-crates` flag publishes only our two owned crates (`codex-empirica-plugin`, `codex-empirica-translator`) for users who want to embed them in other projects.
 
 The repo retains an `npm/` subdir (wrapper code + scripts/postinstall.js) and a `--publish-npm` flag in `scripts/release.sh`, kept available for future use without commitment. Releases do **not** publish to npm by default.
 

@@ -122,6 +122,13 @@ version = "0.0.0"
 # edition.
 edition = "2024"
 license = "Apache-2.0"
+# Required by crates.io for any crate that publishes (we publish
+# codex-empirica-plugin and codex-empirica-translator from this
+# workspace; codex-cli and other forked crates are NOT published).
+# Owned crates can override `description` per-crate for specificity.
+description = "ecodex — Empirica's epistemic agent environment, a fork of openai/codex with measured agent discipline."
+repository = "https://github.com/Nubaeon/ecodex"
+homepage = "https://github.com/Nubaeon/ecodex"
 
 [workspace.dependencies]
 # Internal

@@ -3,6 +3,9 @@ edition.workspace = true
 license.workspace = true
 name = "codex-empirica-plugin"
 version.workspace = true
+description = "ecodex's empirica plugin host — codex hook integration that runs the epistemic Sentinel firewall, transaction lifecycle, and subagent routing."
+repository.workspace = true
+homepage.workspace = true
 
 [[bin]]
 name = "codex-empirica-plugin"

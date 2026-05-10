@@ -3,6 +3,9 @@ edition.workspace = true
 license.workspace = true
 name = "codex-empirica-translator"
 version.workspace = true
+description = "ecodex's protocol translator — bridges OpenAI Chat Completions providers (DeepSeek, Qwen, Kimi, Ollama, etc.) to codex's Responses API surface."
+repository.workspace = true
+homepage.workspace = true
 
 [[bin]]
 name = "codex-empirica-translator"
