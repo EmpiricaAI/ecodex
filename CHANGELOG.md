@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-05-10
+
 ### Added
 - **Tx-BC** (`scripts/release.sh`): Phase 1 of the release pipeline — version bump, CHANGELOG roll, commit, tag. Replaces the prior placeholder stub.
 - **Tx-BB**: rustdoc on `codex-empirica-plugin` (47% → 100%) and `codex-empirica-translator` (56% → 64%); overall owned-crate docs coverage 53.6% → 75.0%.
@@ -33,5 +35,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/Nubaeon/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.0.0...HEAD
+[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/Nubaeon/ecodex/compare/v0.0.0...v0.0.1
 [0.0.0]: https://github.com/Nubaeon/ecodex/releases/tag/v0.0.0
