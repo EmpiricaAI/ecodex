@@ -149,10 +149,44 @@ pub(crate) fn curated_models() -> Vec<EcodexCuratedModel> {
             category: EcodexModelCategory::LocalOpenWeights,
         },
         // ── CloudRouter ──
+        // OpenRouter is wired as a single-key gateway to many providers. The
+        // entries below are OpenRouter model IDs (vendor/model). Slug catalog
+        // verified live against https://openrouter.ai/api/v1/models.
+        // Selection criterion: frontier capability NOT already reachable via
+        // a direct provider in the curated set above (no duplication of
+        // claude-sonnet, kimi, deepseek which have direct entries).
         EcodexCuratedModel {
             slug: "openrouter/auto",
             display_name: "OpenRouter — auto (best-of)",
             description: "OpenRouter's auto-routing — sends each request to whichever frontier model wins for the prompt. Single key, many models. Pay-as-you-go, mark-up over direct provider rates.",
+            provider: "openrouter",
+            category: EcodexModelCategory::CloudRouter,
+        },
+        EcodexCuratedModel {
+            slug: "anthropic/claude-opus-4.7",
+            display_name: "Claude Opus 4.7 (via OpenRouter)",
+            description: "Anthropic's frontier Opus tier — strongest reasoning + agent calibration. 1M context. Reach Opus without separate Anthropic API key/billing.",
+            provider: "openrouter",
+            category: EcodexModelCategory::CloudRouter,
+        },
+        EcodexCuratedModel {
+            slug: "openai/gpt-5.2-codex",
+            display_name: "GPT-5.2 Codex (via OpenRouter)",
+            description: "OpenAI's codex-tuned tier — purpose-built for coding agents, 400K context. Reach GPT-5 family without OpenAI direct provider setup.",
+            provider: "openrouter",
+            category: EcodexModelCategory::CloudRouter,
+        },
+        EcodexCuratedModel {
+            slug: "x-ai/grok-code-fast-1",
+            display_name: "Grok Code Fast 1 (via OpenRouter)",
+            description: "xAI's fast coding tier — high throughput, 256K context, competitive on tool-use. The cheap-and-fast option when latency dominates quality.",
+            provider: "openrouter",
+            category: EcodexModelCategory::CloudRouter,
+        },
+        EcodexCuratedModel {
+            slug: "google/gemini-2.5-pro",
+            display_name: "Gemini 2.5 Pro (via OpenRouter)",
+            description: "Google's flagship general model, 1M context. Strong on long-document analysis. Reach Gemini without separate Google Cloud setup.",
             provider: "openrouter",
             category: EcodexModelCategory::CloudRouter,
         },
