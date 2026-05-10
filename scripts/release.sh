@@ -417,8 +417,12 @@ if [[ "$CREATE_GH_RELEASE" -eq 1 ]]; then
   elif ! command -v gh >/dev/null 2>&1; then
     warn "gh CLI not found on PATH — install from https://cli.github.com/ to auto-create the release"
   else
+    # --repo Nubaeon/ecodex: gh defaults to the parent repo for forks
+    # (openai/codex), which doesn't have our tag and rejects with
+    # "tag exists locally but has not been pushed to openai/codex".
     log "Creating GitHub release v${new_version}"
     run_or_dry gh release create "v${new_version}" \
+      --repo Nubaeon/ecodex \
       --title "ecodex v${new_version}" \
       --generate-notes
   fi
@@ -474,7 +478,7 @@ if [[ "$UPLOAD_ASSETS" -eq 1 ]]; then
       fi
     done
     if [[ "${#asset_args[@]}" -gt 0 ]]; then
-      run_or_dry gh release upload "v${new_version}" "${asset_args[@]}" --clobber
+      run_or_dry gh release upload "v${new_version}" "${asset_args[@]}" --clobber --repo Nubaeon/ecodex
     else
       warn "no assets to upload — skipping"
     fi
