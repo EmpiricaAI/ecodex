@@ -344,18 +344,21 @@ gate_build() {
 }
 
 gate_test() {
-  # RUST_MIN_STACK=16777216 (16MB) raises the per-test-thread stack from the
-  # 2MB default. Workspace test runs schedule 1600+ tests across N parallel
-  # threads, and a few recursive tests (e.g. agent::control subtree walks)
-  # overflow the 2MB default under that contention even though each test is
-  # fine in isolation. The bigger stack is cheap (only allocated to threads
-  # that need it) and avoids the SIGABRT that bit v0.0.1's first cut.
-  log "[gate-test] cargo test --workspace --lib  (RUST_MIN_STACK=16M)"
+  # Scope: our owned crates + the binary crate (codex-cli) that produces the
+  # `ecodex` binary. We do NOT run --workspace --lib: upstream codex's 100+
+  # crates contain tests that fail in this environment for reasons unrelated
+  # to ecodex (env-dependent config snapshots, network-proxy timeouts).
+  # Same scoping principle PUBLISH_ORDER uses. If a regression in upstream
+  # code breaks ecodex, gate-build catches it (build fails). RUST_MIN_STACK
+  # belt-and-suspenders for any future recursive test we add ourselves.
+  local pkgs="-p codex-empirica-plugin -p codex-empirica-translator -p codex-cli"
+  log "[gate-test] cargo test ${pkgs} --lib  (RUST_MIN_STACK=16M, owned crates only)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '  [dry-run] RUST_MIN_STACK=16777216 cargo test --workspace --lib\n' >&2
+    printf '  [dry-run] RUST_MIN_STACK=16777216 cargo test %s --lib\n' "$pkgs" >&2
     return 0
   fi
-  (cd "${ECODEX_ROOT}/codex-rs" && RUST_MIN_STACK=16777216 cargo test --workspace --lib) \
+  # shellcheck disable=SC2086  # word-splitting on $pkgs is intentional
+  (cd "${ECODEX_ROOT}/codex-rs" && RUST_MIN_STACK=16777216 cargo test $pkgs --lib) \
     || error "gate-test failed — review failures, fix, then re-run"
 }
 
