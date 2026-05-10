@@ -1,28 +1,23 @@
 # @nubaeon/ecodex
 
-npm wrapper for [ecodex](https://github.com/Nubaeon/ecodex) — Empirica's epistemic agent environment, a fork of [openai/codex](https://github.com/openai/codex) with measured agent discipline.
+> **npm is not a canonical distribution channel for ecodex.** This wrapper exists in the repo for future use but is not currently published. See canonical install paths below.
 
-## Install
+## Canonical install
 
-```sh
-npm install -g @nubaeon/ecodex
-```
+| Channel | Command |
+|---|---|
+| Cargo (Rust devs) | `cargo install ecodex` |
+| Homebrew (Mac/Linux) | `brew install nubaeon/tap/ecodex` |
+| Direct binary | Download from [GitHub Releases](https://github.com/Nubaeon/ecodex/releases) |
+| Build from source | `git clone … && ./ecodex/scripts/install.sh` |
 
-The postinstall hook downloads the platform-specific binary (Linux/macOS, x86_64/arm64) from the matching GitHub release. Failure to download is non-fatal — `ecodex` itself will surface a clear error if the binary isn't present, with instructions to install from source.
+ecodex is a Rust binary serving the open-weights operator audience (Llama / Qwen / DeepSeek / Kimi via Ollama, vLLM, OpenRouter, direct cloud APIs). That audience reaches for cargo, brew, or curl — not `npm install -g`. The npm postinstall pattern also carries a security tax (arbitrary node at user privilege) we don't want to charge users without strong reason.
 
-## Run
+## What this directory is
 
-```sh
-ecodex
-```
+A thin spawn wrapper (`bin/ecodex.js`) + postinstall downloader (`scripts/postinstall.js`) + `package.json` for `@nubaeon/ecodex`. Code lives here so we can flip distribution on later if the audience expands. `scripts/release.sh --publish-npm` exercises this path for testing.
 
-Pure passthrough — args + stdin/stdout/stderr + exit code all forward to the underlying Rust binary.
-
-## Why a thin wrapper?
-
-ecodex is a Rust binary. The npm wrapper exists so `npm install -g @nubaeon/ecodex` works as a discovery + install path for the JavaScript-tooling crowd. The wrapper carries no logic of its own beyond binary selection + arg forwarding.
-
-If you build from source (the recommended path for contributors), skip npm and use [`ecodex/scripts/install.sh`](https://github.com/Nubaeon/ecodex/blob/build/v1-plugin/ecodex/scripts/install.sh) directly.
+If you actively want the npm route despite the above, the pipeline still supports it — but it's an experimental opt-in, not a recommended install path.
 
 ## License
 

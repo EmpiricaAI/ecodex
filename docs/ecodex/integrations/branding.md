@@ -32,18 +32,24 @@ codex-rs/cli/src/main.rs:788, 1751, 1769, 1797, 1824, 1850,
 
 Decision: leave cosmetic test strings as-is. Avoids needless churn and keeps test diffs small.
 
-### Optional: npm wrapper rename
+### npm wrapper — non-canonical for ecodex
 
-The `codex-cli/` directory is a JS/TS wrapper distributed as `@openai/codex` on npm. If ecodex ships an npm wrapper too:
+**Decision (2026-05-10):** npm is **not** a canonical distribution channel for ecodex.
 
-| Location | Current | Change to |
+Reasoning: ecodex's audience is open-weights operators on Linux/Mac with cargo + brew, not the JS-tooling crowd. The npm postinstall pattern (download binary, no checksum, arbitrary node code at user privilege) carries a security tax that isn't repaid by reach into our actual user base. openai/codex used npm because Node is their distribution funnel; ours is different.
+
+Canonical install paths for ecodex:
+
+| Channel | Command | Status |
 |---|---|---|
-| `codex-cli/package.json:2` (`name`) | `"@openai/codex"` | `"@nubaeon/ecodex"` |
-| `codex-cli/package.json:6` (bin entry) | `"codex": "bin/codex.js"` | `"ecodex": "bin/ecodex.js"` |
-| `codex-cli/bin/codex.js` (file) | (file) | rename → `bin/ecodex.js` |
-| `codex-cli/` (directory itself, optional) | (dir) | could rename → `ecodex-cli/` for consistency |
+| `cargo install` | `cargo install ecodex` (once published) | wired via `--publish-crates` |
+| Homebrew | `brew install nubaeon/tap/ecodex` | wired via `--publish-homebrew` |
+| GitHub Releases binary | manual download | wired via `--upload-assets` |
+| `curl ... \| sh` installer | (planned) | TBD post-v0.0.1 |
 
-Defer until we decide whether ecodex has an npm distribution channel (vs. only GitHub Releases binary + cargo install). The Rust binary rename works standalone without touching the JS wrapper.
+The repo retains an `npm/` subdir (wrapper code + scripts/postinstall.js) and a `--publish-npm` flag in `scripts/release.sh`, kept available for future use without commitment. Releases do **not** publish to npm by default.
+
+The original openai/codex `codex-cli/` directory (separate JS wrapper for the upstream Node distribution) remains untouched — irrelevant to ecodex's release flow.
 
 ## What is *not* affected
 
