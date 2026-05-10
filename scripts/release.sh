@@ -344,12 +344,18 @@ gate_build() {
 }
 
 gate_test() {
-  log "[gate-test] cargo test --workspace --lib"
+  # RUST_MIN_STACK=16777216 (16MB) raises the per-test-thread stack from the
+  # 2MB default. Workspace test runs schedule 1600+ tests across N parallel
+  # threads, and a few recursive tests (e.g. agent::control subtree walks)
+  # overflow the 2MB default under that contention even though each test is
+  # fine in isolation. The bigger stack is cheap (only allocated to threads
+  # that need it) and avoids the SIGABRT that bit v0.0.1's first cut.
+  log "[gate-test] cargo test --workspace --lib  (RUST_MIN_STACK=16M)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '  [dry-run] cargo test --workspace --lib\n' >&2
+    printf '  [dry-run] RUST_MIN_STACK=16777216 cargo test --workspace --lib\n' >&2
     return 0
   fi
-  (cd "${ECODEX_ROOT}/codex-rs" && cargo test --workspace --lib) \
+  (cd "${ECODEX_ROOT}/codex-rs" && RUST_MIN_STACK=16777216 cargo test --workspace --lib) \
     || error "gate-test failed — review failures, fix, then re-run"
 }
 
