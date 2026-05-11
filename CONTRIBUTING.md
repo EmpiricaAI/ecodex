@@ -98,9 +98,32 @@ cargo clippy --workspace --all-targets
 - Body covers the *why* — what regression were we preventing, what behavior were we changing, why this design over alternatives.
 - Sign commits with the empirica session ID where applicable (commit messages auto-include this when authored via the empirica transaction lifecycle).
 
+## Filing issues + PRs
+
+We use templates to keep issue triage and PR review fast:
+
+- **Bug reports** — [`/issues/new`](https://github.com/Nubaeon/ecodex/issues/new/choose) → "Bug report". Asks for `empirica diagnose-ecodex` output + the layer (L1/L2/L3) the bug lives in.
+- **Feature requests** — same place → "Feature request". Layer + user story.
+- **Upstream sync tracking** — same place → "Upstream sync". Includes a checklist of ecodex divergences (T78 hot-swap, Tx-AT trust allowlist, hook output translation, etc.) that need careful merge attention.
+- **Pull requests** — `.github/pull_request_template.md` auto-fills. Includes the test-plan checklist that mirrors CI (`cargo build` / `cargo test` / `cargo clippy` on owned crates).
+
+Blank issues are disabled — pick a template. Discussions about the broader Empirica framework go to [`Nubaeon/empirica` discussions](https://github.com/Nubaeon/empirica/discussions).
+
+## CI
+
+The `.github/workflows/ci.yml` workflow runs on every push to `main` / `build/v1-plugin` and every PR targeting either. It mirrors `scripts/release.sh`'s gate logic:
+
+- `cargo build --release` for the three owned crates
+- `cargo test --lib` scoped to owned crates (upstream codex tests are out of scope — see goal `0309b0ad`)
+- `cargo clippy --workspace --all-targets`
+
+Cache is keyed on `Cargo.lock` hash. Stack size is bumped to 16MB (`RUST_MIN_STACK=16777216`) to avoid the recursive-test SIGABRT we hit on v0.0.1's first cut.
+
+The full upstream codex CI suite (bazel, rust-ci-full, V8 release, etc.) is archived under `.github/workflows-upstream/` for reference. When pulling upstream changes, the upstream-sync issue template walks through what to consider.
+
 ## Security disclosures
 
-Don't open public issues for security disclosures. See [`SECURITY.md`](SECURITY.md) for the disclosure path. ecodex inherits codex's threat model; ecodex-specific surfaces (the empirica plugin, the translator) are in scope for our disclosure process.
+Don't open public issues for security disclosures. See [`SECURITY.md`](SECURITY.md) for the disclosure path. ecodex inherits codex's threat model; ecodex-specific surfaces (the empirica plugin, the translator, install scripts) are in scope for our disclosure process. The preferred channel is [GitHub Private Security Advisories](https://github.com/Nubaeon/ecodex/security/advisories/new).
 
 ## License
 
