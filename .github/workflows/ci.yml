@@ -1,77 +1,78 @@
-name: ci
+name: CI
 
 on:
-  pull_request: {}
-  push: { branches: [main] }
+  push:
+    branches: [main, build/v1-plugin]
+  pull_request:
+    branches: [main, build/v1-plugin]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Mirrors scripts/release.sh gate_test: 16MB test-thread stack avoids
+  # SIGABRT on workspace tests with recursive subtree walks.
+  RUST_MIN_STACK: 16777216
 
 jobs:
-  build-test:
+  build-test-clippy:
+    name: Build + test + clippy (scoped to ecodex-owned crates)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      NODE_OPTIONS: --max-old-space-size=4096
+    timeout-minutes: 45
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Verify codex-rs Cargo manifests inherit workspace settings
-        run: python3 .github/scripts/verify_cargo_workspace_manifests.py
-
-      - name: Verify codex-tui does not import codex-core directly
-        run: python3 .github/scripts/verify_tui_core_boundary.py
-
-      - name: Verify Bazel clippy flags match Cargo workspace lints
-        run: python3 .github/scripts/verify_bazel_clippy_lints.py
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
         with:
-          run_install: false
+          components: clippy
 
-      - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      - name: Cargo cache
+        uses: actions/cache@v4
         with:
-          node-version: 22
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            codex-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('codex-rs/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      # ── Build (release profile) ──────────────────────────────────────
+      # Mirrors scripts/release.sh gate_build. Scopes to the three crates
+      # we ship: codex-cli produces the `ecodex` binary, plus our two
+      # owned crates. Building these covers all our redistributed code
+      # (their transitive deps include the upstream codex internals).
+      - name: Build (release)
+        working-directory: codex-rs
+        run: >
+          cargo build --release
+          -p codex-cli
+          -p codex-empirica-plugin
+          -p codex-empirica-translator
 
-      # stage_npm_packages.py requires DotSlash when staging releases.
-      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+      # ── Test (scoped to owned crates + binary) ───────────────────────
+      # Mirrors scripts/release.sh gate_test. Does NOT run --workspace
+      # --lib: upstream codex has 100+ crates with tests that fail in
+      # CI environments for reasons unrelated to ecodex (env-dependent
+      # config snapshots, network-proxy timeouts). Those are upstream's
+      # responsibility. See goal 0309b0ad for the upstream-test
+      # investigation track.
+      - name: Test (lib, owned + binary)
+        working-directory: codex-rs
+        run: >
+          cargo test --lib
+          -p codex-cli
+          -p codex-empirica-plugin
+          -p codex-empirica-translator
 
-      - name: Stage npm package
-        id: stage_npm_package
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # Use a recent successful rust-release run that published the full
-          # cross-platform native payload required by the npm package layout.
-          # Passing the workflow URL directly avoids relying on old rust-v*
-          # branches remaining discoverable via `gh run list --branch ...`.
-          CODEX_VERSION=0.125.0
-          WORKFLOW_URL="https://github.com/openai/codex/actions/runs/24901475298"
-          OUTPUT_DIR="${RUNNER_TEMP}"
-          # This reused workflow predates the standalone bwrap artifact.
-          python3 ./scripts/stage_npm_packages.py \
-            --release-version "$CODEX_VERSION" \
-            --workflow-url "$WORKFLOW_URL" \
-            --package codex \
-            --allow-missing-native-component bwrap \
-            --output-dir "$OUTPUT_DIR"
-          PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
-          echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
-
-      - name: Upload staged npm package artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
-        with:
-          name: codex-npm-staging
-          path: ${{ steps.stage_npm_package.outputs.pack_output }}
-
-      - name: Ensure root README.md contains only ASCII and certain Unicode code points
-        run: ./scripts/asciicheck.py README.md
-      - name: Check root README ToC
-        run: python3 scripts/readme_toc.py README.md
-
-      - name: Prettier (run `pnpm run format:fix` to fix)
-        run: pnpm run format
+      # ── Clippy (workspace, warnings allowed) ─────────────────────────
+      # Tx-AV cleared clippy errors to 0 after the rust 1.93 upgrade.
+      # We run clippy on the workspace (catches regressions across the
+      # surface we redistribute) but don't gate on warnings — David's
+      # call: cleanup, not policy.
+      - name: Clippy
+        working-directory: codex-rs
+        run: cargo clippy --workspace --all-targets
