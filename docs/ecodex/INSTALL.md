@@ -1,14 +1,43 @@
 # Installing ecodex
 
-ecodex installs from source. There is no prebuilt release yet; the install script auto-builds via `cargo` on first invocation.
+ecodex offers four install paths. Pick the lightest-touch one that fits your setup.
 
 ## Prerequisites
 
-- **Rust toolchain** — install via [rustup.rs](https://rustup.rs/). The workspace builds with stable Rust 1.93 or later.
 - **`empirica` CLI** on `PATH` — the empirica plugin shells out to it. Install from [`Nubaeon/empirica`](https://github.com/Nubaeon/empirica) before running ecodex; without it, the plugin's hook subprocesses fail-quiet and discipline goes dark.
 - **Linux or macOS** — Windows isn't supported yet (requires `landlock` / sandbox parity work).
+- **Rust toolchain** ([rustup.rs](https://rustup.rs/), stable 1.93+) — needed only for the cargo + source-build paths.
 
-## One-command install
+## Install paths
+
+### Homebrew (recommended for Mac/Linux)
+
+```sh
+brew install nubaeon/tap/ecodex
+```
+
+Pulls from the [`Nubaeon/homebrew-tap`](https://github.com/Nubaeon/homebrew-tap) tap. Builds from source via cargo (Rust toolchain auto-installed as a brew dep). One command, no clone.
+
+### Direct binary download
+
+Grab the matching binary for your platform from the [Releases page](https://github.com/Nubaeon/ecodex/releases/latest):
+
+- `ecodex-linux-x86_64` — Linux x86_64
+- (more platforms land as CI is wired up — see goal `c20d412f` for the cross-compile track)
+
+`chmod +x` it and drop in `~/.local/bin/` or `/usr/local/bin/`. The empirica plugin binary (`codex-empirica-plugin`) is uploaded alongside; both need to be on `PATH` (or you can vendor the plugin under `~/.codex/plugins/`).
+
+### Cargo (Rust devs, source build)
+
+```sh
+cargo install --git https://github.com/Nubaeon/ecodex codex-cli
+```
+
+Builds the `ecodex` binary from the tip of `build/v1-plugin`. Note: this *doesn't* install the empirica plugin or seed `~/.codex/config.toml` — for the full integrated experience use Homebrew or the source-build script.
+
+The two owned crates we publish to crates.io are also reachable directly: `cargo install codex-empirica-translator` and `cargo install codex-empirica-plugin`. They're standalone-useful for embedding in other codex-based agents.
+
+### Source build (most control)
 
 ```sh
 git clone https://github.com/Nubaeon/ecodex.git
@@ -16,7 +45,7 @@ cd ecodex
 ./ecodex/scripts/install.sh
 ```
 
-This builds the Rust workspace (`-p codex-cli -p codex-empirica-plugin --release`), installs binaries + bundled plugin assets, and seeds `~/.codex/config.toml` if no config exists. First-time builds take 10–25 minutes depending on hardware; rebuilds are minutes.
+This builds the Rust workspace (`-p codex-cli -p codex-empirica-plugin --release`), installs binaries + bundled plugin assets, and seeds `~/.codex/config.toml` if no config exists. First-time builds take 10–25 minutes depending on hardware; rebuilds are minutes. Use `--fast` for a `lto=thin` build profile if you want a quicker iteration cycle.
 
 ## What the install lays down
 

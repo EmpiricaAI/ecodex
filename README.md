@@ -18,12 +18,14 @@ This is **not** a drop-in replacement for codex. It is opinionated: the discipli
 
 ## Status
 
-Alpha. Daily-driven by the ecodex team but not yet packaged for general install. The repo's main branches:
+Alpha. **v0.0.1 shipped 2026-05-10** — see [the release](https://github.com/Nubaeon/ecodex/releases/tag/v0.0.1). The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
+
+The repo's main branches:
 
 - `main` — clean tracking branch for upstream `openai/codex/main`. We rebase here and PR fixes upstream.
 - `build/v1-plugin` (default) — the active ecodex work: the empirica plugin, the protocol translator, curated open-weights provider defaults, the koru-spiral welcome screen, and discipline wiring.
 
-Public release timing is gated on T80 (docs suite) and T79 (release pipeline) — see open goals in `empirica goals-list`.
+Public-facing pieces (CI workflows, contributor templates, expanded docs) land incrementally as we approach a broader launch. The CLI itself is daily-driven by the ecodex team.
 
 ## What ecodex adds on top of codex
 
@@ -45,13 +47,18 @@ Concretely, what users notice that vanilla codex doesn't do:
 
 ## Install
 
-```shell
-git clone https://github.com/Nubaeon/ecodex.git
-cd ecodex
-./ecodex/scripts/install.sh
-```
+| Channel | Command |
+|---|---|
+| **Homebrew** (Mac/Linux) | `brew install nubaeon/tap/ecodex` |
+| **Direct binary** | Download from [Releases](https://github.com/Nubaeon/ecodex/releases/latest) |
+| **Cargo** (Rust devs, source build) | `cargo install --git https://github.com/Nubaeon/ecodex codex-cli` |
+| **Build from source** | `git clone … && cd ecodex && ./ecodex/scripts/install.sh` |
 
-This builds the Rust workspace, installs the binaries, vendors the plugin assets, and seeds `~/.codex/config.toml` with curated provider defaults if no config exists. The empirica CLI must also be on `PATH` — install from [`Nubaeon/empirica`](https://github.com/Nubaeon/empirica). See [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) for system vs user install, prerequisites, troubleshooting, and provider configuration.
+All four paths produce the same `ecodex` binary. The Rust toolchain is required for the cargo + source-build paths; Homebrew + direct-binary work without it.
+
+The empirica CLI must also be on `PATH` — install from [`Nubaeon/empirica`](https://github.com/Nubaeon/empirica). Without it the empirica plugin shells fail-quiet and discipline goes dark.
+
+See [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) for `--user` vs `--system` install, prerequisites, provider configuration, and troubleshooting.
 
 ## Run
 
