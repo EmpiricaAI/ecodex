@@ -16,7 +16,7 @@ jobs:
   build-test-clippy:
     name: Build + test + clippy (scoped to ecodex-owned crates)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -40,15 +40,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      # ── Build (release profile) ──────────────────────────────────────
-      # Mirrors scripts/release.sh gate_build. Scopes to the three crates
-      # we ship: codex-cli produces the `ecodex` binary, plus our two
-      # owned crates. Building these covers all our redistributed code
-      # (their transitive deps include the upstream codex internals).
-      - name: Build (release)
+      # ── Build (debug profile) ────────────────────────────────────────
+      # Debug build is 2-5x faster than release. CI's job is to validate
+      # that code compiles + tests pass; binary optimization happens in
+      # release.yml on tag push. Scoped to the three crates we ship so
+      # we still pull all our redistributed surface through the compiler.
+      - name: Build (debug)
         working-directory: codex-rs
         run: >
-          cargo build --release
+          cargo build
           -p codex-cli
           -p codex-empirica-plugin
           -p codex-empirica-translator
@@ -68,11 +68,19 @@ jobs:
           -p codex-empirica-plugin
           -p codex-empirica-translator
 
-      # ── Clippy (workspace, warnings allowed) ─────────────────────────
-      # Tx-AV cleared clippy errors to 0 after the rust 1.93 upgrade.
-      # We run clippy on the workspace (catches regressions across the
-      # surface we redistribute) but don't gate on warnings — David's
-      # call: cleanup, not policy.
+      # ── Clippy (scoped to owned crates) ──────────────────────────────
+      # Originally `--workspace --all-targets`, but that walks ~130
+      # transitive crates and pushed CI past the 45min ceiling on cold
+      # cache (Tx-BU finding 187fcdce). Scoped to the same set as
+      # test/build — keeps us honest about lints in code we own +
+      # redistribute via our binary, lets upstream lints be upstream's
+      # problem (already filtered out of release.sh's gate_clippy in
+      # practice — same scoping rationale as gate_test).
       - name: Clippy
         working-directory: codex-rs
-        run: cargo clippy --workspace --all-targets
+        run: >
+          cargo clippy
+          -p codex-cli
+          -p codex-empirica-plugin
+          -p codex-empirica-translator
+          --all-targets
