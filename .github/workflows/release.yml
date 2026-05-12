@@ -1,0 +1,221 @@
+name: Release
+
+# Triggers on tag push. The expected flow is:
+#   1. Locally: ./scripts/release.sh --patch --gate-all (no --push)
+#      → bumps Cargo.toml, rolls CHANGELOG, commits, tags v0.0.x
+#   2. Locally: git push origin build/v1-plugin && git push origin v0.0.x
+#   3. GH Actions catches the tag push and runs this workflow:
+#      → builds release binaries
+#      → creates the GH release with auto-generated notes
+#      → uploads binaries (linux-x86_64 this iteration; macOS matrix
+#        is goal c20d412f, separate transaction)
+#      → publishes codex-empirica-translator + codex-empirica-plugin
+#        to crates.io (gated on CARGO_REGISTRY_TOKEN secret)
+#      → updates Nubaeon/homebrew-tap Formula/ecodex.rb
+#        (gated on HOMEBREW_TAP_TOKEN secret)
+#
+# Required secrets (set at Settings → Secrets and variables → Actions):
+#   CARGO_REGISTRY_TOKEN  — crates.io API token (publish-new, publish-update)
+#   HOMEBREW_TAP_TOKEN    — PAT with `repo` scope for Nubaeon/homebrew-tap
+#
+# Both are optional. Missing secrets cause the affected step to skip
+# with a warning, not fail the whole workflow.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write   # gh release create + upload
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_MIN_STACK: 16777216
+
+jobs:
+  release:
+    name: Build + publish v${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for the source tarball + release notes
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          version="${tag#v}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Cutting release ${tag} (version ${version})"
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            codex-rs/target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('codex-rs/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-cargo-
+
+      # ── Build release binaries ───────────────────────────────────────
+      - name: Build release binaries
+        working-directory: codex-rs
+        run: >
+          cargo build --release
+          -p codex-cli
+          -p codex-empirica-plugin
+          -p codex-empirica-translator
+
+      # ── GitHub Release ───────────────────────────────────────────────
+      # `gh release create` is idempotent in our usage: if the release
+      # already exists (e.g. someone created it manually first), we
+      # tolerate the existing-release error and proceed to upload.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists, skipping create"
+          else
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "ecodex $tag" \
+              --generate-notes
+          fi
+
+      - name: Upload binaries (linux-x86_64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          gh release upload "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            "codex-rs/target/release/ecodex#ecodex-linux-x86_64" \
+            "codex-rs/target/release/codex-empirica-plugin#codex-empirica-plugin-linux-x86_64" \
+            "codex-rs/target/release/codex-empirica-translator#codex-empirica-translator-linux-x86_64"
+
+      # ── crates.io publish (optional, gated on secret) ────────────────
+      - name: Publish codex-empirica-translator to crates.io
+        if: ${{ env.CARGO_REGISTRY_TOKEN != '' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        working-directory: codex-rs
+        run: cargo publish -p codex-empirica-translator
+
+      - name: Publish codex-empirica-plugin to crates.io
+        if: ${{ env.CARGO_REGISTRY_TOKEN != '' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        working-directory: codex-rs
+        run: cargo publish -p codex-empirica-plugin
+
+      - name: Warn if crates.io publish skipped
+        if: ${{ env.CARGO_REGISTRY_TOKEN == '' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          echo "::warning::CARGO_REGISTRY_TOKEN not set — crates.io publish skipped. Set at Settings → Secrets → Actions."
+
+      # ── Homebrew tap update (optional, gated on secret) ──────────────
+      - name: Update Homebrew tap
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          version="${{ steps.version.outputs.version }}"
+          tarball_url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${tag}.tar.gz"
+
+          # GitHub generates the source tarball asynchronously. Poll
+          # until it's available (usually a few seconds).
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsSL -o /dev/null -I "$tarball_url"; then
+              echo "tarball available after $((i*5))s"
+              break
+            fi
+            echo "tarball not yet available, retry $i/10..."
+            sleep 5
+          done
+
+          sha256=$(curl -fsSL "$tarball_url" | sha256sum | awk '{print $1}')
+          echo "tarball sha256: $sha256"
+
+          tap_dir="$(mktemp -d)"
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/Nubaeon/homebrew-tap.git" \
+            "$tap_dir"
+
+          mkdir -p "$tap_dir/Formula"
+          cat > "$tap_dir/Formula/ecodex.rb" <<EOF_RUBY
+          class Ecodex < Formula
+            desc "Empirica's epistemic agent environment — a fork of openai/codex with measured discipline"
+            homepage "https://github.com/Nubaeon/ecodex"
+            url "${tarball_url}"
+            sha256 "${sha256}"
+            license "Apache-2.0"
+            head "https://github.com/Nubaeon/ecodex.git", branch: "build/v1-plugin"
+
+            depends_on "rust" => :build
+
+            def install
+              cd "codex-rs" do
+                system "cargo", "install", *std_cargo_args(path: "cli")
+              end
+            end
+
+            test do
+              assert_match "ecodex", shell_output("#{bin}/ecodex --version")
+            end
+          end
+          EOF_RUBY
+
+          cd "$tap_dir"
+          git config user.name "ecodex-release-bot"
+          git config user.email "release@nubaeon.com"
+          git add Formula/ecodex.rb
+          git commit -m "ecodex ${tag}"
+          git push
+
+      - name: Warn if homebrew tap update skipped
+        if: ${{ env.HOMEBREW_TAP_TOKEN == '' }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          echo "::warning::HOMEBREW_TAP_TOKEN not set — Nubaeon/homebrew-tap update skipped. Create a PAT with 'repo' scope and set at Settings → Secrets → Actions."
+
+      # ── Summary ──────────────────────────────────────────────────────
+      - name: Release summary
+        if: always()
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          {
+            echo "## ecodex ${tag}"
+            echo ""
+            echo "- GitHub Release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
+            if [[ -n "${{ secrets.CARGO_REGISTRY_TOKEN }}" ]]; then
+              echo "- crates.io: \`codex-empirica-translator\` and \`codex-empirica-plugin\` published"
+            else
+              echo "- crates.io: skipped (CARGO_REGISTRY_TOKEN not set)"
+            fi
+            if [[ -n "${{ secrets.HOMEBREW_TAP_TOKEN }}" ]]; then
+              echo "- Homebrew tap: \`brew install nubaeon/tap/ecodex\` updated"
+            else
+              echo "- Homebrew tap: skipped (HOMEBREW_TAP_TOKEN not set)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

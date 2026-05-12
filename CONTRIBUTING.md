@@ -121,6 +121,32 @@ Cache is keyed on `Cargo.lock` hash. Stack size is bumped to 16MB (`RUST_MIN_STA
 
 The full upstream codex CI suite (bazel, rust-ci-full, V8 release, etc.) is archived under `.github/workflows-upstream/` for reference. When pulling upstream changes, the upstream-sync issue template walks through what to consider.
 
+## Releases
+
+The expected flow for cutting v0.0.x:
+
+1. **Locally:** `./scripts/release.sh --patch --gate-all` — bumps version, rolls CHANGELOG, commits, tags `v0.0.x` (no `--push` flag this time).
+2. **Locally:** `git push origin build/v1-plugin && git push origin v0.0.x`.
+3. **GH Actions** catches the tag push and runs `.github/workflows/release.yml`:
+   - Builds release binaries on `ubuntu-latest`
+   - Creates the GitHub release with `--generate-notes`
+   - Uploads `ecodex`, `codex-empirica-plugin`, `codex-empirica-translator` binaries (linux-x86_64)
+   - Publishes the two owned crates to crates.io (if `CARGO_REGISTRY_TOKEN` is set)
+   - Updates `Nubaeon/homebrew-tap/Formula/ecodex.rb` (if `HOMEBREW_TAP_TOKEN` is set)
+
+### Required GitHub Actions secrets
+
+Set at **Settings → Secrets and variables → Actions** on the `Nubaeon/ecodex` repo:
+
+| Secret | What | How to get it |
+|---|---|---|
+| `CARGO_REGISTRY_TOKEN` | crates.io API token | https://crates.io/settings/tokens → New token with `publish-new` + `publish-update` scopes |
+| `HOMEBREW_TAP_TOKEN` | GitHub PAT with push access to `Nubaeon/homebrew-tap` | https://github.com/settings/tokens → Generate new token (classic), `repo` scope, expiry as you prefer |
+
+Both are optional — missing secrets cause the affected step to skip with a warning, not fail the workflow.
+
+`scripts/release.sh` still works locally as a fallback; the GH Actions workflow is the path of least resistance once the secrets are configured.
+
 ## Security disclosures
 
 Don't open public issues for security disclosures. See [`SECURITY.md`](SECURITY.md) for the disclosure path. ecodex inherits codex's threat model; ecodex-specific surfaces (the empirica plugin, the translator, install scripts) are in scope for our disclosure process. The preferred channel is [GitHub Private Security Advisories](https://github.com/Nubaeon/ecodex/security/advisories/new).
