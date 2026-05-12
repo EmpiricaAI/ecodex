@@ -5,10 +5,11 @@ name: Release
 #      → bumps Cargo.toml, rolls CHANGELOG, commits, tags v0.0.x
 #   2. Locally: git push origin build/v1-plugin && git push origin v0.0.x
 #   3. GH Actions catches the tag push and runs this workflow:
-#      → builds release binaries
+#      → builds release binaries on matrix (linux-x86_64,
+#        macos-x86_64, macos-aarch64) — linux-aarch64 needs
+#        cross-compile, deferred
 #      → creates the GH release with auto-generated notes
-#      → uploads binaries (linux-x86_64 this iteration; macOS matrix
-#        is goal c20d412f, separate transaction)
+#      → uploads binaries with platform-suffixed names
 #      → publishes codex-empirica-translator + codex-empirica-plugin
 #        to crates.io (gated on CARGO_REGISTRY_TOKEN secret)
 #      → updates Nubaeon/homebrew-tap Formula/ecodex.rb
@@ -34,25 +35,31 @@ env:
   RUST_MIN_STACK: 16777216
 
 jobs:
-  release:
-    name: Build + publish v${{ github.ref_name }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+  # ── Build matrix ───────────────────────────────────────────────────
+  # Builds the three shipped binaries (ecodex, codex-empirica-plugin,
+  # codex-empirica-translator) on each platform. Each platform's
+  # binaries are uploaded as a job artifact with a slug-prefixed name
+  # so the downstream release job can fan them in.
+  build:
+    name: Build ${{ matrix.platform_slug }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      # Don't kill macOS jobs if Linux build fails (or vice-versa) —
+      # we want partial coverage rather than nothing.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform_slug: linux-x86_64
+          - os: macos-13           # Intel Mac
+            platform_slug: macos-x86_64
+          - os: macos-14           # Apple Silicon
+            platform_slug: macos-aarch64
 
     steps:
       - name: Checkout tag
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # full history for the source tarball + release notes
-
-      - name: Extract version from tag
-        id: version
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          version="${tag#v}"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "Cutting release ${tag} (version ${version})"
 
       - name: Install Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -66,12 +73,11 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             codex-rs/target/
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('codex-rs/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.platform_slug }}-cargo-release-${{ hashFiles('codex-rs/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-release-
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-${{ matrix.platform_slug }}-cargo-release-
+            ${{ runner.os }}-${{ matrix.platform_slug }}-cargo-
 
-      # ── Build release binaries ───────────────────────────────────────
       - name: Build release binaries
         working-directory: codex-rs
         run: >
@@ -80,10 +86,63 @@ jobs:
           -p codex-empirica-plugin
           -p codex-empirica-translator
 
-      # ── GitHub Release ───────────────────────────────────────────────
-      # `gh release create` is idempotent in our usage: if the release
-      # already exists (e.g. someone created it manually first), we
-      # tolerate the existing-release error and proceed to upload.
+      # Rename binaries with platform-suffixed names so the release
+      # job's upload step can globbing them all together.
+      - name: Stage binaries with platform suffix
+        run: |
+          mkdir -p staging
+          cp codex-rs/target/release/ecodex "staging/ecodex-${{ matrix.platform_slug }}"
+          cp codex-rs/target/release/codex-empirica-plugin "staging/codex-empirica-plugin-${{ matrix.platform_slug }}"
+          cp codex-rs/target/release/codex-empirica-translator "staging/codex-empirica-translator-${{ matrix.platform_slug }}"
+          chmod +x staging/*
+          ls -lh staging/
+
+      - name: Upload binaries as job artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.platform_slug }}
+          path: staging/*
+          retention-days: 1   # only needed until release job consumes
+
+  # ── Release (runs once after all matrix builds succeed/finish) ────
+  release:
+    name: Publish v${{ github.ref_name }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Don't gate on every build job succeeding — fail-fast: false means
+    # we still want to ship whatever did build successfully. The
+    # download-artifact step tolerates missing artifacts; the upload
+    # step uploads whatever's in the staging dir.
+    if: ${{ always() && !cancelled() }}
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          version="${tag#v}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Cutting release ${tag} (version ${version})"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binaries-*
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -lh artifacts/ || echo "no artifacts directory (all builds may have failed)"
+
+      # Idempotent: tolerates an existing release (e.g. if someone
+      # manually pre-created it).
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -98,19 +157,28 @@ jobs:
               --generate-notes
           fi
 
-      - name: Upload binaries (linux-x86_64)
+      - name: Upload binaries to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ steps.version.outputs.tag }}"
+          if [[ ! -d artifacts ]] || [[ -z "$(ls -A artifacts 2>/dev/null)" ]]; then
+            echo "::warning::No binaries staged — all platform builds failed or didn't run"
+            exit 0
+          fi
+          # shellcheck disable=SC2046
           gh release upload "$tag" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber \
-            "codex-rs/target/release/ecodex#ecodex-linux-x86_64" \
-            "codex-rs/target/release/codex-empirica-plugin#codex-empirica-plugin-linux-x86_64" \
-            "codex-rs/target/release/codex-empirica-translator#codex-empirica-translator-linux-x86_64"
+            $(find artifacts -type f | tr '\n' ' ')
 
       # ── crates.io publish (optional, gated on secret) ────────────────
+      - name: Install Rust toolchain for crates.io publish
+        if: ${{ env.CARGO_REGISTRY_TOKEN != '' }}
+        uses: dtolnay/rust-toolchain@stable
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
       - name: Publish codex-empirica-translator to crates.io
         if: ${{ env.CARGO_REGISTRY_TOKEN != '' }}
         env:
@@ -143,7 +211,7 @@ jobs:
           tarball_url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${tag}.tar.gz"
 
           # GitHub generates the source tarball asynchronously. Poll
-          # until it's available (usually a few seconds).
+          # until available (usually a few seconds).
           for i in 1 2 3 4 5 6 7 8 9 10; do
             if curl -fsSL -o /dev/null -I "$tarball_url"; then
               echo "tarball available after $((i*5))s"
@@ -208,6 +276,14 @@ jobs:
             echo "## ecodex ${tag}"
             echo ""
             echo "- GitHub Release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
+            echo ""
+            echo "### Platform binaries"
+            if [[ -d artifacts ]]; then
+              ls artifacts/ | sed 's/^/- /'
+            else
+              echo "- (no binaries — all platform builds failed)"
+            fi
+            echo ""
             if [[ -n "${{ secrets.CARGO_REGISTRY_TOKEN }}" ]]; then
               echo "- crates.io: \`codex-empirica-translator\` and \`codex-empirica-plugin\` published"
             else

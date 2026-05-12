@@ -22,10 +22,14 @@ Pulls from the [`Nubaeon/homebrew-tap`](https://github.com/Nubaeon/homebrew-tap)
 
 Grab the matching binary for your platform from the [Releases page](https://github.com/Nubaeon/ecodex/releases/latest):
 
-- `ecodex-linux-x86_64` — Linux x86_64
-- (more platforms land as CI is wired up — see goal `c20d412f` for the cross-compile track)
+| Platform | Asset |
+|---|---|
+| Linux x86_64 | `ecodex-linux-x86_64` |
+| macOS Intel (x86_64) | `ecodex-macos-x86_64` |
+| macOS Apple Silicon | `ecodex-macos-aarch64` |
+| Linux aarch64 | not yet (cross-compile pending — track in goal `c20d412f`) |
 
-`chmod +x` it and drop in `~/.local/bin/` or `/usr/local/bin/`. The empirica plugin binary (`codex-empirica-plugin`) is uploaded alongside; both need to be on `PATH` (or you can vendor the plugin under `~/.codex/plugins/`).
+`chmod +x` it and drop in `~/.local/bin/` or `/usr/local/bin/`. The empirica plugin binary (`codex-empirica-plugin-<platform>`) is uploaded alongside; both need to be on `PATH` (or you can vendor the plugin under `~/.codex/plugins/`). The translator binary (`codex-empirica-translator-<platform>`) is also uploaded; only needed if you're routing through non-Responses-API providers.
 
 ### Cargo (Rust devs, source build)
 
