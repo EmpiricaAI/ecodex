@@ -73,6 +73,7 @@ UPLOAD_ASSETS=0
 PUBLISH_CRATES=0
 PUBLISH_HOMEBREW=0
 PUBLISH_NPM=0
+FORCE_VERSION=0
 
 # ─── Parse args ──────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -104,6 +105,7 @@ while [[ $# -gt 0 ]]; do
     --publish-crates)   PUBLISH_CRATES=1;       shift ;;
     --publish-homebrew) PUBLISH_HOMEBREW=1;     shift ;;
     --publish-npm)      PUBLISH_NPM=1;          shift ;;
+    --force-version)    FORCE_VERSION=1;        shift ;;
     -h|--help)
       sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#//'
       exit 0
@@ -199,7 +201,16 @@ case "$BUMP_KIND" in
 esac
 
 if [[ "$new_version" == "$current_version" ]]; then
-  error "computed version $new_version equals current — nothing to release"
+  if [[ "$FORCE_VERSION" -eq 1 ]]; then
+    # Recovery path: pipeline failed mid-flight, version already bumped,
+    # tag may already exist + be pushed. User wants to re-run just the
+    # publish phases (gh release, cargo publish, brew tap) without
+    # re-bumping. Combine with --skip-tag --skip-commit --skip-changelog
+    # to skip everything in Phase 1.
+    warn "computed version $new_version equals current — --force-version is set, proceeding (recovery mode)"
+  else
+    error "computed version $new_version equals current — nothing to release (use --force-version + --skip-{tag,commit,changelog} for recovery)"
+  fi
 fi
 
 log "Current version: $current_version"
@@ -643,6 +654,12 @@ echo "  --publish-homebrew       Update Formula in Nubaeon/homebrew-tap"
 echo ""
 echo "Phase 3 surfaces (experimental, non-canonical):"
 echo "  --publish-npm            npm publish @nubaeon/ecodex — kept for future, not part of canonical release flow"
+echo ""
+echo "Recovery:"
+echo "  --force-version          bypass the 'version unchanged' guard"
+echo "                             (combine with --skip-{tag,commit,changelog})"
+echo "                             use when a previous cut failed mid-flight"
+echo "                             and you want to re-run just publish phases"
 echo ""
 echo "Canonical v0.x invocation:"
 echo "  ./scripts/release.sh --patch --gate-all --push --create-gh-release \\"
