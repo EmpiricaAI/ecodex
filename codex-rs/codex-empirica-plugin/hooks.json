@@ -119,6 +119,97 @@
           }
         ]
       }
+    ],
+    "TaskCompleted": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook TaskCompleted task-completed.py",
+            "timeout": 10,
+            "statusMessage": "Empirica POSTFLIGHT-enforcement check"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook PostToolUseFailure tool-failure.py",
+            "timeout": 10,
+            "statusMessage": "Empirica dead-end capture"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook PreCompact pre-compact.py",
+            "timeout": 30,
+            "statusMessage": "Empirica pre-compact snapshot"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook PostCompact post-compact.py",
+            "timeout": 10,
+            "statusMessage": "Empirica post-compact restore"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SessionEnd session-end-postflight.py",
+            "timeout": 30,
+            "statusMessage": "Empirica session-end POSTFLIGHT + curate"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SubagentStart subagent-start.py",
+            "timeout": 10,
+            "statusMessage": "Empirica subagent spawn tracker"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SubagentStop subagent-stop.py",
+            "timeout": 10,
+            "statusMessage": "Empirica subagent completion merge"
+          }
+        ]
+      }
     ]
   }
 }
