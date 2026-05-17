@@ -569,11 +569,91 @@ def _find_best_orphaned_transaction(empirica_dir: Path) -> tuple:
     return None, None
 
 
-def _adopt_orphaned_transaction(project_root: Path) -> dict:
-    """Check for orphaned open transactions and re-key them to the new instance.
+def _auto_postflight_orphaned_transaction(tx_file: Path, tx_data: dict) -> bool:
+    """Auto-close an orphaned open transaction with a session-pickup reason.
 
-    After machine/terminal/tmux restart, instance-keyed files are stale but
-    transaction files survive. Adopt and re-key them.
+    A new ecodex session that inherits an open transaction from a previous
+    session would continue that measurement window — calibration deltas
+    would span unrelated work. Auto-postflight closes the window honestly
+    so the new session starts with fresh vectors.
+
+    Vectors are carried forward from tx_data where available with
+    completion=1.0 forced (the close signal). If postflight succeeds the
+    empirica daemon removes the active_transaction file; on failure the
+    caller falls back to adoption to avoid losing data.
+
+    Returns True if the transaction was closed successfully.
+    """
+    session_id = tx_data.get('session_id')
+    if not session_id:
+        return False
+
+    last_vectors = tx_data.get('vectors', {}) if isinstance(tx_data.get('vectors'), dict) else {}
+    payload = {
+        'session_id': session_id,
+        'vectors': {
+            'know': last_vectors.get('know', 0.5),
+            'uncertainty': last_vectors.get('uncertainty', 0.5),
+            'context': last_vectors.get('context', 0.5),
+            'clarity': last_vectors.get('clarity', 0.5),
+            'coherence': last_vectors.get('coherence', 0.5),
+            'signal': last_vectors.get('signal', 0.5),
+            'density': last_vectors.get('density', 0.5),
+            'state': last_vectors.get('state', 0.5),
+            'change': last_vectors.get('change', 0.0),
+            'completion': 1.0,
+            'impact': last_vectors.get('impact', 0.3),
+            'do': last_vectors.get('do', 0.5),
+            'engagement': last_vectors.get('engagement', 0.3),
+        },
+        'reasoning': (
+            'session-pickup auto-close — inherited open transaction from '
+            'previous session, no human-driven completion signal observed. '
+            'Closed by session-init hook so new session starts with fresh vectors.'
+        ),
+    }
+
+    try:
+        result = subprocess.run(
+            ['empirica', 'postflight-submit', '-'],
+            input=json.dumps(payload),
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            tx_id_preview = (tx_data.get('transaction_id') or '?')[:8]
+            print(
+                f"Auto-closed inherited transaction {tx_id_preview}... (session-pickup auto-close)",
+                file=sys.stderr,
+            )
+            if tx_file.exists():
+                try:
+                    tx_file.unlink()
+                except Exception:
+                    pass
+            return True
+        else:
+            stderr_preview = (result.stderr or '')[:200]
+            print(
+                f"Auto-postflight failed (exit={result.returncode}): {stderr_preview}",
+                file=sys.stderr,
+            )
+            return False
+    except Exception as e:
+        print(f"Auto-postflight error: {e}", file=sys.stderr)
+        return False
+
+
+def _adopt_orphaned_transaction(project_root: Path) -> dict:
+    """Auto-close orphaned open transactions on SessionStart.
+
+    Default behavior: detect any orphaned active_transaction*.json and
+    auto-postflight it (session-pickup auto-close). New session starts
+    fresh — no inherited measurement window.
+
+    Fallback: if auto-postflight fails (CLI error, daemon down), fall
+    back to the legacy re-keying adoption so transaction data isn't lost.
+    Adoption keeps the old window open; the user can manually POSTFLIGHT
+    or continue.
     """
     empirica_dir = project_root / '.empirica'
     if not empirica_dir.exists():
@@ -593,13 +673,22 @@ def _adopt_orphaned_transaction(project_root: Path) -> dict:
     if not session_id:
         return {}
 
-    # Re-key the transaction file to the new instance suffix
+    # Default: auto-close. New session starts fresh with no inherited tx.
+    if _auto_postflight_orphaned_transaction(tx_file, tx_data):
+        return {}
+
+    # Fallback: re-key the transaction file to the new instance suffix
+    # (legacy adoption behavior, preserves data when auto-close fails).
     new_tx_file = empirica_dir / f'active_transaction{new_suffix}.json'
     if tx_file != new_tx_file:
         try:
             shutil.copy2(str(tx_file), str(new_tx_file))
             tx_file.unlink()
-            print(f"Adopted orphaned transaction {tx_data.get('transaction_id', '?')[:8]}... -> new instance", file=sys.stderr)
+            print(
+                f"Adopted orphaned transaction {tx_data.get('transaction_id', '?')[:8]}... "
+                f"-> new instance (fallback after auto-postflight failure)",
+                file=sys.stderr,
+            )
         except Exception:
             pass  # Adoption failure is non-fatal
     return {'session_id': session_id, 'source': 'orphaned_transaction'}
