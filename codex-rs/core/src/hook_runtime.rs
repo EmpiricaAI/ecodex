@@ -15,6 +15,8 @@ use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreCompactOutcome;
 use codex_hooks::PreCompactRequest;
+use codex_hooks::SessionEndOutcome;
+use codex_hooks::SessionEndRequest;
 use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
@@ -313,6 +315,33 @@ pub(crate) async fn run_post_compact_hooks(
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
     let outcome = hooks.run_post_compact(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
+    outcome
+}
+
+/// ecodex addition (goal f0004294): fires SessionEnd at the start of
+/// session shutdown. Symmetric to SessionStart. Plugin handlers run
+/// final POSTFLIGHT + curate the rollout while session state is still
+/// live (before abort_all_tasks / conversation shutdown).
+pub(crate) async fn run_session_end_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    turn_count: u64,
+) -> SessionEndOutcome {
+    let request = SessionEndRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        turn_count,
+    };
+    let hooks = sess.hooks();
+    let preview_runs = hooks.preview_session_end(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = hooks.run_session_end(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
     outcome
 }

@@ -630,6 +630,26 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
 }
 
 pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
+    // ecodex addition (goal f0004294): fire SessionEnd at the start of
+    // shutdown so plugin handlers capture final session state while
+    // history/tasks/MCP are still alive. .await is the natural block —
+    // shutdown proceeds only after handlers complete.
+    let pre_shutdown_turn_count = {
+        let history = sess.clone_history().await;
+        history
+            .raw_items()
+            .iter()
+            .filter(|item| is_user_turn_boundary(item))
+            .count() as u64
+    };
+    let session_end_ctx = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+    crate::hook_runtime::run_session_end_hooks(
+        sess,
+        &session_end_ctx,
+        pre_shutdown_turn_count,
+    )
+    .await;
+
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     let _ = sess.conversation.shutdown().await;
     sess.services

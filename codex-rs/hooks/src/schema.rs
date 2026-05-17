@@ -461,6 +461,25 @@ pub(crate) struct PostCompactCommandInput {
     pub success: bool,
 }
 
+// ecodex addition (goal f0004294): SessionEnd is the symmetric counterpart
+// to SessionStart. turn_count gives plugins a session-summary threshold
+// signal (e.g., skip snapshot for trivial 1-turn sessions).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "session_end.command.input")]
+pub(crate) struct SessionEndCommandInput {
+    pub session_id: String,
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "session_end_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub turn_count: u64,
+}
+
 // ecodex addition (goal f0004294): PostToolUseFailure mirrors PostToolUse's
 // tool-context fields (minus tool_response, which doesn't exist on failure)
 // and adds error_message + duration_ms for plugin handlers consuming the
@@ -630,6 +649,10 @@ fn pre_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn post_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostCompact")
+}
+
+fn session_end_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("SessionEnd")
 }
 
 fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {

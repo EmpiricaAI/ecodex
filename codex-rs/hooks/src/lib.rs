@@ -65,6 +65,8 @@ pub use events::post_tool_use_failure::PostToolUseFailureOutcome;
 pub use events::post_tool_use_failure::PostToolUseFailureRequest;
 pub use events::pre_compact::PreCompactOutcome;
 pub use events::pre_compact::PreCompactRequest;
+pub use events::session_end::SessionEndOutcome;
+pub use events::session_end::SessionEndRequest;
 pub use events::task_completed::TaskCompletedOutcome;
 pub use events::task_completed::TaskCompletedRequest;
 pub use events::user_prompt_submit::UserPromptSubmitOutcome;

@@ -20,6 +20,8 @@ use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
 use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
 use crate::events::pre_compact::PreCompactOutcome;
 use crate::events::pre_compact::PreCompactRequest;
+use crate::events::session_end::SessionEndOutcome;
+use crate::events::session_end::SessionEndRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
 use crate::events::task_completed::TaskCompletedOutcome;
@@ -306,6 +308,21 @@ impl ClaudeHooksEngine {
         request: PostCompactRequest,
     ) -> PostCompactOutcome {
         crate::events::post_compact::run(&self.handlers, &self.shell, request).await
+    }
+
+    // ecodex addition (goal f0004294)
+    pub(crate) fn preview_session_end(
+        &self,
+        request: &SessionEndRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::session_end::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_session_end(
+        &self,
+        request: SessionEndRequest,
+    ) -> SessionEndOutcome {
+        crate::events::session_end::run(&self.handlers, &self.shell, request).await
     }
 
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {

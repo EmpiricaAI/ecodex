@@ -19,6 +19,8 @@ use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
 use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
 use crate::events::pre_compact::PreCompactOutcome;
 use crate::events::pre_compact::PreCompactRequest;
+use crate::events::session_end::SessionEndOutcome;
+use crate::events::session_end::SessionEndRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
 use crate::events::task_completed::TaskCompletedOutcome;
@@ -239,6 +241,18 @@ impl Hooks {
 
     pub async fn run_post_compact(&self, request: PostCompactRequest) -> PostCompactOutcome {
         self.engine.run_post_compact(request).await
+    }
+
+    // ecodex addition (goal f0004294)
+    pub fn preview_session_end(
+        &self,
+        request: &SessionEndRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_session_end(request)
+    }
+
+    pub async fn run_session_end(&self, request: SessionEndRequest) -> SessionEndOutcome {
+        self.engine.run_session_end(request).await
     }
 }
 

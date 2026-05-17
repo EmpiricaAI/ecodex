@@ -7,7 +7,8 @@ Tracks the 7 hook events ecodex adds on top of stock codex's 6, and where each o
 - ✅ **TaskCompleted dispatch site landed**: fires at `codex-rs/core/src/session/turn.rs:570` after Stop's continuation flow, before AfterAgent. **Pattern proven** — see "Dispatch pattern (minimal sibling)" below.
 - ✅ **PostToolUseFailure dispatch site landed**: fires at `codex-rs/core/src/tools/registry.rs:434` in the failure branch (else of post_tool_use_payload). Carries tool_name + tool_input + error_message + duration_ms for plugin handlers consuming failures as dead-end artifacts.
 - ✅ **PreCompact + PostCompact dispatch sites landed**: both fire from `codex-rs/core/src/tasks/compact.rs:CompactTask::run` (single entry point for all 3 compaction implementations — local/remote/remote_v2). PreCompact awaits synchronously before compaction runs (the `.await` is the natural block — plugin handlers complete their snapshot work before the summarizer touches history). PostCompact fires after with `success: bool`. Payload carries `compact_type` so handlers know which path ran.
-- ❌ **Remaining 3 dispatch sites pending**: SessionEnd, SubagentStart/Stop. Tracked under goal `f0004294`.
+- ✅ **SessionEnd dispatch site landed**: fires at `codex-rs/core/src/session/handlers.rs:shutdown()` entry, before `abort_all_tasks`. Plugin handlers run final POSTFLIGHT + capture session snapshot + curate the rollout while history/tasks/MCP are still alive. Payload carries `turn_count`.
+- ❌ **Remaining 2 dispatch sites pending**: SubagentStart/Stop (low priority — only relevant once subagents become common in ecodex). Tracked under goal `f0004294`.
 
 ## Dispatch pattern (minimal sibling) — proven by TaskCompleted
 
@@ -54,13 +55,15 @@ Listed with the file:line where the dispatch call needs to be inserted in `codex
 
 **Handler:** `pre-compact.py` (snapshots), `post-compact.py` (restores via SessionStart fan-out already in place).
 
-### `SessionEnd`
+### `SessionEnd` ✅ SHIPPED
 
-**Lifecycle:** When a codex session terminates (user `/quit`, signal, parent process death, etc.).
+**Lifecycle:** Fires at the start of session shutdown (user `/quit`, signal, parent process death, etc.). Awaits synchronously so plugin handlers complete their final POSTFLIGHT + snapshot before cleanup begins.
 
 **Why:** Symmetric counterpart to `SessionStart`. Lets empirica run final POSTFLIGHT, capture session snapshot, curate the conversation rollout.
 
-**Dispatch site (TBC):** `codex-rs/core/src/session/mod.rs` — find the session shutdown path (likely a `Drop` impl or explicit `close()`). Fire `SessionEnd` with the final session state in the payload.
+**Dispatch site:** `codex-rs/core/src/session/handlers.rs:shutdown()` entry, before `abort_all_tasks`. Helper `run_session_end_hooks` in `codex-rs/core/src/hook_runtime.rs`. Turn context constructed via `sess.new_default_turn_with_sub_id(sub_id.clone())` — same pattern compact() uses.
+
+**Payload:** Standard 6 fields plus `turn_count: u64` (number of user-turn boundaries in the session at shutdown).
 
 **Handlers:** `session-end-postflight.py`, `curate-snapshots.py`.
 
