@@ -22,6 +22,14 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 ECODEX_ROOT="$(cd -- "${SCRIPT_DIR}/.." &> /dev/null && pwd)"
 WORKSPACE_ROOT="$(cd -- "${ECODEX_ROOT}/.." &> /dev/null && pwd)"
 
+# Capture whether the caller set ECODEX_BINARY / PLUGIN_BINARY in the
+# environment BEFORE we apply defaults (the `${VAR:-default}` form below
+# would otherwise make every invocation look like "the var was set").
+# Used downstream to decide whether to skip the cargo build entirely.
+# `${VAR+1}` expands to `1` if VAR was set (even to empty), else to nothing.
+ECODEX_BINARY_PRESET=${ECODEX_BINARY+1}
+PLUGIN_BINARY_PRESET=${PLUGIN_BINARY+1}
+
 # ─── Defaults ────────────────────────────────────────────────────────
 SCOPE="user"           # system | user
 PREFIX="/usr/local"
@@ -81,13 +89,14 @@ CODEX_CONFIG="${HOME}/.codex/config.toml"
 # when nothing has changed, so the cost on a clean install is paid
 # once and incremental rebuilds during development are quick.
 #
-# Skip the build if --no-build is set OR if both binaries already
-# exist AND ECODEX_BINARY/PLUGIN_BINARY are explicitly overridden via
-# env (i.e. user is pointing at a pre-built artifact in CI/release).
-ECODEX_BINARY_OVERRIDDEN=${ECODEX_BINARY_OVERRIDDEN:-0}
-PLUGIN_BINARY_OVERRIDDEN=${PLUGIN_BINARY_OVERRIDDEN:-0}
-[[ "${ECODEX_BINARY:-}" != "${WORKSPACE_ROOT}/codex-rs/target/release/ecodex" ]] && ECODEX_BINARY_OVERRIDDEN=1
-[[ "${PLUGIN_BINARY:-}" != "${WORKSPACE_ROOT}/codex-rs/target/release/codex-empirica-plugin" ]] && PLUGIN_BINARY_OVERRIDDEN=1
+# Skip the build if --no-build is set OR if both binaries are explicitly
+# overridden via env at script-entry time (i.e. user is pointing at a
+# pre-built artifact in CI/release). We use the pre-defaults capture from
+# the top of the script — the prior comparison-against-release-path
+# misfired under `--fast` because that flag remaps the var to
+# `target/fast-release/...` and the comparison then trivially succeeded.
+ECODEX_BINARY_OVERRIDDEN=${ECODEX_BINARY_PRESET:-0}
+PLUGIN_BINARY_OVERRIDDEN=${PLUGIN_BINARY_PRESET:-0}
 
 if [[ ! -d "$PLUGIN_SRC" ]]; then
   echo "ecodex install: plugin source not found at $PLUGIN_SRC" >&2
