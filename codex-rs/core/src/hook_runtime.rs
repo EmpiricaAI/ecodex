@@ -17,6 +17,10 @@ use codex_hooks::PreCompactOutcome;
 use codex_hooks::PreCompactRequest;
 use codex_hooks::SessionEndOutcome;
 use codex_hooks::SessionEndRequest;
+use codex_hooks::SubagentStartOutcome;
+use codex_hooks::SubagentStartRequest;
+use codex_hooks::SubagentStopOutcome;
+use codex_hooks::SubagentStopRequest;
 use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
@@ -315,6 +319,68 @@ pub(crate) async fn run_post_compact_hooks(
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
     let outcome = hooks.run_post_compact(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
+    outcome
+}
+
+/// ecodex addition (goal f0004294): fires SubagentStart in the parent
+/// session after spawn_agent successfully creates a subagent thread.
+/// Plugin handlers track parent→child relationship via child_thread_id.
+pub(crate) async fn run_subagent_start_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    child_thread_id: String,
+    agent_role: Option<String>,
+    agent_nickname: Option<String>,
+    child_model: String,
+) -> SubagentStartOutcome {
+    let request = SubagentStartRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        child_thread_id,
+        agent_role,
+        agent_nickname,
+        child_model,
+    };
+    let hooks = sess.hooks();
+    let preview_runs = hooks.preview_subagent_start(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = hooks.run_subagent_start(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
+    outcome
+}
+
+/// ecodex addition (goal f0004294): fires SubagentStop in the subagent's
+/// own session when it calls report_agent_job_result. Plugin handlers
+/// correlate to the parent via job_id + session_id (= child_thread_id).
+pub(crate) async fn run_subagent_stop_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    job_id: String,
+    item_id: String,
+    accepted: bool,
+) -> SubagentStopOutcome {
+    let request = SubagentStopRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        job_id,
+        item_id,
+        accepted,
+    };
+    let hooks = sess.hooks();
+    let preview_runs = hooks.preview_subagent_stop(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = hooks.run_subagent_stop(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
     outcome
 }

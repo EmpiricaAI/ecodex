@@ -27,7 +27,10 @@ impl ToolHandler for ReportAgentJobResultHandler {
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
-            session, payload, ..
+            session,
+            turn,
+            payload,
+            ..
         } = invocation;
 
         let arguments = match payload {
@@ -39,12 +42,13 @@ impl ToolHandler for ReportAgentJobResultHandler {
             }
         };
 
-        handle(session, arguments).await
+        handle(session, turn, arguments).await
     }
 }
 
 pub async fn handle(
     session: Arc<Session>,
+    turn: Arc<crate::session::turn_context::TurnContext>,
     arguments: String,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: ReportAgentJobResultArgs = parse_arguments(arguments.as_str())?;
@@ -76,6 +80,18 @@ pub async fn handle(
             .mark_agent_job_cancelled(args.job_id.as_str(), message)
             .await;
     }
+    // ecodex addition (goal f0004294): fire SubagentStop in subagent's
+    // own session so plugin handlers can correlate completion back to
+    // the SubagentStart event the parent saw.
+    crate::hook_runtime::run_subagent_stop_hooks(
+        &session,
+        &turn,
+        args.job_id.clone(),
+        args.item_id.clone(),
+        accepted,
+    )
+    .await;
+
     let content =
         serde_json::to_string(&ReportAgentJobResultToolResult { accepted }).map_err(|err| {
             FunctionCallError::Fatal(format!(

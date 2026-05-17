@@ -24,6 +24,10 @@ use crate::events::session_end::SessionEndOutcome;
 use crate::events::session_end::SessionEndRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::subagent_start::SubagentStartOutcome;
+use crate::events::subagent_start::SubagentStartRequest;
+use crate::events::subagent_stop::SubagentStopOutcome;
+use crate::events::subagent_stop::SubagentStopRequest;
 use crate::events::task_completed::TaskCompletedOutcome;
 use crate::events::task_completed::TaskCompletedRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
@@ -323,6 +327,36 @@ impl ClaudeHooksEngine {
         request: SessionEndRequest,
     ) -> SessionEndOutcome {
         crate::events::session_end::run(&self.handlers, &self.shell, request).await
+    }
+
+    // ecodex addition (goal f0004294)
+    pub(crate) fn preview_subagent_start(
+        &self,
+        request: &SubagentStartRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::subagent_start::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_subagent_start(
+        &self,
+        request: SubagentStartRequest,
+    ) -> SubagentStartOutcome {
+        crate::events::subagent_start::run(&self.handlers, &self.shell, request).await
+    }
+
+    // ecodex addition (goal f0004294)
+    pub(crate) fn preview_subagent_stop(
+        &self,
+        request: &SubagentStopRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::subagent_stop::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_subagent_stop(
+        &self,
+        request: SubagentStopRequest,
+    ) -> SubagentStopOutcome {
+        crate::events::subagent_stop::run(&self.handlers, &self.shell, request).await
     }
 
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {

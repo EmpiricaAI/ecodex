@@ -8,7 +8,8 @@ Tracks the 7 hook events ecodex adds on top of stock codex's 6, and where each o
 - ✅ **PostToolUseFailure dispatch site landed**: fires at `codex-rs/core/src/tools/registry.rs:434` in the failure branch (else of post_tool_use_payload). Carries tool_name + tool_input + error_message + duration_ms for plugin handlers consuming failures as dead-end artifacts.
 - ✅ **PreCompact + PostCompact dispatch sites landed**: both fire from `codex-rs/core/src/tasks/compact.rs:CompactTask::run` (single entry point for all 3 compaction implementations — local/remote/remote_v2). PreCompact awaits synchronously before compaction runs (the `.await` is the natural block — plugin handlers complete their snapshot work before the summarizer touches history). PostCompact fires after with `success: bool`. Payload carries `compact_type` so handlers know which path ran.
 - ✅ **SessionEnd dispatch site landed**: fires at `codex-rs/core/src/session/handlers.rs:shutdown()` entry, before `abort_all_tasks`. Plugin handlers run final POSTFLIGHT + capture session snapshot + curate the rollout while history/tasks/MCP are still alive. Payload carries `turn_count`.
-- ❌ **Remaining 2 dispatch sites pending**: SubagentStart/Stop (low priority — only relevant once subagents become common in ecodex). Tracked under goal `f0004294`.
+- ✅ **SubagentStart + SubagentStop dispatch sites landed**: SubagentStart fires in the parent session at `codex-rs/core/src/tools/handlers/multi_agents/spawn.rs:~176` (after spawn_agent_with_metadata returns Ok). SubagentStop fires in the subagent's own session at `codex-rs/core/src/tools/handlers/agent_jobs/report_agent_job_result.rs:handle()` (when the subagent calls report-done). Plugins correlate parent→child via `child_thread_id` + matching session_id on the Stop side.
+- ✅ **7/7 dispatch sites landed**. Goal `f0004294` complete.
 
 ## Dispatch pattern (minimal sibling) — proven by TaskCompleted
 
@@ -67,15 +68,25 @@ Listed with the file:line where the dispatch call needs to be inserted in `codex
 
 **Handlers:** `session-end-postflight.py`, `curate-snapshots.py`.
 
-### `SubagentStart` / `SubagentStop`
+### `SubagentStart` / `SubagentStop` ✅ SHIPPED
 
-**Lifecycle:** When a subagent (Agent tool spawn) is created / completes.
+**Lifecycle:**
+- `SubagentStart` fires in the **parent's session** after the `spawn_agent` tool successfully creates a subagent thread.
+- `SubagentStop` fires in the **subagent's own session** when it calls the `report_agent_job_result` tool to report done.
+
+Asymmetric session contexts (parent for Start, child for Stop) reflect codex's threading model: the parent dispatches the spawn but the subagent runs in its own session and self-reports completion. Plugin handlers correlate via `child_thread_id` (Start payload) + `session_id` (Stop payload, = child_thread_id).
 
 **Why:** Subagents inherit epistemic context but run their own transactions. Empirica needs to track the parent→child relationship and merge findings back on completion.
 
-**Dispatch site (TBC):** `codex-rs/core/src/agent/control.rs` — find `spawn_agent()` and the parent-notification path on agent completion. Fire `SubagentStart` after the child is registered, `SubagentStop` when the child reports done.
+**Dispatch sites:**
+- SubagentStart: `codex-rs/core/src/tools/handlers/multi_agents/spawn.rs:~176` (after `spawn_agent_with_metadata` returns Ok, before `SpawnAgentResult` return).
+- SubagentStop: `codex-rs/core/src/tools/handlers/agent_jobs/report_agent_job_result.rs:handle()` (after `accepted` flag computed, before result serialization).
 
-**Handlers:** `subagent-start.py`, `subagent-stop.py`.
+**Payloads:**
+- SubagentStart: standard 6 fields + `child_thread_id`, `agent_role`, `agent_nickname`, `child_model`.
+- SubagentStop: standard 6 fields + `job_id`, `item_id`, `accepted`.
+
+**Handlers:** `subagent-start.py`, `subagent-stop.py` — plugin writes parent→child relationship to `~/.empirica/subagents/<parent>/<child>.yaml` on Start, appends result on Stop, parent's next prompt reads the shared state.
 
 ### `TaskCompleted` ✅ SHIPPED
 

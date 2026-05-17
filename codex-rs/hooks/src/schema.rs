@@ -461,6 +461,50 @@ pub(crate) struct PostCompactCommandInput {
     pub success: bool,
 }
 
+// ecodex addition (goal f0004294): SubagentStart fires in parent context
+// when spawn_agent tool successfully creates a subagent thread. Plugin
+// handlers correlate parent→child via child_thread_id + the matching
+// SubagentStop payload that fires from the subagent's own session.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "subagent_start.command.input")]
+pub(crate) struct SubagentStartCommandInput {
+    pub session_id: String,
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "subagent_start_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub child_thread_id: String,
+    pub agent_role: NullableString,
+    pub agent_nickname: NullableString,
+    pub child_model: String,
+}
+
+// ecodex addition (goal f0004294): SubagentStop fires in the subagent's
+// own session when it calls report_agent_job_result. Plugin handlers
+// correlate back to the parent via job_id + child_thread_id (session_id).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "subagent_stop.command.input")]
+pub(crate) struct SubagentStopCommandInput {
+    pub session_id: String,
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "subagent_stop_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub job_id: String,
+    pub item_id: String,
+    pub accepted: bool,
+}
+
 // ecodex addition (goal f0004294): SessionEnd is the symmetric counterpart
 // to SessionStart. turn_count gives plugins a session-summary threshold
 // signal (e.g., skip snapshot for trivial 1-turn sessions).
@@ -653,6 +697,14 @@ fn post_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn session_end_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("SessionEnd")
+}
+
+fn subagent_start_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("SubagentStart")
+}
+
+fn subagent_stop_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("SubagentStop")
 }
 
 fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {

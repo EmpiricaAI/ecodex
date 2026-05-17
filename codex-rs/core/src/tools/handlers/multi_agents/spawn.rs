@@ -156,9 +156,9 @@ impl ToolHandler for Handler {
                     sender_thread_id: session.conversation_id,
                     new_thread_id,
                     new_agent_nickname,
-                    new_agent_role,
+                    new_agent_role: new_agent_role.clone(),
                     prompt,
-                    model: effective_model,
+                    model: effective_model.clone(),
                     reasoning_effort: effective_reasoning_effort,
                     status,
                 }
@@ -172,6 +172,18 @@ impl ToolHandler for Handler {
             /*inc*/ 1,
             &[("role", role_tag)],
         );
+
+        // ecodex addition (goal f0004294): fire SubagentStart in parent
+        // session so plugin handlers can track the parent→child relationship.
+        crate::hook_runtime::run_subagent_start_hooks(
+            &session,
+            &turn,
+            new_thread_id.to_string(),
+            new_agent_role,
+            nickname.clone(),
+            effective_model,
+        )
+        .await;
 
         Ok(SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
