@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+- **Translator multi-upstream router** (`codex-empirica-translator`, commit `dcec5b4099`): one translator process now serves N upstream providers, routing per-request via first-match-wins glob on the incoming Responses request's `model` field. New `--upstreams-config <TOML>` flag; existing single-upstream flags preserved for backwards compatibility. Sample config at `examples/upstreams.toml` covers Kimi (Anthropic mode), DeepSeek/Qwen/GLM/Anthropic/OpenRouter as commented templates. New `Upstream` + `UpstreamRouter` public API. `/healthz` now lists configured upstreams inventory. 33/33 tests pass.
+- **Plugin multi-script fan-out** (`codex-empirica-plugin`, commit `630b7b2ab7`): empirica plugin now mirrors Claude Code's `~/.claude/settings.json` multi-handler-per-event wiring. New `run-hook EVENT SCRIPT.py` generic dispatcher subcommand; `hooks.json` declares sibling scripts per event (UserPromptSubmit fires 6 scripts, SessionStart 4, PostToolUse 2). Closes the "compulsion gap" where tool-router.py's siblings (`context-shift-tracker`, `loop/listener install/uninstall pickups`) were never firing. Vendored previously-missing `session-monitor-arm.py`.
+- **Hook event schema additions** (`codex-rs/protocol/src/protocol.rs` + 12 other files, commit `7bcf85c3b8`): `HookEventName` enum extended with 7 new variants matching CC's wider surface — `PreCompact`, `PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `TaskCompleted`, `PostToolUseFailure`. Plugins can declare handlers in `hooks.json` today; **dispatch sites still pending** (events won't actually fire until lifecycle-point patches land in `codex-rs/core`). Roadmap with per-event file:line target + priority order at `docs/ecodex/hook-events-roadmap.md`.
+
+### Notes
+- Goal `f0004294` tracks the PR2 dispatch-site implementation (separate per-event patches, priority order: `TaskCompleted` + `PostToolUseFailure` first for the agent-discipline enforcement gap).
+
 ## [0.0.1] - 2026-05-10
 
 ### Added
