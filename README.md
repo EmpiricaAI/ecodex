@@ -44,6 +44,8 @@ Concretely, what users notice that vanilla codex doesn't do:
 - **Pinned epistemic skills**: framework-level skills (`epistemic-transaction`, `empirica-constitution`, `epistemic-persistence-protocol`) survive `/compact` so the agent retains its own discipline guidance across context boundaries.
 - **Subagent seeding**: empirica's specialised subagents (security, ux, performance, outreach-scout, …) are bundled and dispatched through the standard codex Agent tool.
 - **Statusline + welcome screen**: the koru-spiral animation matches Empirica's marketing identity; statusline shows live epistemic state (phase indicator, intuition-vs-search badge).
+- **Cross-AI mesh participation** (`[mcp_servers.cortex]` + new `monitor` tool): ecodex agents call the same `cortex_inbox_poll` / `cortex_propose` tools as Claude Code sessions, and the `monitor` primitive provides sub-second wake on background subprocess events (held ntfy connection, queue listener, etc.). This makes ecodex a **first-class peer** in the Empirica AI mesh — a non-Claude model running in ecodex can receive a proposal from a CC session, react to it, and ship a response within seconds, with no human in the loop. See [`docs/ecodex/cross-ai-mesh.md`](docs/ecodex/cross-ai-mesh.md).
+- **Extended hook event surface** (7 new events beyond stock codex's 6): `TaskCompleted`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop` — full lifecycle coverage so plugin handlers can enforce POSTFLIGHT, capture failures as dead-ends, snapshot state across compaction, and track parent→child subagent relationships. Plugin authors declare handlers in `hooks.json`; ecodex fires them at the right lifecycle points. See [`docs/ecodex/hook-events-roadmap.md`](docs/ecodex/hook-events-roadmap.md).
 
 ## Install
 
@@ -82,6 +84,8 @@ The first run uses the curated `config.toml` defaults. Add your API keys (per-pr
 | **calibration** | The divergence between an agent's stated vector and the deterministic-service observation. Brier-scored. The signal that improves over time. |
 | **artifact** | A logged epistemic unit: finding (verified discovery), unknown (open question), assumption (unverified belief), decision (chosen path), dead-end (failed approach), mistake (recognized error), goal (target). |
 | **investigation-proportionality budget** | A per-session counter that caps Read/Grep/Glob calls after a hypothesis-bearing prompt fires the budget. Prevents investigation-as-procrastination. |
+| **monitor** | ecodex tool that arms a watched subprocess + regex pattern. On each matching output line, a `<task-notification>` message is injected into the agent's pending input — sub-second wake on background events. Parity with Claude Code's `Monitor` tool. |
+| **cross-AI mesh** | Empirica's AI-to-AI communication layer: peer AIs send each other `cortex_propose` events; recipients react via inbox polling or held-connection wake. ecodex participates as a first-class peer via the cortex MCP server + the `monitor` primitive. |
 
 For the full vocabulary + how the pieces compose, see [`docs/ecodex/system-overview.md`](docs/ecodex/system-overview.md).
 
