@@ -66,6 +66,15 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::Stop => "stop",
+            // ecodex additions — kebab strings for log/trace output until
+            // dispatch sites land. See goal f0004294.
+            codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
+            codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
+            codex_protocol::protocol::HookEventName::SessionEnd => "session-end",
+            codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
+            codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
+            codex_protocol::protocol::HookEventName::TaskCompleted => "task-completed",
+            codex_protocol::protocol::HookEventName::PostToolUseFailure => "post-tool-use-failure",
         }
     }
 }

@@ -665,6 +665,14 @@ fn event_label(event_name: HookEventName) -> &'static str {
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
+        // ecodex hook event additions (goal f0004294)
+        HookEventName::PreCompact => "PreCompact",
+        HookEventName::PostCompact => "PostCompact",
+        HookEventName::SessionEnd => "SessionEnd",
+        HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
+        HookEventName::TaskCompleted => "TaskCompleted",
+        HookEventName::PostToolUseFailure => "PostToolUseFailure",
     }
 }
 
@@ -676,6 +684,15 @@ fn event_description(event_name: HookEventName) -> &'static str {
         HookEventName::SessionStart => "When a new session starts",
         HookEventName::UserPromptSubmit => "When the user submits a prompt",
         HookEventName::Stop => "Right before Codex ends its turn",
+        // ecodex hook event additions (goal f0004294 — schema present;
+        // dispatch sites still pending in upstream codex source)
+        HookEventName::PreCompact => "Before codex compacts the conversation",
+        HookEventName::PostCompact => "After conversation compaction completes",
+        HookEventName::SessionEnd => "When a codex session ends",
+        HookEventName::SubagentStart => "When a subagent is spawned",
+        HookEventName::SubagentStop => "When a subagent completes its work",
+        HookEventName::TaskCompleted => "When the agent declares task completion",
+        HookEventName::PostToolUseFailure => "When a tool invocation fails",
     }
 }
 

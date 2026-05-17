@@ -472,6 +472,14 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
+        // ecodex hook event additions (goal f0004294)
+        HookEventName::PreCompact => "PreCompact",
+        HookEventName::PostCompact => "PostCompact",
+        HookEventName::SessionEnd => "SessionEnd",
+        HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
+        HookEventName::TaskCompleted => "TaskCompleted",
+        HookEventName::PostToolUseFailure => "PostToolUseFailure",
     };
     let hook_source = match run.source {
         HookSource::System => "system",

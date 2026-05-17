@@ -525,6 +525,15 @@ fn hook_event_key_label(event_name: codex_protocol::protocol::HookEventName) -> 
         codex_protocol::protocol::HookEventName::SessionStart => "session_start",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "user_prompt_submit",
         codex_protocol::protocol::HookEventName::Stop => "stop",
+        // ecodex additions (snake_case for registry keys; dispatch-site
+        // wiring tracked under goal f0004294).
+        codex_protocol::protocol::HookEventName::PreCompact => "pre_compact",
+        codex_protocol::protocol::HookEventName::PostCompact => "post_compact",
+        codex_protocol::protocol::HookEventName::SessionEnd => "session_end",
+        codex_protocol::protocol::HookEventName::SubagentStart => "subagent_start",
+        codex_protocol::protocol::HookEventName::SubagentStop => "subagent_stop",
+        codex_protocol::protocol::HookEventName::TaskCompleted => "task_completed",
+        codex_protocol::protocol::HookEventName::PostToolUseFailure => "post_tool_use_failure",
     }
 }
 

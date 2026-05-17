@@ -9,13 +9,27 @@ mod types;
 
 pub use engine::HookListEntry;
 /// Hook event names as they appear in hooks JSON and config files.
-pub const HOOK_EVENT_NAMES: [&str; 6] = [
+///
+/// The first 6 are codex-stock; the remaining 7 are ecodex divergences
+/// mirroring CC's lifecycle surface. Dispatch sites for the ecodex
+/// additions are wired in incremental PRs (see goal f0004294) —
+/// declaring them in hooks.json is valid today but they won't fire
+/// until the corresponding lifecycle-point patch lands.
+pub const HOOK_EVENT_NAMES: [&str; 13] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
     "SessionStart",
     "UserPromptSubmit",
     "Stop",
+    // ecodex additions:
+    "PreCompact",
+    "PostCompact",
+    "SessionEnd",
+    "SubagentStart",
+    "SubagentStop",
+    "TaskCompleted",
+    "PostToolUseFailure",
 ];
 
 /// Hook event names whose matcher fields are meaningful during dispatch.
@@ -23,11 +37,14 @@ pub const HOOK_EVENT_NAMES: [&str; 6] = [
 /// Other events can appear in hooks JSON, but Codex ignores their matcher
 /// fields because those events do not dispatch against a tool or session-start
 /// source.
-pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 4] = [
+pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 5] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
     "SessionStart",
+    // ecodex addition — PostToolUseFailure matches on tool_name like its
+    // success twin.
+    "PostToolUseFailure",
 ];
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;

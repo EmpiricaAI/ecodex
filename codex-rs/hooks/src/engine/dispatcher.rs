@@ -46,7 +46,8 @@ pub(crate) fn select_handlers_for_matcher_inputs(
             HookEventName::PreToolUse
             | HookEventName::PermissionRequest
             | HookEventName::PostToolUse
-            | HookEventName::SessionStart => {
+            | HookEventName::SessionStart
+            | HookEventName::PostToolUseFailure => {
                 if matcher_inputs.is_empty() {
                     matches_matcher(handler.matcher.as_deref(), /*input*/ None)
                 } else {
@@ -55,7 +56,14 @@ pub(crate) fn select_handlers_for_matcher_inputs(
                         .any(|input| matches_matcher(handler.matcher.as_deref(), Some(input)))
                 }
             }
-            HookEventName::UserPromptSubmit | HookEventName::Stop => true,
+            HookEventName::UserPromptSubmit
+            | HookEventName::Stop
+            | HookEventName::PreCompact
+            | HookEventName::PostCompact
+            | HookEventName::SessionEnd
+            | HookEventName::SubagentStart
+            | HookEventName::SubagentStop
+            | HookEventName::TaskCompleted => true,
         })
         .cloned()
         .collect()
@@ -128,12 +136,23 @@ pub(crate) fn completed_summary(
 
 fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
-        HookEventName::SessionStart => HookScope::Thread,
+        // Thread-scope = session-lifespan-bound. SessionStart and SessionEnd
+        // are session-bound; compaction is a thread-level boundary too
+        // (preserves state across the context-window flush).
+        HookEventName::SessionStart
+        | HookEventName::SessionEnd
+        | HookEventName::PreCompact
+        | HookEventName::PostCompact => HookScope::Thread,
+        // Turn-scope = per-agent-turn bounded.
         HookEventName::PreToolUse
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
         | HookEventName::UserPromptSubmit
-        | HookEventName::Stop => HookScope::Turn,
+        | HookEventName::Stop
+        | HookEventName::PostToolUseFailure
+        | HookEventName::SubagentStart
+        | HookEventName::SubagentStop
+        | HookEventName::TaskCompleted => HookScope::Turn,
     }
 }
 

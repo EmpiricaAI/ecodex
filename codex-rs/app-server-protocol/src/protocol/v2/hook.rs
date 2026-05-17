@@ -17,7 +17,13 @@ use ts_rs::TS;
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PermissionRequest, PostToolUse, SessionStart, UserPromptSubmit, Stop
+        PreToolUse, PermissionRequest, PostToolUse, SessionStart, UserPromptSubmit, Stop,
+        // ecodex divergence: extra lifecycle events mirroring CC's surface
+        // (PreCompact / PostCompact / SessionEnd / SubagentStart /
+        // SubagentStop / TaskCompleted / PostToolUseFailure). Dispatch
+        // sites land in incremental PRs — schema declarable today.
+        PreCompact, PostCompact, SessionEnd, SubagentStart, SubagentStop,
+        TaskCompleted, PostToolUseFailure
     }
 );
 

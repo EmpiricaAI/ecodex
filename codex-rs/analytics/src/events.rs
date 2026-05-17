@@ -883,6 +883,14 @@ fn analytics_hook_event_name(event_name: HookEventName) -> &'static str {
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
+        // ecodex hook event additions (goal f0004294)
+        HookEventName::PreCompact => "PreCompact",
+        HookEventName::PostCompact => "PostCompact",
+        HookEventName::SessionEnd => "SessionEnd",
+        HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
+        HookEventName::TaskCompleted => "TaskCompleted",
+        HookEventName::PostToolUseFailure => "PostToolUseFailure",
     }
 }
 

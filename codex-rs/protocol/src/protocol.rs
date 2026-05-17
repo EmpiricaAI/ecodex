@@ -1480,6 +1480,29 @@ pub enum HookEventName {
     SessionStart,
     UserPromptSubmit,
     Stop,
+    // ── ecodex divergence — events mirroring Claude Code surface ─────
+    // CC fires hooks on 11 lifecycle events; codex stock has 6. The
+    // 5 below let empirica's CC-equivalent scripts wire to ecodex's
+    // hooks.json. Dispatch sites at each lifecycle point are PARTIAL:
+    // schema is declarable today, runtime fan-out per site lands as
+    // separate PRs (one per site). Goal f0004294 tracks.
+    /// Fires just before codex compacts the conversation history.
+    PreCompact,
+    /// Fires after compaction completes — useful for restoring state.
+    PostCompact,
+    /// Fires when a codex session ends (cleanup, final POSTFLIGHT).
+    SessionEnd,
+    /// Fires when a subagent is spawned (Agent tool invocation).
+    SubagentStart,
+    /// Fires when a subagent completes its work (returns to parent).
+    SubagentStop,
+    /// Fires when the agent declares task-completion (Stop's broader
+    /// sibling — Stop fires on agent-turn-end, TaskCompleted fires on
+    /// explicit "I'm done with this task" signal).
+    TaskCompleted,
+    /// Fires when a tool invocation fails (errno != 0 / exception /
+    /// timeout). Lets empirica's tool-failure.py capture + record.
+    PostToolUseFailure,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
