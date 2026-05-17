@@ -59,8 +59,12 @@ pub use events::session_start::SessionStartSource;
 pub use events::stop::StopOutcome;
 pub use events::stop::StopRequest;
 // ecodex additions (goal f0004294)
+pub use events::post_compact::PostCompactOutcome;
+pub use events::post_compact::PostCompactRequest;
 pub use events::post_tool_use_failure::PostToolUseFailureOutcome;
 pub use events::post_tool_use_failure::PostToolUseFailureRequest;
+pub use events::pre_compact::PreCompactOutcome;
+pub use events::pre_compact::PreCompactRequest;
 pub use events::task_completed::TaskCompletedOutcome;
 pub use events::task_completed::TaskCompletedRequest;
 pub use events::user_prompt_submit::UserPromptSubmitOutcome;

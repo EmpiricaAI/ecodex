@@ -423,6 +423,44 @@ pub(crate) struct TaskCompletedCommandInput {
     pub last_assistant_message: NullableString,
 }
 
+// ecodex addition (goal f0004294): PreCompact carries the standard hook
+// fields plus compact_type (local|remote|remote_v2) so plugins know which
+// summarizer path is about to run.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "pre_compact.command.input")]
+pub(crate) struct PreCompactCommandInput {
+    pub session_id: String,
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "pre_compact_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub compact_type: String,
+}
+
+// ecodex addition (goal f0004294): PostCompact mirrors PreCompact, adds
+// success flag so handlers know whether to restore breadcrumbs or not.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "post_compact.command.input")]
+pub(crate) struct PostCompactCommandInput {
+    pub session_id: String,
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "post_compact_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub compact_type: String,
+    pub success: bool,
+}
+
 // ecodex addition (goal f0004294): PostToolUseFailure mirrors PostToolUse's
 // tool-context fields (minus tool_response, which doesn't exist on failure)
 // and adds error_message + duration_ms for plugin handlers consuming the
@@ -584,6 +622,14 @@ fn task_completed_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn post_tool_use_failure_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostToolUseFailure")
+}
+
+fn pre_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("PreCompact")
+}
+
+fn post_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("PostCompact")
 }
 
 fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {

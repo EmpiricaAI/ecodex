@@ -5,6 +5,8 @@ pub mod pre_tool_use;
 pub mod session_start;
 pub mod stop;
 // ecodex additions (goal f0004294)
+pub mod post_compact;
 pub mod post_tool_use_failure;
+pub mod pre_compact;
 pub mod task_completed;
 pub mod user_prompt_submit;

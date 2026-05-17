@@ -6,7 +6,8 @@ Tracks the 7 hook events ecodex adds on top of stock codex's 6, and where each o
 - ✅ **Schema landed** (commit `7bcf85c3b8`): `HookEventName` enum extended; exhaustive matches updated; `hooks.json` accepts the new event names without rejection. Empirica plugin can declare handlers today.
 - ✅ **TaskCompleted dispatch site landed**: fires at `codex-rs/core/src/session/turn.rs:570` after Stop's continuation flow, before AfterAgent. **Pattern proven** — see "Dispatch pattern (minimal sibling)" below.
 - ✅ **PostToolUseFailure dispatch site landed**: fires at `codex-rs/core/src/tools/registry.rs:434` in the failure branch (else of post_tool_use_payload). Carries tool_name + tool_input + error_message + duration_ms for plugin handlers consuming failures as dead-end artifacts.
-- ❌ **Remaining 5 dispatch sites pending**: PreCompact, PostCompact, SessionEnd, SubagentStart/Stop. Tracked under goal `f0004294`.
+- ✅ **PreCompact + PostCompact dispatch sites landed**: both fire from `codex-rs/core/src/tasks/compact.rs:CompactTask::run` (single entry point for all 3 compaction implementations — local/remote/remote_v2). PreCompact awaits synchronously before compaction runs (the `.await` is the natural block — plugin handlers complete their snapshot work before the summarizer touches history). PostCompact fires after with `success: bool`. Payload carries `compact_type` so handlers know which path ran.
+- ❌ **Remaining 3 dispatch sites pending**: SessionEnd, SubagentStart/Stop. Tracked under goal `f0004294`.
 
 ## Dispatch pattern (minimal sibling) — proven by TaskCompleted
 
@@ -39,13 +40,17 @@ Build + verify: `cargo build --manifest-path codex-rs/Cargo.toml --workspace --e
 
 Listed with the file:line where the dispatch call needs to be inserted in `codex-rs/core` (best guess from current architecture — confirm during implementation).
 
-### `PreCompact` / `PostCompact`
+### `PreCompact` / `PostCompact` ✅ SHIPPED
 
-**Lifecycle:** Just before / just after codex compacts the conversation history (when token usage approaches context limit).
+**Lifecycle:** PreCompact fires just before any compaction implementation runs (local, remote-V1, or remote-V2). PostCompact fires just after, with `success: bool` indicating whether the compaction completed cleanly.
 
 **Why:** Compaction destroys epistemic state in working memory. Pre-compact hook lets empirica snapshot transaction state, vectors, recent artifacts to `~/.empirica/breadcrumbs/`. Post-compact restores via system-message injection.
 
-**Dispatch site (TBC):** `codex-rs/core/src/compact.rs` — find the `compact_conversation()` entrypoint, fire `PreCompact` just before the truncation, `PostCompact` just after the new history is sized down.
+**Dispatch site:** `codex-rs/core/src/tasks/compact.rs:CompactTask::run` — single orchestration entry that branches into three implementations. Both fires happen at this level so all three paths get the events. Helpers `run_pre_compact_hooks` + `run_post_compact_hooks` in `codex-rs/core/src/hook_runtime.rs`.
+
+**Block semantics:** PreCompact uses the `.await` on the hook run as its natural block — plugin handlers complete their snapshot work before the summarizer touches history. No should_block/continuation_fragments needed (would have been a richer Stop-like sibling pattern; the simpler awaited dispatch was sufficient).
+
+**Payload:** Standard 6 fields plus `compact_type` (`"local"` / `"remote"` / `"remote_v2"`). PostCompact additionally carries `success: bool`.
 
 **Handler:** `pre-compact.py` (snapshots), `post-compact.py` (restores via SessionStart fan-out already in place).
 
