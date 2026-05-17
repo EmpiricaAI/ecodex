@@ -84,7 +84,7 @@ impl UpstreamRouter {
         let upstreams = parsed
             .upstream
             .into_iter()
-            .map(|raw| raw.resolve())
+            .map(RawUpstream::resolve)
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Self::new(upstreams))
