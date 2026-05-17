@@ -446,7 +446,12 @@ def determine_work_phase(phase: str, gate_decision: str | None = None) -> str:
 def format_phase_state(phase: str, work_phase: str, composite: float, gate_decision: str | None = None) -> str:
     """Format transaction phase + work state as compact indicator.
 
-    Examples: PRE 🔍65% | CHK 🔍82%→ | CHK ⚙65%… | POST ⚙92% Δ ✓
+    Examples: PRE 🔍65% | CHK 🔍82%→ | CHK 🔨65%… | POST 🔨92% Δ ✓
+
+    Praxic emoji is 🔨 (hammer, U+1F528 — east-asian-width: W). Was ⚙
+    (U+2699, eaw: N/ambiguous) which terminal-rendered narrow on some
+    surfaces and wide on others, causing the digits next to it to overlap
+    or clip. 🔨 also matches the existing docs in CLAUDE_CODE_SETUP.md.
     """
     # Phase abbreviation
     phase_abbrev = {
@@ -459,7 +464,7 @@ def format_phase_state(phase: str, work_phase: str, composite: float, gate_decis
     if work_phase == 'noetic':
         emoji = "🔍"
     else:
-        emoji = "⚙"
+        emoji = "🔨"
 
     pct = int(composite * 100)
     color = _color_by_value(composite)
@@ -1027,12 +1032,13 @@ def _format_statusline_header(project_name, vectors, threshold_info):
     confidence = calculate_confidence(vectors)
     conf_str = format_confidence(confidence)
 
-    threshold_str = ""
-    if threshold_info:
-        know_t, _, t_color = threshold_info
-        threshold_str = f" {format_threshold(know_t, t_color)}"
-
-    parts = [f"{Colors.GREEN}[{label}]{Colors.RESET} {conf_str}{threshold_str}"]
+    # Threshold (↕XX%) intentionally not rendered in live statusline. It's
+    # Sentinel-scoped (set/dynamically-adjusted at session level, not per
+    # action) and not actionable for the AI mid-tool-call. Helpers
+    # `get_dynamic_threshold` + `format_threshold` remain available for
+    # `empirica sentinel-status` and debug surfaces. Pass threshold_info=None
+    # from callers to keep the live statusline tight.
+    parts = [f"{Colors.GREEN}[{label}]{Colors.RESET} {conf_str}"]
 
     ext_str = read_statusline_extensions()
     if ext_str:
@@ -1415,7 +1421,7 @@ def main():
         deltas = get_vector_deltas(db, transaction_session_id or session_id)
         goal = get_active_goal(db, session_id)
         open_counts = get_open_counts(db, session_id, project_id=project_id)
-        threshold_info = get_dynamic_threshold(db)
+        # threshold_info intentionally not fetched — Sentinel-scoped, not surfaced live
         db.close()
 
         if output_json:
@@ -1436,7 +1442,7 @@ def main():
         output = format_statusline(
             session, phase, vectors, deltas, mode,
             gate_decision=gate_decision, goal=goal, open_counts=open_counts,
-            project_name=project_name, threshold_info=threshold_info,
+            project_name=project_name, threshold_info=None,
             stdin_context=stdin_context,
         )
         print(output)
