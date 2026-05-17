@@ -16,6 +16,8 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::task_completed::TaskCompletedOutcome;
+use crate::events::task_completed::TaskCompletedRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::output_spill::HookOutputSpiller;
@@ -238,6 +240,21 @@ impl ClaudeHooksEngine {
             .maybe_spill_prompt_fragments(session_id, outcome.continuation_fragments)
             .await;
         outcome
+    }
+
+    // ecodex addition (goal f0004294)
+    pub(crate) fn preview_task_completed(
+        &self,
+        request: &TaskCompletedRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::task_completed::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_task_completed(
+        &self,
+        request: TaskCompletedRequest,
+    ) -> TaskCompletedOutcome {
+        crate::events::task_completed::run(&self.handlers, &self.shell, request).await
     }
 
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {

@@ -525,7 +525,7 @@ pub(crate) async fn run_turn(
                         cwd: turn_context.cwd.clone(),
                         transcript_path: sess.hook_transcript_path().await,
                         model: turn_context.model_info.slug.clone(),
-                        permission_mode: stop_hook_permission_mode,
+                        permission_mode: stop_hook_permission_mode.clone(),
                         stop_hook_active,
                         last_assistant_message: last_agent_message.clone(),
                     };
@@ -567,6 +567,37 @@ pub(crate) async fn run_turn(
                     if stop_outcome.should_stop {
                         break;
                     }
+                    // ecodex addition (goal f0004294): fire TaskCompleted at
+                    // the normal agent-done lifecycle point. Informational
+                    // only — plugin handlers attach POSTFLIGHT enforcement
+                    // here without changing Stop's continuation semantics.
+                    let task_completed_request = codex_hooks::TaskCompletedRequest {
+                        session_id: sess.conversation_id,
+                        turn_id: turn_context.sub_id.clone(),
+                        cwd: turn_context.cwd.clone(),
+                        transcript_path: sess.hook_transcript_path().await,
+                        model: turn_context.model_info.slug.clone(),
+                        permission_mode: stop_hook_permission_mode.clone(),
+                        last_assistant_message: last_agent_message.clone(),
+                    };
+                    for run in hooks.preview_task_completed(&task_completed_request) {
+                        sess.send_event(
+                            &turn_context,
+                            EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
+                                turn_id: Some(turn_context.sub_id.clone()),
+                                run,
+                            }),
+                        )
+                        .await;
+                    }
+                    let task_completed_outcome =
+                        hooks.run_task_completed(task_completed_request).await;
+                    emit_hook_completed_events(
+                        &sess,
+                        &turn_context,
+                        task_completed_outcome.hook_events,
+                    )
+                    .await;
                     let hook_outcomes = sess
                         .hooks()
                         .dispatch(HookPayload {

@@ -58,6 +58,9 @@ pub use events::session_start::SessionStartRequest;
 pub use events::session_start::SessionStartSource;
 pub use events::stop::StopOutcome;
 pub use events::stop::StopRequest;
+// ecodex addition (goal f0004294)
+pub use events::task_completed::TaskCompletedOutcome;
+pub use events::task_completed::TaskCompletedRequest;
 pub use events::user_prompt_submit::UserPromptSubmitOutcome;
 pub use events::user_prompt_submit::UserPromptSubmitRequest;
 pub use legacy_notify::legacy_notify_json;

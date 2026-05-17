@@ -404,6 +404,25 @@ pub(crate) struct StopCommandInput {
     pub last_assistant_message: NullableString,
 }
 
+// ecodex addition (goal f0004294): TaskCompleted carries the same shape as
+// Stop minus stop_hook_active (no re-entry semantics — this fires once per
+// agent-done lifecycle point).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "task_completed.command.input")]
+pub(crate) struct TaskCompletedCommandInput {
+    pub session_id: String,
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "task_completed_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub last_assistant_message: NullableString,
+}
+
 pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     let generated_dir = schema_root.join(GENERATED_DIR);
     ensure_empty_dir(&generated_dir)?;
@@ -533,6 +552,10 @@ fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Sche
 
 fn stop_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("Stop")
+}
+
+fn task_completed_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("TaskCompleted")
 }
 
 fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {

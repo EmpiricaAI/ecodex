@@ -3,8 +3,25 @@
 Tracks the 7 hook events ecodex adds on top of stock codex's 6, and where each one's dispatch site needs to be wired in `codex-rs/core/` for the event to actually fire.
 
 **Status (2026-05-17):**
-- ✅ **Schema landed** (PR `<commit>`): `HookEventName` enum extended; exhaustive matches updated; `hooks.json` accepts the new event names without rejection. Empirica plugin can declare handlers today.
-- ❌ **Dispatch sites pending**: events are declarable but won't fire until each one's lifecycle-point patch lands in `codex-rs/core`. Tracked under goal `f0004294`.
+- ✅ **Schema landed** (commit `7bcf85c3b8`): `HookEventName` enum extended; exhaustive matches updated; `hooks.json` accepts the new event names without rejection. Empirica plugin can declare handlers today.
+- ✅ **TaskCompleted dispatch site landed**: fires at `codex-rs/core/src/session/turn.rs:570` after Stop's continuation flow, before AfterAgent. **Pattern proven** — see "Dispatch pattern (minimal sibling)" below.
+- ❌ **Remaining 6 dispatch sites pending**: PostToolUseFailure, PreCompact, PostCompact, SessionEnd, SubagentStart/Stop. Tracked under goal `f0004294`.
+
+## Dispatch pattern (minimal sibling) — proven by TaskCompleted
+
+For each informational event (everything except PreCompact, which needs sync continuation semantics), the dispatch wire-up is ~150 LOC new + ~30 LOC across 6 wiring sites:
+
+| File | Change | LOC |
+|---|---|---|
+| `codex-rs/hooks/src/events/<event>.rs` | New: `<Event>Request` struct (StopRequest-shape, drop fields not relevant), `<Event>Outcome { hook_events: Vec<HookCompletedEvent> }`, `preview()` + `run()` + minimal `parse_completed()` (no decision/block parsing — informational) | ~150 |
+| `codex-rs/hooks/src/events/mod.rs` | `pub mod <event>;` | 1 |
+| `codex-rs/hooks/src/lib.rs` | Re-export `<Event>Request` + `<Event>Outcome` | 2 |
+| `codex-rs/hooks/src/schema.rs` | Add `<Event>CommandInput` struct + `<event>_hook_event_name_schema()` fn | ~25 |
+| `codex-rs/hooks/src/registry.rs` | Add `preview_<event>()` + `run_<event>()` methods on `Hooks` | ~15 |
+| `codex-rs/hooks/src/engine/mod.rs` | Add `preview_<event>()` + `run_<event>()` wrappers on engine | ~10 |
+| `codex-rs/core/src/session/turn.rs` (or appropriate lifecycle file) | Build request, fire preview HookStarted events, run, emit completed events | ~25 |
+
+Build + verify: `cargo build --manifest-path codex-rs/Cargo.toml --workspace --exclude codex-bwrap` should pass clean. No new unit tests required for the dispatch path itself — the wiring is mechanical and verified by build; behavioral tests belong on plugin handlers.
 
 ## Stock codex events (already wired)
 
@@ -51,15 +68,15 @@ Listed with the file:line where the dispatch call needs to be inserted in `codex
 
 **Handlers:** `subagent-start.py`, `subagent-stop.py`.
 
-### `TaskCompleted`
+### `TaskCompleted` ✅ SHIPPED
 
-**Lifecycle:** When the agent declares an explicit "I'm done with this task" signal (semantically distinct from `Stop` which fires every turn-end).
+**Lifecycle:** Fires at the normal agent-done lifecycle point — after `Stop`'s continuation flow resolves, before the legacy AfterAgent notify dispatch. Codex has no explicit task-completion marker, so this fires once per turn-end-without-follow-up (same trigger as Stop, but distinct event name lets plugins attach POSTFLIGHT-enforcement handlers without changing Stop semantics).
 
 **Why:** Forces POSTFLIGHT before the conversation moves on. The "knows but doesn't do" gap David observed in 2026-05-13 is partly because there's no hook point that says "agent claimed done — did you POSTFLIGHT?".
 
-**Dispatch site (TBC):** `codex-rs/core/src/session/turn.rs` — find where the agent's final-message-marker or update_plan completion-marker is processed. Fire `TaskCompleted` with the agent's stated completion claim in the payload.
+**Dispatch site:** `codex-rs/core/src/session/turn.rs:570` (after `if stop_outcome.should_stop { break; }`, before `let hook_outcomes = sess.hooks().dispatch(HookPayload { ... AfterAgent ... })`). Skip-on-should_stop matches existing AfterAgent semantics.
 
-**Handler:** `task-completed.py`.
+**Handler:** `task-completed.py` (vendor when defining the plugin handler).
 
 ### `PostToolUseFailure`
 

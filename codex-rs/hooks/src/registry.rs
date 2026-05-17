@@ -15,6 +15,8 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::task_completed::TaskCompletedOutcome;
+use crate::events::task_completed::TaskCompletedRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::types::Hook;
@@ -177,6 +179,21 @@ impl Hooks {
 
     pub async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         self.engine.run_stop(request).await
+    }
+
+    // ecodex addition (goal f0004294)
+    pub fn preview_task_completed(
+        &self,
+        request: &TaskCompletedRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_task_completed(request)
+    }
+
+    pub async fn run_task_completed(
+        &self,
+        request: TaskCompletedRequest,
+    ) -> TaskCompletedOutcome {
+        self.engine.run_task_completed(request).await
     }
 }
 
