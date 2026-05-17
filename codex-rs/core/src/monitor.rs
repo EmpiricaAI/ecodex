@@ -204,11 +204,10 @@ pub async fn spawn_monitor(
 
             let notification = format!(
                 "<task-notification>\n\
-                 <monitor-id>{}</monitor-id>\n\
-                 <command>{}</command>\n\
-                 <matched-line>{}</matched-line>\n\
-                 </task-notification>",
-                id_for_task, cmd_display_for_task, line,
+                 <monitor-id>{id_for_task}</monitor-id>\n\
+                 <command>{cmd_display_for_task}</command>\n\
+                 <matched-line>{line}</matched-line>\n\
+                 </task-notification>"
             );
             let item = ResponseInputItem::Message {
                 role: "user".to_string(),
