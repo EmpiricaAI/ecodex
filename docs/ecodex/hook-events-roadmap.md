@@ -5,7 +5,8 @@ Tracks the 7 hook events ecodex adds on top of stock codex's 6, and where each o
 **Status (2026-05-17):**
 - ✅ **Schema landed** (commit `7bcf85c3b8`): `HookEventName` enum extended; exhaustive matches updated; `hooks.json` accepts the new event names without rejection. Empirica plugin can declare handlers today.
 - ✅ **TaskCompleted dispatch site landed**: fires at `codex-rs/core/src/session/turn.rs:570` after Stop's continuation flow, before AfterAgent. **Pattern proven** — see "Dispatch pattern (minimal sibling)" below.
-- ❌ **Remaining 6 dispatch sites pending**: PostToolUseFailure, PreCompact, PostCompact, SessionEnd, SubagentStart/Stop. Tracked under goal `f0004294`.
+- ✅ **PostToolUseFailure dispatch site landed**: fires at `codex-rs/core/src/tools/registry.rs:434` in the failure branch (else of post_tool_use_payload). Carries tool_name + tool_input + error_message + duration_ms for plugin handlers consuming failures as dead-end artifacts.
+- ❌ **Remaining 5 dispatch sites pending**: PreCompact, PostCompact, SessionEnd, SubagentStart/Stop. Tracked under goal `f0004294`.
 
 ## Dispatch pattern (minimal sibling) — proven by TaskCompleted
 
@@ -78,15 +79,17 @@ Listed with the file:line where the dispatch call needs to be inserted in `codex
 
 **Handler:** `task-completed.py` (vendor when defining the plugin handler).
 
-### `PostToolUseFailure`
+### `PostToolUseFailure` ✅ SHIPPED
 
-**Lifecycle:** When a tool invocation fails (non-zero exit, exception, timeout). Separate from `PostToolUse` which fires on success.
+**Lifecycle:** Fires when a tool invocation fails (non-zero exit, exception, timeout) — the failure branch sibling to `PostToolUse` which only fires on success. Informational only (no continuation/block semantics).
 
 **Why:** Failure is a learning signal — empirica's `tool-failure.py` captures the failed approach as a dead-end artifact for future calibration. Without this hook, failures are invisible to the artifact system.
 
-**Dispatch site (TBC):** Wherever tool invocations are awaited in `codex-rs/core/src/agent/`. Branch on result: success → `PostToolUse` (already wired), failure → `PostToolUseFailure` (new).
+**Dispatch site:** `codex-rs/core/src/tools/registry.rs:434` (the `else` branch of `post_tool_use_payload`, gated on `!success`). Helper `run_post_tool_use_failure_hooks` in `codex-rs/core/src/hook_runtime.rs` mirrors `run_post_tool_use_hooks`.
 
-**Handler:** `tool-failure.py`.
+**Payload:** `tool_use_id` (correlates with prior PreToolUse), `tool_name`, `matcher_aliases` (recovered from `handler.pre_tool_use_payload`), `tool_input` (the input that failed), `error_message`, `duration_ms`.
+
+**Handler:** `tool-failure.py` (vendor when defining the plugin handler).
 
 ## Implementation order (recommended)
 

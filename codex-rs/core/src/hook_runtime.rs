@@ -7,6 +7,8 @@ use codex_analytics::build_track_events_context;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
+use codex_hooks::PostToolUseFailureOutcome;
+use codex_hooks::PostToolUseFailureRequest;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -251,6 +253,43 @@ pub(crate) async fn run_post_tool_use_hooks(
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
     let outcome = hooks.run_post_tool_use(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
+    outcome
+}
+
+/// ecodex addition (goal f0004294): fires when a tool invocation fails.
+/// Sibling to `run_post_tool_use_hooks` — same shape minus the success-only
+/// `tool_response`, plus `error_message` + `duration_ms` for plugin handlers
+/// consuming failures as calibration signals.
+pub(crate) async fn run_post_tool_use_failure_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    tool_use_id: String,
+    tool_name: String,
+    matcher_aliases: Vec<String>,
+    tool_input: Value,
+    error_message: String,
+    duration_ms: u64,
+) -> PostToolUseFailureOutcome {
+    let request = PostToolUseFailureRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name,
+        matcher_aliases,
+        tool_use_id,
+        tool_input,
+        error_message,
+        duration_ms,
+    };
+    let hooks = sess.hooks();
+    let preview_runs = hooks.preview_post_tool_use_failure(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = hooks.run_post_tool_use_failure(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
     outcome
 }

@@ -423,6 +423,30 @@ pub(crate) struct TaskCompletedCommandInput {
     pub last_assistant_message: NullableString,
 }
 
+// ecodex addition (goal f0004294): PostToolUseFailure mirrors PostToolUse's
+// tool-context fields (minus tool_response, which doesn't exist on failure)
+// and adds error_message + duration_ms for plugin handlers consuming the
+// failure as a calibration signal.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "post_tool_use_failure.command.input")]
+pub(crate) struct PostToolUseFailureCommandInput {
+    pub session_id: String,
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "post_tool_use_failure_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub tool_name: String,
+    pub tool_use_id: String,
+    pub tool_input: serde_json::Value,
+    pub error_message: String,
+    pub duration_ms: u64,
+}
+
 pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     let generated_dir = schema_root.join(GENERATED_DIR);
     ensure_empty_dir(&generated_dir)?;
@@ -556,6 +580,10 @@ fn stop_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn task_completed_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("TaskCompleted")
+}
+
+fn post_tool_use_failure_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("PostToolUseFailure")
 }
 
 fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {

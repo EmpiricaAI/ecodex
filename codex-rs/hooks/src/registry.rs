@@ -13,6 +13,8 @@ use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
+use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
+use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
 use crate::events::task_completed::TaskCompletedOutcome;
@@ -194,6 +196,21 @@ impl Hooks {
         request: TaskCompletedRequest,
     ) -> TaskCompletedOutcome {
         self.engine.run_task_completed(request).await
+    }
+
+    // ecodex addition (goal f0004294)
+    pub fn preview_post_tool_use_failure(
+        &self,
+        request: &PostToolUseFailureRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_post_tool_use_failure(request)
+    }
+
+    pub async fn run_post_tool_use_failure(
+        &self,
+        request: PostToolUseFailureRequest,
+    ) -> PostToolUseFailureOutcome {
+        self.engine.run_post_tool_use_failure(request).await
     }
 }
 

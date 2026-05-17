@@ -14,6 +14,8 @@ use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
+use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
+use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
 use crate::events::task_completed::TaskCompletedOutcome;
@@ -255,6 +257,21 @@ impl ClaudeHooksEngine {
         request: TaskCompletedRequest,
     ) -> TaskCompletedOutcome {
         crate::events::task_completed::run(&self.handlers, &self.shell, request).await
+    }
+
+    // ecodex addition (goal f0004294)
+    pub(crate) fn preview_post_tool_use_failure(
+        &self,
+        request: &PostToolUseFailureRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::post_tool_use_failure::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_post_tool_use_failure(
+        &self,
+        request: PostToolUseFailureRequest,
+    ) -> PostToolUseFailureOutcome {
+        crate::events::post_tool_use_failure::run(&self.handlers, &self.shell, request).await
     }
 
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {

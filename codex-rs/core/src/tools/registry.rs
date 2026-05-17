@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::function_tool::FunctionCallError;
 use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::run_post_tool_use_failure_hooks;
 use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memory_usage::emit_metric_for_tool_read;
@@ -429,6 +430,32 @@ impl ToolRegistry {
                 .await,
             )
         } else {
+            if !success {
+                // ecodex addition (goal f0004294): fire PostToolUseFailure
+                // so plugin handlers can capture the failure as a dead-end
+                // calibration signal. Informational only — does not redirect
+                // the agent loop.
+                let (tool_name_for_hook, matcher_aliases_for_hook, tool_input_for_hook) =
+                    match handler.pre_tool_use_payload(&invocation) {
+                        Some(payload) => (
+                            payload.tool_name.name().to_string(),
+                            payload.tool_name.matcher_aliases().to_vec(),
+                            payload.tool_input,
+                        ),
+                        None => (tool_name.name.clone(), Vec::new(), serde_json::Value::Null),
+                    };
+                run_post_tool_use_failure_hooks(
+                    &invocation.session,
+                    &invocation.turn,
+                    invocation.call_id.clone(),
+                    tool_name_for_hook,
+                    matcher_aliases_for_hook,
+                    tool_input_for_hook,
+                    output_preview.clone(),
+                    duration.as_millis() as u64,
+                )
+                .await;
+            }
             None
         };
         // Deprecated: this is the legacy AfterToolUse hook. Prefer the new PostToolUse
