@@ -9,6 +9,10 @@ mod apply_patch;
 mod apps;
 mod arc_monitor;
 mod client;
+// ecodex addition: Monitor primitive — sub-second wake on background
+// subprocess output (parity with CC's Monitor tool, enables cross-AI mesh
+// participation in non-Claude models).
+pub(crate) mod monitor;
 mod client_common;
 mod realtime_context;
 mod realtime_conversation;

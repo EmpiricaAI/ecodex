@@ -4,6 +4,9 @@ mod dynamic;
 mod goal;
 mod mcp;
 mod mcp_resource;
+// ecodex addition: Monitor tool — sub-second wake on background subprocess
+// output matching a regex pattern. Enables cross-AI mesh participation.
+mod monitor;
 pub(crate) mod multi_agents;
 pub(crate) mod multi_agents_common;
 pub(crate) mod multi_agents_v2;
@@ -45,6 +48,7 @@ pub use mcp::McpHandler;
 pub use mcp_resource::ListMcpResourceTemplatesHandler;
 pub use mcp_resource::ListMcpResourcesHandler;
 pub use mcp_resource::ReadMcpResourceHandler;
+pub use monitor::MonitorHandler;
 pub use plan::PlanHandler;
 pub use request_permissions::RequestPermissionsHandler;
 pub use request_plugin_install::RequestPluginInstallHandler;

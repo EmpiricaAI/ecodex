@@ -894,6 +894,9 @@ impl Session {
                 )),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
+                // ecodex addition: empty registry; agent populates via the
+                // `monitor` tool. `Session::shutdown` aborts all entries.
+                monitor_registry: Arc::new(crate::monitor::MonitorRegistry::new()),
             };
             services
                 .model_client

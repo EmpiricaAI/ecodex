@@ -341,7 +341,106 @@ pub(crate) fn build_specs_with_discoverable_tools(
         }
         builder.register_handler(Arc::new(UnavailableToolHandler::new(unavailable_tool)));
     }
+
+    // ecodex addition: Monitor tool — arms a background subprocess watch.
+    // On stdout/stderr regex match, the matched line is injected into the
+    // agent's pending input as a <task-notification> message, enabling
+    // sub-second wake on cortex mesh events for non-Claude models.
+    //
+    // Registered unconditionally so all ecodex sessions can participate
+    // in the AI mesh. The handler dispatches via {action:"arm"|"kill"|"list"}.
+    if existing_spec_names.insert("monitor".to_string()) {
+        builder.push_spec(monitor_tool_spec());
+        builder.register_handler(Arc::new(crate::tools::handlers::MonitorHandler));
+    }
+
     builder
+}
+
+// ecodex addition: build the ToolSpec describing the `monitor` tool's
+// JSON-schema argument surface so the model can discover + call it.
+fn monitor_tool_spec() -> codex_tools::ToolSpec {
+    use serde_json::Value as JsonValue;
+
+    let mut properties = std::collections::BTreeMap::<String, JsonSchema>::new();
+    properties.insert(
+        "action".to_string(),
+        JsonSchema::string_enum(
+            vec![
+                JsonValue::String("arm".to_string()),
+                JsonValue::String("kill".to_string()),
+                JsonValue::String("list".to_string()),
+            ],
+            Some("What to do: arm a new watch, kill an existing one, or list count".to_string()),
+        ),
+    );
+    properties.insert(
+        "command".to_string(),
+        JsonSchema::array(
+            JsonSchema::string(None),
+            Some(
+                "Argv to spawn (action=arm only). First element is the program, rest are args."
+                    .to_string(),
+            ),
+        ),
+    );
+    properties.insert(
+        "pattern".to_string(),
+        JsonSchema::string(Some(
+            "Regex pattern to match against subprocess output lines (action=arm only).".to_string(),
+        )),
+    );
+    properties.insert(
+        "persistent".to_string(),
+        JsonSchema::boolean(Some(
+            "When true, the watch stays armed after each match (action=arm only). Default false.".to_string(),
+        )),
+    );
+    properties.insert(
+        "stream".to_string(),
+        JsonSchema::string_enum(
+            vec![
+                JsonValue::String("stdout".to_string()),
+                JsonValue::String("stderr".to_string()),
+                JsonValue::String("both".to_string()),
+            ],
+            Some("Which stream to watch (action=arm only). Default stdout.".to_string()),
+        ),
+    );
+    properties.insert(
+        "cwd".to_string(),
+        JsonSchema::string(Some(
+            "Working directory for the spawned command (action=arm only).".to_string(),
+        )),
+    );
+    properties.insert(
+        "monitor_id".to_string(),
+        JsonSchema::string(Some(
+            "The id returned by a prior arm (action=kill only).".to_string(),
+        )),
+    );
+
+    let parameters = JsonSchema::object(
+        properties,
+        Some(vec!["action".to_string()]),
+        Some(AdditionalProperties::Boolean(false)),
+    );
+
+    codex_tools::ToolSpec::Function(ResponsesApiTool {
+        name: "monitor".to_string(),
+        description:
+            "Arm a watch on a background subprocess. On each line matching the regex \
+             `pattern`, a <task-notification> message is injected into your pending \
+             input. Use for sub-second wake on cortex mesh events (held ntfy \
+             connection) or any long-running stream you want to react to. Returns \
+             {monitor_id} from arm; pair with kill to disarm. persistent=true keeps \
+             the watch armed across multiple matches."
+                .to_string(),
+        strict: false,
+        parameters,
+        output_schema: None,
+        defer_loading: None,
+    })
 }
 
 #[cfg(test)]

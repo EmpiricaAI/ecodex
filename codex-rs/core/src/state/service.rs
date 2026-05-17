@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::client::ModelClient;
+use crate::monitor::MonitorRegistry;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
@@ -80,4 +81,9 @@ pub(crate) struct SessionServices {
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.
     pub(crate) environment_manager: Arc<EnvironmentManager>,
+    /// ecodex addition: per-session registry of armed Monitor watchers
+    /// (background subprocess + regex pattern that injects wake events
+    /// via `Session::inject_response_items` on match). Cleared on
+    /// shutdown via `MonitorRegistry::abort_all`.
+    pub(crate) monitor_registry: Arc<MonitorRegistry>,
 }

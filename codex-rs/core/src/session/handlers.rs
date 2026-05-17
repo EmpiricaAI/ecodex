@@ -651,6 +651,10 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
     .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    // ecodex addition (goal f0004294-adjacent): abort all armed Monitor
+    // watchers so background curl/ntfy connections + watcher tasks don't
+    // leak past session shutdown.
+    sess.services.monitor_registry.abort_all().await;
     let _ = sess.conversation.shutdown().await;
     sess.services
         .unified_exec_manager
