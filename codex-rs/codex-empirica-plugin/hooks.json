@@ -1,4 +1,5 @@
 {
+  "_comment": "Codex plugin hook wiring for ecodex. Mirrors CC's ~/.claude/settings.json multi-handler-per-event fan-out: each event lists the canonical Rust-dispatched primary first, then sibling scripts via the generic run-hook subcommand. Primary handlers translate CC-shape script output to codex-shape (Tx-AE). Generic dispatcher does the same translation per event name. Missing codex events relative to CC (PreCompact / SessionEnd / SubagentStart / SubagentStop / TaskCompleted / PostToolUseFailure) are tracked under goal f0004294 PR2.",
   "hooks": {
     "PreToolUse": [
       {
@@ -22,6 +23,12 @@
             "command": "codex-empirica-plugin post-tool-use",
             "timeout": 10,
             "statusMessage": "Empirica tool capture"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook PostToolUse entity-extractor.py",
+            "timeout": 10,
+            "statusMessage": "Empirica entity extract"
           }
         ]
       }
@@ -35,6 +42,24 @@
             "command": "codex-empirica-plugin session-start",
             "timeout": 60,
             "statusMessage": "Empirica session init"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SessionStart ewm-protocol-loader.py",
+            "timeout": 10,
+            "statusMessage": "EWM protocol load"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SessionStart post-compact.py",
+            "timeout": 10,
+            "statusMessage": "Empirica post-compact context"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SessionStart session-monitor-arm.py",
+            "timeout": 10,
+            "statusMessage": "Listener/loop monitor arm"
           }
         ]
       }
@@ -48,6 +73,36 @@
             "command": "codex-empirica-plugin user-prompt-submit",
             "timeout": 30,
             "statusMessage": "Empirica context injection"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook UserPromptSubmit context-shift-tracker.py",
+            "timeout": 5,
+            "statusMessage": "Context-shift tracker"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook UserPromptSubmit loop-install-pickup.py",
+            "timeout": 5,
+            "statusMessage": "Loop install pickup"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook UserPromptSubmit loop-uninstall-pickup.py",
+            "timeout": 5,
+            "statusMessage": "Loop uninstall pickup"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook UserPromptSubmit listener-install-pickup.py",
+            "timeout": 5,
+            "statusMessage": "Listener install pickup"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook UserPromptSubmit listener-uninstall-pickup.py",
+            "timeout": 5,
+            "statusMessage": "Listener uninstall pickup"
           }
         ]
       }

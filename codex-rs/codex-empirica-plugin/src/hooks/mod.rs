@@ -26,3 +26,9 @@ pub mod stop;
 /// hypothesis markers, hedges, and proportional-scope cues; injects
 /// epistemic-discipline guidance and arms the proportionality budget.
 pub mod user_prompt_submit;
+
+/// Generic dispatcher for fan-out — runs any vendored script against
+/// any codex hook event, mirroring CC's `~/.claude/settings.json`
+/// multi-handler-per-event wiring. hooks.json declares siblings via
+/// `codex-empirica-plugin run-hook EVENT SCRIPT.py`.
+pub mod generic;
