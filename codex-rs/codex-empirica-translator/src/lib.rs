@@ -37,5 +37,11 @@ pub mod server;
 /// modifying the translator inner loop.
 pub mod tap;
 
+/// Multi-upstream router. One translator process can serve N upstream
+/// providers, routing per-request by the incoming `model` field via a
+/// TOML config of `[[upstream]]` entries (first-match-wins glob).
+pub mod upstreams;
+
 pub use server::{ServerConfig, UpstreamProtocol, run};
 pub use tap::{EventEmitter, JsonlFileEmitter, NoopEmitter, TapEvent};
+pub use upstreams::{Upstream, UpstreamRouter};

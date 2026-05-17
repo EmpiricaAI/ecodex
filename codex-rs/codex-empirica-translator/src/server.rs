@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 
 use crate::adapters::{anthropic, chat, responses};
 use crate::tap::{EventEmitter, NoopEmitter, TapEvent, build_request_started, new_request_id};
+use crate::upstreams::{Upstream, UpstreamRouter};
 
 /// Wire format the translator speaks to the upstream provider. The codex-side
 /// (request in / response out) is always Responses API; only the provider-side
@@ -43,14 +44,12 @@ impl UpstreamProtocol {
 /// Configuration for the translator server.
 #[derive(Clone)]
 pub struct ServerConfig {
-    /// Upstream provider's endpoint base URL. The protocol-specific suffix
-    /// (`/chat/completions` or `/messages`) is appended at request time.
-    pub upstream_base_url: String,
-    /// Optional API key. Forwarded as `Authorization: Bearer` for Chat,
-    /// `x-api-key` for Anthropic.
-    pub upstream_api_key: Option<String>,
-    /// Wire format the upstream speaks. Defaults to Chat for backward compat.
-    pub upstream_protocol: UpstreamProtocol,
+    /// Per-request upstream router. Resolves the incoming Responses
+    /// request's `model` field to one of N configured upstreams. The
+    /// single-upstream case from earlier versions is now a router with
+    /// one catch-all entry — main.rs synthesizes that when the legacy
+    /// `--upstream-base-url` flags are used instead of `--upstreams-config`.
+    pub router: UpstreamRouter,
     /// Address to bind tiny_http on.
     pub bind_addr: String,
     /// Event tap. None disables emission (NoopEmitter).
@@ -60,28 +59,30 @@ pub struct ServerConfig {
 impl std::fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerConfig")
-            .field("upstream_base_url", &self.upstream_base_url)
-            .field(
-                "upstream_api_key",
-                &self.upstream_api_key.as_ref().map(|_| "***"),
-            )
-            .field("upstream_protocol", &self.upstream_protocol)
+            .field("router", &self.router)
             .field("bind_addr", &self.bind_addr)
             .finish()
     }
 }
 
 impl ServerConfig {
-    /// Helper to build a config with the no-op emitter (for tests + simple use).
+    /// Helper to build a single-upstream config with the no-op emitter
+    /// (for tests + simple use). Keeps the pre-multiplex constructor
+    /// shape callable by existing test fixtures.
     pub fn new(
         upstream_base_url: String,
         upstream_api_key: Option<String>,
         bind_addr: String,
     ) -> Self {
+        let upstream = Upstream {
+            name: "default".to_string(),
+            model_match: "*".to_string(),
+            base_url: upstream_base_url,
+            protocol: UpstreamProtocol::Chat,
+            api_key: upstream_api_key,
+        };
         Self {
-            upstream_base_url,
-            upstream_api_key,
-            upstream_protocol: UpstreamProtocol::Chat,
+            router: UpstreamRouter::new(vec![upstream]),
             bind_addr,
             emitter: Arc::new(NoopEmitter),
         }
@@ -91,9 +92,15 @@ impl ServerConfig {
 pub fn run(config: ServerConfig) -> Result<()> {
     let server = Server::http(&config.bind_addr)
         .map_err(|e| anyhow::anyhow!("failed to bind {}: {e}", config.bind_addr))?;
+    let upstream_names: Vec<&str> = config
+        .router
+        .upstreams()
+        .iter()
+        .map(|u| u.name.as_str())
+        .collect();
     info!(
         bind = %config.bind_addr,
-        upstream = %config.upstream_base_url,
+        upstreams = ?upstream_names,
         "codex-empirica-translator listening"
     );
 
@@ -114,16 +121,26 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
 
     // ecodex T81: /healthz probe surface for `empirica diagnose --frontend
     // ecodex` and other liveness checkers. Returns 200 with a tiny JSON
-    // body identifying the upstream protocol so a probe can verify both
-    // "translator alive" and "translator pointed at the right provider".
+    // body listing the configured upstreams so a probe can verify both
+    // "translator alive" and "translator can route to expected provider".
     if method == "GET" && url == "/healthz" {
+        let upstreams: Vec<serde_json::Value> = cfg
+            .router
+            .upstreams()
+            .iter()
+            .map(|u| {
+                serde_json::json!({
+                    "name": u.name,
+                    "model_match": u.model_match,
+                    "protocol": format!("{:?}", u.protocol).to_lowercase(),
+                })
+            })
+            .collect();
         let body = serde_json::json!({
             "status": "ok",
-            "upstream_protocol": format!("{:?}", cfg.upstream_protocol).to_lowercase(),
+            "upstreams": upstreams,
         })
         .to_string();
-        // `Header::from_str` only fails on malformed input; this literal is
-        // statically valid, so a match-with-no-header fallback is fine.
         let mut response = Response::from_string(body).with_status_code(200);
         if let Ok(content_type) =
             tiny_http::Header::from_str("Content-Type: application/json")
@@ -160,22 +177,56 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
             return Err(e).context("parse Responses request body");
         }
     };
+
+    // ─── Per-request upstream routing ───────────────────────────────
+    // Read the incoming request's `model` field, route through
+    // UpstreamRouter (first-match-wins glob). Single-upstream deploys
+    // synthesize a router with one `model_match = "*"` entry — they
+    // route uniformly, no per-request overhead.
+    let model = body_value
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let upstream = match cfg.router.route(model) {
+        Some(u) => u,
+        None => {
+            let upstream_names: Vec<&str> = cfg
+                .router
+                .upstreams()
+                .iter()
+                .map(|u| u.name.as_str())
+                .collect();
+            let msg = format!(
+                "no upstream matches model `{model}` — configured upstreams: {upstream_names:?}"
+            );
+            warn!(model = %model, "{msg}");
+            emitter.emit(&TapEvent::RequestErrored {
+                request_id,
+                stage: "route".into(),
+                message: msg.clone(),
+                duration_ms: started.elapsed().as_millis() as u64,
+            });
+            let response = Response::from_string(msg).with_status_code(400);
+            return request.respond(response).context("respond 400 unmatched model");
+        }
+    };
+
     let cif_request = responses::parse_request(&body_value)?;
 
     // Per-protocol request shape: URL suffix, auth header, body encoder, and
     // — separately, below — chunk-state + parser. Branching here keeps the
     // shared SSE plumbing (chunked HTTP write, CIF event re-encoding via
     // responses adapter) protocol-agnostic.
-    let (upstream_url, protocol_label) = match cfg.upstream_protocol {
+    let (upstream_url, protocol_label) = match upstream.protocol {
         UpstreamProtocol::Chat => (
             format!(
                 "{}/chat/completions",
-                cfg.upstream_base_url.trim_end_matches('/')
+                upstream.base_url.trim_end_matches('/')
             ),
             "chat",
         ),
         UpstreamProtocol::Anthropic => (
-            format!("{}/messages", cfg.upstream_base_url.trim_end_matches('/')),
+            format!("{}/messages", upstream.base_url.trim_end_matches('/')),
             "anthropic",
         ),
     };
@@ -186,7 +237,7 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         &upstream_url,
     ));
 
-    let upstream_body = match cfg.upstream_protocol {
+    let upstream_body = match upstream.protocol {
         UpstreamProtocol::Chat => chat::encode_request(&cif_request),
         UpstreamProtocol::Anthropic => anthropic::encode_request(&cif_request),
     };
@@ -194,8 +245,8 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
     let mut req_builder = reqwest::blocking::Client::new()
         .post(&upstream_url)
         .json(&upstream_body);
-    if let Some(key) = &cfg.upstream_api_key {
-        req_builder = match cfg.upstream_protocol {
+    if let Some(key) = &upstream.api_key {
+        req_builder = match upstream.protocol {
             UpstreamProtocol::Chat => req_builder.bearer_auth(key),
             UpstreamProtocol::Anthropic => req_builder
                 .header("x-api-key", key)
@@ -203,7 +254,13 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         };
     }
 
-    info!(upstream = %upstream_url, protocol = ?cfg.upstream_protocol, "forwarding to provider");
+    info!(
+        upstream_name = %upstream.name,
+        model = %model,
+        url = %upstream_url,
+        protocol = ?upstream.protocol,
+        "forwarding to provider"
+    );
     // ecodex T81 Tx-S diagnostic: log the full upstream body so we can verify
     // that prior assistant tool_use blocks are being followed by user tool_result
     // blocks in the right shape. Symptom we're chasing: Kimi rejects with
@@ -266,7 +323,7 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
             continue;
         };
         let data = data.strip_prefix(' ').unwrap_or(data);
-        let events = match cfg.upstream_protocol {
+        let events = match upstream.protocol {
             UpstreamProtocol::Chat => chat::parse_chunk(data, &mut chat_state)?,
             UpstreamProtocol::Anthropic => anthropic::parse_chunk(data, &mut anthropic_state)?,
         };
