@@ -217,7 +217,7 @@ async fn run_remote_compact_task_inner_impl(
         output_schema_strict: true,
     };
 
-    let window_id = sess.services.model_client.current_window_id();
+    let window_id = sess.services.model_client.load().current_window_id();
     let turn_metadata_header = turn_context
         .turn_metadata_state
         .current_header_value_for_compaction(&window_id, compaction_metadata);
@@ -232,7 +232,7 @@ async fn run_remote_compact_task_inner_impl(
     let client_session = match client_session {
         Some(client_session) => client_session,
         None => {
-            owned_client_session = sess.services.model_client.new_session();
+            owned_client_session = sess.services.model_client.load().new_session();
             &mut owned_client_session
         }
     };

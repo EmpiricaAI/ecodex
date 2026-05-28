@@ -256,11 +256,12 @@ async fn schedule_startup_prewarm_inner(
         build_prompt_started_at.elapsed(),
         /*status*/ None,
     );
-    let window_id = session.services.model_client.current_window_id();
+    let window_id = session.services.model_client.load().current_window_id();
     let startup_turn_metadata_header = startup_turn_context
         .turn_metadata_state
         .current_header_value();
     let mut client_session = session.services.model_client.load().new_session();
+    let websocket_warmup_started_at = Instant::now();
     client_session
         .prewarm_websocket(
             &startup_prompt,

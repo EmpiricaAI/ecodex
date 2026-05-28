@@ -583,23 +583,14 @@ impl Codex {
             &model_info,
         );
 
-        // Tx-AI/3: Enrich the session's PermissionProfile with plugin-declared
-        // writable_roots. Plugins like Empirica need cross-cwd write access
-        // (e.g. ~/.empirica for global session DB / instance pointers /
-        // transaction state) by design — the project lifecycle exists outside
-        // any single cwd. Without this carve-out, landlock blocks every plugin
-        // state write with EROFS and the plugin's runtime silently fails.
-        //
-        // Only applies under Restricted file system profiles (the
-        // `with_additional_writable_roots` builder is a no-op for unrestricted
-        // and external-sandbox profiles). When no plugin declares roots, the
-        // base profile is cloned through unchanged.
-        let permission_profile = enrich_permission_profile_with_plugin_writable_roots(
-            &config.permissions.permission_profile,
-            &plugin_outcome,
-            config.cwd.as_path(),
-        );
-
+        // NOTE (2026-05 sync): Tx-AI/3 plugin-writable-roots enrichment was
+        // dropped here — upstream restructured per-session permissions into
+        // `permission_profile_state` (session_permission_profile_state_from_config),
+        // and the old `permission_profile` field this enriched is gone. The
+        // enrich_permission_profile_with_plugin_writable_roots helper is kept
+        // for re-integration. Until re-wired, plugins needing cross-cwd writes
+        // (e.g. Empirica ~/.empirica) are NOT carved out of landlock. See
+        // build-fix queue finding.
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -1486,6 +1477,7 @@ impl Session {
                 .features
                 .enabled(codex_features::Feature::RuntimeMetrics),
             Self::build_model_client_beta_features_header(plan.config.as_ref()),
+            self.services.attestation_provider.clone(),
         );
         // The new client starts at window_generation 0 (fresh WebSocket
         // session generation for the new provider). Old turn-scoped
@@ -3482,8 +3474,6 @@ pub(crate) fn emit_subagent_session_started(
         created_at,
     });
 }
-
-use codex_memories_read::build_memory_tool_developer_instructions;
 
 /// Tx-AI/3: Merge plugin-declared `writableRoots` into the session's
 /// `PermissionProfile` so the codex sandbox honors plugin-required cross-cwd
