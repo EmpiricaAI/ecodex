@@ -636,6 +636,9 @@ impl TurnRequestProcessor {
                     profile_workspace_roots: profile_workspace_roots.clone(),
                     windows_sandbox_level: None,
                     model: model.clone(),
+                    // ecodex (T78): carry the provider override into the
+                    // preview/validate path too.
+                    model_provider: model_provider.clone(),
                     effort,
                     summary,
                     service_tier: service_tier.clone(),
