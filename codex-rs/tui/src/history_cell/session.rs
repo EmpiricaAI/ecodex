@@ -337,12 +337,18 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
+        // ecodex T81 branding: title line "∴ ecodex (vX)  ·  turtles all the
+        // way down". The '∴' (therefore) glyph replaces the upstream
+        // shell-prompt '>_'; the tagline signals the epistemic-discipline
+        // framing. (Re-migrated into history_cell/session.rs after the 2026-05
+        // sync replaced the single history_cell.rs with a module dir.)
         let title_spans: Vec<Span<'static>> = vec![
-            Span::from(">_ ").dim(),
-            Span::from("OpenAI Codex").bold(),
+            Span::from("∴ ").dim(),
+            Span::from("ecodex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
+            Span::from("  ·  ").dim(),
+            Span::from("turtles all the way down").dim().italic(),
         ];
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
@@ -407,7 +413,8 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let mut lines = vec![
-            Line::from(format!("OpenAI Codex (v{})", self.version)),
+            // ecodex T81 branding (plain-text/accessibility variant).
+            Line::from(format!("ecodex (v{}) · turtles all the way down", self.version)),
             Line::from(format!(
                 "model: {}{}",
                 self.model,
