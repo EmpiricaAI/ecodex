@@ -8,6 +8,13 @@ use codex_protocol::protocol::HookRunSummary;
 use crate::engine::ConfiguredHandler;
 use crate::engine::dispatcher;
 
+/// Identifies a thread-spawned subagent when a normal hook runs inside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentHookContext {
+    pub agent_id: String,
+    pub agent_type: String,
+}
+
 pub(crate) fn join_text_chunks(chunks: Vec<String>) -> Option<String> {
     if chunks.is_empty() {
         None
@@ -104,14 +111,14 @@ pub(crate) fn matcher_pattern_for_event(
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
         | HookEventName::SessionStart
-        | HookEventName::PostToolUseFailure => matcher,
-        HookEventName::UserPromptSubmit
-        | HookEventName::Stop
-        | HookEventName::PreCompact
-        | HookEventName::PostCompact
-        | HookEventName::SessionEnd
+        | HookEventName::PostToolUseFailure
         | HookEventName::SubagentStart
         | HookEventName::SubagentStop
+        | HookEventName::PreCompact
+        | HookEventName::PostCompact => matcher,
+        HookEventName::UserPromptSubmit
+        | HookEventName::Stop
+        | HookEventName::SessionEnd
         | HookEventName::TaskCompleted => None,
     }
 }
@@ -274,6 +281,14 @@ mod tests {
         assert_eq!(
             matcher_pattern_for_event(HookEventName::SessionStart, Some("startup|resume")),
             Some("startup|resume")
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::PreCompact, Some("^auto$")),
+            Some("^auto$")
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::PostCompact, Some("manual|auto")),
+            Some("manual|auto")
         );
     }
 }

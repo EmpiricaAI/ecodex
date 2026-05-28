@@ -2,35 +2,33 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::context::boxed_tool_output;
+use crate::tools::handlers::agent_jobs_spec::create_report_agent_job_result_tool;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 use super::*;
 
 pub struct ReportAgentJobResultHandler;
 
-impl ToolHandler for ReportAgentJobResultHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ReportAgentJobResultHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("report_agent_job_result")
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        create_report_agent_job_result_tool()
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
-            session,
-            turn,
-            payload,
-            ..
+            session, payload, ..
         } = invocation;
 
         let arguments = match payload {
@@ -42,13 +40,18 @@ impl ToolHandler for ReportAgentJobResultHandler {
             }
         };
 
-        handle(session, turn, arguments).await
+        handle(session, arguments).await.map(boxed_tool_output)
+    }
+}
+
+impl CoreToolRuntime for ReportAgentJobResultHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 
 pub async fn handle(
     session: Arc<Session>,
-    turn: Arc<crate::session::turn_context::TurnContext>,
     arguments: String,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: ReportAgentJobResultArgs = parse_arguments(arguments.as_str())?;
@@ -80,18 +83,6 @@ pub async fn handle(
             .mark_agent_job_cancelled(args.job_id.as_str(), message)
             .await;
     }
-    // ecodex addition (goal f0004294): fire SubagentStop in subagent's
-    // own session so plugin handlers can correlate completion back to
-    // the SubagentStart event the parent saw.
-    crate::hook_runtime::run_subagent_stop_hooks(
-        &session,
-        &turn,
-        args.job_id.clone(),
-        args.item_id.clone(),
-        accepted,
-    )
-    .await;
-
     let content =
         serde_json::to_string(&ReportAgentJobResultToolResult { accepted }).map_err(|err| {
             FunctionCallError::Fatal(format!(

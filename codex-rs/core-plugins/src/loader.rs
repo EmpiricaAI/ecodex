@@ -27,9 +27,7 @@ use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::PluginLoadOutcome;
-use codex_plugin::PluginStatuslineSource;
 use codex_plugin::PluginTelemetryMetadata;
-use codex_plugin::PluginWritableRootSource;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -114,7 +112,6 @@ pub async fn load_plugins_from_layer_stack(
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     restriction_product: Option<Product>,
-    plugin_hooks_enabled: bool,
 ) -> PluginLoadOutcome<McpServerConfig> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     let mut configured_plugins = configured_plugins_from_stack(config_layer_stack);
@@ -131,7 +128,6 @@ pub async fn load_plugins_from_layer_stack(
             store,
             restriction_product,
             &skill_config_rules,
-            plugin_hooks_enabled,
         )
         .await;
         for name in loaded_plugin.mcp_servers.keys() {
@@ -380,10 +376,10 @@ fn refresh_non_curated_plugin_cache_with_mode(
 fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
+    let Some(user_config) = config_layer_stack.effective_user_config() else {
         return HashMap::new();
     };
-    configured_plugins_from_user_config_value(&user_layer.config)
+    configured_plugins_from_user_config_value(&user_config)
 }
 
 fn is_full_git_sha(value: &str) -> bool {
@@ -501,7 +497,6 @@ async fn load_plugin(
     store: &PluginStore,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
-    plugin_hooks_enabled: bool,
 ) -> LoadedPlugin<McpServerConfig> {
     let plugin_id = PluginId::parse(&config_name);
     let active_plugin_root = plugin_id
@@ -527,8 +522,6 @@ async fn load_plugin(
         apps: Vec::new(),
         hook_sources: Vec::new(),
         hook_load_warnings: Vec::new(),
-        statusline_source: None,
-        writable_root_sources: Vec::new(),
         error: None,
     };
 
@@ -601,31 +594,14 @@ async fn load_plugin(
     }
     loaded_plugin.mcp_servers = mcp_servers;
     loaded_plugin.apps = load_plugin_apps(plugin_root.as_path()).await;
-    if plugin_hooks_enabled {
-        let (hook_sources, hook_load_warnings) = load_plugin_hooks(
-            &plugin_root,
-            &loaded_plugin_id,
-            &store.plugin_data_root(&loaded_plugin_id),
-            manifest_paths,
-        );
-        loaded_plugin.hook_sources = hook_sources;
-        loaded_plugin.hook_load_warnings = hook_load_warnings;
-    }
-    // Plugin-contributed statusline (independent of hooks gating — discovery is
-    // cheap and the TUI render runtime decides whether to actually invoke).
-    loaded_plugin.statusline_source = load_plugin_statusline(
+    let (hook_sources, hook_load_warnings) = load_plugin_hooks(
         &plugin_root,
         &loaded_plugin_id,
         &store.plugin_data_root(&loaded_plugin_id),
         manifest_paths,
     );
-    // Plugin-declared writable roots (cross-cwd carve-outs). Discovery is
-    // independent of hooks gating: the SandboxPolicy assembly site is what
-    // decides whether to merge them, and that decision is keyed on the
-    // active permission profile (WorkspaceWrite gets carve-outs, ReadOnly
-    // and DangerFullAccess do not need them for opposite reasons).
-    loaded_plugin.writable_root_sources =
-        load_plugin_writable_roots(&plugin_root, &loaded_plugin_id, manifest_paths);
+    loaded_plugin.hook_sources = hook_sources;
+    loaded_plugin.hook_load_warnings = hook_load_warnings;
     loaded_plugin
 }
 
@@ -679,6 +655,7 @@ pub async fn load_plugin_skills(
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: Some(plugin_id.as_key()),
+            plugin_root: Some(plugin_root.clone()),
         })
         .collect::<Vec<_>>();
     let outcome = load_skills_from_roots(roots).await;
@@ -886,48 +863,6 @@ fn append_plugin_hook_file(
     });
 }
 
-/// Discover a plugin-contributed statusline command from `manifest.statusline`.
-/// Returns `None` when the plugin did not declare one. Discovery is cheap;
-/// invocation is the renderer's responsibility (Tx6(b)/3).
-pub fn load_plugin_statusline(
-    plugin_root: &AbsolutePathBuf,
-    plugin_id: &PluginId,
-    plugin_data_root: &AbsolutePathBuf,
-    manifest_paths: &PluginManifestPaths,
-) -> Option<PluginStatuslineSource> {
-    manifest_paths
-        .statusline
-        .as_ref()
-        .map(|command| PluginStatuslineSource {
-            plugin_id: plugin_id.clone(),
-            plugin_root: plugin_root.clone(),
-            plugin_data_root: plugin_data_root.clone(),
-            command: command.clone(),
-        })
-}
-
-/// Discover plugin-declared writable roots from `manifest.writable_roots`.
-/// Each entry yields one `PluginWritableRootSource` so downstream auditing
-/// can attribute each granted carve-out to its declaring plugin. Returns
-/// an empty Vec when the plugin did not declare any. Discovery only —
-/// the SandboxPolicy merge happens at session-start config assembly
-/// (Tx-AI/3).
-pub fn load_plugin_writable_roots(
-    plugin_root: &AbsolutePathBuf,
-    plugin_id: &PluginId,
-    manifest_paths: &PluginManifestPaths,
-) -> Vec<PluginWritableRootSource> {
-    manifest_paths
-        .writable_roots
-        .iter()
-        .map(|root| PluginWritableRootSource {
-            plugin_id: plugin_id.clone(),
-            plugin_root: plugin_root.clone(),
-            root: root.clone(),
-        })
-        .collect()
-}
-
 async fn load_apps_from_paths(
     plugin_root: &Path,
     app_config_paths: Vec<AbsolutePathBuf>,
@@ -1114,13 +1049,21 @@ fn normalize_plugin_mcp_server_value(
         }
     }
 
-    if let Some(JsonValue::Object(oauth)) = object.remove("oauth")
-        && oauth.contains_key("callbackPort")
-    {
-        warn!(
-            plugin = %plugin_root.display(),
-            "plugin MCP server OAuth callbackPort is ignored; Codex uses global MCP OAuth callback settings"
-        );
+    if let Some(JsonValue::Object(mut oauth)) = object.remove("oauth") {
+        if oauth.remove("callbackPort").is_some() {
+            warn!(
+                plugin = %plugin_root.display(),
+                "plugin MCP server OAuth callbackPort is ignored; Codex uses global MCP OAuth callback settings"
+            );
+        }
+
+        if let Some(client_id) = oauth.remove("clientId") {
+            oauth.entry("client_id".to_string()).or_insert(client_id);
+        }
+
+        if !oauth.is_empty() {
+            object.insert("oauth".to_string(), JsonValue::Object(oauth));
+        }
     }
 
     if let Some(JsonValue::String(cwd)) = object.get("cwd")

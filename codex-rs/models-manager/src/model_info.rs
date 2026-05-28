@@ -115,6 +115,7 @@ fn build_fallback_model_info(slug: &str) -> ModelInfo {
         priority: 99,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
+        default_service_tier: None,
         availability_nux: None,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),

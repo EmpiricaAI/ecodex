@@ -83,9 +83,10 @@ pub(crate) async fn run_codex_thread_interactive(
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
-        skills_watcher: Arc::clone(&parent_session.services.skills_watcher),
+        extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
         session_source: SessionSource::SubAgent(subagent_source.clone()),
+        forked_from_thread_id: Some(parent_session.conversation_id),
         thread_source: Some(ThreadSource::Subagent),
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),
@@ -98,8 +99,8 @@ pub(crate) async fn run_codex_thread_interactive(
         parent_trace: None,
         environment_selections: parent_ctx.environments.clone(),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
-        state_db: parent_session.services.state_db.clone(),
         thread_store: Arc::clone(&parent_session.services.thread_store),
+        attestation_provider: parent_session.services.attestation_provider.clone(),
     }))
     .or_cancel(&cancel_token)
     .await??;
@@ -108,6 +109,7 @@ pub(crate) async fn run_codex_thread_interactive(
     emit_subagent_session_started(
         &parent_session.services.analytics_events_client,
         client_metadata,
+        codex.session.session_id(),
         codex.session.conversation_id,
         Some(parent_session.conversation_id),
         thread_config,
@@ -192,6 +194,8 @@ pub(crate) async fn run_codex_thread_one_shot(
         items: input,
         final_output_json_schema,
         responsesapi_client_metadata: None,
+        additional_context: Default::default(),
+        thread_settings: Default::default(),
     })
     .await?;
 
@@ -530,7 +534,10 @@ async fn handle_patch_approval(
     let guardian_decision = if routes_approval_to_guardian(parent_ctx) {
         let files = changes
             .keys()
-            .map(|path| parent_ctx.cwd.join(path))
+            .map(|path| {
+                #[allow(deprecated)]
+                parent_ctx.cwd.join(path)
+            })
             .collect::<Vec<_>>();
         let review_cancel = cancel_token.child_token();
         let patch = changes
@@ -566,6 +573,7 @@ async fn handle_patch_approval(
             new_guardian_review_id(),
             GuardianApprovalRequest::ApplyPatch {
                 id: approval_id.clone(),
+                #[allow(deprecated)]
                 cwd: parent_ctx.cwd.clone(),
                 files,
                 patch,
@@ -739,7 +747,10 @@ async fn handle_request_permissions(
         reason: event.reason,
         permissions: event.permissions,
     };
-    let cwd = event.cwd.unwrap_or_else(|| parent_ctx.cwd.clone());
+    let cwd = event.cwd.unwrap_or_else(|| {
+        #[allow(deprecated)]
+        parent_ctx.cwd.clone()
+    });
     let response_fut = parent_session.request_permissions_for_cwd(
         parent_ctx,
         call_id.clone(),

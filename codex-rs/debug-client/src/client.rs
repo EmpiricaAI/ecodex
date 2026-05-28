@@ -103,6 +103,7 @@ impl AppServerClient {
                 },
                 capabilities: Some(InitializeCapabilities {
                     experimental_api: true,
+                    request_attestation: false,
                     opt_out_notification_methods: None,
                 }),
             },
@@ -311,10 +312,8 @@ impl AppServerClient {
             };
 
             match message {
-                JSONRPCMessage::Response(response) => {
-                    if &response.id == request_id {
-                        return Ok(response);
-                    }
+                JSONRPCMessage::Response(response) if &response.id == request_id => {
+                    return Ok(response);
                 }
                 JSONRPCMessage::Request(request) => {
                     let _ = handle_server_request(request, &stdin);
