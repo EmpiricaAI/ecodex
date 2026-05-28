@@ -3382,6 +3382,15 @@ impl Session {
             .await
     }
 
+    /// ecodex (Monitor): queue items to be delivered on the next turn when
+    /// immediate injection has no active turn to attach to. Delegates to the
+    /// session input queue (mirrors `inject_response_items`).
+    pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
+        self.input_queue
+            .queue_response_items_for_next_turn(items)
+            .await;
+    }
+
     pub(crate) async fn record_memory_citation_for_turn(&self, sub_id: &str) {
         let turn_state = self
             .input_queue

@@ -552,8 +552,10 @@ impl ConfigDocument {
                 // ecodex T78: also write model_provider when set so saved
                 // state stays consistent (model + provider together).
                 if let Some(provider_id) = provider.as_ref() {
-                    mutated |= self
-                        .write_profile_value(&["model_provider"], Some(value(provider_id.clone())));
+                    mutated |= self.write_optional_value(
+                        &["model_provider"],
+                        Some(value(provider_id.clone())),
+                    );
                 }
                 mutated
             }),

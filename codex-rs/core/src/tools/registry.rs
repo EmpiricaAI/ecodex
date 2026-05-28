@@ -550,6 +550,9 @@ impl ToolRegistry {
         let invocation_for_tool = invocation.clone();
         let log_payload = invocation.payload.log_payload();
 
+        // ecodex (goal f0004294): time the tool call for the PostToolUseFailure
+        // hook payload below.
+        let tool_call_started_at = std::time::Instant::now();
         let result = otel
             .log_tool_result_with_tags(
                 tool_name_flat.as_ref(),
@@ -606,25 +609,24 @@ impl ToolRegistry {
                 // ecodex addition (goal f0004294): fire PostToolUseFailure
                 // so plugin handlers can capture the failure as a dead-end
                 // calibration signal. Informational only — does not redirect
-                // the agent loop.
-                let (tool_name_for_hook, matcher_aliases_for_hook, tool_input_for_hook) =
-                    match handler.pre_tool_use_payload(&invocation) {
-                        Some(payload) => (
-                            payload.tool_name.name().to_string(),
-                            payload.tool_name.matcher_aliases().to_vec(),
-                            payload.tool_input,
-                        ),
-                        None => (tool_name.name.clone(), Vec::new(), serde_json::Value::Null),
-                    };
+                // the agent loop. (2026-05 sync: upstream's dispatch no longer
+                // exposes the handler/output_preview/duration locals our HEAD
+                // block used, so we derive the failure preview from `result`
+                // and the duration from the timer above; matcher_aliases +
+                // tool_input are best-effort empty for this informational hook.)
+                let failure_preview = match &result {
+                    Ok((preview, _)) => preview.clone(),
+                    Err(err) => err.to_string(),
+                };
                 run_post_tool_use_failure_hooks(
                     &invocation.session,
                     &invocation.turn,
                     invocation.call_id.clone(),
-                    tool_name_for_hook,
-                    matcher_aliases_for_hook,
-                    tool_input_for_hook,
-                    output_preview.clone(),
-                    duration.as_millis() as u64,
+                    tool_name.name.clone(),
+                    Vec::new(),
+                    serde_json::Value::Null,
+                    failure_preview,
+                    tool_call_started_at.elapsed().as_millis() as u64,
                 )
                 .await;
             }

@@ -13,6 +13,7 @@ use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::McpHandler;
+use crate::tools::handlers::MonitorHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
@@ -572,6 +573,9 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     let environment_mode = turn_context.tool_environment_mode();
 
     planned_tools.add(PlanHandler);
+    // ecodex addition: Monitor tool registered unconditionally so all ecodex
+    // sessions can arm background-subprocess watches for cross-AI mesh wake.
+    planned_tools.add(MonitorHandler);
     if goal_tools_enabled(turn_context) {
         planned_tools.add(GetGoalHandler);
         planned_tools.add(CreateGoalHandler);

@@ -20,11 +20,16 @@ use crate::monitor::spawn_monitor;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::context::boxed_tool_output;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_tools::AdditionalProperties;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
@@ -65,18 +70,20 @@ enum MonitorAction {
     List,
 }
 
-impl ToolHandler for MonitorHandler {
-    type Output = MonitorToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for MonitorHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("monitor")
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        monitor_tool_spec()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session, payload, ..
         } = invocation;
@@ -110,7 +117,7 @@ impl ToolHandler for MonitorHandler {
                     "armed": true,
                 })
                 .to_string();
-                Ok(MonitorToolOutput { text })
+                Ok(boxed_tool_output(MonitorToolOutput { text }))
             }
             MonitorAction::Kill { monitor_id } => {
                 let removed = session.services.monitor_registry.kill(&monitor_id).await;
@@ -120,7 +127,7 @@ impl ToolHandler for MonitorHandler {
                     "monitor_id": monitor_id,
                 })
                 .to_string();
-                Ok(MonitorToolOutput { text })
+                Ok(boxed_tool_output(MonitorToolOutput { text }))
             }
             MonitorAction::List => {
                 // Hold the lock briefly to snapshot id+meta for each entry.
@@ -144,8 +151,97 @@ impl ToolHandler for MonitorHandler {
                     "monitors": entries,
                 })
                 .to_string();
-                Ok(MonitorToolOutput { text })
+                Ok(boxed_tool_output(MonitorToolOutput { text }))
             }
         }
     }
+}
+
+impl CoreToolRuntime for MonitorHandler {}
+
+// ecodex addition: build the ToolSpec describing the `monitor` tool's
+// JSON-schema argument surface so the model can discover + call it.
+// (Restored into the handler's spec() after the 2026-05 sync moved tool
+// specs from the old tools/spec.rs builder into per-handler spec() methods.)
+fn monitor_tool_spec() -> ToolSpec {
+    let mut properties = std::collections::BTreeMap::<String, JsonSchema>::new();
+    properties.insert(
+        "action".to_string(),
+        JsonSchema::string_enum(
+            vec![
+                JsonValue::String("arm".to_string()),
+                JsonValue::String("kill".to_string()),
+                JsonValue::String("list".to_string()),
+            ],
+            Some("What to do: arm a new watch, kill an existing one, or list count".to_string()),
+        ),
+    );
+    properties.insert(
+        "command".to_string(),
+        JsonSchema::array(
+            JsonSchema::string(None),
+            Some(
+                "Argv to spawn (action=arm only). First element is the program, rest are args."
+                    .to_string(),
+            ),
+        ),
+    );
+    properties.insert(
+        "pattern".to_string(),
+        JsonSchema::string(Some(
+            "Regex pattern to match against subprocess output lines (action=arm only).".to_string(),
+        )),
+    );
+    properties.insert(
+        "persistent".to_string(),
+        JsonSchema::boolean(Some(
+            "When true, the watch stays armed after each match (action=arm only). Default false."
+                .to_string(),
+        )),
+    );
+    properties.insert(
+        "stream".to_string(),
+        JsonSchema::string_enum(
+            vec![
+                JsonValue::String("stdout".to_string()),
+                JsonValue::String("stderr".to_string()),
+                JsonValue::String("both".to_string()),
+            ],
+            Some("Which stream to watch (action=arm only). Default stdout.".to_string()),
+        ),
+    );
+    properties.insert(
+        "cwd".to_string(),
+        JsonSchema::string(Some(
+            "Working directory for the spawned command (action=arm only).".to_string(),
+        )),
+    );
+    properties.insert(
+        "monitor_id".to_string(),
+        JsonSchema::string(Some(
+            "The id returned by a prior arm (action=kill only).".to_string(),
+        )),
+    );
+
+    let parameters = JsonSchema::object(
+        properties,
+        Some(vec!["action".to_string()]),
+        Some(AdditionalProperties::Boolean(false)),
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "monitor".to_string(),
+        description:
+            "Arm a watch on a background subprocess. On each line matching the regex \
+             `pattern`, a <task-notification> message is injected into your pending \
+             input. Use for sub-second wake on cortex mesh events (held ntfy \
+             connection) or any long-running stream you want to react to. Returns \
+             {monitor_id} from arm; pair with kill to disarm. persistent=true keeps \
+             the watch armed across multiple matches."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters,
+        output_schema: None,
+    })
 }
