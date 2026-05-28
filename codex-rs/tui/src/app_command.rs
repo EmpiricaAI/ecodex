@@ -230,7 +230,9 @@ impl AppCommand {
             approval_policy,
             approvals_reviewer,
             permission_profile,
-            active_permission_profile,
+            // ecodex T78: provider/model override doesn't change the resolved
+            // permission profile.
+            active_permission_profile: None,
             windows_sandbox_level,
             model,
             model_provider,

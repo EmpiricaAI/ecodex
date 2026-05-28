@@ -749,6 +749,17 @@ impl App {
                 self.sync_active_thread_service_tier_to_cached_session()
                     .await;
             }
+            AppEvent::RefreshPluginStatuslineSources => {
+                self.refresh_plugin_statusline_sources();
+            }
+            // ecodex T74: plugin-statusline DISPLAY handlers. The chat_widget
+            // rendering methods (on_plugin_statusline_sources_loaded /
+            // on_plugin_statusline_output_updated) were dropped in upstream's
+            // 2026-05 chat_widget restructure, and loader.rs no longer populates
+            // statusline_source — so this flow is inert until the T74 statusline
+            // moat is re-integrated (see build-fix queue). No-op for now.
+            AppEvent::PluginStatuslineSourcesLoaded { .. } => {}
+            AppEvent::PluginStatuslineOutputUpdated { .. } => {}
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
                 self.sync_active_thread_personality_setting(app_server, personality)
@@ -1241,7 +1252,16 @@ impl App {
                     let _ = (preset, mode, profile_selection);
                 }
             }
-            AppEvent::PersistModelSelection { model, effort } => {
+            AppEvent::PersistModelSelection {
+                model,
+                effort,
+                model_provider,
+            } => {
+                // ecodex T78: the provider-swap persist flows through the
+                // thread_settings/OverrideTurnContext → config path; this
+                // model+effort persist event currently always carries
+                // model_provider=None. Acknowledge the field explicitly.
+                let _ = &model_provider;
                 match crate::config_update::write_config_batch(
                     app_server.request_handle(),
                     crate::config_update::build_model_selection_edits(model.as_str(), effort),

@@ -6,6 +6,7 @@
 
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
+use codex_core_plugins::PluginsManager;
 use crate::app_event::ConnectorsSnapshot;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;

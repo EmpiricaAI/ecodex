@@ -605,6 +605,10 @@ impl App {
                             permissions_override,
                             config.permissions.user_visible_workspace_roots(),
                             model.to_string(),
+                            // ecodex T78: this UserTurn path doesn't carry an
+                            // inline provider override — provider swaps flow via
+                            // OverrideTurnContext → thread/settings.
+                            None,
                             *effort,
                             *summary,
                             service_tier.clone(),

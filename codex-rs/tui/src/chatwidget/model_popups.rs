@@ -232,6 +232,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
+                model_provider: None,
             });
         })]
     }
@@ -312,6 +313,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model.clone(),
                 effort,
+                model_provider: None,
             });
         })];
 
@@ -480,6 +482,7 @@ impl ChatWidget {
                     tx.send(AppEvent::PersistModelSelection {
                         model: model_for_action.clone(),
                         effort: choice_effort,
+                        model_provider: None,
                     });
                 }
             })];
@@ -533,6 +536,10 @@ impl ChatWidget {
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
         self.apply_model_and_effort_without_persist(model.clone(), effort);
         self.app_event_tx
-            .send(AppEvent::PersistModelSelection { model, effort });
+            .send(AppEvent::PersistModelSelection {
+                model,
+                effort,
+                model_provider: None,
+            });
     }
 }
