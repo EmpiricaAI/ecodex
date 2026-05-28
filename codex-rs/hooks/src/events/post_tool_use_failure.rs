@@ -160,6 +160,7 @@ fn parse_completed(
     };
     dispatcher::ParsedHandler {
         completed,
+        completion_order: 0,
         data: (),
     }
 }

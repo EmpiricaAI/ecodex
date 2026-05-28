@@ -983,6 +983,12 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
+            Self::UserTurn { .. } => "user_turn",
+            // ecodex: dormant after the 2026-05 sync (turn/start now routes
+            // through Op::UserInput{thread_settings}); kept as protocol
+            // variants pending cleanup removal.
+            Self::UserInputWithTurnContext { .. } => "user_input_with_turn_context",
+            Self::OverrideTurnContext { .. } => "override_turn_context",
             Self::ThreadSettings { .. } => "thread_settings",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::ExecApproval { .. } => "exec_approval",

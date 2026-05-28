@@ -17,20 +17,12 @@ use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
-use crate::events::post_compact::PostCompactOutcome;
-use crate::events::post_compact::PostCompactRequest;
 use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
 use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
-use crate::events::pre_compact::PreCompactOutcome;
-use crate::events::pre_compact::PreCompactRequest;
 use crate::events::session_end::SessionEndOutcome;
 use crate::events::session_end::SessionEndRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
-use crate::events::subagent_start::SubagentStartOutcome;
-use crate::events::subagent_start::SubagentStartRequest;
-use crate::events::subagent_stop::SubagentStopOutcome;
-use crate::events::subagent_stop::SubagentStopRequest;
 use crate::events::task_completed::TaskCompletedOutcome;
 use crate::events::task_completed::TaskCompletedRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
@@ -249,30 +241,6 @@ impl Hooks {
     }
 
     // ecodex addition (goal f0004294)
-    pub fn preview_pre_compact(
-        &self,
-        request: &PreCompactRequest,
-    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
-        self.engine.preview_pre_compact(request)
-    }
-
-    pub async fn run_pre_compact(&self, request: PreCompactRequest) -> PreCompactOutcome {
-        self.engine.run_pre_compact(request).await
-    }
-
-    // ecodex addition (goal f0004294)
-    pub fn preview_post_compact(
-        &self,
-        request: &PostCompactRequest,
-    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
-        self.engine.preview_post_compact(request)
-    }
-
-    pub async fn run_post_compact(&self, request: PostCompactRequest) -> PostCompactOutcome {
-        self.engine.run_post_compact(request).await
-    }
-
-    // ecodex addition (goal f0004294)
     pub fn preview_session_end(
         &self,
         request: &SessionEndRequest,
@@ -282,36 +250,6 @@ impl Hooks {
 
     pub async fn run_session_end(&self, request: SessionEndRequest) -> SessionEndOutcome {
         self.engine.run_session_end(request).await
-    }
-
-    // ecodex addition (goal f0004294)
-    pub fn preview_subagent_start(
-        &self,
-        request: &SubagentStartRequest,
-    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
-        self.engine.preview_subagent_start(request)
-    }
-
-    pub async fn run_subagent_start(
-        &self,
-        request: SubagentStartRequest,
-    ) -> SubagentStartOutcome {
-        self.engine.run_subagent_start(request).await
-    }
-
-    // ecodex addition (goal f0004294)
-    pub fn preview_subagent_stop(
-        &self,
-        request: &SubagentStopRequest,
-    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
-        self.engine.preview_subagent_stop(request)
-    }
-
-    pub async fn run_subagent_stop(
-        &self,
-        request: SubagentStopRequest,
-    ) -> SubagentStopOutcome {
-        self.engine.run_subagent_stop(request).await
     }
 }
 

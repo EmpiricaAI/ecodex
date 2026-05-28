@@ -522,6 +522,13 @@ async fn load_plugin(
         apps: Vec::new(),
         hook_sources: Vec::new(),
         hook_load_warnings: Vec::new(),
+        // ecodex moat fields (T74 statusline, plugin writable roots).
+        // NOTE: upstream's loader (taken in the 2026-05 sync) dropped our
+        // population logic — these stay default until re-wired, so plugin
+        // statuslines + plugin-declared writable roots are inert post-sync.
+        // See build-fix queue finding. Recover logic from pre-sync-2026-05.
+        statusline_source: None,
+        writable_root_sources: Vec::new(),
         error: None,
     };
 

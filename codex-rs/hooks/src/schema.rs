@@ -824,24 +824,8 @@ fn post_tool_use_failure_hook_event_name_schema(_gen: &mut SchemaGenerator) -> S
     string_const_schema("PostToolUseFailure")
 }
 
-fn pre_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("PreCompact")
-}
-
-fn post_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("PostCompact")
-}
-
 fn session_end_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("SessionEnd")
-}
-
-fn subagent_start_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("SubagentStart")
-}
-
-fn subagent_stop_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("SubagentStop")
 }
 
 fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
