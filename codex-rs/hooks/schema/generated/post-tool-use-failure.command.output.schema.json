@@ -82,6 +82,6 @@
       "type": "string"
     }
   },
-  "title": "post-tool-use.command.output",
+  "title": "post-tool-use-failure.command.output",
   "type": "object"
 }

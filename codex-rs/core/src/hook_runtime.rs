@@ -8,6 +8,8 @@ use codex_analytics::build_track_events_context;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
+use codex_hooks::PostToolUseFailureOutcome;
+use codex_hooks::PostToolUseFailureRequest;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -287,6 +289,50 @@ pub(crate) async fn run_post_tool_use_hooks(
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
     let outcome = hooks.run_post_tool_use(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
+    outcome
+}
+
+/// Runs matching `PostToolUseFailure` hooks after a tool invocation fails.
+///
+/// Sibling of [`run_post_tool_use_hooks`]: `PostToolUse` fires on a successful
+/// tool output, whereas this fires when the invocation failed (handler error,
+/// non-zero exit, timeout, or an unsuccessful tool result). `error_message`
+/// carries the failure reason; `tool_response` is the (possibly null) partial
+/// response. The same tool-identity adaptation applies so user matchers and
+/// hook logs see the stable hook contract rather than raw internal data.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_post_tool_use_failure_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    tool_use_id: String,
+    tool_name: String,
+    matcher_aliases: Vec<String>,
+    tool_input: Value,
+    tool_response: Value,
+    error_message: String,
+) -> PostToolUseFailureOutcome {
+    let request = PostToolUseFailureRequest {
+        session_id: sess.session_id().into(),
+        turn_id: turn_context.sub_id.clone(),
+        subagent: thread_spawn_subagent_hook_context(sess, turn_context),
+        #[allow(deprecated)]
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name,
+        matcher_aliases,
+        tool_use_id,
+        tool_input,
+        tool_response,
+        error_message,
+    };
+    let hooks = sess.hooks();
+    let preview_runs = hooks.preview_post_tool_use_failure(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = hooks.run_post_tool_use_failure(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
     outcome
 }
@@ -685,6 +731,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::PreToolUse => "PreToolUse",
         HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::PostToolUseFailure => "PostToolUseFailure",
         HookEventName::PreCompact => "PreCompact",
         HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",

@@ -716,6 +716,7 @@ fn hook_event_label(event_name: HookEventName) -> &'static str {
         HookEventName::PreToolUse => "PreToolUse",
         HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::PostToolUseFailure => "PostToolUseFailure",
         HookEventName::PreCompact => "PreCompact",
         HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",

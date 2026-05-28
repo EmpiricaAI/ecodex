@@ -48,6 +48,7 @@ pub(crate) fn select_handlers_for_matcher_inputs(
             HookEventName::PreToolUse
             | HookEventName::PermissionRequest
             | HookEventName::PostToolUse
+            | HookEventName::PostToolUseFailure
             | HookEventName::SessionStart
             | HookEventName::SubagentStart
             | HookEventName::SubagentStop
@@ -145,6 +146,7 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
         HookEventName::PreToolUse
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
+        | HookEventName::PostToolUseFailure
         | HookEventName::PreCompact
         | HookEventName::PostCompact
         | HookEventName::UserPromptSubmit

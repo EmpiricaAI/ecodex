@@ -110,6 +110,7 @@ pub(crate) fn matcher_pattern_for_event(
         HookEventName::PreToolUse
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
+        | HookEventName::PostToolUseFailure
         | HookEventName::SessionStart
         | HookEventName::SubagentStart
         | HookEventName::SubagentStop

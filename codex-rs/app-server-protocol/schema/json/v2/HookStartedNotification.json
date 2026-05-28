@@ -10,6 +10,7 @@
         "preToolUse",
         "permissionRequest",
         "postToolUse",
+        "postToolUseFailure",
         "preCompact",
         "postCompact",
         "sessionStart",

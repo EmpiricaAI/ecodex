@@ -13,6 +13,8 @@ use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
+use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
+use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::session_start::SessionStartOutcome;
@@ -155,6 +157,20 @@ impl Hooks {
 
     pub async fn run_post_tool_use(&self, request: PostToolUseRequest) -> PostToolUseOutcome {
         self.engine.run_post_tool_use(request).await
+    }
+
+    pub fn preview_post_tool_use_failure(
+        &self,
+        request: &PostToolUseFailureRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_post_tool_use_failure(request)
+    }
+
+    pub async fn run_post_tool_use_failure(
+        &self,
+        request: PostToolUseFailureRequest,
+    ) -> PostToolUseFailureOutcome {
+        self.engine.run_post_tool_use_failure(request).await
     }
 
     pub fn preview_pre_compact(

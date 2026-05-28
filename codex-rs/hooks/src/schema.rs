@@ -17,6 +17,9 @@ use crate::events::common::SubagentHookContext;
 const GENERATED_DIR: &str = "generated";
 const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.json";
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
+const POST_TOOL_USE_FAILURE_INPUT_FIXTURE: &str = "post-tool-use-failure.command.input.schema.json";
+const POST_TOOL_USE_FAILURE_OUTPUT_FIXTURE: &str =
+    "post-tool-use-failure.command.output.schema.json";
 const PERMISSION_REQUEST_INPUT_FIXTURE: &str = "permission-request.command.input.schema.json";
 const PERMISSION_REQUEST_OUTPUT_FIXTURE: &str = "permission-request.command.output.schema.json";
 const POST_COMPACT_INPUT_FIXTURE: &str = "post-compact.command.input.schema.json";
@@ -103,6 +106,8 @@ pub(crate) enum HookEventNameWire {
     PermissionRequest,
     #[serde(rename = "PostToolUse")]
     PostToolUse,
+    #[serde(rename = "PostToolUseFailure")]
+    PostToolUseFailure,
     #[serde(rename = "PreCompact")]
     PreCompact,
     #[serde(rename = "PostCompact")]
@@ -139,6 +144,21 @@ pub(crate) struct PreToolUseCommandOutputWire {
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "post-tool-use.command.output")]
 pub(crate) struct PostToolUseCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+    #[serde(default)]
+    pub decision: Option<BlockDecisionWire>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub hook_specific_output: Option<PostToolUseHookSpecificOutputWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "post-tool-use-failure.command.output")]
+pub(crate) struct PostToolUseFailureCommandOutputWire {
     #[serde(flatten)]
     pub universal: HookUniversalOutputWire,
     #[serde(default)]
@@ -331,6 +351,32 @@ pub(crate) struct PostToolUseCommandInput {
     pub tool_input: Value,
     pub tool_response: Value,
     pub tool_use_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "post-tool-use-failure.command.input")]
+pub(crate) struct PostToolUseFailureCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "post_tool_use_failure_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub tool_name: String,
+    pub tool_input: Value,
+    pub tool_response: Value,
+    pub tool_use_id: String,
+    /// Human-readable reason the tool invocation failed.
+    pub error_message: String,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -592,6 +638,14 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
         schema_json::<PostToolUseCommandOutputWire>()?,
     )?;
     write_schema(
+        &generated_dir.join(POST_TOOL_USE_FAILURE_INPUT_FIXTURE),
+        schema_json::<PostToolUseFailureCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(POST_TOOL_USE_FAILURE_OUTPUT_FIXTURE),
+        schema_json::<PostToolUseFailureCommandOutputWire>()?,
+    )?;
+    write_schema(
         &generated_dir.join(PERMISSION_REQUEST_INPUT_FIXTURE),
         schema_json::<PermissionRequestCommandInput>()?,
     )?;
@@ -726,6 +780,10 @@ fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostToolUse")
 }
 
+fn post_tool_use_failure_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("PostToolUseFailure")
+}
+
 fn pre_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PreCompact")
 }
@@ -810,6 +868,8 @@ mod tests {
     use super::PERMISSION_REQUEST_OUTPUT_FIXTURE;
     use super::POST_COMPACT_INPUT_FIXTURE;
     use super::POST_COMPACT_OUTPUT_FIXTURE;
+    use super::POST_TOOL_USE_FAILURE_INPUT_FIXTURE;
+    use super::POST_TOOL_USE_FAILURE_OUTPUT_FIXTURE;
     use super::POST_TOOL_USE_INPUT_FIXTURE;
     use super::POST_TOOL_USE_OUTPUT_FIXTURE;
     use super::PRE_COMPACT_INPUT_FIXTURE;
@@ -851,6 +911,12 @@ mod tests {
             }
             POST_TOOL_USE_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/post-tool-use.command.output.schema.json")
+            }
+            POST_TOOL_USE_FAILURE_INPUT_FIXTURE => {
+                include_str!("../schema/generated/post-tool-use-failure.command.input.schema.json")
+            }
+            POST_TOOL_USE_FAILURE_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/post-tool-use-failure.command.output.schema.json")
             }
             PERMISSION_REQUEST_INPUT_FIXTURE => {
                 include_str!("../schema/generated/permission-request.command.input.schema.json")
@@ -923,6 +989,8 @@ mod tests {
         for fixture in [
             POST_TOOL_USE_INPUT_FIXTURE,
             POST_TOOL_USE_OUTPUT_FIXTURE,
+            POST_TOOL_USE_FAILURE_INPUT_FIXTURE,
+            POST_TOOL_USE_FAILURE_OUTPUT_FIXTURE,
             PERMISSION_REQUEST_INPUT_FIXTURE,
             PERMISSION_REQUEST_OUTPUT_FIXTURE,
             POST_COMPACT_INPUT_FIXTURE,

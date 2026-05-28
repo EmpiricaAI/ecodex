@@ -6278,6 +6278,7 @@
         "preToolUse",
         "permissionRequest",
         "postToolUse",
+        "postToolUseFailure",
         "preCompact",
         "postCompact",
         "sessionStart",
@@ -7207,6 +7208,12 @@
           },
           "type": "array"
         },
+        "PostToolUseFailure": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "PreCompact": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -7266,6 +7273,7 @@
         "PermissionRequest",
         "PostCompact",
         "PostToolUse",
+        "PostToolUseFailure",
         "PreCompact",
         "PreToolUse",
         "SessionStart",

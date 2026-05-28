@@ -8,6 +8,7 @@ use crate::function_tool::FunctionCallError;
 use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::PreToolUseHookResult;
 use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::run_post_tool_use_failure_hooks;
 use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memory_usage::emit_metric_for_tool_read;
@@ -634,6 +635,62 @@ impl ToolRegistry {
                     });
                     *guard = Some(result);
                 }
+            }
+        }
+
+        if !success {
+            // The tool invocation failed (handler error, non-zero exit, or an
+            // unsuccessful tool result). Fire PostToolUseFailure with whatever
+            // tool identity is available: the recomputed pre-tool-use payload
+            // when the handler itself errored, or the result's post-tool-use
+            // payload when the handler ran but reported failure.
+            let failure_inputs: Option<(String, Vec<String>, Value, Value, String)> = match &result
+            {
+                Err(err) => tool.pre_tool_use_payload(&invocation).map(|pre| {
+                    (
+                        pre.tool_name.name().to_string(),
+                        pre.tool_name.matcher_aliases().to_vec(),
+                        pre.tool_input,
+                        Value::Null,
+                        err.to_string(),
+                    )
+                }),
+                Ok((preview, _)) => {
+                    let guard = response_cell.lock().await;
+                    guard
+                        .as_ref()
+                        .and_then(|result| result.post_tool_use_payload.clone())
+                        .map(|payload| {
+                            (
+                                payload.tool_name.name().to_string(),
+                                payload.tool_name.matcher_aliases().to_vec(),
+                                payload.tool_input,
+                                payload.tool_response,
+                                preview.clone(),
+                            )
+                        })
+                }
+            };
+            if let Some((tool_name, matcher_aliases, tool_input, tool_response, error_message)) =
+                failure_inputs
+            {
+                let failure_outcome = run_post_tool_use_failure_hooks(
+                    &invocation.session,
+                    &invocation.turn,
+                    invocation.call_id.clone(),
+                    tool_name,
+                    matcher_aliases,
+                    tool_input,
+                    tool_response,
+                    error_message,
+                )
+                .await;
+                record_additional_contexts(
+                    &invocation.session,
+                    &invocation.turn,
+                    failure_outcome.additional_contexts.clone(),
+                )
+                .await;
             }
         }
 

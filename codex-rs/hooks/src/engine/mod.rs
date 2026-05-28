@@ -12,6 +12,8 @@ use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
+use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
+use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::session_start::SessionStartOutcome;
@@ -66,6 +68,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PreToolUse => "pre-tool-use",
             codex_protocol::protocol::HookEventName::PermissionRequest => "permission-request",
             codex_protocol::protocol::HookEventName::PostToolUse => "post-tool-use",
+            codex_protocol::protocol::HookEventName::PostToolUseFailure => "post-tool-use-failure",
             codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
             codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
@@ -204,6 +207,29 @@ impl ClaudeHooksEngine {
         let session_id = request.session_id;
         let mut outcome =
             crate::events::post_tool_use::run(&self.handlers, &self.shell, request).await;
+        outcome.additional_contexts = self
+            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .await;
+        outcome.feedback_message = self
+            .maybe_spill_text(session_id, outcome.feedback_message)
+            .await;
+        outcome
+    }
+
+    pub(crate) fn preview_post_tool_use_failure(
+        &self,
+        request: &PostToolUseFailureRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::post_tool_use_failure::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_post_tool_use_failure(
+        &self,
+        request: PostToolUseFailureRequest,
+    ) -> PostToolUseFailureOutcome {
+        let session_id = request.session_id;
+        let mut outcome =
+            crate::events::post_tool_use_failure::run(&self.handlers, &self.shell, request).await;
         outcome.additional_contexts = self
             .maybe_spill_texts(session_id, outcome.additional_contexts)
             .await;

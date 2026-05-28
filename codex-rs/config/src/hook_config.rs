@@ -37,6 +37,8 @@ pub struct HookEventsToml {
     pub permission_request: Vec<MatcherGroup>,
     #[serde(rename = "PostToolUse", default)]
     pub post_tool_use: Vec<MatcherGroup>,
+    #[serde(rename = "PostToolUseFailure", default)]
+    pub post_tool_use_failure: Vec<MatcherGroup>,
     #[serde(rename = "PreCompact", default)]
     pub pre_compact: Vec<MatcherGroup>,
     #[serde(rename = "PostCompact", default)]
@@ -59,6 +61,7 @@ impl HookEventsToml {
             pre_tool_use,
             permission_request,
             post_tool_use,
+            post_tool_use_failure,
             pre_compact,
             post_compact,
             session_start,
@@ -70,6 +73,7 @@ impl HookEventsToml {
         pre_tool_use.is_empty()
             && permission_request.is_empty()
             && post_tool_use.is_empty()
+            && post_tool_use_failure.is_empty()
             && pre_compact.is_empty()
             && post_compact.is_empty()
             && session_start.is_empty()
@@ -84,6 +88,7 @@ impl HookEventsToml {
             pre_tool_use,
             permission_request,
             post_tool_use,
+            post_tool_use_failure,
             pre_compact,
             post_compact,
             session_start,
@@ -96,6 +101,7 @@ impl HookEventsToml {
             pre_tool_use,
             permission_request,
             post_tool_use,
+            post_tool_use_failure,
             pre_compact,
             post_compact,
             session_start,
@@ -110,11 +116,15 @@ impl HookEventsToml {
         .sum()
     }
 
-    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 10] {
+    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 11] {
         [
             (HookEventName::PreToolUse, self.pre_tool_use),
             (HookEventName::PermissionRequest, self.permission_request),
             (HookEventName::PostToolUse, self.post_tool_use),
+            (
+                HookEventName::PostToolUseFailure,
+                self.post_tool_use_failure,
+            ),
             (HookEventName::PreCompact, self.pre_compact),
             (HookEventName::PostCompact, self.post_compact),
             (HookEventName::SessionStart, self.session_start),

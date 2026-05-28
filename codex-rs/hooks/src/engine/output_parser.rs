@@ -80,6 +80,7 @@ use crate::schema::PermissionRequestCommandOutputWire;
 use crate::schema::PermissionRequestDecisionWire;
 use crate::schema::PostCompactCommandOutputWire;
 use crate::schema::PostToolUseCommandOutputWire;
+use crate::schema::PostToolUseFailureCommandOutputWire;
 use crate::schema::PreCompactCommandOutputWire;
 use crate::schema::PreToolUseCommandOutputWire;
 use crate::schema::PreToolUseDecisionWire;
@@ -220,6 +221,40 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
         Some(invalid_block_message("PostToolUse"))
     } else if !should_block && universal.continue_processing && wire.reason.is_some() {
         Some("PostToolUse hook returned reason without decision".to_string())
+    } else {
+        None
+    };
+    let additional_context = wire
+        .hook_specific_output
+        .and_then(|output| output.additional_context);
+
+    Some(PostToolUseOutput {
+        universal,
+        should_block: should_block && invalid_reason.is_none() && invalid_block_reason.is_none(),
+        reason: wire.reason,
+        invalid_block_reason,
+        additional_context,
+        invalid_reason,
+    })
+}
+
+pub(crate) fn parse_post_tool_use_failure(stdout: &str) -> Option<PostToolUseOutput> {
+    let wire: PostToolUseFailureCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    let invalid_reason = unsupported_post_tool_use_universal(&universal).or_else(|| {
+        wire.hook_specific_output
+            .as_ref()
+            .and_then(unsupported_post_tool_use_hook_specific_output)
+    });
+    let should_block = matches!(wire.decision, Some(BlockDecisionWire::Block));
+    let invalid_block_reason = if should_block
+        && match wire.reason.as_deref() {
+            Some(reason) => reason.trim().is_empty(),
+            None => true,
+        } {
+        Some(invalid_block_message("PostToolUseFailure"))
+    } else if !should_block && universal.continue_processing && wire.reason.is_some() {
+        Some("PostToolUseFailure hook returned reason without decision".to_string())
     } else {
         None
     };

@@ -1092,6 +1092,13 @@
           },
           "type": "array"
         },
+        "PostToolUseFailure": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "PreCompact": {
           "default": [],
           "items": {

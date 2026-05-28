@@ -1353,6 +1353,7 @@ pub enum HookEventName {
     PreToolUse,
     PermissionRequest,
     PostToolUse,
+    PostToolUseFailure,
     PreCompact,
     PostCompact,
     SessionStart,

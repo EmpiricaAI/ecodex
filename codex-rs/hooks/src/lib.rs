@@ -16,10 +16,11 @@ pub use declarations::plugin_hook_declarations;
 pub use engine::HookListEntry;
 pub use events::common::SubagentHookContext;
 /// Hook event names as they appear in hooks JSON and config files.
-pub const HOOK_EVENT_NAMES: [&str; 10] = [
+pub const HOOK_EVENT_NAMES: [&str; 11] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
+    "PostToolUseFailure",
     "PreCompact",
     "PostCompact",
     "SessionStart",
@@ -34,10 +35,11 @@ pub const HOOK_EVENT_NAMES: [&str; 10] = [
 /// Other events can appear in hooks JSON, but Codex ignores their matcher
 /// fields because those events do not dispatch against a tool, compaction
 /// trigger, or session-start source.
-pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 8] = [
+pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 9] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
+    "PostToolUseFailure",
     "PreCompact",
     "PostCompact",
     "SessionStart",
@@ -54,6 +56,8 @@ pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;
 pub use events::post_tool_use::PostToolUseOutcome;
 pub use events::post_tool_use::PostToolUseRequest;
+pub use events::post_tool_use_failure::PostToolUseFailureOutcome;
+pub use events::post_tool_use_failure::PostToolUseFailureRequest;
 pub use events::pre_tool_use::PreToolUseOutcome;
 pub use events::pre_tool_use::PreToolUseRequest;
 pub use events::session_start::SessionStartOutcome;
@@ -86,6 +90,7 @@ pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
         HookEventName::PreToolUse => "pre_tool_use",
         HookEventName::PermissionRequest => "permission_request",
         HookEventName::PostToolUse => "post_tool_use",
+        HookEventName::PostToolUseFailure => "post_tool_use_failure",
         HookEventName::PreCompact => "pre_compact",
         HookEventName::PostCompact => "post_compact",
         HookEventName::SessionStart => "session_start",
