@@ -4670,6 +4670,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         // ecodex addition: tests don't arm any monitors, but the field must
         // be present to satisfy the struct initializer.
         monitor_registry: Arc::new(crate::monitor::MonitorRegistry::new()),
+        ntfy_listener_registry: Arc::new(crate::ntfy_listener::NtfyListenerRegistry::new()),
     };
 
     let plugin_outcome = services
@@ -6518,6 +6519,7 @@ where
         // ecodex addition: tests don't arm any monitors, but the field must
         // be present to satisfy the struct initializer.
         monitor_registry: Arc::new(crate::monitor::MonitorRegistry::new()),
+        ntfy_listener_registry: Arc::new(crate::ntfy_listener::NtfyListenerRegistry::new()),
     };
 
     let plugin_outcome = services

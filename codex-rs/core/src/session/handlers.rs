@@ -620,6 +620,9 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     // watchers so background curl/ntfy connections + watcher tasks don't
     // leak past session shutdown.
     sess.services.monitor_registry.abort_all().await;
+    // ecodex addition: stop the native ntfy mesh wake-listener so its held
+    // connection + reconnect loop don't leak past session shutdown.
+    sess.services.ntfy_listener_registry.abort().await;
     let _ = sess.conversation.shutdown().await;
     sess.services
         .unified_exec_manager

@@ -1084,6 +1084,11 @@ impl Session {
                 // ecodex addition: empty registry; agent populates via the
                 // `monitor` tool. `Session::shutdown` aborts all entries.
                 monitor_registry: Arc::new(crate::monitor::MonitorRegistry::new()),
+                // ecodex addition: native ntfy mesh wake-listener slot; filled
+                // best-effort after construction (see `try_start_mesh_listener`).
+                ntfy_listener_registry: Arc::new(
+                    crate::ntfy_listener::NtfyListenerRegistry::new(),
+                ),
             };
             services
                 .model_client
@@ -1114,6 +1119,10 @@ impl Session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);
             }
+            // ecodex addition: start the native ntfy mesh wake-listener if the
+            // mesh is configured (credentials.yaml present + ai_id resolvable).
+            // Best-effort — never blocks or fails session construction.
+            crate::ntfy_listener::try_start_mesh_listener(sess.clone(), config.cwd.as_path()).await;
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             // If resuming, include converted initial messages in the payload so UIs can render them immediately.
             let initial_messages = initial_history.get_event_msgs();

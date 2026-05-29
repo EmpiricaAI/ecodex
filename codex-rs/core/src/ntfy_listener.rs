@@ -20,8 +20,20 @@
 
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
+use futures::StreamExt;
 use serde::Deserialize;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
+
+use crate::session::session::Session;
 
 /// Resolved ntfy connection + auth configuration.
 ///
@@ -254,6 +266,225 @@ fn encode_with(s: &str, is_safe: impl Fn(char) -> bool) -> String {
     out
 }
 
+// ---------------------------------------------------------------------------
+// Stream loop (T2) — held ntfy connection, doorbell → session wake, reconnect.
+// ---------------------------------------------------------------------------
+
+/// Reconnect backoff bounds. ntfy held-connections end periodically and on
+/// transient network failures; we reconnect promptly, growing the delay only
+/// while errors persist, and reset on a clean connection.
+const RECONNECT_BASE: Duration = Duration::from_secs(2);
+const RECONNECT_MAX: Duration = Duration::from_secs(60);
+
+/// Holds the single background listener task for a session so the shutdown
+/// path can abort it. Mirrors `MonitorRegistry` (one listener per session).
+#[derive(Default)]
+pub(crate) struct NtfyListenerRegistry {
+    handle: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl NtfyListenerRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Install the listener task, aborting any prior one.
+    pub async fn set(&self, handle: JoinHandle<()>) {
+        let mut guard = self.handle.lock().await;
+        if let Some(old) = guard.take() {
+            old.abort();
+        }
+        *guard = Some(handle);
+    }
+
+    /// Abort the listener task. Called on session shutdown.
+    pub async fn abort(&self) {
+        if let Some(handle) = self.handle.lock().await.take() {
+            handle.abort();
+        }
+    }
+}
+
+/// Standard ntfy JSON-stream envelope (only the fields we use). ntfy emits
+/// `open`/`keepalive`/`poll_request` housekeeping events too — only `message`
+/// carries a real publication.
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+struct NtfyEnvelope {
+    event: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum NtfyStreamError {
+    #[error("ntfy request failed: {0}")]
+    Request(#[from] reqwest::Error),
+    #[error("ntfy returned non-success status {0}")]
+    Status(u16),
+}
+
+/// Parse one ntfy JSON-stream line. Returns `None` for blank lines and any
+/// line that isn't a well-formed ntfy envelope (defensive — never panics on
+/// junk in the stream).
+fn parse_ntfy_line(line: &str) -> Option<NtfyEnvelope> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    serde_json::from_str::<NtfyEnvelope>(line).ok()
+}
+
+/// Only `message` events are real publications worth a wake.
+fn is_wake_event(env: &NtfyEnvelope) -> bool {
+    env.event == "message"
+}
+
+/// Build the session wake for one ntfy doorbell. Per the agreed design the
+/// ntfy event is a *doorbell*: this injects a poll-trigger wake so the model
+/// fetches authoritative content via the `cortex_inbox_poll` MCP tool (Cortex
+/// owns comms). Any message body / tags ntfy carried are surfaced as a hint.
+fn build_wake_item(env: &NtfyEnvelope, ai_id: &str) -> ResponseInputItem {
+    let ntfy_id = env.id.as_deref().unwrap_or("?");
+    let tags = env.tags.join(",");
+    let hint = match (env.title.as_deref(), env.message.as_deref()) {
+        (Some(t), Some(m)) if !t.is_empty() || !m.is_empty() => format!(" ntfy hint: {t} — {m}"),
+        (_, Some(m)) if !m.is_empty() => format!(" ntfy hint: {m}"),
+        _ => String::new(),
+    };
+    let text = format!(
+        "<task-notification>\n\
+         <source>cortex-mesh-ntfy</source>\n\
+         <ai-id>{ai_id}</ai-id>\n\
+         <ntfy-id>{ntfy_id}</ntfy-id>\n\
+         <tags>{tags}</tags>\n\
+         <message>Mesh wake (ntfy doorbell): a proposal event may be waiting for you. \
+         Poll cortex_inbox_poll(ai_id=\"{ai_id}\", status=\"accepted,changed\") for the \
+         authoritative content and react per the mailbox protocol (act on actionable, \
+         treat fyi as read-on-poll).{hint}</message>\n\
+         </task-notification>"
+    );
+    ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText { text }],
+        phase: None,
+    }
+}
+
+/// One connection attempt: hold the ntfy stream and inject a wake per
+/// `message` event until the stream ends or errors.
+async fn run_stream_once(
+    client: &reqwest::Client,
+    url: &str,
+    config: &NtfyListenerConfig,
+    session: &Arc<Session>,
+) -> Result<(), NtfyStreamError> {
+    let mut req = client.get(url);
+    if let Some((name, value)) = auth_header(config) {
+        req = req.header(name, value);
+    }
+    let resp = req.send().await?;
+    if !resp.status().is_success() {
+        return Err(NtfyStreamError::Status(resp.status().as_u16()));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=pos).collect();
+            let text = String::from_utf8_lossy(&line);
+            let Some(env) = parse_ntfy_line(&text) else {
+                continue;
+            };
+            if !is_wake_event(&env) {
+                continue;
+            }
+            let item = build_wake_item(&env, &config.ai_id);
+            if let Err(returned) = session.inject_response_items(vec![item]).await {
+                session.queue_response_items_for_next_turn(returned).await;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Spawn the held-connection listener loop. Runs until the task is aborted
+/// (session shutdown). Reconnects with exponential backoff on error; resets to
+/// the base delay after a clean stream end.
+pub(crate) fn spawn_listener_loop(
+    session: Arc<Session>,
+    config: NtfyListenerConfig,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let url = build_subscribe_url(&config);
+        let client = reqwest::Client::new();
+        let mut backoff = RECONNECT_BASE;
+        loop {
+            match run_stream_once(&client, &url, &config, &session).await {
+                Ok(()) => {
+                    backoff = RECONNECT_BASE;
+                }
+                Err(err) => {
+                    warn!(
+                        target: "ntfy_listener",
+                        error = %err,
+                        backoff_secs = backoff.as_secs(),
+                        "ntfy stream error; backing off before reconnect",
+                    );
+                }
+            }
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(RECONNECT_MAX);
+        }
+    })
+}
+
+/// Best-effort mesh-listener startup, called at session boot. Resolves
+/// `ai_id` + credentials; if the mesh isn't configured (no credentials file,
+/// unresolved ai_id, incomplete creds) it logs at debug and returns without
+/// error — mesh participation is opt-in by having credentials present. Never
+/// blocks or fails session construction.
+pub(crate) async fn try_start_mesh_listener(session: Arc<Session>, project_root: &Path) {
+    // Never auto-open a network connection during the crate's own tests.
+    if cfg!(test) {
+        return;
+    }
+    let Some(creds_path) = default_credentials_path() else {
+        debug!(target: "ntfy_listener", "no HOME; mesh listener not started");
+        return;
+    };
+    if !creds_path.exists() {
+        debug!(target: "ntfy_listener", "no ~/.empirica/credentials.yaml; mesh listener not started");
+        return;
+    }
+    let ai_id = match resolve_ai_id(project_root) {
+        Ok(id) => id,
+        Err(err) => {
+            debug!(target: "ntfy_listener", %err, "ai_id unresolved; mesh listener not started");
+            return;
+        }
+    };
+    let config = match load_config(&creds_path, ai_id) {
+        Ok(config) => config,
+        Err(err) => {
+            debug!(target: "ntfy_listener", %err, "mesh creds incomplete; mesh listener not started");
+            return;
+        }
+    };
+    let ai_id = config.ai_id.clone();
+    let handle = spawn_listener_loop(session.clone(), config);
+    session.services.ntfy_listener_registry.set(handle).await;
+    info!(target: "ntfy_listener", %ai_id, "native ntfy mesh listener started");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,5 +602,55 @@ mod tests {
         let root = dir.path().join("empirica-outreach");
         std::fs::create_dir_all(&root).unwrap();
         assert_eq!(resolve_ai_id(&root).unwrap(), "outreach");
+    }
+
+    #[test]
+    fn parse_ntfy_line_accepts_message_envelope() {
+        let line = r#"{"id":"abc","event":"message","topic":"orchestration-events","message":"hi","tags":["orchestration_event","ecodex"]}"#;
+        let env = parse_ntfy_line(line).expect("parsed");
+        assert_eq!(env.event, "message");
+        assert_eq!(env.id.as_deref(), Some("abc"));
+        assert_eq!(env.tags, vec!["orchestration_event", "ecodex"]);
+        assert!(is_wake_event(&env));
+    }
+
+    #[test]
+    fn parse_ntfy_line_rejects_blank_and_junk() {
+        assert!(parse_ntfy_line("").is_none());
+        assert!(parse_ntfy_line("   ").is_none());
+        assert!(parse_ntfy_line("not json").is_none());
+    }
+
+    #[test]
+    fn housekeeping_events_are_not_wakes() {
+        for ev in ["open", "keepalive", "poll_request"] {
+            let env = parse_ntfy_line(&format!(r#"{{"event":"{ev}"}}"#)).expect("parsed");
+            assert!(!is_wake_event(&env), "{ev} should not wake");
+        }
+    }
+
+    #[test]
+    fn wake_item_is_user_role_and_directs_to_inbox_poll() {
+        let env = NtfyEnvelope {
+            event: "message".to_string(),
+            id: Some("evt-1".to_string()),
+            message: Some("Re: onboarding".to_string()),
+            title: None,
+            tags: vec!["ecodex".to_string()],
+        };
+        let item = build_wake_item(&env, "ecodex");
+        match item {
+            ResponseInputItem::Message { role, content, .. } => {
+                assert_eq!(role, "user");
+                let ContentItem::InputText { text } = &content[0] else {
+                    panic!("expected input text");
+                };
+                assert!(text.contains("cortex_inbox_poll(ai_id=\"ecodex\""));
+                assert!(text.contains("evt-1"));
+                assert!(text.contains("ntfy hint: Re: onboarding"));
+                assert!(text.contains("read-on-poll"));
+            }
+            other => panic!("expected Message, got {other:?}"),
+        }
     }
 }
