@@ -1,0 +1,67 @@
+# codex-empirica-translator multi-upstream config example.
+#
+# Pass to the translator via:
+#   codex-empirica-translator --upstreams-config /path/to/upstreams.toml \
+#     --bind 127.0.0.1:18080
+#
+# Or via env: ECODEX_TRANSLATOR_UPSTREAMS_CONFIG=/path/to/upstreams.toml
+#
+# Routing model: first-match-wins glob against the `model` field of the
+# incoming Responses request. Use trailing `*` for prefix matches, exact
+# strings for pinning, plain `*` for a catch-all. Put narrow patterns
+# BEFORE catch-alls.
+
+# Kimi For Coding — Anthropic surface bypasses the OpenAI X-Msh-Platform
+# allowlist that blocks unregistered clients on api.kimi.com/coding/v1.
+[[upstream]]
+name = "kimi"
+model_match = "kimi-*"
+base_url = "https://api.kimi.com/coding/v1"
+protocol = "anthropic"
+api_key_env = "KIMI_API_KEY"
+
+# DeepSeek — straight chat-completions over their public API.
+# Uncomment + set DEEPSEEK_API_KEY in ~/.codex/.env to enable. Translator
+# fails-loud at startup if api_key_env is unset, so leaving enabled-but-keyless
+# upstreams will block the whole process.
+# [[upstream]]
+# name = "deepseek"
+# model_match = "deepseek-*"
+# base_url = "https://api.deepseek.com/v1"
+# protocol = "chat"
+# api_key_env = "DEEPSEEK_API_KEY"
+
+# Qwen (Alibaba Cloud / Dashscope) — chat-completions.
+# [[upstream]]
+# name = "qwen"
+# model_match = "qwen-*"
+# base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+# protocol = "chat"
+# api_key_env = "DASHSCOPE_API_KEY"
+
+# GLM (Zhipu AI) — chat-completions.
+# [[upstream]]
+# name = "glm"
+# model_match = "glm-*"
+# base_url = "https://open.bigmodel.cn/api/paas/v4"
+# protocol = "chat"
+# api_key_env = "ZHIPU_API_KEY"
+
+# Anthropic direct — for claude-* requests routed through the translator
+# (e.g. when ecodex's curated picker has Claude entries but you want them
+# to flow through the event tap for observability).
+# [[upstream]]
+# name = "anthropic"
+# model_match = "claude-*"
+# base_url = "https://api.anthropic.com/v1"
+# protocol = "anthropic"
+# api_key_env = "ANTHROPIC_API_KEY"
+
+# Catch-all to OpenRouter for any model not matched above. Uncomment to
+# get "if I don't recognize it, send to OpenRouter" semantics.
+# [[upstream]]
+# name = "openrouter"
+# model_match = "*"
+# base_url = "https://openrouter.ai/api/v1"
+# protocol = "chat"
+# api_key_env = "OPENROUTER_API_KEY"

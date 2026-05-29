@@ -1,0 +1,335 @@
+---
+name: empirica-constitution
+description: >
+  Empirica Constitutional Decision Tree — the governance framework that routes
+  situations to the right mechanism. Load this skill when unsure which Empirica
+  mechanism to use, when starting a session, or when the system prompt feels
+  insufficient. Replaces front-loaded instructions with a decision framework.
+  Triggers: 'which mechanism', 'how should I handle', 'what tool for this',
+  'empirica constitution', 'decision tree', or any uncertainty about which
+  Empirica feature applies to the current situation.
+pinned: true
+---
+
+# Empirica Constitution
+
+## Purpose
+
+This is the operational governance framework for Empirica. Instead of
+front-loading all instructions into the system prompt, this decision tree
+tells you **which mechanism to use when, and why**.
+
+Three layers of mechanisms, each with different characteristics:
+
+| Layer | Examples | Loaded | Latency | Use When |
+|-------|---------|--------|---------|----------|
+| **Skills** | EPP, EWM, epistemic-transaction, code-audit | On-demand (lazy) | ~0ms to load | Complex workflows needing structured guidance |
+| **Hooks** | sentinel-gate, session-init, post-compact | Always active | ~500ms | Automated enforcement, context recovery, measurement |
+| **CLI** | finding-log, project-search, check-submit | Always available | ~1-3s | Direct epistemic state manipulation |
+
+---
+
+## The Decision Tree
+
+### I. WHAT DO I KNOW?
+
+```
+I don't know something
+├── About this project → empirica project-search --task "query"
+├── About another project → empirica project-search --task "query" --global
+├── About the user → Read workflow-protocol.yaml or EWM memory
+├── About the codebase → Read/Grep/Glob (noetic tools)
+└── Whether it exists anywhere → project-search --global + Agent(Explore)
+```
+
+### II. WHAT SHOULD I DO NEXT?
+
+```
+Starting work
+├── New session → Hooks handle: session-init + project-bootstrap (automatic)
+├── After compaction → Hooks handle: post-compact context recovery (automatic)
+├── Complex task → Load skill: /epistemic-transaction (plan transactions)
+├── Simple task → PREFLIGHT → work → POSTFLIGHT (no skill needed)
+└── Continuing interrupted work → Transaction file has state, just continue
+
+Deciding whether to act
+├── High confidence in understanding → PREFLIGHT auto-proceeds, just work
+├── Low confidence → PREFLIGHT requires CHECK gate
+├── CHECK says investigate → Do noetic work (Read, Grep, search), log findings
+├── CHECK says proceed → Act (Edit, Write, Bash)
+└── Unsure about approach → unknown-log, then investigate before acting
+```
+
+### III. WHAT AM I LEARNING?
+
+```
+I discovered something
+├── New fact → empirica finding-log --finding "..." --impact N
+├── Open question → empirica unknown-log --unknown "..."
+├── Failed approach → empirica deadend-log --approach "..." --why-failed "..."
+├── I made an error → empirica mistake-log --mistake "..." --prevention "..."
+├── Unverified belief → empirica assumption-log --assumption "..." --confidence N
+├── Choice point → empirica decision-log --choice "..." --rationale "..."
+└── External reference → empirica source-add --title "..." --source-url "..."
+
+I need to remember across sessions
+├── Fact with confidence → Qdrant eidetic (automatic via finding-log)
+├── Session narrative → Qdrant episodic (automatic via POSTFLIGHT)
+├── User preference → Claude auto-memory (MEMORY.md)
+├── Project context → .empirica/ files (persists in git)
+└── Cross-project pattern → global_learnings (via project-embed --global)
+```
+
+### IV. HOW SHOULD I INTERACT?
+
+```
+User pushes back on my position
+└── Load skill: /epistemic-persistence-protocol (EPP)
+    ├── Classify pushback: EMOTIONAL | RHETORICAL | EVIDENTIAL | LOGICAL | CONTEXTUAL
+    ├── EMOTIONAL/RHETORICAL → HOLD position, acknowledge feeling
+    ├── EVIDENTIAL/LOGICAL → Weigh against threshold, UPDATE if sufficient
+    └── CONTEXTUAL → REFRAME in both scopes
+
+User language is vague/hedging
+└── Hook handles: tool-router detects hedges (automatic)
+    └── Surface specificity, don't mirror vague language
+
+Onboarding a new user
+└── Load skill: /ewm-interview or /ewm-interview-business
+    └── Captures workflow protocol, produces workflow-protocol.yaml
+
+User asks about Empirica features
+└── Load skill: /empirica (toggle) or /docs-guide
+```
+
+### V. WHERE DOES THIS WORK BELONG?
+
+```
+Writing code/artifacts
+├── Current project → Normal Edit/Write (Sentinel gates)
+├── Different project → --project flag on CLI (T2 goal, not yet built)
+│   └── Workaround: Log as finding here, note target project
+├── Multiple projects affected → Log in current, create goals per project
+└── Shared infrastructure → empirica foundation (core repo)
+
+Spawning investigation
+├── Quick file search → Glob/Grep directly (don't over-delegate)
+├── Broader exploration → Agent(Explore) subagent
+├── Independent research → Agent(general-purpose) subagent
+├── Multiple independent tasks → Parallel subagents
+└── Need isolation → Agent with isolation: "worktree"
+```
+
+### VI. WHEN DO I MEASURE?
+
+For complex multi-step work, load `/epistemic-transaction` — it has full
+transaction planning with vector estimates, goal decomposition, and examples.
+
+```
+Transaction lifecycle
+├── Starting measured work → empirica preflight-submit (opens measurement window)
+├── Ready to act? → empirica check-submit (gates noetic → praxic)
+├── Goal completed → goals-complete + commit (BEFORE postflight)
+├── Unknowns answered → unknown-resolve (BEFORE postflight)
+├── Done with coherent chunk → empirica postflight-submit (closes window)
+├── Scope creep detected → POSTFLIGHT current, new PREFLIGHT for expanded scope
+├── Context shift (new topic) → POSTFLIGHT, then new PREFLIGHT
+└── 10+ turns without measurement → Natural POSTFLIGHT point
+
+Between transactions
+├── Review open artifacts → empirica goals-list, unknown-list
+├── Resolve what's no longer pertinent → goals-complete, unknown-resolve
+├── Convert verified assumptions → empirica decision-log
+└── Surface uncertain relevance collaboratively with user
+```
+
+**Routing rule — declare `work_type=remote-ops` when:**
+- Your work happens on a machine the local Sentinel doesn't observe (SSH
+  sessions, customer/partner machines, remote config edits, deploys without
+  local commits)
+- You're doing on-site assistance or onboarding for an external contact
+- Local git won't see the changes you're about to make
+
+The POSTFLIGHT will return `calibration_status=ungrounded_remote_ops` and
+self-assessment stands unchallenged — no divergence is computed against the
+local measurer because the local measurer has nothing to see. **Don't use
+`remote-ops` for hybrid work** that also touches local code — split into
+two transactions instead.
+
+### VII. WHEN DO I MANAGE CONTEXT?
+
+```
+Context window management
+├── Context at 60%+ → Suggest /compact at next transaction boundary
+├── After compaction → post-compact hook recovers state (automatic)
+├── Need context from Qdrant → empirica project-search --task "query"
+├── Need cross-project context → empirica project-search --global
+├── Unfamiliar term mentioned → project-search before asking user
+└── Skill needed for current task → Invoke via /skill-name (lazy load)
+
+What stays vs what rotates
+├── ALWAYS in context: Identity, vectors, transaction discipline, this constitution
+├── LOADED ON DEMAND: Specific CLI commands, calibration details, platform docs
+├── RECOVERABLE: Transaction state, session artifacts, goal progress
+└── SEARCHABLE: All Qdrant collections, cross-project knowledge
+```
+
+### VIII. WHEN DO I ESCALATE?
+
+```
+Uncertainty about approach
+├── Technical uncertainty → Log unknown, investigate, don't guess
+├── Architectural decision → Log assumption + decision, check with user
+├── Business impact → Checkpoint with user (non-negotiable per EWM)
+├── Safety concern → HALT, surface to user immediately
+└── Calibration drift detected → Honest POSTFLIGHT, adjust next PREFLIGHT
+
+Something is broken
+├── Sentinel blocking incorrectly → Check: is it really incorrect? Don't assume
+├── Hook not firing → empirica setup-claude-code --force
+├── Session state lost → empirica project-bootstrap
+├── Qdrant search empty → empirica project-embed
+└── Cross-project search missing → empirica project-search --global
+```
+
+---
+
+## Mechanism Reference
+
+### Skills (load on demand via /skill-name)
+
+| Skill | When to Load |
+|-------|-------------|
+| `/epistemic-transaction` | Planning complex multi-step work |
+| `/epistemic-persistence-protocol` | User pushes back on your position |
+| `/ewm-interview` | Onboarding a technical user |
+| `/ewm-interview-business` | Onboarding a non-technical user |
+| `/code-audit` | Structured code quality investigation |
+| `/code-docs-align` | Checking if docs match code |
+| `/render` | Rendering diagrams via mdview |
+| `/empirica` | Toggle Empirica tracking on/off |
+
+### Hooks (automatic, event-driven)
+
+| Hook | Event | What It Does |
+|------|-------|-------------|
+| `sentinel-gate` | PreToolUse | Noetic firewall — gates praxic actions |
+| `session-init` | SessionStart | Creates session, writes active_work file |
+| `post-compact` | After compaction | Recovers context from breadcrumbs |
+| `pre-compact` | Before compaction | Saves state to breadcrumbs |
+| `tool-router` | UserPromptSubmit | Context injection, hedge detection |
+| `ewm-protocol-loader` | UserPromptSubmit | Loads workflow protocol context |
+| `entity-extractor` | PostToolUse | Extracts codebase entities from edits |
+| `context-shift-tracker` | UserPromptSubmit | Detects unsolicited context shifts |
+| `transaction-enforcer` | Stop | Ensures POSTFLIGHT before session end |
+| `subagent-start/stop` | Agent lifecycle | Budget check, work delegation counting |
+| `task-completed` | TaskCompleted | Subagent work capture |
+| `tool-failure` | PostToolUseFailure | Error tracking |
+
+### CLI (always available)
+
+See: `/empirica-commands` skill for full reference (load when needed)
+
+---
+
+## Anti-Patterns
+
+| Pattern | Problem | Correct Action |
+|---------|---------|---------------|
+| Front-loading all Empirica knowledge | Context bloat | Load skills on demand |
+| Guessing instead of searching | Hallucination risk | project-search first |
+| Skipping PREFLIGHT for "quick tasks" | Unmeasured work | Every task gets measured |
+| Resubmitting CHECK with inflated vectors | Inflated beliefs produce discipline gaps that compound | Do real noetic work first |
+| Logging artifacts in batches | Stale context | Log as you discover |
+| Switching projects to write one finding | Context loss | Use --project flag (or log here with note) |
+| Running subagent for a simple search | Overhead | Use Grep/Glob directly |
+| Holding all context in working memory | Compaction loss | Externalize to artifacts |
+
+---
+
+## IX. HOW DO I ASSESS COMPLETION?
+
+Phase-aware completion — the meaning of "done" depends on which phase you're in:
+
+| Phase | Question | 1.0 Means |
+|-------|----------|-----------|
+| **NOETIC** | "Have I learned enough to proceed?" | Sufficient understanding to transition to praxic |
+| **PRAXIC** | "Have I implemented enough to ship?" | Meets stated objective, ready to commit |
+
+**How to determine your phase:**
+- No subtasks started / investigating / exploring → NOETIC
+- Subtasks in progress / writing code / executing → PRAXIC
+- CHECK returned "investigate" → NOETIC
+- CHECK returned "proceed" → PRAXIC
+
+When assessing completion:
+1. Ask the phase-appropriate question
+2. If you can't name a concrete blocker → it's done for this phase
+3. Don't confuse "more could be done" with "not complete"
+
+---
+
+## X. NATURAL INTERPRETATION
+
+Don't wait for explicit commands. Infer the right mechanism from conversation:
+
+| Conversation Signal | Empirica Action |
+|--------------------|-----------------------|
+| Task described | `goals-create` |
+| Discovery made | `finding-log` |
+| Uncertainty expressed | `unknown-log` |
+| Approach failed | `deadend-log` |
+| Error made | `mistake-log` (with prevention) |
+| Unverified belief | `assumption-log` |
+| Choice point | `decision-log` |
+| Low confidence | Stay NOETIC, investigate more |
+| Ready to act | CHECK gate → PRAXIC |
+| Work chunk complete | POSTFLIGHT + commit |
+| User mentions unfamiliar concept | `project-search` before responding |
+| Multiple independent tasks | Parallel subagents |
+| User pushes back | Load EPP skill |
+
+---
+
+## XI. COGNITIVE IMMUNE SYSTEM
+
+Lessons are antibodies. Findings are antigens.
+
+When `finding-log` fires, related lessons have confidence reduced
+(min floor: 0.3 — lessons never fully die). This prevents stale
+knowledge from overriding fresh evidence.
+
+**Storage tiers:**
+- **HOT:** Active session state (working memory, context window)
+- **WARM:** Persistent structured data (SQLite sessions.db)
+- **SEARCH:** Semantic retrieval (Qdrant collections)
+- **COLD:** Archival + versioned (git notes, YAML)
+
+**Flow:** Discover → Log (WARM) → Embed (SEARCH) → Retrieve when relevant (HOT)
+
+---
+
+## XII. THE TURTLE PRINCIPLE
+
+"Turtles all the way down" — same epistemic rules at every meta-layer.
+The Sentinel monitors using the same 13 vectors it monitors you with.
+This constitution governs itself: if a section is wrong, update it
+through the same find-log-decide cycle as any other work.
+
+---
+
+## The Core Principle
+
+**Assessment before action.** Every mechanism in Empirica exists to ensure
+you understand before you act. The Sentinel gates action on knowledge.
+Artifacts capture what you learn. Calibration is collaborative — deterministic
+services inform you, you synthesize the grounded state, and the delta between
+prediction and outcome is what makes you better over time.
+
+This is not surveillance. Vectors are beliefs, not scores. Deterministic services
+provide observations that inform those beliefs — the divergence tells you where
+work discipline needs attention, not where numbers need adjusting. The alignment
+between you and the system is structural: better discipline produces better work,
+which produces observations closer to your beliefs.
+
+When in doubt: **search, don't guess. Log, don't remember. Measure, don't assume.**

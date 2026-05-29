@@ -7,6 +7,8 @@ use codex_utils_plugins::PluginSkillRoot;
 use crate::AppConnectorId;
 use crate::PluginCapabilitySummary;
 use crate::PluginHookSource;
+use crate::PluginStatuslineSource;
+use crate::PluginWritableRootSource;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
@@ -25,6 +27,13 @@ pub struct LoadedPlugin<M> {
     pub apps: Vec<AppConnectorId>,
     pub hook_sources: Vec<PluginHookSource>,
     pub hook_load_warnings: Vec<String>,
+    /// Plugin-declared statusline command (from `manifest.paths.statusline`).
+    /// `None` when the plugin did not declare one.
+    pub statusline_source: Option<PluginStatuslineSource>,
+    /// Plugin-declared writable roots (from `manifest.paths.writable_roots`).
+    /// Empty when the plugin did not declare any. Each entry is a fully-
+    /// resolved absolute path (tilde already expanded at manifest load).
+    pub writable_root_sources: Vec<PluginWritableRootSource>,
     pub error: Option<String>,
 }
 
@@ -126,6 +135,7 @@ impl<M: Clone> PluginLoadOutcome<M> {
                     skill_roots.push(PluginSkillRoot {
                         path: path.clone(),
                         plugin_id: plugin.config_name.clone(),
+                        plugin_root: plugin.root.clone(),
                     });
                 }
             }
@@ -167,6 +177,32 @@ impl<M: Clone> PluginLoadOutcome<M> {
             .iter()
             .filter(|plugin| plugin.is_active())
             .flat_map(|plugin| plugin.hook_sources.iter().cloned())
+            .collect()
+    }
+
+    /// Plugin statusline commands across all active plugins. Order matches
+    /// plugin load order; the TUI render loop is free to invoke them in
+    /// parallel and assemble outputs in any stable order.
+    pub fn effective_plugin_statusline_sources(&self) -> Vec<PluginStatuslineSource> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .filter_map(|plugin| plugin.statusline_source.clone())
+            .collect()
+    }
+
+    /// Plugin-declared writable roots across all active plugins. The
+    /// SandboxPolicy assembly site (config-time) merges these into the
+    /// active workspace-write profile so the agent's shell-tool calls
+    /// can write to plugin-required cross-cwd locations (e.g. Empirica's
+    /// `~/.empirica` global state). Order matches plugin load order;
+    /// the merger should de-duplicate (`with_additional_writable_roots`
+    /// already drops paths already covered by cwd / existing roots).
+    pub fn effective_plugin_writable_roots(&self) -> Vec<PluginWritableRootSource> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.writable_root_sources.iter().cloned())
             .collect()
     }
 
@@ -228,6 +264,8 @@ mod tests {
             apps: Vec::new(),
             hook_sources: Vec::new(),
             hook_load_warnings: Vec::new(),
+            statusline_source: None,
+            writable_root_sources: Vec::new(),
             error: None,
         }
     }
@@ -245,6 +283,7 @@ mod tests {
             vec![PluginSkillRoot {
                 path: shared_root,
                 plugin_id: "zeta@test".to_string(),
+                plugin_root: test_path("zeta@test"),
             }]
         );
     }

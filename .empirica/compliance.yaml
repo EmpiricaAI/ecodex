@@ -1,0 +1,23 @@
+# ecodex compliance overrides
+#
+# Per-project tuning of `empirica compliance-report` — see
+# empirica/cli/command_handlers/compliance_report_commands.py:_load_compliance_config
+# for the full schema.
+
+# Use the Rust-aware tech_docs counter (Tx-BA): walks Cargo.toml
+# workspace members, counts pub items + /// docstrings on crates we
+# own. docpistemic was mis-discovering upstream codex Python internals
+# (generate-batch, stage-sdk CLI commands; USERPROFILE, EMPIRICA_USER
+# env vars) as undocumented features and inflating the denominator
+# with surface that doesn't need user-facing docs.
+#
+# rust-docs-assess respects .empirica/rust_docs.toml include/exclude.
+# See that file for the per-crate scope.
+tech_docs:
+  tool: rust-docs-assess
+
+# tech_docs_links scans markdown for broken refs — still useful but
+# would re-discover upstream link surface. Skip until we have a
+# rust-aware variant or a configurable scope.
+skip_checks:
+  - tech_docs_links

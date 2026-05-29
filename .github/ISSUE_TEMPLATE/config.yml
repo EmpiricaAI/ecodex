@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Nubaeon/ecodex/security/advisories/new
+    about: Report a security issue privately — see SECURITY.md for what's in scope.
+  - name: Upstream codex bug
+    url: https://github.com/openai/codex/issues/new/choose
+    about: Bugs in code we redistribute unchanged from openai/codex belong there.
+  - name: Empirica framework discussion
+    url: https://github.com/Nubaeon/empirica/discussions
+    about: Questions about the broader Empirica epistemic-discipline framework.

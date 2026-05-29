@@ -614,6 +614,7 @@ async fn prepare_realtime_start(
     let auth_manager = sess
         .services
         .model_client
+        .load()
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
     let auth = auth_manager.auth().await;
@@ -641,12 +642,14 @@ async fn prepare_realtime_start(
             realtime_request_headers(
                 requested_realtime_session_id.as_deref(),
                 Some(realtime_api_key.as_str()),
+                version,
             )?
         }
         ConversationStartTransport::Webrtc { .. } => {
             realtime_request_headers(
                 requested_realtime_session_id.as_deref(),
                 /*api_key*/ None,
+                version,
             )?
         }
     };
@@ -788,7 +791,13 @@ async fn handle_start_inner(
         api_provider,
         extra_headers,
         session_config,
-        model_client: sess.services.model_client.clone(),
+        // Realtime conversation captures a snapshot of the current
+        // ModelClient. ArcSwap.load() returns a Guard<Arc<ModelClient>>;
+        // dereffing once gives Arc<ModelClient>, dereffing again gives
+        // ModelClient — we then .clone() the ModelClient (cheap, Arc-internal)
+        // so the realtime session keeps its snapshot even if the user
+        // hot-swaps the session-shared client.
+        model_client: (**sess.services.model_client.load()).clone(),
         sdp,
     };
     let start_output = sess.conversation.start(start).await?;
@@ -973,8 +982,13 @@ fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> C
 fn realtime_request_headers(
     realtime_session_id: Option<&str>,
     api_key: Option<&str>,
+    version: RealtimeWsVersion,
 ) -> CodexResult<Option<HeaderMap>> {
     let mut headers = HeaderMap::new();
+
+    if version == RealtimeWsVersion::V1 {
+        headers.insert("openai-alpha", HeaderValue::from_static("quicksilver=v1"));
+    }
 
     if let Some(realtime_session_id) = realtime_session_id
         && let Ok(realtime_session_id) = HeaderValue::from_str(realtime_session_id)

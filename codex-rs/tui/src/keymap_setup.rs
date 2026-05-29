@@ -866,7 +866,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
+            placeholder_text: "Ask ecodex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: false,
             skills: Some(Vec::new()),
@@ -1009,6 +1009,7 @@ mod tests {
             actions,
             vec![
                 "Composer.submit",
+                "Chat.interrupt_turn",
                 "Editor.insert_newline",
                 "Composer.queue",
                 "Global.open_external_editor",

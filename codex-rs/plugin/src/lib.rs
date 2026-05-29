@@ -39,6 +39,37 @@ pub struct PluginHookSource {
     pub hooks: HookEventsToml,
 }
 
+/// A plugin-contributed statusline command. The TUI render loop
+/// invokes `command` on a debounced tick and renders the captured
+/// stdout in the bottom pane. `plugin_root` and `plugin_data_root`
+/// are exposed via env vars (PLUGIN_ROOT / CLAUDE_PLUGIN_ROOT /
+/// PLUGIN_DATA / CLAUDE_PLUGIN_DATA) so the script can locate
+/// vendored assets under its own install dir.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginStatuslineSource {
+    pub plugin_id: PluginId,
+    pub plugin_root: AbsolutePathBuf,
+    pub plugin_data_root: AbsolutePathBuf,
+    pub command: AbsolutePathBuf,
+}
+
+/// A plugin-contributed writable root. Declared in the plugin's manifest
+/// (`writableRoots: [...]`) and merged into the active SandboxPolicy's
+/// writable_roots at session start so the agent can write to filesystem
+/// locations the plugin's runtime requires (e.g. `~/.empirica` for
+/// Empirica's session DB / instance pointers / transaction state, which
+/// live outside any project cwd by design).
+///
+/// One `PluginWritableRootSource` per declared root, per plugin — so
+/// telemetry and audit can attribute each granted carve-out to its
+/// declaring plugin without losing the per-path granularity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginWritableRootSource {
+    pub plugin_id: PluginId,
+    pub plugin_root: AbsolutePathBuf,
+    pub root: AbsolutePathBuf,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginTelemetryMetadata {
     pub plugin_id: PluginId,

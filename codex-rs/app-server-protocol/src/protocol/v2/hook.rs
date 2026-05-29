@@ -17,7 +17,10 @@ use ts_rs::TS;
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PermissionRequest, PostToolUse, SessionStart, UserPromptSubmit, Stop
+        PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop,
+        // ecodex divergence: 3 events upstream lacks. PreCompact/PostCompact/
+        // SubagentStart/SubagentStop converged with upstream (adopted above).
+        SessionEnd, TaskCompleted, PostToolUseFailure
     }
 );
 

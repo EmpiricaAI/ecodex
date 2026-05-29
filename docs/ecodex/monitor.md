@@ -1,0 +1,148 @@
+# `monitor` tool
+
+The `monitor` tool arms a watch on a background subprocess. On each line of subprocess output matching the supplied regex pattern, a `<task-notification>` message is injected into the agent's pending input — giving the conversation a sub-second wake on background events.
+
+Parity with Claude Code's `Monitor` tool. Closes the wake-on-event gap that previously prevented non-Claude models running in ecodex from participating fully in the Empirica AI mesh.
+
+## What it's for
+
+- **Cross-AI mesh participation**: hold an ntfy SSE connection, wake on each push from a peer AI's `cortex_propose`.
+- **Long-running build/test watching**: arm on `cargo test --watch` or `npm test --watch`, wake on the first FAIL line.
+- **Log tailing for incidents**: arm on `journalctl -f`, wake on a specific error pattern.
+- **Queue listeners**: arm on any line-emitting daemon, wake on the events you care about.
+
+The general shape: a background process produces output as a stream; you only want the agent to engage when something specific shows up in that stream.
+
+## API
+
+The tool takes a single `action` argument that selects the operation. All examples are JSON shapes the model emits to the tool.
+
+### `arm` — start a new watch
+
+```json
+{
+  "action": "arm",
+  "command": ["curl", "-N", "-u", "user:pass", "https://ntfy.example/cortex-topic/json"],
+  "pattern": "^\\{",
+  "persistent": true,
+  "stream": "stdout",
+  "cwd": "/optional/working/directory"
+}
+```
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `action` | yes | — | Must be `"arm"`. |
+| `command` | yes | — | Argv to spawn. First element is the program, rest are args. Spawn happens via `tokio::Command`; child has `kill_on_drop = true` so child dies when the watcher does. |
+| `pattern` | yes | — | Regex (regex_lite syntax — no look-around). Matched line-by-line against the subprocess stream. |
+| `persistent` | no | `false` | When `true`, the watch stays armed after each match and continues firing notifications. When `false`, the watch disarms itself after the first match. |
+| `stream` | no | `"stdout"` | Which stream to watch: `"stdout"`, `"stderr"`, or `"both"`. |
+| `cwd` | no | inherited | Working directory for the spawned command. |
+
+**Returns:**
+
+```json
+{"ok": true, "monitor_id": "abc-123-...", "armed": true}
+```
+
+The `monitor_id` is the handle for later `kill` operations.
+
+### Wake injection
+
+On each matching line, the agent's pending input receives a user-role message with this body:
+
+```
+<task-notification>
+  <monitor-id>abc-123-...</monitor-id>
+  <command>curl -N -u user:pass https://ntfy.example/cortex-topic/json</command>
+  <matched-line>{"event":"cortex_propose","payload":{...}}</matched-line>
+</task-notification>
+```
+
+If a turn is active, the notification lands as pending input for that turn. If no turn is active, ecodex queues the message for delivery at the start of the next turn (same fallback as `Session::inject_user_message_without_turn`).
+
+### `kill` — disarm a watch
+
+```json
+{"action": "kill", "monitor_id": "abc-123-..."}
+```
+
+**Returns:**
+
+```json
+{"ok": true, "killed": true, "monitor_id": "abc-123-..."}
+```
+
+`killed: false` means the id did not match any armed monitor (already disarmed or never existed).
+
+### `list` — introspect armed monitors
+
+```json
+{"action": "list"}
+```
+
+**Returns:**
+
+```json
+{
+  "ok": true,
+  "count": 2,
+  "monitors": [
+    {
+      "monitor_id": "abc-123-...",
+      "command": ["curl", "-N", "-u", "...", "https://ntfy.example/cortex-topic/json"],
+      "pattern": "^\\{",
+      "persistent": true
+    },
+    {
+      "monitor_id": "def-456-...",
+      "command": ["cargo", "test", "--watch"],
+      "pattern": "^FAIL",
+      "persistent": false
+    }
+  ]
+}
+```
+
+## Lifecycle
+
+- **Spawn**: ecodex spawns the subprocess via `tokio::Command` with `stdout` + `stderr` piped and `kill_on_drop = true`.
+- **Read loop**: a background `tokio::spawn` task reads the chosen stream line-by-line. The regex is compiled once at arm time.
+- **Wake**: on each match, the watcher constructs a `ResponseInputItem::Message` (user role) and calls `Session::inject_response_items`. If the session has an active turn, the item is pushed to the turn's pending input. Otherwise the item is queued for the next turn.
+- **Disarm**:
+  - **`persistent = false`** + match → watcher self-disarms after the first wake.
+  - **`persistent = true`** → watcher stays in the read loop indefinitely.
+  - Explicit `kill` → ecodex aborts the watcher task; `kill_on_drop` reaps the child.
+  - **Session shutdown** → `Session::services.monitor_registry.abort_all()` runs at the start of `shutdown()` (before `abort_all_tasks`); all watchers + children are terminated cleanly.
+- **Subprocess exits naturally** (stream EOF or child dies) → watcher removes itself from the registry; `list` / `len` stay accurate.
+
+## Architecture
+
+- **Module**: `codex-rs/core/src/monitor.rs` — runtime types, `MonitorRegistry`, `MonitorEntry`, `ArmMonitorOptions`, `spawn_monitor`.
+- **Tool handler**: `codex-rs/core/src/tools/handlers/monitor.rs` — `MonitorHandler` implementing `ToolHandler`, dispatches `arm` / `kill` / `list`.
+- **Session integration**: `codex-rs/core/src/state/service.rs` adds `monitor_registry: Arc<MonitorRegistry>` to `SessionServices`. `session/session.rs` initializes it at session construction. `session/handlers.rs:shutdown()` calls `abort_all`.
+- **Tool spec**: `codex-rs/core/src/tools/spec.rs` builds the JSON-schema spec and registers the handler unconditionally at the tail of the registry-build function.
+
+## Comparison to Claude Code's `Monitor`
+
+| Aspect | Claude Code `Monitor` | ecodex `monitor` |
+|---|---|---|
+| Watches existing task | Yes (takes `task_id` from prior `Bash` w/ `run_in_background: true`) | No (bundles spawn + watch in one call) |
+| Pattern matching | Regex on stream | Regex on stream (identical) |
+| Wake mechanism | Harness injects into conversation | `Session::inject_response_items` → pending input |
+| Persistent mode | Yes | Yes |
+| Disarm | `TaskStop` on the underlying task | `{"action":"kill","monitor_id":"..."}` |
+| Per-session cleanup | Harness handles | `monitor_registry.abort_all()` in `shutdown()` |
+
+The bundled spawn+watch is a deliberate divergence: codex's `shell` tool is synchronous and has no native `run_in_background` flag. Bundling keeps the API atomic for the common use case (held connection) without requiring a separate background-shell primitive. If codex later gains a background-shell tool, this can be split.
+
+## Smoke test
+
+Once ecodex is rebuilt + reinstalled, an agent can verify the round trip:
+
+```
+Arm a monitor on `seq 1 5 | tr ' ' '\n' && sleep 60`,
+with pattern `^3$`, persistent=false.
+```
+
+The watcher will see lines `1`, `2`, `3` (match → wake → disarm), then the child stays alive but the watcher has exited. The agent should receive a `<task-notification>` containing `<matched-line>3</matched-line>` within a few hundred milliseconds.

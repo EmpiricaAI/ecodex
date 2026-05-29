@@ -1,0 +1,131 @@
+# ecodex bundled default config — installs to ~/.codex/config.toml on
+# first run if no user config exists. (If a user config exists, the
+# installer leaves it alone and prints these as suggested overrides.)
+#
+# This is the A + E layers of our discipline-strengthening stack:
+#   A — bundle empirica plugin enabled by default
+#   E — strict empirica defaults so the AI's calibration loop
+#       captures clean data (no fail-open hiding misses, lower
+#       auto-proceed threshold so most actions need explicit CHECK,
+#       etc.)
+#
+# B — the structural lock against runtime disable — lives in
+# `managed.toml.example` and is installed separately at /etc/ecodex/
+# or ~/.ecodex/.
+
+# ─── Feature gates (A — these unlock the plugin host) ────────────────
+# Without these the plugin host is dark and ALL plugin hooks silently
+# no-op (sentinel firewall, session bind, transaction enforcer, the
+# whole empirica integration). The doctor (`empirica diagnose-ecodex`)
+# also FAILs on a missing plugin_hooks flag.
+suppress_unstable_features_warning = true
+
+[features]
+plugins = true
+plugin_hooks = true
+
+# ─── Plugin enablement (A) ───────────────────────────────────────────
+
+[plugins."empirica@nubaeon"]
+enabled = true
+
+# ─── Curated provider defaults (open-weights focus) ──────────────────
+# See docs/ecodex/integrations/providers.md for the full set + auth
+# instructions for each.
+#
+# ⚠ WIRE-API STATUS: codex upstream removed `wire_api = "chat"` support
+# (commit d2394a2494, "chore: nuke chat/completions API"). All curated
+# providers below speak chat-completions, NOT Responses API natively, so
+# requests sent directly to their base_url will fail at runtime with an
+# unknown-endpoint error.
+#
+# The fix is `codex-empirica-translator` (planned goal bca167a1, scaffold
+# in codex-rs/codex-empirica-translator/). When that ships:
+#   1. ecodex auto-spawns translator on localhost:18080
+#   2. base_urls below get rewritten to http://localhost:18080/v1
+#   3. translator forwards to the real provider with chat-completions
+#      wire format and converts the SSE stream back
+# Until then: built-in `oss` (Ollama) is the only provider that works
+# out-of-box (Ollama implements Responses API natively).
+
+model = "deepseek-chat"
+model_provider = "deepseek"
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/v1"
+env_key = "DEEPSEEK_API_KEY"
+env_key_instructions = "Get an API key at https://platform.deepseek.com/api_keys, then export DEEPSEEK_API_KEY in your shell."
+wire_api = "responses"
+
+[model_providers.qwen]
+name = "Qwen (Alibaba Cloud)"
+base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+env_key = "DASHSCOPE_API_KEY"
+env_key_instructions = "Get an API key at https://dashscope.console.aliyun.com/apiKey, then export DASHSCOPE_API_KEY in your shell."
+wire_api = "responses"
+
+[model_providers.glm]
+name = "GLM (Zhipu AI)"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+env_key = "ZHIPU_API_KEY"
+env_key_instructions = "Get an API key at https://bigmodel.cn/usercenter/proj-mgmt/apikeys, then export ZHIPU_API_KEY in your shell."
+wire_api = "responses"
+
+[model_providers.kimi]
+name = "Kimi (Moonshot AI)"
+base_url = "https://api.moonshot.cn/v1"
+env_key = "MOONSHOT_API_KEY"
+env_key_instructions = "Get an API key at https://platform.moonshot.cn/console/api-keys, then export MOONSHOT_API_KEY in your shell."
+wire_api = "responses"
+
+[model_providers.empirica-local]
+name = "empirica-server (local LAN: Strix Halo, 128GB unified mem)"
+# Verified live 2026-05-02: 192.168.1.68 = empirica-server (via /etc/hosts).
+# Three OpenAI-compat endpoints active:
+#   :11434  Ollama       — qwen3.5:latest, qwen3.5:4b, qwopus:27b-q4,
+#                          huihui_ai/mirothinker1-abliterated:30b-Q4_K_M, …
+#   :8080   llama.cpp    — Qwen3-30B-A3B-Q4_K_M.gguf
+#   :8081   llama.cpp    — Qwen3-30B-A3B-Q4_K_M.gguf (alt instance)
+# Default to Ollama (broadest model selection); switch to :8080 if you want
+# llama.cpp directly (typically lower latency on Strix Halo iGPU via ROCm).
+base_url = "http://empirica-server:11434/v1"
+env_key_instructions = "Local LAN endpoint — no auth required by default. If empirica-server adds auth, set EMPIRICA_LOCAL_API_KEY."
+# env_key = "EMPIRICA_LOCAL_API_KEY"
+wire_api = "responses"
+
+# Local LLM providers `oss` (Ollama) and `lmstudio` are built-in to
+# codex; no config needed unless overriding ports.
+
+# ─── Strict empirica defaults (E) ────────────────────────────────────
+# These knobs are read by the empirica python CLI from the environment.
+# Codex's TOML config doesn't know about them, so the ecodex installer
+# also drops a wrapper script at /usr/local/bin/ecodex that exports
+# these before exec'ing the actual binary at /usr/local/lib/ecodex/bin/
+# ecodex. See docs/ecodex/integrations/discipline-strengthening.md for
+# the wrapper script template.
+#
+# Strict defaults to set:
+#   EMPIRICA_SENTINEL_REQUIRE_BOOTSTRAP=true
+#       Sentinel requires `empirica project-bootstrap` to have run before
+#       any praxic action. Forces the AI to load project context before
+#       acting.
+#   EMPIRICA_SENTINEL_COMPACT_INVALIDATION=true
+#       After a context compaction, prior CHECKs are invalidated. The AI
+#       must re-CHECK because its post-compaction belief state is fresh.
+#   EMPIRICA_SENTINEL_CHECK_EXPIRY=true
+#       30-minute CHECK expiry instead of session-long. Tighter
+#       observation cadence on the calibration loop.
+#   EMPIRICA_CALIBRATION_FEEDBACK=true
+#       Surface calibration feedback in PREFLIGHT/CHECK output so the AI
+#       sees its own Brier-score trajectory and can adjust.
+#
+# These are NOT set in this TOML file; the wrapper script handles them.
+# Documented here so users know what ecodex's strict mode means.
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+env_key_instructions = "Get an API key at https://openrouter.ai/keys, then export OPENROUTER_API_KEY in your shell or add to ~/.codex/.env."
+wire_api = "responses"

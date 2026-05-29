@@ -1,0 +1,62 @@
+# ecodex ruff config — scopes lint to OUR code, excludes upstream codex.
+#
+# Rationale: ecodex is a fork of openai/codex. The upstream Python code
+# (sdk/python, codex-rs/scripts, tools, codex-cli/scripts) is maintained
+# upstream and any lint debt there is theirs to fix. We track lint
+# compliance only on the code we own:
+#
+#   codex-rs/codex-empirica-translator/   — our wire-protocol bridge
+#   codex-rs/codex-empirica-plugin/       — our plugin crate (Rust, no ruff)
+#   ecodex/                               — our wrapper scripts/configs
+#   docs/ecodex/                          — our docs (no ruff)
+#
+# This file is read by `ruff check` automatically (no flag needed).
+# `empirica compliance-report` runs `ruff check` and honors this scope.
+#
+# Per T35 finding (101 upstream lint errors are 100% in upstream codex
+# code). Per T62 transaction setting up source-of-truth scope.
+
+# Standard exclusions plus upstream codex paths.
+extend-exclude = [
+    # Upstream Python code (forked from openai/codex, not maintained here)
+    "sdk/python",
+    "sdk/python-runtime",
+    "codex-rs/scripts",
+    "codex-cli",
+    "scripts",
+    "tools",
+
+    # Third-party vendored code (e.g. bubblewrap sandbox)
+    "codex-rs/vendor",
+
+    # Upstream codex Rust crates with bundled Python smoketests
+    "codex-rs/windows-sandbox-rs",
+
+    # Vendored CC-empirica hooks (Tx4 self-containment): snapshot of
+    # ~/.claude/plugins/local/empirica/{hooks,lib} maintained upstream
+    # in the empirica repo. Refresh via scripts/sync-empirica-assets.sh,
+    # not by editing in place.
+    "codex-rs/codex-empirica-plugin/assets/hooks_scripts",
+
+    # Standard ruff exclusions (build artifacts, caches, etc.)
+    ".bazel-out",
+    "bazel-bin",
+    "bazel-out",
+    "bazel-testlogs",
+    "bazel-ecodex",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+]
+
+# Match the ruff defaults the empirica services expect.
+line-length = 100
+target-version = "py311"
+
+[lint]
+# Conservative default rule set — enable explicitly as we add more
+# of our own Python code. Today our crates are mostly Rust so the
+# Python footprint is small.
+select = ["E", "F", "I", "W", "UP"]
+ignore = []

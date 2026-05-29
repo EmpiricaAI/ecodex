@@ -3,21 +3,26 @@ use std::sync::Arc;
 
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::attestation::AttestationProvider;
 use crate::client::ModelClient;
+use crate::monitor::MonitorRegistry;
+use crate::config::NetworkProxyAuditMetadata;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
-use crate::skills_watcher::SkillsWatcher;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
 use codex_analytics::AnalyticsEventsClient;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
+use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionRegistry;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
 use codex_mcp::McpConnectionManager;
@@ -59,17 +64,35 @@ pub(crate) struct SessionServices {
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
-    pub(crate) skills_watcher: Arc<SkillsWatcher>,
+    pub(crate) extensions: Arc<ExtensionRegistry<crate::config::Config>>,
+    pub(crate) session_extension_data: ExtensionData,
+    pub(crate) thread_extension_data: ExtensionData,
     pub(crate) agent_control: AgentControl,
-    pub(crate) network_proxy: Option<StartedNetworkProxy>,
+    pub(crate) network_proxy: ArcSwapOption<StartedNetworkProxy>,
+    pub(crate) network_proxy_audit_metadata: NetworkProxyAuditMetadata,
+    pub(crate) managed_network_requirements_configured: bool,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) live_thread: Option<LiveThread>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     /// Session-scoped model client shared across turns.
-    pub(crate) model_client: ModelClient,
+    ///
+    /// Wrapped in `ArcSwap` (matching the `hooks` field above) so that the
+    /// session can hot-swap to a freshly-constructed client when the user
+    /// changes `model_provider` mid-session via the `/model` picker
+    /// (T78 — ecodex extension). Reads return a `Guard<Arc<ModelClient>>`
+    /// that derefs transparently to `&ModelClient`, so existing call sites
+    /// only need a `.load()` insertion. Writes (rare provider swaps) go
+    /// through `Services::swap_model_client`.
+    pub(crate) model_client: ArcSwap<ModelClient>,
     pub(crate) code_mode_service: CodeModeService,
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.
     pub(crate) environment_manager: Arc<EnvironmentManager>,
+    /// ecodex addition: per-session registry of armed Monitor watchers
+    /// (background subprocess + regex pattern that injects wake events
+    /// via `Session::inject_response_items` on match). Cleared on
+    /// shutdown via `MonitorRegistry::abort_all`.
+    pub(crate) monitor_registry: Arc<MonitorRegistry>,
 }

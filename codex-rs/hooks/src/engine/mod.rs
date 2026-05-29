@@ -4,8 +4,10 @@ pub(crate) mod dispatcher;
 pub(crate) mod output_parser;
 pub(crate) mod schema_loader;
 
-use std::collections::HashMap;
-
+use crate::events::compact::PostCompactRequest;
+use crate::events::compact::PreCompactOutcome;
+use crate::events::compact::PreCompactRequest;
+use crate::events::compact::StatelessHookOutcome;
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -14,8 +16,14 @@ use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
+use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
+use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
+use crate::events::session_end::SessionEndOutcome;
+use crate::events::session_end::SessionEndRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::task_completed::TaskCompletedOutcome;
+use crate::events::task_completed::TaskCompletedRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::output_spill::HookOutputSpiller;
@@ -28,6 +36,7 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandShell {
@@ -63,9 +72,22 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PreToolUse => "pre-tool-use",
             codex_protocol::protocol::HookEventName::PermissionRequest => "permission-request",
             codex_protocol::protocol::HookEventName::PostToolUse => "post-tool-use",
+            codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
+            codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
+            codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
+            codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
             codex_protocol::protocol::HookEventName::Stop => "stop",
+            // ecodex additions — kebab strings for log/trace output until
+            // dispatch sites land. See goal f0004294.
+            codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
+            codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
+            codex_protocol::protocol::HookEventName::SessionEnd => "session-end",
+            codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
+            codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
+            codex_protocol::protocol::HookEventName::TaskCompleted => "task-completed",
+            codex_protocol::protocol::HookEventName::PostToolUseFailure => "post-tool-use-failure",
         }
     }
 }
@@ -100,6 +122,7 @@ pub(crate) struct ClaudeHooksEngine {
 impl ClaudeHooksEngine {
     pub(crate) fn new(
         enabled: bool,
+        bypass_hook_trust: bool,
         config_layer_stack: Option<&ConfigLayerStack>,
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
@@ -119,6 +142,7 @@ impl ClaudeHooksEngine {
             config_layer_stack,
             plugin_hook_sources,
             plugin_hook_load_warnings,
+            bypass_hook_trust,
         );
         Self {
             handlers: discovered.handlers,
@@ -172,7 +196,13 @@ impl ClaudeHooksEngine {
     }
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
-        crate::events::pre_tool_use::run(&self.handlers, &self.shell, request).await
+        let session_id = request.session_id;
+        let mut outcome =
+            crate::events::pre_tool_use::run(&self.handlers, &self.shell, request).await;
+        outcome.additional_contexts = self
+            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .await;
+        outcome
     }
 
     pub(crate) async fn run_permission_request(
@@ -196,6 +226,25 @@ impl ClaudeHooksEngine {
             .maybe_spill_text(session_id, outcome.feedback_message)
             .await;
         outcome
+    }
+
+    pub(crate) fn preview_pre_compact(&self, request: &PreCompactRequest) -> Vec<HookRunSummary> {
+        crate::events::compact::preview_pre(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_pre_compact(&self, request: PreCompactRequest) -> PreCompactOutcome {
+        crate::events::compact::run_pre(&self.handlers, &self.shell, request).await
+    }
+
+    pub(crate) fn preview_post_compact(&self, request: &PostCompactRequest) -> Vec<HookRunSummary> {
+        crate::events::compact::preview_post(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_post_compact(
+        &self,
+        request: PostCompactRequest,
+    ) -> StatelessHookOutcome {
+        crate::events::compact::run_post(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) fn preview_user_prompt_submit(
@@ -229,6 +278,51 @@ impl ClaudeHooksEngine {
             .maybe_spill_prompt_fragments(session_id, outcome.continuation_fragments)
             .await;
         outcome
+    }
+
+    // ecodex addition (goal f0004294)
+    pub(crate) fn preview_task_completed(
+        &self,
+        request: &TaskCompletedRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::task_completed::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_task_completed(
+        &self,
+        request: TaskCompletedRequest,
+    ) -> TaskCompletedOutcome {
+        crate::events::task_completed::run(&self.handlers, &self.shell, request).await
+    }
+
+    // ecodex addition (goal f0004294)
+    pub(crate) fn preview_post_tool_use_failure(
+        &self,
+        request: &PostToolUseFailureRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::post_tool_use_failure::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_post_tool_use_failure(
+        &self,
+        request: PostToolUseFailureRequest,
+    ) -> PostToolUseFailureOutcome {
+        crate::events::post_tool_use_failure::run(&self.handlers, &self.shell, request).await
+    }
+
+    // ecodex addition (goal f0004294)
+    pub(crate) fn preview_session_end(
+        &self,
+        request: &SessionEndRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::session_end::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_session_end(
+        &self,
+        request: SessionEndRequest,
+    ) -> SessionEndOutcome {
+        crate::events::session_end::run(&self.handlers, &self.shell, request).await
     }
 
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {

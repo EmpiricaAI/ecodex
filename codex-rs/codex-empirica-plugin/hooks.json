@@ -1,0 +1,215 @@
+{
+  "_comment": "Codex plugin hook wiring for ecodex. Mirrors CC's ~/.claude/settings.json multi-handler-per-event fan-out: each event lists the canonical Rust-dispatched primary first, then sibling scripts via the generic run-hook subcommand. Primary handlers translate CC-shape script output to codex-shape (Tx-AE). Generic dispatcher does the same translation per event name. Missing codex events relative to CC (PreCompact / SessionEnd / SubagentStart / SubagentStop / TaskCompleted / PostToolUseFailure) are tracked under goal f0004294 PR2.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin pre-tool-use",
+            "timeout": 30,
+            "statusMessage": "Empirica sentinel"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin post-tool-use",
+            "timeout": 10,
+            "statusMessage": "Empirica tool capture"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook PostToolUse entity-extractor.py",
+            "timeout": 10,
+            "statusMessage": "Empirica entity extract"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin session-start",
+            "timeout": 60,
+            "statusMessage": "Empirica session init"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SessionStart ewm-protocol-loader.py",
+            "timeout": 10,
+            "statusMessage": "EWM protocol load"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SessionStart post-compact.py",
+            "timeout": 10,
+            "statusMessage": "Empirica post-compact context"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SessionStart session-monitor-arm.py",
+            "timeout": 10,
+            "statusMessage": "Listener/loop monitor arm"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin user-prompt-submit",
+            "timeout": 30,
+            "statusMessage": "Empirica context injection"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook UserPromptSubmit context-shift-tracker.py",
+            "timeout": 5,
+            "statusMessage": "Context-shift tracker"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook UserPromptSubmit loop-install-pickup.py",
+            "timeout": 5,
+            "statusMessage": "Loop install pickup"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook UserPromptSubmit loop-uninstall-pickup.py",
+            "timeout": 5,
+            "statusMessage": "Loop uninstall pickup"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook UserPromptSubmit listener-install-pickup.py",
+            "timeout": 5,
+            "statusMessage": "Listener install pickup"
+          },
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook UserPromptSubmit listener-uninstall-pickup.py",
+            "timeout": 5,
+            "statusMessage": "Listener uninstall pickup"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin stop",
+            "timeout": 10,
+            "statusMessage": "Empirica transaction enforcer"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook TaskCompleted task-completed.py",
+            "timeout": 10,
+            "statusMessage": "Empirica POSTFLIGHT-enforcement check"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook PostToolUseFailure tool-failure.py",
+            "timeout": 10,
+            "statusMessage": "Empirica dead-end capture"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook PreCompact pre-compact.py",
+            "timeout": 30,
+            "statusMessage": "Empirica pre-compact snapshot"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook PostCompact post-compact.py",
+            "timeout": 10,
+            "statusMessage": "Empirica post-compact restore"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SessionEnd session-end-postflight.py",
+            "timeout": 30,
+            "statusMessage": "Empirica session-end POSTFLIGHT + curate"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SubagentStart subagent-start.py",
+            "timeout": 10,
+            "statusMessage": "Empirica subagent spawn tracker"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook SubagentStop subagent-stop.py",
+            "timeout": 10,
+            "statusMessage": "Empirica subagent completion merge"
+          }
+        ]
+      }
+    ]
+  }
+}

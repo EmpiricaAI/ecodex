@@ -99,6 +99,8 @@ async fn queue_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extensions::guardian_agent_spawner;
+    use crate::extensions::thread_extensions;
     use async_trait::async_trait;
     use codex_arg0::Arg0DispatchPaths;
     use codex_config::CloudRequirementsLoader;
@@ -108,11 +110,11 @@ mod tests {
     use codex_config::ThreadConfigLoadErrorCode;
     use codex_config::ThreadConfigLoader;
     use codex_config::ThreadConfigSource;
-    use codex_core::agent_graph_store_from_state_db;
     use codex_core::config::ConfigOverrides;
-    use codex_core::init_state_db_from_config;
+    use codex_core::init_state_db;
     use codex_core::thread_store_from_config;
     use codex_exec_server::EnvironmentManager;
+    use codex_extension_api::NoopExtensionEventSink;
     use codex_login::AuthManager;
     use codex_login::CodexAuth;
     use codex_protocol::protocol::SessionSource;
@@ -175,22 +177,28 @@ mod tests {
             .await?;
 
         let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
-        let state_db = init_state_db_from_config(&good_config)
+        let state_db = init_state_db(&good_config)
             .await
             .expect("refresh tests require state db");
-        let thread_store = thread_store_from_config(&good_config, state_db.clone());
-        let agent_graph_store = agent_graph_store_from_state_db(state_db.clone());
-        let thread_manager = Arc::new(ThreadManager::new(
-            &good_config,
-            auth_manager,
-            SessionSource::Exec,
-            Arc::new(EnvironmentManager::default_for_tests()),
-            /*analytics_events_client*/ None,
-            state_db,
-            thread_store,
-            agent_graph_store,
-            "11111111-1111-4111-8111-111111111111".to_string(),
-        ));
+        let thread_store = thread_store_from_config(&good_config, Some(state_db.clone()));
+        let thread_manager = Arc::new_cyclic(|thread_manager| {
+            ThreadManager::new(
+                &good_config,
+                auth_manager.clone(),
+                SessionSource::Exec,
+                Arc::new(EnvironmentManager::default_for_tests()),
+                thread_extensions(
+                    guardian_agent_spawner(thread_manager.clone()),
+                    Arc::new(NoopExtensionEventSink),
+                    auth_manager.clone(),
+                ),
+                /*analytics_events_client*/ None,
+                Arc::clone(&thread_store),
+                Some(state_db.clone()),
+                "11111111-1111-4111-8111-111111111111".to_string(),
+                /*attestation_provider*/ None,
+            )
+        });
         thread_manager.start_thread(good_config).await?;
         thread_manager.start_thread(bad_config).await?;
 
@@ -204,6 +212,7 @@ mod tests {
             temp_dir.path().to_path_buf(),
             Vec::new(),
             LoaderOverrides::without_managed_config_for_tests(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             Arg0DispatchPaths::default(),
             loader.clone(),

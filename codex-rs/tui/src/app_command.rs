@@ -16,6 +16,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -41,7 +42,7 @@ pub(crate) enum AppCommand {
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: Option<ApprovalsReviewer>,
-        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
@@ -55,8 +56,15 @@ pub(crate) enum AppCommand {
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
         permission_profile: Option<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
+        /// ecodex extension: provider override for the picker's curated
+        /// model entries (see `tui/src/ecodex_curated_models.rs`). When
+        /// the user selects a curated entry that routes to a different
+        /// `model_providers.<id>` than the current session's, the picker
+        /// emits this field alongside `model`.
+        model_provider: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
         summary: Option<ReasoningSummaryConfig>,
         service_tier: Option<Option<String>>,
@@ -142,7 +150,7 @@ impl AppCommand {
         items: Vec<UserInput>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
-        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
@@ -156,7 +164,7 @@ impl AppCommand {
             cwd,
             approval_policy,
             approvals_reviewer: None,
-            permission_profile,
+            active_permission_profile,
             model,
             effort,
             summary,
@@ -173,8 +181,44 @@ impl AppCommand {
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
         permission_profile: Option<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
+        effort: Option<Option<ReasoningEffortConfig>>,
+        summary: Option<ReasoningSummaryConfig>,
+        service_tier: Option<Option<String>>,
+        collaboration_mode: Option<CollaborationMode>,
+        personality: Option<Personality>,
+    ) -> Self {
+        Self::override_turn_context_with_provider(
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            permission_profile,
+            windows_sandbox_level,
+            model,
+            /*model_provider*/ None,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+        )
+    }
+
+    /// ecodex extension: variant of `override_turn_context` that also
+    /// emits a `model_provider` override. Used by the picker when a
+    /// curated model entry maps to a different provider than the
+    /// session's current.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn override_turn_context_with_provider(
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+        permission_profile: Option<PermissionProfile>,
+        windows_sandbox_level: Option<WindowsSandboxLevel>,
+        model: Option<String>,
+        model_provider: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
         summary: Option<ReasoningSummaryConfig>,
         service_tier: Option<Option<String>>,
@@ -186,8 +230,12 @@ impl AppCommand {
             approval_policy,
             approvals_reviewer,
             permission_profile,
+            // ecodex T78: provider/model override doesn't change the resolved
+            // permission profile.
+            active_permission_profile: None,
             windows_sandbox_level,
             model,
+            model_provider,
             effort,
             summary,
             service_tier,

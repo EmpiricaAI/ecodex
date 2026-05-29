@@ -1,0 +1,49 @@
+{
+  "name": "@nubaeon/ecodex",
+  "version": "0.0.0",
+  "description": "ecodex — Empirica's epistemic agent environment, a fork of openai/codex with measured agent discipline.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/Nubaeon/ecodex",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nubaeon/ecodex.git",
+    "directory": "npm"
+  },
+  "bugs": {
+    "url": "https://github.com/Nubaeon/ecodex/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "codex",
+    "ecodex",
+    "empirica",
+    "epistemic",
+    "calibration"
+  ],
+  "bin": {
+    "ecodex": "bin/ecodex.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "vendor",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "linux",
+    "darwin"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

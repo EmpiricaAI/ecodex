@@ -1,7 +1,69 @@
 use super::*;
 use crate::manifest::load_plugin_manifest;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
 use codex_plugin::PluginId;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
+
+fn user_config_path(temp_dir: &TempDir, file_name: &str) -> AbsolutePathBuf {
+    AbsolutePathBuf::from_absolute_path(temp_dir.path().join(file_name))
+        .expect("test user config path should be absolute")
+}
+
+fn user_layer(path: AbsolutePathBuf, config: &str) -> ConfigLayerEntry {
+    ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: path,
+            profile: None,
+        },
+        toml::from_str(config).expect("user config toml"),
+    )
+}
+
+#[test]
+fn configured_plugins_from_stack_merges_user_layers() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let stack = ConfigLayerStack::new(
+        vec![
+            user_layer(
+                user_config_path(&temp_dir, "config.toml"),
+                "[plugins.base]\nenabled = true\n",
+            ),
+            user_layer(
+                user_config_path(&temp_dir, "work.config.toml"),
+                "[plugins.profile]\nenabled = false\n",
+            ),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+
+    let plugins = configured_plugins_from_stack(&stack);
+
+    assert_eq!(
+        plugins,
+        HashMap::from([
+            (
+                "base".to_string(),
+                PluginConfig {
+                    enabled: true,
+                    mcp_servers: HashMap::new(),
+                },
+            ),
+            (
+                "profile".to_string(),
+                PluginConfig {
+                    enabled: false,
+                    mcp_servers: HashMap::new(),
+                },
+            ),
+        ])
+    );
+}
 
 #[test]
 fn plugin_mcp_file_supports_mcp_servers_object_format() {
@@ -366,4 +428,87 @@ fn materialize_git_subdir_uses_sparse_checkout() {
         .expect("materialized path should be nested under checkout root");
     assert!(!checkout_root.join("root.txt").exists());
     assert!(!checkout_root.join("plugins/other/marker.txt").exists());
+}
+
+fn load_statusline(plugin_root: &AbsolutePathBuf) -> Option<codex_plugin::PluginStatuslineSource> {
+    let manifest = load_plugin_manifest(plugin_root.as_path()).expect("manifest");
+    let plugin_data_root = AbsolutePathBuf::try_from(
+        plugin_root
+            .as_path()
+            .parent()
+            .expect("plugin root parent")
+            .join("plugin-data"),
+    )
+    .expect("plugin data root");
+    load_plugin_statusline(
+        plugin_root,
+        &plugin_id(),
+        &plugin_data_root,
+        &manifest.paths,
+    )
+}
+
+#[test]
+fn load_plugin_statusline_returns_some_when_field_set() {
+    let (_tmp, plugin_root) = plugin_root();
+    write_manifest(
+        &plugin_root,
+        r#"{
+  "name": "demo-plugin",
+  "statusline": "./scripts/statusline.sh"
+}"#,
+    );
+    fs::create_dir_all(plugin_root.join("scripts")).expect("create scripts dir");
+    fs::write(
+        plugin_root.join("scripts/statusline.sh"),
+        "#!/bin/sh\necho ok\n",
+    )
+    .expect("write statusline script");
+
+    let source = load_statusline(&plugin_root).expect("statusline source");
+    assert_eq!(source.plugin_id, plugin_id());
+    assert!(source.command.as_path().ends_with("scripts/statusline.sh"));
+    assert_eq!(source.plugin_root.as_path(), plugin_root.as_path());
+}
+
+#[test]
+fn load_plugin_statusline_returns_none_when_field_unset() {
+    let (_tmp, plugin_root) = plugin_root();
+    write_manifest(&plugin_root, r#"{ "name": "demo-plugin" }"#);
+    assert!(load_statusline(&plugin_root).is_none());
+}
+
+fn load_writable_roots(
+    plugin_root: &AbsolutePathBuf,
+) -> Vec<codex_plugin::PluginWritableRootSource> {
+    let manifest = load_plugin_manifest(plugin_root.as_path()).expect("manifest");
+    load_plugin_writable_roots(plugin_root, &plugin_id(), &manifest.paths)
+}
+
+#[test]
+fn load_plugin_writable_roots_emits_one_source_per_declared_root() {
+    let (_tmp, plugin_root) = plugin_root();
+    write_manifest(
+        &plugin_root,
+        r#"{
+  "name": "demo-plugin",
+  "writableRoots": ["/var/lib/demo-a", "/var/lib/demo-b"]
+}"#,
+    );
+
+    let sources = load_writable_roots(&plugin_root);
+    assert_eq!(sources.len(), 2);
+    for source in &sources {
+        assert_eq!(source.plugin_id, plugin_id());
+        assert_eq!(source.plugin_root.as_path(), plugin_root.as_path());
+    }
+    assert_eq!(sources[0].root.as_path(), Path::new("/var/lib/demo-a"));
+    assert_eq!(sources[1].root.as_path(), Path::new("/var/lib/demo-b"));
+}
+
+#[test]
+fn load_plugin_writable_roots_returns_empty_when_field_unset() {
+    let (_tmp, plugin_root) = plugin_root();
+    write_manifest(&plugin_root, r#"{ "name": "demo-plugin" }"#);
+    assert!(load_writable_roots(&plugin_root).is_empty());
 }
