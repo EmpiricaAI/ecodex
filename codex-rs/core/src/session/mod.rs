@@ -583,15 +583,11 @@ impl Codex {
             &model_info,
         );
 
-        // NOTE (2026-05 sync): Tx-AI/3 plugin-writable-roots enrichment was
-        // dropped here — upstream restructured per-session permissions into
-        // `permission_profile_state` (session_permission_profile_state_from_config),
-        // and the old `permission_profile` field this enriched is gone. The
-        // enrich_permission_profile_with_plugin_writable_roots helper is kept
-        // for re-integration. Until re-wired, plugins needing cross-cwd writes
-        // (e.g. Empirica ~/.empirica) are NOT carved out of landlock. See
-        // build-fix queue finding.
-        let session_configuration = SessionConfiguration {
+        // Tx-AI/3: the session's base PermissionProfile is enriched with
+        // plugin-declared writable_roots below (after this struct is built and
+        // plugins are loaded), so landlock honors cross-cwd plugin writes
+        // (e.g. Empirica ~/.empirica).
+        let mut session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
@@ -622,6 +618,32 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
         };
+
+        // Tx-AI/3 (re-integrated post-2026-05 sync): enrich the session's base
+        // PermissionProfile with plugin-declared writable_roots so the landlock
+        // sandbox allows plugins (e.g. Empirica's global ~/.empirica state) to
+        // write outside cwd. Plugins are loaded here (cached — Session::new's
+        // hook build reuses the cache). No-op when no plugin declares roots, or
+        // for unrestricted / external-sandbox profiles.
+        let plugin_outcome = plugins_manager
+            .plugins_for_config(&config.plugins_config_input())
+            .await;
+        if let Some(enriched) = enrich_permission_profile_with_plugin_writable_roots(
+            session_configuration
+                .permission_profile_state
+                .permission_profile(),
+            &plugin_outcome,
+            config.cwd.as_path(),
+        ) && let Err(err) = session_configuration
+            .permission_profile_state
+            .set_legacy_permission_profile(enriched)
+        {
+            tracing::warn!(
+                "ignoring plugin-declared writable_roots: constraint validation \
+                 rejected enriched profile ({err}); plugin contributions will not \
+                 extend sandbox scope this session"
+            );
+        }
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
@@ -3495,37 +3517,26 @@ pub(crate) fn emit_subagent_session_started(
 /// external-sandbox profiles, so this is safe to apply unconditionally —
 /// non-WorkspaceWrite policies are unaffected.
 fn enrich_permission_profile_with_plugin_writable_roots(
-    base: &Constrained<PermissionProfile>,
+    base: &PermissionProfile,
     plugin_outcome: &codex_core_plugins::PluginLoadOutcome,
     cwd: &Path,
-) -> Constrained<PermissionProfile> {
+) -> Option<PermissionProfile> {
     let plugin_roots: Vec<AbsolutePathBuf> = plugin_outcome
         .effective_plugin_writable_roots()
         .into_iter()
         .map(|src| src.root)
         .collect();
     if plugin_roots.is_empty() {
-        return base.clone();
+        return None;
     }
-    let current = base.get();
-    let enriched_fs = current
+    let enriched_fs = base
         .file_system_sandbox_policy()
         .with_additional_writable_roots(cwd, &plugin_roots);
-    let enriched_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-        current.enforcement(),
+    Some(PermissionProfile::from_runtime_permissions_with_enforcement(
+        base.enforcement(),
         &enriched_fs,
-        current.network_sandbox_policy(),
-    );
-    let mut next = base.clone();
-    if let Err(err) = next.set(enriched_profile) {
-        tracing::warn!(
-            "ignoring plugin-declared writable_roots: constraint validation \
-             rejected enriched profile ({err}); plugin contributions will not \
-             extend sandbox scope this session"
-        );
-        return base.clone();
-    }
-    next
+        base.network_sandbox_policy(),
+    ))
 }
 
 /// Builds the hook engine for one config snapshot, including any enabled plugin hooks.
