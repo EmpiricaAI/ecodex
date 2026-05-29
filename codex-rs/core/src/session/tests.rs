@@ -5944,6 +5944,16 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
     assert_eq!(
         codex_thread_store::InMemoryThreadStoreCalls {
             create_thread: 1,
+            // ecodex (goal f0004294): shutdown fires the SessionEnd hook, whose
+            // request carries `transcript_path: hook_transcript_path()`. As of
+            // the 2026-05 upstream sync, hook_transcript_path() materializes the
+            // rollout (ensure_rollout_materialized → LiveThread::persist) so the
+            // hook receives a valid transcript path. That single materialization
+            // touches the store twice — persist + metadata — both pre-teardown.
+            // The core invariant still holds: no items are appended on shutdown
+            // (append_items stays 0).
+            persist_thread: 1,
+            update_thread_metadata: 1,
             shutdown_thread: 1,
             ..Default::default()
         },
