@@ -3637,6 +3637,86 @@ enabled = true
     );
 }
 
+/// ecodex moat regression guard (T74 statusline + Tx-AI/3 plugin writable
+/// roots). The pure `load_plugin_statusline` / `load_plugin_writable_roots`
+/// unit tests in `loader_tests.rs` call those functions directly, so they pass
+/// even when the orchestrator (`load_plugin`) forgets to *call* them — which is
+/// exactly the regression that silently made BOTH moats inert during the
+/// 2026-05 upstream merge (the merge reset the fields to `None`/`Vec::new()`
+/// and dropped the population calls; `effective_plugin_writable_roots()` then
+/// returned empty, so the writable-roots enrich was a no-op). This exercises
+/// the full load path and asserts the aggregating accessors the TUI render and
+/// the sandbox-policy enrich actually consume, so an inert-moat regression
+/// FAILS here loudly.
+#[tokio::test]
+async fn load_plugins_populates_statusline_and_writable_roots_from_manifest() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample",
+  "statusline": "./scripts/statusline.sh",
+  "writableRoots": ["/var/lib/sample-a", "/var/lib/sample-b"]
+}"#,
+    );
+    write_file(
+        &plugin_root.join("scripts/statusline.sh"),
+        "#!/bin/sh\necho ok\n",
+    );
+
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+    )
+    .await;
+
+    let plugins = outcome.plugins();
+    assert_eq!(plugins.len(), 1, "sample plugin should load");
+    let plugin = &plugins[0];
+    assert_eq!(plugin.error, None);
+    assert!(plugin.is_active());
+
+    // The orchestrator must have CALLED load_plugin_statusline. If it regresses
+    // to leaving statusline_source defaulted (the inert-moat bug), this fails.
+    let statusline = plugin
+        .statusline_source
+        .as_ref()
+        .expect("loader must populate statusline_source from manifest.statusline");
+    assert!(
+        statusline
+            .command
+            .as_path()
+            .ends_with("scripts/statusline.sh")
+    );
+
+    // Likewise for load_plugin_writable_roots.
+    assert_eq!(
+        plugin.writable_root_sources.len(),
+        2,
+        "loader must populate writable_root_sources from manifest.writableRoots"
+    );
+
+    // The aggregating accessors the TUI statusline runtime + sandbox-policy
+    // enrich consume — these returning empty is the precise inert-moat symptom.
+    let effective_statusline = outcome.effective_plugin_statusline_sources();
+    assert_eq!(effective_statusline.len(), 1);
+    let effective_roots = outcome.effective_plugin_writable_roots();
+    assert_eq!(effective_roots.len(), 2);
+    assert_eq!(
+        effective_roots[0].root.as_path(),
+        Path::new("/var/lib/sample-a")
+    );
+    assert_eq!(
+        effective_roots[1].root.as_path(),
+        Path::new("/var/lib/sample-b")
+    );
+}
+
 #[tokio::test]
 async fn load_plugins_ignores_project_config_files() {
     let codex_home = TempDir::new().unwrap();
