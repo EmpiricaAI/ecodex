@@ -4041,7 +4041,9 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
     let parent_skill = parent_outcome
         .skills
         .iter()
-        .find(|skill| skill.name == "demo-skill")
+        // 2026-05 sync: skills now carry a `<namespace>:` prefix (upstream's
+        // plugin_namespace_for_skill_path). Match the bare suffix.
+        .find(|skill| skill.name == "demo-skill" || skill.name.ends_with(":demo-skill"))
         .expect("demo skill should be discovered");
     assert_eq!(parent_outcome.is_skill_enabled(parent_skill), true);
 
@@ -4086,7 +4088,9 @@ enabled = false
         .outcome
         .skills
         .iter()
-        .find(|skill| skill.name == "demo-skill")
+        // 2026-05 sync: skills now carry a `<namespace>:` prefix (upstream's
+        // plugin_namespace_for_skill_path). Match the bare suffix.
+        .find(|skill| skill.name == "demo-skill" || skill.name.ends_with(":demo-skill"))
         .expect("demo skill should be discovered");
     assert_eq!(
         child_turn.turn_skills.outcome.is_skill_enabled(child_skill),

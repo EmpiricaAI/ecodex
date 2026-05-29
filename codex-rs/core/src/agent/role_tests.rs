@@ -428,10 +428,14 @@ enabled = false
             Some(Arc::clone(&codex_exec_server::LOCAL_FS)),
         )
         .await;
+    // 2026-05 sync: upstream added skill-name namespacing
+    // (plugin_namespace_for_skill_path), so discovered skills now carry a
+    // `<namespace>:` prefix (e.g. `empirica-admin:demo-skill`). Match the
+    // bare suffix so the test is robust to the env-derived namespace.
     let skill = outcome
         .skills
         .iter()
-        .find(|skill| skill.name == "demo-skill")
+        .find(|skill| skill.name == "demo-skill" || skill.name.ends_with(":demo-skill"))
         .expect("demo skill should be discovered");
 
     assert_eq!(outcome.is_skill_enabled(skill), false);
