@@ -90,6 +90,9 @@ impl ChatWidget {
             frame_requester.clone(),
             app_event_tx.clone(),
         );
+        // ecodex T74: clone for the plugin-statusline runtime before
+        // app_event_tx is moved into BottomPaneParams below.
+        let plugin_statusline_tx = app_event_tx.clone();
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -220,6 +223,13 @@ impl ChatWidget {
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
+            // ecodex T74: plugin-contributed statusline subsystem.
+            plugin_statusline_sources: Vec::new(),
+            plugin_statusline_runtime:
+                crate::plugin_statusline_runtime::PluginStatuslineRuntime::new(
+                    plugin_statusline_tx,
+                ),
+            plugin_statusline_outputs: std::collections::HashMap::new(),
         };
 
         widget.prefetch_rate_limits();

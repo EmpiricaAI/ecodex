@@ -106,6 +106,8 @@ impl ChatWidget {
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
         self.refresh_plugin_mentions();
+        // ecodex T74: kick off plugin-contributed statusline discovery.
+        self.refresh_plugin_statusline_sources();
         let model_for_header = self.current_model().to_string();
         if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();

@@ -752,14 +752,14 @@ impl App {
             AppEvent::RefreshPluginStatuslineSources => {
                 self.refresh_plugin_statusline_sources();
             }
-            // ecodex T74: plugin-statusline DISPLAY handlers. The chat_widget
-            // rendering methods (on_plugin_statusline_sources_loaded /
-            // on_plugin_statusline_output_updated) were dropped in upstream's
-            // 2026-05 chat_widget restructure, and loader.rs no longer populates
-            // statusline_source — so this flow is inert until the T74 statusline
-            // moat is re-integrated (see build-fix queue). No-op for now.
-            AppEvent::PluginStatuslineSourcesLoaded { .. } => {}
-            AppEvent::PluginStatuslineOutputUpdated { .. } => {}
+            // ecodex T74: plugin-statusline display handlers (re-integrated).
+            AppEvent::PluginStatuslineSourcesLoaded { sources } => {
+                self.chat_widget.on_plugin_statusline_sources_loaded(sources);
+            }
+            AppEvent::PluginStatuslineOutputUpdated { plugin_id, output } => {
+                self.chat_widget
+                    .on_plugin_statusline_output_updated(plugin_id, output);
+            }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
                 self.sync_active_thread_personality_setting(app_server, personality)

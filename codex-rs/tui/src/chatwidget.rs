@@ -142,6 +142,9 @@ use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_plugin::PluginCapabilitySummary;
+// ecodex T74: plugin-contributed statusline subsystem.
+use codex_plugin::PluginId;
+use codex_plugin::PluginStatuslineSource;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::GuardianAssessmentAction;
@@ -713,6 +716,13 @@ pub(crate) struct ChatWidget {
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_display: Option<UserMessageDisplay>,
     last_non_retry_error: Option<(String, String)>,
+    // ecodex T74: plugin-contributed statusline. `sources` are the declared
+    // statusline commands (discovered at session start); `runtime` spawns one
+    // background tick task per source; `outputs` caches each plugin's latest
+    // stdout, aggregated + rendered via `set_status_line`.
+    plugin_statusline_sources: Vec<PluginStatuslineSource>,
+    plugin_statusline_runtime: crate::plugin_statusline_runtime::PluginStatuslineRuntime,
+    plugin_statusline_outputs: std::collections::HashMap<PluginId, Vec<u8>>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

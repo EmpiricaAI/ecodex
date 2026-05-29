@@ -69,6 +69,76 @@ impl ChatWidget {
         self.bottom_pane.set_status_line(status_line);
     }
 
+    // ecodex T74: plugin-contributed statusline. Request a refresh of the
+    // plugin-declared statusline sources (App fetches + replies with
+    // PluginStatuslineSourcesLoaded). Clears sources when Plugins is disabled.
+    pub(crate) fn refresh_plugin_statusline_sources(&mut self) {
+        if !self.config.features.enabled(Feature::Plugins) {
+            self.plugin_statusline_sources.clear();
+            return;
+        }
+        self.app_event_tx
+            .send(AppEvent::RefreshPluginStatuslineSources);
+    }
+
+    /// Stash freshly-discovered statusline sources and hand them to the
+    /// background runtime; clear cached outputs for plugins that disappeared.
+    pub(crate) fn on_plugin_statusline_sources_loaded(
+        &mut self,
+        sources: Vec<PluginStatuslineSource>,
+    ) {
+        let active_ids: std::collections::HashSet<PluginId> =
+            sources.iter().map(|src| src.plugin_id.clone()).collect();
+        self.plugin_statusline_outputs
+            .retain(|id, _| active_ids.contains(id));
+        self.plugin_statusline_sources = sources.clone();
+        self.plugin_statusline_runtime.set_sources(sources);
+        self.recompute_plugin_statusline();
+    }
+
+    /// Handle a fresh stdout capture from one plugin's statusline command.
+    /// Empty `output` means the latest invocation failed; we still update the
+    /// cache so the renderer reflects current state rather than stale text.
+    pub(crate) fn on_plugin_statusline_output_updated(
+        &mut self,
+        plugin_id: PluginId,
+        output: Vec<u8>,
+    ) {
+        if output.is_empty() {
+            self.plugin_statusline_outputs.remove(&plugin_id);
+        } else {
+            self.plugin_statusline_outputs.insert(plugin_id, output);
+        }
+        self.recompute_plugin_statusline();
+    }
+
+    /// Project the cached per-plugin outputs into a single status line (joined
+    /// in PluginId order, ANSI-parsed) via the existing `set_status_line`
+    /// pipeline. Empty cache clears our override.
+    fn recompute_plugin_statusline(&mut self) {
+        if self.plugin_statusline_outputs.is_empty() {
+            self.set_status_line(None);
+            return;
+        }
+        let mut entries: Vec<(&PluginId, &Vec<u8>)> =
+            self.plugin_statusline_outputs.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        let aggregate: String = entries
+            .into_iter()
+            .filter_map(|(_, bytes)| {
+                let text = String::from_utf8_lossy(bytes).trim().to_string();
+                (!text.is_empty()).then_some(text)
+            })
+            .collect::<Vec<_>>()
+            .join(" │ ");
+        if aggregate.is_empty() {
+            self.set_status_line(None);
+            return;
+        }
+        let line = codex_ansi_escape::ansi_escape_line(&aggregate);
+        self.set_status_line(Some(line));
+    }
+
     /// Sets the terminal hyperlink target for the currently rendered footer status line.
     pub(crate) fn set_status_line_hyperlink(&mut self, url: Option<String>) {
         self.bottom_pane.set_status_line_hyperlink(url);
