@@ -195,6 +195,7 @@ impl AppCommand {
             approval_policy,
             approvals_reviewer,
             permission_profile,
+            active_permission_profile,
             windows_sandbox_level,
             model,
             /*model_provider*/ None,
@@ -216,6 +217,7 @@ impl AppCommand {
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
         permission_profile: Option<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
         model_provider: Option<String>,
@@ -230,9 +232,7 @@ impl AppCommand {
             approval_policy,
             approvals_reviewer,
             permission_profile,
-            // ecodex T78: provider/model override doesn't change the resolved
-            // permission profile.
-            active_permission_profile: None,
+            active_permission_profile,
             windows_sandbox_level,
             model,
             model_provider,
