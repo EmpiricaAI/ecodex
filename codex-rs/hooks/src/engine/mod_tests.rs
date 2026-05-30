@@ -1377,6 +1377,7 @@ fn empirica_plugin_hooks_are_auto_trusted_without_config_state() {
                 matcher: Some("Bash".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
                     command: "true".to_string(),
+                    command_windows: None,
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,
@@ -1389,6 +1390,7 @@ fn empirica_plugin_hooks_are_auto_trusted_without_config_state() {
     let listed = crate::list_hooks(crate::HooksConfig {
         legacy_notify_argv: None,
         feature_enabled: true,
+        bypass_hook_trust: false,
         config_layer_stack: None,
         plugin_hook_sources,
         plugin_hook_load_warnings: Vec::new(),
@@ -1437,6 +1439,7 @@ fn unlisted_plugin_hooks_remain_untrusted_without_config_state() {
                 matcher: Some("Bash".to_string()),
                 hooks: vec![HookHandlerConfig::Command {
                     command: "true".to_string(),
+                    command_windows: None,
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,
@@ -1449,6 +1452,7 @@ fn unlisted_plugin_hooks_remain_untrusted_without_config_state() {
     let listed = crate::list_hooks(crate::HooksConfig {
         legacy_notify_argv: None,
         feature_enabled: true,
+        bypass_hook_trust: false,
         config_layer_stack: None,
         plugin_hook_sources,
         plugin_hook_load_warnings: Vec::new(),
