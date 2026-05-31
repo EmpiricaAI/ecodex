@@ -367,7 +367,7 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
         data[0]
             .skills
             .iter()
-            .any(|skill| skill.name == "home-skill"),
+            .any(|skill| (skill.name == "home-skill" || skill.name.ends_with(":home-skill"))),
         "non-plugin skills should remain available"
     );
     assert!(
@@ -419,7 +419,7 @@ async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
         data[0]
             .skills
             .iter()
-            .any(|skill| skill.name == "home-skill")
+            .any(|skill| (skill.name == "home-skill" || skill.name.ends_with(":home-skill")))
     );
     assert!(
         data[0]
@@ -568,7 +568,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         third_data[0]
             .skills
             .iter()
-            .any(|skill| skill.name == "late-extra-skill")
+            .any(|skill| (skill.name == "late-extra-skill" || skill.name.ends_with(":late-extra-skill")))
     );
     Ok(())
 }
@@ -605,7 +605,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         data[0]
             .skills
             .iter()
-            .any(|skill| { skill.name == "demo" && skill.description == "demo description" })
+            .any(|skill| { (skill.name == "demo" || skill.name.ends_with(":demo")) && skill.description == "demo description" })
     );
 
     let thread_start_request_id = mcp
@@ -678,7 +678,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         data[0]
             .skills
             .iter()
-            .any(|skill| skill.name == "demo" && skill.description == "updated")
+            .any(|skill| (skill.name == "demo" || skill.name.ends_with(":demo")) && skill.description == "updated")
     );
     Ok(())
 }

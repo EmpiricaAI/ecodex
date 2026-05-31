@@ -870,6 +870,7 @@ interface:
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            pinned: false,
             name: "send-message".to_string(),
             description: "send messages".to_string(),
             short_description: None,
@@ -926,6 +927,7 @@ interface:
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
+            pinned: false,
             name: "send-message".to_string(),
             description: "send messages".to_string(),
             short_description: None,

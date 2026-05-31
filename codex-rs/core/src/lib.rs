@@ -12,6 +12,10 @@ mod client;
 // subprocess output (parity with CC's Monitor tool, enables cross-AI mesh
 // participation in non-Claude models).
 pub(crate) mod monitor;
+// ecodex native mesh wake-listener — holds the ntfy stream in-harness
+// (transport only; cortex_* comms stay over MCP). Replaces the Python
+// `empirica loop listen` subprocess to drop the version-drift coupling.
+pub(crate) mod ntfy_listener;
 mod client_common;
 mod realtime_context;
 mod realtime_conversation;

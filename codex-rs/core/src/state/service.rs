@@ -95,4 +95,10 @@ pub(crate) struct SessionServices {
     /// via `Session::inject_response_items` on match). Cleared on
     /// shutdown via `MonitorRegistry::abort_all`.
     pub(crate) monitor_registry: Arc<MonitorRegistry>,
+    /// ecodex addition: the native ntfy mesh wake-listener task (holds the
+    /// authenticated ntfy stream and injects a poll-trigger wake per
+    /// proposal-event doorbell). Replaces the `empirica loop listen` Python
+    /// subprocess; transport only — comms stay over MCP. Aborted on shutdown
+    /// via `NtfyListenerRegistry::abort`.
+    pub(crate) ntfy_listener_registry: Arc<crate::ntfy_listener::NtfyListenerRegistry>,
 }
