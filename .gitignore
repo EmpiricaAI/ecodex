@@ -83,6 +83,10 @@ yarn.lock
 # release
 package.json-e
 session.ts-e
+
+# empirica runtime state + generated artifacts (never committed)
+.empirica_session_state/
+docs/SEMANTIC_INDEX.yaml
 CHANGELOG.ignore.md
 
 # nix related
