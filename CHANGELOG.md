@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-02
+
 ### Added
 - **L3 model registry — curated seed + provider discovery** (`codex-models-manager` + `cli`, commits `aec472f4b8` / `db37c97461` / `b93d47da5c`): ecodex now ships a curated model registry so the picker is useful out of the box. Three-layer slug resolution (`model_info_from_slug`): exact-curated entry (bundled `models.curated.json` ∪ `~/.codex/models.user.json`) → family-prefix table → generic fallback. Lean seed schema (curated/epistemic fields only — context, tools, `reasoning.supported`, routes, `jurisdiction`, `calibration_tier`, `last_verified`); codex-runtime fields inherited from the runtime template at `enrich()` time. Seed: 11 entries (8 deep-research 3-vote-verified non-GPT coding models — Kimi K2.6, Qwen3.7/3.6 Max, DeepSeek-R1, gpt-oss 120B/20B, Qwen3-Coder-30B, GLM-5.1, MiniMax-M2.7 — plus 2 EU-sovereignty Mistral Devstral entries tagged `jurisdiction.eu_data_residency`). New `ecodex models list` (show resolved registry) and `ecodex models refresh [--provider ID] [--dry-run] [--no-filter]` (probe each `[model_providers.*]` `/v1/models`, curated-families filter + non-coding/unstable-variant exclusion + latest-per-line collapse, write `models.user.json`). Discovery proven live (OpenRouter + local: 366 discovered → 81 kept). `calibration_tier` ships `unmeasured` for every entry by design — populated from grounded usage, never asserted. Local serving backends documented + exemplified: Ollama/LM Studio (built-in), llama.cpp `:8080` + vLLM `:8000` (added to `config.toml.default`). See `docs/ecodex/integrations/model-registry.md`. 43/43 models-manager tests.
 - **Native ntfy mesh wake-listener** (`codex-rs/core/src/ntfy_listener.rs`, branch `feature/native-ntfy-listener` merged `54bf8b6ea6`): native Rust held-connection ntfy stream loop (reqwest, reconnect/backoff, doorbell wake via `inject_response_items` mirroring `monitor.rs`) + session-boot wiring (creds-gated, `cfg!(test)`-guarded) + shutdown abort. Decouples the mesh push transport from the empirica Python CLI so ecodex wakes on mesh events natively. Config + credentials loader, subscribe-URL builder, ai_id resolution. codex-core 1826/0 (+14 listener tests).
@@ -57,6 +59,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/Nubaeon/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Nubaeon/ecodex/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/Nubaeon/ecodex/compare/v0.0.0...v0.0.1
 [0.0.0]: https://github.com/Nubaeon/ecodex/releases/tag/v0.0.0
