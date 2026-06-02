@@ -18,12 +18,11 @@ This is **not** a drop-in replacement for codex. It is opinionated: the discipli
 
 ## Status
 
-Alpha. **v0.0.1 shipped 2026-05-10** — see [the release](https://github.com/Nubaeon/ecodex/releases/tag/v0.0.1). The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
+Alpha. **v0.1.0 shipped 2026-06-02** — see [the releases](https://github.com/Nubaeon/ecodex/releases). The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
 
-The repo's main branches:
+The repo's branches:
 
-- `main` — clean tracking branch for upstream `openai/codex/main`. We rebase here and PR fixes upstream.
-- `build/v1-plugin` (default) — the active ecodex work: the empirica plugin, the protocol translator, curated open-weights provider defaults, the koru-spiral welcome screen, and discipline wiring.
+- `main` (default) — the canonical ecodex branch: all active work — the empirica plugin, the protocol translator, curated open-weights provider defaults + L3 model registry, the native ntfy mesh listener, the koru-spiral welcome screen, and discipline wiring. Upstream `openai/codex` is tracked via the `upstream` remote and synced in periodically (see `docs/ecodex/` + the upstream-sync issue template).
 
 Public-facing pieces (CI workflows, contributor templates, expanded docs) land incrementally as we approach a broader launch. The CLI itself is daily-driven by the ecodex team.
 
