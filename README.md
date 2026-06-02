@@ -39,7 +39,8 @@ Three layers (full architecture: [`docs/ecodex/system-overview.md`](docs/ecodex/
 
 Concretely, what users notice that vanilla codex doesn't do:
 
-- **Curated open-weights provider defaults**: out-of-the-box config for DeepSeek, Qwen3-Coder, Kimi K2.6, GLM, Ollama, LM Studio, llama.cpp. Pick a provider in `/model` and routing swaps mid-session — no restart.
+- **Curated open-weights provider defaults**: out-of-the-box config for DeepSeek, Qwen3-Coder, Kimi K2.6, GLM, Ollama, LM Studio, llama.cpp, vLLM. Pick a provider in `/model` and routing swaps mid-session — no restart.
+- **Curated model registry + discovery** (`ecodex models`): a pre-filled, capability-tagged seed of coding/agentic models (context, tool-use, reasoning, route, jurisdiction) so the picker is short and relevant — not a 300-entry dump. `ecodex models refresh` probes your configured providers' `/v1/models` (incl. local Ollama/llama.cpp/vLLM/LM Studio) and adds only recognized coding-family models, latest-per-line. Per-model `calibration_tier` ships `unmeasured` and is filled from your own grounded usage. See [`docs/ecodex/integrations/model-registry.md`](docs/ecodex/integrations/model-registry.md).
 - **Wire-protocol translator** (`codex-rs/codex-empirica-translator/`): a small `tiny_http` bridge that lets codex's Responses-format API talk to providers that only speak Chat Completions or Anthropic Messages. CIF (Canonical Intermediate Format) validated at N=3 adapters.
 - **Pinned epistemic skills**: framework-level skills (`epistemic-transaction`, `empirica-constitution`, `epistemic-persistence-protocol`) survive `/compact` so the agent retains its own discipline guidance across context boundaries.
 - **Subagent seeding**: empirica's specialised subagents (security, ux, performance, outreach-scout, …) are bundled and dispatched through the standard codex Agent tool.
