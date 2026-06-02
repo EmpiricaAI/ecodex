@@ -158,6 +158,14 @@ struct KnownOpenWeightsFamily {
     context_window: i64,
 }
 
+/// True if `slug` matches a known coding/open-weights family (the prefix table)
+/// OR an exact curated-seed entry. Used by `ecodex models refresh` to keep the
+/// discovered registry epistemically relevant — a provider's `/v1/models` lists
+/// hundreds of embeddings/audio/image models we do not want in the picker.
+pub fn is_recognized_coding_model(slug: &str) -> bool {
+    crate::curated_seed::lookup(slug).is_some() || recognize_open_weights_family(slug).is_some()
+}
+
 fn recognize_open_weights_family(slug: &str) -> Option<KnownOpenWeightsFamily> {
     let normalized = slug
         .rsplit_once('/')
