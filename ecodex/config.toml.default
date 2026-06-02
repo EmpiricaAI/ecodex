@@ -94,8 +94,28 @@ env_key_instructions = "Local LAN endpoint — no auth required by default. If e
 # env_key = "EMPIRICA_LOCAL_API_KEY"
 wire_api = "responses"
 
-# Local LLM providers `oss` (Ollama) and `lmstudio` are built-in to
-# codex; no config needed unless overriding ports.
+# ─── Local serving backends ──────────────────────────────────────────
+# `oss` (Ollama, :11434) and `lmstudio` (:1234) are BUILT-IN providers —
+# codex auto-discovers them on the standard local ports; no config needed
+# unless overriding the port/host. llama.cpp and vLLM are NOT built-in —
+# add them explicitly as below. All four expose an OpenAI-compatible
+# `/v1/models` endpoint, so `ecodex models refresh` can discover what each
+# is serving (see docs/ecodex/integrations/model-registry.md).
+
+# llama.cpp `llama-server` — defaults to 127.0.0.1:8080, serves one model.
+[model_providers.llamacpp]
+name = "llama.cpp (local)"
+base_url = "http://localhost:8080/v1"
+env_key_instructions = "Local llama-server — no auth by default."
+wire_api = "responses"
+
+# vLLM `vllm serve` — defaults to localhost:8000, serves one model at a time.
+[model_providers.vllm]
+name = "vLLM (local)"
+base_url = "http://localhost:8000/v1"
+env_key_instructions = "Local vLLM server — no auth by default. Set VLLM_API_KEY + uncomment env_key if you started vllm with --api-key."
+# env_key = "VLLM_API_KEY"
+wire_api = "responses"
 
 # ─── Strict empirica defaults (E) ────────────────────────────────────
 # These knobs are read by the empirica python CLI from the environment.

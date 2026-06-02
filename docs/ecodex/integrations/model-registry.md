@@ -76,6 +76,23 @@ ecodex models refresh [--provider <id>]... [--dry-run] [--no-filter]
   - `--dry-run` — show what would be written without touching the file.
   - `--no-filter` — keep **all** discovered slugs (escape hatch; noisy).
 
+### Local serving backends
+
+`refresh` discovers from local servers exactly like remote ones — all four
+common backends expose an OpenAI-compatible `GET /v1/models`:
+
+| Backend | base_url | Provider id |
+|---|---|---|
+| Ollama | `http://localhost:11434/v1` | `oss` (built-in) |
+| LM Studio | `http://localhost:1234/v1` | `lmstudio` (built-in) |
+| llama.cpp (`llama-server`) | `http://localhost:8080/v1` | add `[model_providers.llamacpp]` |
+| vLLM (`vllm serve`) | `http://localhost:8000/v1` | add `[model_providers.vllm]` |
+
+Discovered slugs whose provider id contains `ollama`/`lmstudio`/`llama`/`local`
+are tagged `route: local`. llama.cpp and vLLM each serve one model at a time, so
+their `/v1/models` returns a single entry — `refresh` picks it up if it's a
+recognized coding family. See `integrations/providers.md` for config blocks.
+
 ### Discovery filter: curated families only
 
 A provider's `/v1/models` typically lists hundreds of models — embeddings,

@@ -8,6 +8,8 @@ ecodex's brand identity is "Empirica's branded codex for open-weights operators.
 |---|---|---|---|---|
 | **Ollama** (local) | `oss` (built-in) | `http://localhost:11434/v1` | OpenAI-chat | none |
 | **LMStudio** (local) | `lmstudio` (built-in) | `http://localhost:1234/v1` | OpenAI-chat | none |
+| **llama.cpp** (local) | `llamacpp` | `http://localhost:8080/v1` | OpenAI-chat | none |
+| **vLLM** (local) | `vllm` | `http://localhost:8000/v1` | OpenAI-chat | optional `VLLM_API_KEY` |
 | **DeepSeek** | `deepseek` | `https://api.deepseek.com/v1` | OpenAI-chat | `DEEPSEEK_API_KEY` |
 | **Qwen** (Alibaba Cloud / Dashscope) | `qwen` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | OpenAI-chat | `DASHSCOPE_API_KEY` |
 | **GLM** (Zhipu AI) | `glm` | `https://open.bigmodel.cn/api/paas/v4` | OpenAI-chat | `ZHIPU_API_KEY` |
@@ -15,6 +17,23 @@ ecodex's brand identity is "Empirica's branded codex for open-weights operators.
 | **empirica-server** (David's local Empirica server) | `empirica-local` | `http://empirica-server:<port>/v1` | OpenAI-chat | TBD (likely none on private network) |
 
 All are OpenAI-compatible chat completions endpoints, which codex's existing provider abstraction handles natively. No custom adapters required.
+
+### Local serving backends
+
+The four most-used local OpenAI-compatible servers, all of which expose a
+`GET /v1/models` endpoint that `ecodex models refresh` can discover from:
+
+| Backend | Default base_url | Built-in? | Serves |
+|---|---|---|---|
+| **Ollama** | `http://localhost:11434/v1` | ✅ `oss` | many models, hot-swappable |
+| **LM Studio** | `http://localhost:1234/v1` | ✅ `lmstudio` | the loaded model(s) |
+| **llama.cpp** (`llama-server`) | `http://localhost:8080/v1` | ❌ add `[model_providers.llamacpp]` | one model per server |
+| **vLLM** (`vllm serve`) | `http://localhost:8000/v1` | ❌ add `[model_providers.vllm]` | one model at a time |
+
+Ollama and LM Studio are built in (codex auto-discovers them on the standard
+ports). llama.cpp and vLLM need an explicit `[model_providers.*]` block — see
+the config fragment below. After adding them, `ecodex models refresh` will
+probe each and add the served coding models to your registry.
 
 ## config.toml fragment
 
@@ -54,7 +73,18 @@ wire_api = "responses"
 # ─── Local LLM hosts ─────────────────────────────────────────────────
 # `oss` (Ollama) and `lmstudio` are built-in providers — codex auto-discovers
 # them on the standard local ports. No config required unless overriding the
-# port or remote address.
+# port or remote address. llama.cpp and vLLM are NOT built-in — add them:
+
+[model_providers.llamacpp]
+name = "llama.cpp (local)"
+base_url = "http://localhost:8080/v1"   # llama-server default
+wire_api = "responses"
+
+[model_providers.vllm]
+name = "vLLM (local)"
+base_url = "http://localhost:8000/v1"   # vllm serve default
+# env_key = "VLLM_API_KEY"              # only if started with --api-key
+wire_api = "responses"
 
 # Optional: empirica-server as a local LLM gateway (private network).
 [model_providers.empirica-local]
@@ -77,13 +107,17 @@ For each provider, the model strings most relevant to coding/agent workflows. Pa
 | `qwen` | `qwen-max` | 32k | Flagship general |
 | `glm` | `glm-4.6` | 128k | Latest Zhipu flagship |
 | `glm` | `glm-4-plus` | 128k | Stable choice |
-| `kimi` | `kimi-k2-0905-preview` | 200k | k2 variant per David's note |
-| `kimi` | `moonshot-v1-128k` | 128k | Stable production |
-| `oss` (Ollama) | `llama3.3:70b` / `qwen2.5-coder:32b` / etc. | varies | Whatever you've pulled |
+| `kimi` | `kimi-k2.6` | 262k | Current flagship (verified OpenRouter slug `moonshotai/kimi-k2.6`) |
+| `oss` (Ollama) | `qwen3-coder:30b` / `gpt-oss:20b` / `deepseek-r1` | varies | Whatever you've pulled |
 | `lmstudio` | (whatever model you've loaded) | varies | Local |
+| `llamacpp` | (the single model `llama-server` was started with) | varies | Local |
+| `vllm` | (the single model `vllm serve` was started with) | varies | Local |
 | `empirica-local` | (whatever empirica-server is serving) | varies | Local testbed |
 
-**Note on Kimi-k2.6:** As of this writing the latest published Moonshot model is `kimi-k2-0905-preview`. The `k2.6` David referenced may be a newer or in-rollout version — check the Moonshot console for the exact model id when configuring.
+**Model registry (L3):** rather than hand-picking model ids, run
+`ecodex models list` to see the curated registry and `ecodex models refresh` to
+discover what your configured providers (incl. local backends) actually serve.
+See `docs/ecodex/integrations/model-registry.md`.
 
 ## Recommended default
 
@@ -113,18 +147,23 @@ After dropping the config snippet:
 # Confirm config parses
 ecodex --help                          # should not error on config load
 
-# List providers (if codex exposes a listing subcommand)
-ecodex --list-providers                 # if available — otherwise inspect config.toml
+# Inspect + discover the model registry (L3):
+ecodex models list                     # resolved registry (curated seed + overlay)
+ecodex models refresh --dry-run        # probe every configured provider's /v1/models
+ecodex models refresh --provider vllm  # probe just one (e.g. a local backend)
+ecodex models refresh                  # write ~/.codex/models.user.json, then restart
 
 # Try a one-shot exec against each:
 DEEPSEEK_API_KEY=sk-... ecodex exec -p deepseek -m deepseek-chat "say hi"
 DASHSCOPE_API_KEY=sk-... ecodex exec -p qwen -m qwen3-coder-plus "say hi"
 ZHIPU_API_KEY=sk-...    ecodex exec -p glm -m glm-4.6 "say hi"
-MOONSHOT_API_KEY=sk-... ecodex exec -p kimi -m kimi-k2-0905-preview "say hi"
+MOONSHOT_API_KEY=sk-... ecodex exec -p kimi -m kimi-k2.6 "say hi"
 
-# Local hosts:
-ollama serve & ecodex exec -p oss -m llama3.3:70b "say hi"
-ecodex exec -p empirica-local -m <model> "say hi"   # against empirica-server
+# Local backends:
+ollama serve &        ecodex exec -p oss      -m qwen3-coder:30b "say hi"
+llama-server -m … &   ecodex exec -p llamacpp -m <model>         "say hi"
+vllm serve … &        ecodex exec -p vllm     -m <model>         "say hi"
 ```
 
-These verification steps will land in a future transaction once the live binary is built and the empirica plugin is installed.
+See `docs/ecodex/integrations/model-registry.md` for how discovery filters and
+curates what each provider serves.

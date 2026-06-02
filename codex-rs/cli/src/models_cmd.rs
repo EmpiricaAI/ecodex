@@ -246,7 +246,13 @@ fn route_for_provider(provider_id: &str) -> String {
     let p = provider_id.to_ascii_lowercase();
     if p.contains("openrouter") {
         "openrouter".to_string()
-    } else if p.contains("ollama") || p.contains("llama") || p.contains("local") || p.contains("lmstudio") {
+    } else if p.contains("ollama")
+        || p.contains("llama")
+        || p.contains("local")
+        || p.contains("lmstudio")
+        || p.contains("vllm")
+        || p == "oss"
+    {
         "local".to_string()
     } else {
         "direct".to_string()
