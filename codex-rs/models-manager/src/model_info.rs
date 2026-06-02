@@ -88,6 +88,12 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
 /// per-family defaults; tuning them per-tag would require maintaining a
 /// table per Ollama upstream.
 pub fn model_info_from_slug(slug: &str) -> ModelInfo {
+    // Layer 1: exact-slug curated entry (bundled seed ∪ ~/.codex/models.user.json).
+    // Most specific — wins over the family-prefix table below.
+    if let Some(entry) = crate::curated_seed::lookup(slug) {
+        return crate::curated_seed::enrich(build_fallback_model_info(slug), &entry);
+    }
+    // Layer 2: family-prefix recognition (legacy conservative fallback).
     let mut info = build_fallback_model_info(slug);
     if let Some(known) = recognize_open_weights_family(slug) {
         info.context_window = Some(known.context_window);
