@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 try:
     from empirica.core.cockpit.canonical_loops import canonical_loop_by_name
     from empirica.core.loop_scheduler import list_active_loops_for_instance
+    from empirica.core.loop_scheduler.persistent_listener import is_listener_running
     from empirica.utils.session_resolver import InstanceResolver
 except Exception:
     # Empirica package broken / not installed → emit empty output, exit clean.
@@ -51,21 +52,175 @@ def _build_reaction_table(loop_names: list[str]) -> str:
     )
 
 
-def _build_additional_context(instance_id: str, loop_names: list[str]) -> str:
+def _query_listener_on(instance_id: str) -> dict | None:
+    """Delegate to `empirica listener on --output json` for the canonical
+    arming payload. Returns the parsed JSON or None on any failure.
+
+    Phase 2 of prop_oxrhoehv4 — single source of truth: the CLI handler
+    owns the persistent-service short-circuit detection + Monitor command
+    rendering. This hook just renders the JSON response as markdown.
+    """
+    import subprocess
+    try:
+        proc = subprocess.run(
+            [
+                "empirica", "listener", "on",
+                "--ai-id", instance_id,
+                "--instance", instance_id,
+                "--output", "json",
+            ],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return None
+        return json.loads(proc.stdout)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        return None
+
+
+def _build_monitor_block_from_cli(payload: dict | None, instance_id: str) -> str:
+    """Render the Monitor-arming markdown block from `empirica listener on`'s
+    JSON response. Falls back to the canonical default command when the CLI
+    is unavailable.
+
+    Status semantics from the CLI (cockpit_commands.handle_listener_on_command):
+
+      * `awaiting_arm` — standalone mode (no persistent service). Monitor
+        command is `empirica loop listen --instance <ai_id>` — this session
+        holds the ntfy stream itself.
+      * `persistent_service_tail_session` — persistent OS service is up.
+        Monitor command is a `tail -F loop_fires.log | grep instance_id`
+        log-tailer that bridges the persistent service's writes into this
+        session WITHOUT duplicating the ntfy curl subscription. Closes the
+        Phase-3 in-session wake-delivery gap (without this, the session is
+        deaf because the persistent service writes to disk but doesn't
+        deliver to the running Claude).
+
+    Both statuses carry `next_step.args` with the right command — this
+    function just renders whatever the CLI returned.
+    """
+    # Use the CLI-provided next_step.args when available
+    ns = (payload or {}).get("next_step") or {}
+    monitor_args = ns.get("args") if isinstance(ns, dict) else None
+    status = (payload or {}).get("status")
+    # Standalone fallback wraps the listener spawn in a while-true supervisor
+    # loop — the listener's design assumes a relauncher (systemd/launchd) on
+    # clean exits (SIGTERM during reconnect, ListenerUpgraded on pip-version
+    # drift), but Claude Code's Monitor isn't one. Wrapping here gives the
+    # same auto-relaunch semantics on hosts without an OS service. sleep 3
+    # keeps a crash-loop from pinning CPU; reconnect/backoff is handled
+    # internally by the listener loop itself. (cortex prop_6kevxb63 finding.)
+    _standalone_supervised = (
+        f"while true; do empirica loop listen --instance {instance_id}; sleep 3; done"
+    )
+    if monitor_args:
+        description = monitor_args.get("description", f"Cortex orchestration push listener for {instance_id}")
+        command = monitor_args.get("command", _standalone_supervised)
+        persistent = monitor_args.get("persistent", True)
+    else:
+        # Fallback when CLI is unavailable — preserve pre-Phase-2 behavior
+        description = f"Cortex orchestration push listener for {instance_id}"
+        command = _standalone_supervised
+        persistent = True
+    after_arm = ns.get("after_arm") if isinstance(ns, dict) else None
+    after_arm_hint = (
+        f"\n\nAfter arming, run `{after_arm}` (replace `<monitor_task_id>` "
+        f"with the actual id returned by Monitor) so `empirica listener off` "
+        f"knows what to TaskStop later."
+        if after_arm else ""
+    )
+
+    # Mode-specific explainer so the reader knows WHY this Monitor shape
+    # is the one being arrowed, not the other.
+    if status == "persistent_service_tail_session":
+        mode_explainer = (
+            "The persistent OS listener service is already running for this "
+            "ai_id (systemd-user / launchd). The Monitor below is a LOG-TAIL "
+            "on `~/.empirica/loop_fires.log` — it bridges the persistent "
+            "service's writes into this session WITHOUT spawning a duplicate "
+            "ntfy subscriber. The persistent service handles ntfy + catch-up; "
+            "the tail-Monitor handles in-session wake delivery."
+        )
+    else:
+        mode_explainer = (
+            "No persistent service detected for this ai_id — the Monitor "
+            "below runs `empirica loop listen` directly, which holds the "
+            "ntfy stream + catches up via content_poll on initial start, "
+            "on each push arrival, AND on disconnect + reconnect. No "
+            "periodic timer needed — push-primary, poll-on-reconnect-only "
+            "(\"epistemic email for the AI age\" — David, 2026-05-15)."
+        )
+
+    return (
+        f"**Arm this Monitor at session start:**\n\n"
+        f"```python\n"
+        f"Monitor(\n"
+        f'    description="{description}",\n'
+        f'    command="{command}",\n'
+        f"    persistent={persistent},\n"
+        f")\n"
+        f"```\n\n"
+        f"{mode_explainer}{after_arm_hint}"
+    )
+
+
+def _build_additional_context(
+    instance_id: str, loop_names: list[str], listener_running: bool = False,
+) -> str:
     # T8 (goal f718156c): switched from `tail -F loop_fires.log` to
     # `empirica loop listen` — the listener is the push-primary wake
     # mechanism. It holds an ntfy stream to cortex, emits one stdout
-    # line per ECO-decided proposal event (catch-up content_poll on
-    # every push arrival + on every reconnect). Each stdout line is
-    # one Monitor wake event into the running Claude session.
-    monitor_cmd = f"empirica loop listen --instance {instance_id}"
+    # line per ECO-decided proposal event.
+    #
+    # Phase 2 of prop_oxrhoehv4 (2026-05-21): delegate to
+    # `empirica listener on --output json` for the canonical short-circuit
+    # detection + Monitor command rendering. The CLI is the single source
+    # of truth; this hook just renders the JSON as markdown. `listener_running`
+    # arg kept for backwards-compat with callers; CLI delegation supersedes.
+    payload = _query_listener_on(instance_id)
+    if payload is None and listener_running:
+        # CLI unavailable but caller already detected persistent service —
+        # synthesize a tail-session payload so the renderer arms a log-tailer.
+        payload = {"status": "persistent_service_tail_session"}
+    monitor_block = _build_monitor_block_from_cli(payload, instance_id)
+
+    # Wake source language adapts: loops-only / service-only / both.
+    if loop_names and listener_running:
+        wake_source = (
+            f"This instance (`{instance_id}`) has canonical loops registered "
+            f"AND a persistent listener service running."
+        )
+    elif loop_names:
+        wake_source = (
+            f"This instance (`{instance_id}`) has canonical loops registered. "
+            f"The push-primary wake mechanism is `empirica loop listen` — it "
+            f"holds an authenticated ntfy stream to Cortex and emits one "
+            f"stdout line per ECO-decided proposal event (real wake) or "
+            f"AI-to-AI completion ack."
+        )
+    else:
+        # Persistent-service-only case (no canonical loops). This was the
+        # empirica-AI deafness: persistent service writes to loop_fires.log,
+        # session had no Monitor to read it.
+        wake_source = (
+            f"This instance (`{instance_id}`) has a persistent listener "
+            f"service running (systemd-user / launchd) but no canonical "
+            f"loops registered. Without a session-side Monitor on "
+            f"`~/.empirica/loop_fires.log`, wake events written by the "
+            f"persistent service would not reach this session."
+        )
+
+    # Reaction table only renders meaningfully when there are loops.
+    reaction_section = (
+        f"### Active loops + their body skills\n\n"
+        f"{_build_reaction_table(loop_names)}\n"
+        if loop_names else ""
+    )
+
     return f"""\
 ## 📬 Empirica orchestration listener — arm at session start
 
-This instance (`{instance_id}`) has canonical loops registered. The
-push-primary wake mechanism is `empirica loop listen` — it holds an
-authenticated ntfy stream to Cortex and emits one stdout line per
-ECO-decided proposal event (real wake) or AI-to-AI completion ack.
+{wake_source}
 
 ### REQUIRED: load mesh skills before your first transaction
 
@@ -82,24 +237,7 @@ skills MUST be loaded before your first PREFLIGHT:
 Loading them only when an event arrives is too late — the send-side
 handshake guidance is needed BEFORE you act, not after. Load both now.
 
-### Active loops + their body skills
-
-{_build_reaction_table(loop_names)}
-
-**Arm this Monitor at session start:**
-
-```python
-Monitor(
-    description="Cortex orchestration push listener for {instance_id}",
-    command="{monitor_cmd}",
-    persistent=True,
-)
-```
-
-The listener does the right thing on every failure mode: catches up via
-content_poll on initial start, on each push arrival, AND on disconnect
-+ reconnect. No periodic timer needed — push-primary, poll-on-reconnect-only
-("epistemic email for the AI age" — David, 2026-05-15).
+{reaction_section}{monitor_block}
 
 **Reaction protocol** — when an event arrives (one JSON line in the chat):
 
@@ -146,11 +284,25 @@ def main() -> int:
     except Exception:
         loops = []
 
-    if not loops:
+    # Check persistent service. If it's running, this session needs a
+    # tail-Monitor on loop_fires.log to receive wakes — even when no
+    # canonical loops are registered (the empirica-AI case: persistent
+    # service holds the ntfy stream, but the running Claude is deaf
+    # without an in-band Monitor reading the log). Pre-Phase-3, the
+    # hook only fired when loops were registered, which was the wrong
+    # condition — wake bridging is needed wherever there's a wake source.
+    listener_running = False
+    try:
+        listener_running = is_listener_running(instance_id)
+    except Exception:
+        listener_running = False
+
+    # Bail only when there's NO wake source at all (no loops + no service).
+    if not loops and not listener_running:
         print(json.dumps({}))
         return 0
 
-    additional = _build_additional_context(instance_id, loops)
+    additional = _build_additional_context(instance_id, loops, listener_running)
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",

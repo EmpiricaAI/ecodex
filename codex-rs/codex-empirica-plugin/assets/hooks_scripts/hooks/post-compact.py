@@ -1182,14 +1182,6 @@ def _generate_transaction_continue_prompt(pre_vectors: dict, dynamic_context: di
     calibration_section = f"\n{calibration}\n" if calibration else ""
     temporal_trail = _temporal_trail_section(dynamic_context.get('project_path'))
 
-    # v2 supplemental: persistent reference + topic-relevant backlog
-    # See docs/specs/PROPOSAL_BOOTSTRAP_AGGREGATOR.md
-    v2_supplemental = _render_v2_supplemental_safe(
-        dynamic_context.get('project_path'),
-        active_transaction,
-    )
-    v2_section = f"\n{v2_supplemental}\n" if v2_supplemental else ""
-
     return f"""## TRANSACTION CONTINUES
 
 Your context was compacted but your **transaction is still open**.
@@ -1202,29 +1194,9 @@ No new PREFLIGHT or CHECK needed - just continue where you left off.
 ## EPISTEMIC FOCUS
 
 {epistemic_focus}
-{calibration_section}{v2_section}
+{calibration_section}
 **Continue your work.** When done with the current task, close with POSTFLIGHT.
 """
-
-
-def _render_v2_supplemental_safe(project_path: str | None, active_transaction: dict | None) -> str:
-    """Render v2 supplemental sections (persistent_reference + topic_relevant_backlog).
-
-    Wrapped in broad try/except — bootstrap aggregator is new (v0.6 spec) and
-    must not break the post-compact path. Returns empty string on any failure.
-    """
-    if not project_path:
-        return ""
-    try:
-        from empirica.core.bootstrap import build_bootstrap_payload
-        from empirica.core.bootstrap.render import render_v2_supplemental
-        payload = build_bootstrap_payload(
-            project_path=project_path,
-            transaction_state=active_transaction,
-        )
-        return render_v2_supplemental(payload)
-    except Exception:
-        return ""
 
 
 def _generate_check_prompt(pre_vectors: dict, pre_reasoning: str, dynamic_context: dict) -> str:

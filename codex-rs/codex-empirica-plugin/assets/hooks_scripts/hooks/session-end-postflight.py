@@ -490,10 +490,27 @@ def _skip_exit(claude_session_id, reason, session_id=None, state=None):
     sys.exit(0)
 
 
+def _resolve_cortex_creds() -> tuple[str, str]:
+    """Resolve Cortex (api_key, url) via credentials_loader so credentials.yaml
+    is the single source of truth (mirrors session-init). Was raw os.environ
+    before; a stale ~/.bashrc CORTEX_API_KEY shadowing the file is what caused
+    the 2026-05-28 10-day listener-deaf incident. Falls back to raw env only
+    if the loader import fails."""
+    try:
+        sys.path.insert(0, str(Path.home() / 'empirical-ai' / 'empirica'))
+        from empirica.config.credentials_loader import get_credentials_loader
+        cfg = get_credentials_loader().get_cortex_config() or {}
+        key, url = cfg.get('api_key') or '', cfg.get('url') or ''
+        if key and url:
+            return key, url
+    except Exception:
+        pass
+    return os.environ.get('CORTEX_API_KEY', ''), os.environ.get('CORTEX_REMOTE_URL', '')
+
+
 def _run_postflight_cortex_sync(vectors):
     """Push final artifacts to Cortex remote. Fire-and-forget."""
-    cortex_api_key = os.environ.get('CORTEX_API_KEY', '')
-    cortex_url = os.environ.get('CORTEX_REMOTE_URL', '')
+    cortex_api_key, cortex_url = _resolve_cortex_creds()
     if not cortex_api_key or not cortex_url:
         return
 

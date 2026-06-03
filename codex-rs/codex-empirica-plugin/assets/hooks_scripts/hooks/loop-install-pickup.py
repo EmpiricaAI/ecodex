@@ -61,6 +61,64 @@ installed by you.
 """
 
 
+def _maybe_auto_install_canonical_loops(instance_id: str, project_root: Path) -> int:
+    """Zero-touch install on every UserPromptSubmit (works with --resume,
+    unlike SessionStart which only fires on new sessions).
+
+    Same four-gate cascade as the original session-init helper:
+      1. resolvable instance_id (caller already provides)
+      2. project has `.empirica/` (signals empirica intent)
+      3. registry empty (don't clobber manual config)
+      4. no stamp file (only install once per instance lifetime)
+
+    Returns count of canonical loops queued; 0 if any gate fails.
+    The stamp file (`~/.empirica/canonical_loops_installed_<instance>`)
+    makes this idempotent — subsequent prompts skip after first fire.
+    """
+    try:
+        if not project_root.joinpath('.empirica').is_dir():
+            return 0  # gate 2
+        empirica_home = Path.home() / '.empirica'
+        safe_inst = instance_id.replace(':', '_').replace('/', '-')
+        stamp = empirica_home / f'canonical_loops_installed_{safe_inst}'
+        if stamp.exists():
+            return 0  # gate 4
+
+        from empirica.core.cockpit.loop_registry import LoopRegistry
+        registry = LoopRegistry(instance_id)
+        if registry.list_loops():
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.write_text('skipped: registry already had entries\n')
+            return 0  # gate 3
+
+        from empirica.core.cockpit.canonical_loops import CANONICAL_LOOPS
+        from empirica.core.cockpit.loop_install_request import write_pending
+
+        installed = 0
+        for entry in CANONICAL_LOOPS:
+            try:
+                write_pending(
+                    instance_id=instance_id,
+                    name=entry['name'],
+                    interval=entry.get('interval', '15m'),
+                    description=entry.get('description', ''),
+                    base_interval=entry.get('base_interval'),
+                    max_interval=entry.get('max_interval'),
+                    requested_by='user-prompt-submit',
+                    body_skill=entry.get('body_skill'),
+                )
+                installed += 1
+            except Exception:
+                pass
+
+        if installed:
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.write_text(f'installed {installed} canonical loop(s) via UserPromptSubmit\n')
+        return installed
+    except Exception:
+        return 0  # never crash the user prompt
+
+
 def main() -> int:
     try:
         instance_id = InstanceResolver.instance_id()
@@ -69,6 +127,14 @@ def main() -> int:
     if not instance_id:
         print(json.dumps({}))
         return 0
+
+    # Zero-touch auto-install — works with --resume since UserPromptSubmit
+    # fires on every prompt, unlike SessionStart which is new-session only.
+    # Stamp file makes it once-per-instance.
+    try:
+        _maybe_auto_install_canonical_loops(instance_id, Path.cwd())
+    except Exception:
+        pass  # never block prompt on auto-install failure
 
     try:
         requests = consume_pending(instance_id)

@@ -192,13 +192,36 @@ def _write_cortex_cache(sync_result: dict, sync_project_id: str) -> dict:
     }
 
 
+def _resolve_cortex_creds() -> tuple[str, str]:
+    """Resolve Cortex (api_key, url) via credentials_loader — the same path
+    the listener uses — so credentials.yaml is the single source of truth.
+
+    Was raw os.environ.get before; the 2026-05-28 listener-deaf incident
+    showed why env-direct reads are fragile: a revoked CORTEX_API_KEY in
+    ~/.bashrc got imported into systemd --user and 401'd every poll for 10
+    days. The .bashrc exports were removed in the same change, so with no env
+    override get_cortex_config() falls through to the file. (Note:
+    get_cortex_config remains env-first by design for fleet escape-hatch; a
+    separate goal tracks hardening that precedence / warning on env-vs-file
+    mismatch.) Falls back to raw env only if the loader import fails."""
+    try:
+        sys.path.insert(0, str(Path.home() / 'empirical-ai' / 'empirica'))
+        from empirica.config.credentials_loader import get_credentials_loader
+        cfg = get_credentials_loader().get_cortex_config() or {}
+        key, url = cfg.get('api_key') or '', cfg.get('url') or ''
+        if key and url:
+            return key, url
+    except Exception:
+        pass
+    return os.environ.get('CORTEX_API_KEY', ''), os.environ.get('CORTEX_REMOTE_URL', '')
+
+
 def _cortex_remote_sync(result: dict) -> None:
     """Pull cross-domain context from Cortex at session start.
 
     Graceful degradation — if Cortex unavailable, session continues normally.
     """
-    cortex_api_key = os.environ.get('CORTEX_API_KEY', '')
-    cortex_url = os.environ.get('CORTEX_REMOTE_URL', '')
+    cortex_api_key, cortex_url = _resolve_cortex_creds()
     if not (cortex_api_key and cortex_url):
         return
 
@@ -234,6 +257,186 @@ def _cortex_remote_sync(result: dict) -> None:
 
     if sync_result.get("ok"):
         result["cortex_sync"] = _write_cortex_cache(sync_result, sync_project_id)
+
+
+_PROJECT_ID_UUID_RE = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    re.IGNORECASE,
+)
+
+
+def _resolve_ai_id_for_session(project_root: str | Path | None) -> str:
+    """Resolve the canonical ai_id at session-init time.
+
+    Resolution precedence (anchor model — see docs/architecture/AI_ID_AS_ANCHOR.md):
+      1. EMPIRICA_AI_ID env var (explicit override; preserved for harnesses that
+         pass it in their launch config — codex/Kimi/ecodex-lab pattern)
+      2. .empirica/project.yaml `ai_id` field (the canonical declared
+         practitioner — what every consumer surface already reads)
+      3. basename(project_root) (canonical anchor; empirica- prefix KEPT
+         per the 1.11.x strict-canonical decision)
+      4. 'claude-code' with stderr warning (final fallback — surfaces
+         silent identity-misattribution that previously rode unseen)
+
+    Non-CC harnesses (codex, Kimi, ecodex-lab) report as their declared
+    practitioner via project.yaml. Prevents the silent 'every non-CC session
+    stamped as claude-code' mesh-identity bug (ecodex prop_vwmutw7nu).
+    """
+    env_override = os.environ.get('EMPIRICA_AI_ID', '').strip()
+    if env_override:
+        return env_override
+
+    if project_root:
+        try:
+            import yaml
+            proj_yaml = Path(project_root) / '.empirica' / 'project.yaml'
+            if proj_yaml.exists():
+                cfg = yaml.safe_load(proj_yaml.read_text()) or {}
+                declared = cfg.get('ai_id')
+                if declared:
+                    return str(declared)
+        except Exception as exc:
+            print(
+                f"session-init: project.yaml ai_id read failed ({exc}); "
+                f"falling back to basename",
+                file=sys.stderr,
+            )
+
+        basename = Path(project_root).name
+        if basename:
+            return basename
+
+    print(
+        "session-init: ai_id unresolvable (no EMPIRICA_AI_ID env, no "
+        "project.yaml ai_id field, no project basename) — defaulting to "
+        "'claude-code'. This will misattribute mesh identity for non-CC "
+        "harnesses; set EMPIRICA_AI_ID or run 'empirica project-init'.",
+        file=sys.stderr,
+    )
+    return 'claude-code'
+
+
+def _heal_project_yaml_ai_id_at_init(project_root: str | None) -> None:
+    """Validate-and-heal .empirica/project.yaml ai_id at session-init.
+
+    Post-strict-canonical (1.11.x) the canonical ai_id IS the exact
+    project basename — the `empirica-` prefix is KEPT. Legacy
+    project.yamls written before the strict-canonical decision may
+    still carry the stripped form (e.g. `ai_id: extension` instead of
+    `ai_id: empirica-extension`). Cortex's strict-canonical addressing
+    bounces those as `delivery_failed`.
+
+    Heal rule (conservative):
+      - if ai_id matches basename → no-op (already canonical)
+      - if ai_id matches basename.removeprefix('empirica-') AND that
+        differs from basename → heal to basename (known stripped form)
+      - any other value → leave alone (custom provisioned, ecodex
+        sandbox identity, etc. — don't second-guess)
+      - ai_id absent → leave alone (project-init handles that case)
+
+    Non-fatal — logs to stderr on issue, never blocks session boot.
+    Pairs with the (empirica-)? Monitor-grep transition-compat regex
+    in cockpit_commands.py; once installed practices migrate, that
+    regex can be tightened to exact-match.
+    """
+    if not project_root:
+        return
+    try:
+        import yaml
+        project_yaml = Path(project_root) / '.empirica' / 'project.yaml'
+        if not project_yaml.exists():
+            return
+        cfg = yaml.safe_load(project_yaml.read_text()) or {}
+        current = cfg.get('ai_id')
+        if not current:
+            return  # absent — don't auto-introduce, let project-init handle it
+        canonical = Path(project_root).name
+        if not canonical:
+            return  # defensive — empty basename, nothing to heal toward
+        if current == canonical:
+            return  # already canonical
+        stripped = canonical.removeprefix('empirica-')
+        if stripped == canonical:
+            return  # no prefix to strip — can't be a stripped-legacy value
+        if current != stripped:
+            return  # not a known legacy form — leave alone (custom provisioner)
+
+        # Heal: stripped → canonical
+        cfg['ai_id'] = canonical
+        project_yaml.write_text(yaml.safe_dump(cfg, sort_keys=False))
+        print(
+            f"session-init: healed project.yaml ai_id "
+            f"{current!r} → {canonical!r} (stripped-prefix legacy)",
+            file=sys.stderr,
+        )
+    except Exception as e:
+        print(
+            f"session-init: project.yaml ai_id heal skipped ({e})",
+            file=sys.stderr,
+        )
+
+
+def _heal_project_yaml_project_id_at_init(project_root: str | None) -> None:
+    """Validate-and-heal .empirica/project.yaml project_id at session-init.
+
+    Legacy projects init'd before project-init switched to UUIDs have
+    project_id=<slug> (e.g. "empirica", "empirica-outreach") instead
+    of the canonical workspace.db UUID. This causes mismatches in any
+    code that reads project.yaml directly — including doctor's
+    check_project_drift (which compares against /v1/users/me/projects
+    UUIDs and naturally fails on a slug).
+
+    Heal: look up the canonical UUID via workspace.db
+    global_projects.trajectory_path (same key the session-id healer
+    uses) and rewrite yaml. Idempotent — no-op when yaml already has
+    a UUID-shape value.
+
+    Non-fatal — logs to stderr on issue, never blocks session boot.
+    """
+    if not project_root:
+        return
+    try:
+        import yaml
+        project_yaml = Path(project_root) / '.empirica' / 'project.yaml'
+        if not project_yaml.exists():
+            return
+        cfg = yaml.safe_load(project_yaml.read_text()) or {}
+        current = cfg.get('project_id', '') or ''
+        if _PROJECT_ID_UUID_RE.match(current):
+            return  # already UUID-shaped — nothing to do
+
+        # Look up canonical UUID via workspace.db trajectory_path
+        import sqlite3
+        ws_db = Path.home() / '.empirica' / 'workspace' / 'workspace.db'
+        if not ws_db.exists():
+            return
+        trajectory = str(Path(project_root) / '.empirica')
+        conn = sqlite3.connect(str(ws_db))
+        try:
+            cursor = conn.execute(
+                "SELECT id FROM global_projects WHERE trajectory_path = ?",
+                (trajectory,),
+            )
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return  # not registered — leave alone, never guess
+        canonical_uuid = row[0]
+        if canonical_uuid == current:
+            return  # already matches (defensive — UUID regex should've caught)
+
+        # Atomic rewrite — preserve key order via sort_keys=False
+        cfg['project_id'] = canonical_uuid
+        project_yaml.write_text(yaml.safe_dump(cfg, sort_keys=False))
+        print(
+            f"session-init: healed project.yaml project_id "
+            f"{current!r} → {canonical_uuid[:8]}… (slug-shape legacy)",
+            file=sys.stderr,
+        )
+    except Exception as e:
+        print(f"session-init: project.yaml heal skipped "
+              f"({type(e).__name__}: {e})", file=sys.stderr)
 
 
 def _heal_session_project_id_at_init(session_id: str, project_root: str | None) -> None:
@@ -317,6 +520,14 @@ def create_session_and_bootstrap(ai_id: str, project_id: str | None = None) -> d
         # bound to a stale project (ghost-project_id pattern). Idempotent.
         _heal_session_project_id_at_init(session_id, os.environ.get('PWD') or os.getcwd())
 
+        # Step 1c: Heal .empirica/project.yaml project_id if it's a slug-shape
+        # legacy value (pre-UUID project-init era). Idempotent.
+        _heal_project_yaml_project_id_at_init(os.environ.get('PWD') or os.getcwd())
+
+        # Step 1d: Heal .empirica/project.yaml ai_id if it's a stripped-prefix
+        # legacy value (pre-strict-canonical era, 1.11.x). Idempotent.
+        _heal_project_yaml_ai_id_at_init(os.environ.get('PWD') or os.getcwd())
+
         # Step 2: Run bootstrap
         bootstrap_data, project_context = _run_bootstrap(session_id, env)
         if bootstrap_data:
@@ -336,30 +547,6 @@ def create_session_and_bootstrap(ai_id: str, project_id: str | None = None) -> d
         result["error"] = str(e)
 
     return result
-
-
-def _v2_supplemental_safe(project_context: dict | None) -> str:
-    """Render v2 bootstrap supplemental sections (persistent_reference +
-    topic_relevant_backlog).
-
-    Wrapped in broad try/except — bootstrap aggregator is new (v0.6 spec)
-    and must NOT break SessionStart on any failure. Returns empty string
-    if anything goes wrong.
-
-    See docs/specs/PROPOSAL_BOOTSTRAP_AGGREGATOR.md.
-    """
-    if not project_context:
-        return ""
-    project_path = project_context.get("project_path") if isinstance(project_context, dict) else None
-    if not project_path:
-        return ""
-    try:
-        from empirica.core.bootstrap import build_bootstrap_payload
-        from empirica.core.bootstrap.render import render_v2_supplemental
-        payload = build_bootstrap_payload(project_path=project_path)
-        return render_v2_supplemental(payload)
-    except Exception:
-        return ""
 
 
 def format_context(ctx: dict) -> str:
@@ -569,91 +756,11 @@ def _find_best_orphaned_transaction(empirica_dir: Path) -> tuple:
     return None, None
 
 
-def _auto_postflight_orphaned_transaction(tx_file: Path, tx_data: dict) -> bool:
-    """Auto-close an orphaned open transaction with a session-pickup reason.
-
-    A new ecodex session that inherits an open transaction from a previous
-    session would continue that measurement window — calibration deltas
-    would span unrelated work. Auto-postflight closes the window honestly
-    so the new session starts with fresh vectors.
-
-    Vectors are carried forward from tx_data where available with
-    completion=1.0 forced (the close signal). If postflight succeeds the
-    empirica daemon removes the active_transaction file; on failure the
-    caller falls back to adoption to avoid losing data.
-
-    Returns True if the transaction was closed successfully.
-    """
-    session_id = tx_data.get('session_id')
-    if not session_id:
-        return False
-
-    last_vectors = tx_data.get('vectors', {}) if isinstance(tx_data.get('vectors'), dict) else {}
-    payload = {
-        'session_id': session_id,
-        'vectors': {
-            'know': last_vectors.get('know', 0.5),
-            'uncertainty': last_vectors.get('uncertainty', 0.5),
-            'context': last_vectors.get('context', 0.5),
-            'clarity': last_vectors.get('clarity', 0.5),
-            'coherence': last_vectors.get('coherence', 0.5),
-            'signal': last_vectors.get('signal', 0.5),
-            'density': last_vectors.get('density', 0.5),
-            'state': last_vectors.get('state', 0.5),
-            'change': last_vectors.get('change', 0.0),
-            'completion': 1.0,
-            'impact': last_vectors.get('impact', 0.3),
-            'do': last_vectors.get('do', 0.5),
-            'engagement': last_vectors.get('engagement', 0.3),
-        },
-        'reasoning': (
-            'session-pickup auto-close — inherited open transaction from '
-            'previous session, no human-driven completion signal observed. '
-            'Closed by session-init hook so new session starts with fresh vectors.'
-        ),
-    }
-
-    try:
-        result = subprocess.run(
-            ['empirica', 'postflight-submit', '-'],
-            input=json.dumps(payload),
-            capture_output=True, text=True, timeout=15,
-        )
-        if result.returncode == 0:
-            tx_id_preview = (tx_data.get('transaction_id') or '?')[:8]
-            print(
-                f"Auto-closed inherited transaction {tx_id_preview}... (session-pickup auto-close)",
-                file=sys.stderr,
-            )
-            if tx_file.exists():
-                try:
-                    tx_file.unlink()
-                except Exception:
-                    pass
-            return True
-        else:
-            stderr_preview = (result.stderr or '')[:200]
-            print(
-                f"Auto-postflight failed (exit={result.returncode}): {stderr_preview}",
-                file=sys.stderr,
-            )
-            return False
-    except Exception as e:
-        print(f"Auto-postflight error: {e}", file=sys.stderr)
-        return False
-
-
 def _adopt_orphaned_transaction(project_root: Path) -> dict:
-    """Auto-close orphaned open transactions on SessionStart.
+    """Check for orphaned open transactions and re-key them to the new instance.
 
-    Default behavior: detect any orphaned active_transaction*.json and
-    auto-postflight it (session-pickup auto-close). New session starts
-    fresh — no inherited measurement window.
-
-    Fallback: if auto-postflight fails (CLI error, daemon down), fall
-    back to the legacy re-keying adoption so transaction data isn't lost.
-    Adoption keeps the old window open; the user can manually POSTFLIGHT
-    or continue.
+    After machine/terminal/tmux restart, instance-keyed files are stale but
+    transaction files survive. Adopt and re-key them.
     """
     empirica_dir = project_root / '.empirica'
     if not empirica_dir.exists():
@@ -673,22 +780,13 @@ def _adopt_orphaned_transaction(project_root: Path) -> dict:
     if not session_id:
         return {}
 
-    # Default: auto-close. New session starts fresh with no inherited tx.
-    if _auto_postflight_orphaned_transaction(tx_file, tx_data):
-        return {}
-
-    # Fallback: re-key the transaction file to the new instance suffix
-    # (legacy adoption behavior, preserves data when auto-close fails).
+    # Re-key the transaction file to the new instance suffix
     new_tx_file = empirica_dir / f'active_transaction{new_suffix}.json'
     if tx_file != new_tx_file:
         try:
             shutil.copy2(str(tx_file), str(new_tx_file))
             tx_file.unlink()
-            print(
-                f"Adopted orphaned transaction {tx_data.get('transaction_id', '?')[:8]}... "
-                f"-> new instance (fallback after auto-postflight failure)",
-                file=sys.stderr,
-            )
+            print(f"Adopted orphaned transaction {tx_data.get('transaction_id', '?')[:8]}... -> new instance", file=sys.stderr)
         except Exception:
             pass  # Adoption failure is non-fatal
     return {'session_id': session_id, 'source': 'orphaned_transaction'}
@@ -768,6 +866,48 @@ def _try_cwd_adoption() -> tuple:
     except Exception:
         pass
     return None, False
+
+
+def _prefer_cwd_on_startup(project_root, cwd_root, suffix):
+    """STARTUP EXCEPTION (ARCHITECTURE.md; KNOWN_ISSUES 11.26): on a fresh
+    'startup' event the user's CWD is explicit intent and must override a
+    stale instance-file binding left by a *different* conversation that
+    reused this terminal/pane. Without this, pane reuse silently routes the
+    new session into the previous occupant's project (the empirica-autonomy
+    -> empirica-extension misroute, 2026-05-28).
+
+    Guard: an OPEN transaction on the resolved project (this instance's
+    suffix) is authoritative — a continuing loop or compact-rotation — so CWD
+    never wins over it. Only override when CWD is itself a valid Empirica
+    project, so launching from a non-project dir keeps the last project.
+
+    Pure decision function (only side effect: reading the resolved project's
+    transaction file). Returns the project_root to use. Tested directly by
+    tests/test_open_transaction_guard.py.
+    """
+    try:
+        if Path(cwd_root).resolve() == Path(project_root).resolve():
+            return project_root  # already aligned — nothing to override
+    except Exception:
+        return project_root
+
+    tx_file = Path(project_root) / '.empirica' / f'active_transaction{suffix}.json'
+    try:
+        if tx_file.exists():
+            with open(tx_file) as f:
+                if json.load(f).get('status') == 'open':
+                    return project_root  # open tx authoritative (11.26)
+    except Exception:
+        pass
+
+    if has_valid_db(Path(cwd_root)):
+        print(
+            f"session-init: startup CWD intent overrides stale instance "
+            f"binding ({Path(project_root).name} -> {Path(cwd_root).name})",
+            file=sys.stderr,
+        )
+        return Path(cwd_root)
+    return project_root
 
 
 def _run_stale_cleanup(claude_session_id: str) -> int:
@@ -1010,6 +1150,76 @@ def _init_dashboard(session_id: str, ai_id: str) -> str | None:
         return None
 
 
+def _maybe_auto_install_canonical_loops(project_root: Path) -> int:
+    """Zero-touch install: queue install-pending files for each canonical
+    loop when this instance is fresh on an empirica-aware project.
+
+    Gates (all must be true):
+      1. Instance has a resolvable instance_id (TMUX_PANE, WINDOWID, etc.)
+      2. Project has `.empirica/` (signals empirica intent, opted in)
+      3. Instance has no loops registered yet (fresh)
+      4. No stamp file yet (we only auto-install once per instance)
+
+    The stamp file is `~/.empirica/canonical_loops_installed_<instance_id>`.
+    If a user uninstalls a canonical loop later, the stamp stays — they
+    explicitly chose to remove it, don't re-install.
+
+    Returns the count of canonical loops queued (0 if any gate failed).
+    """
+    try:
+        from empirica.utils.session_resolver import get_instance_id
+        instance_id = get_instance_id()
+        if not instance_id:
+            return 0  # gate 1: no instance_id (headless / unknown)
+
+        empirica_dir = project_root / '.empirica'
+        if not empirica_dir.is_dir():
+            return 0  # gate 2: project hasn't been empirica-initialized
+
+        from pathlib import Path as _Path
+        stamp = _Path.home() / '.empirica' / f'canonical_loops_installed_{instance_id.replace(":", "_").replace("/", "-")}'
+        if stamp.exists():
+            return 0  # gate 4: already auto-installed for this instance
+
+        from empirica.core.cockpit.loop_registry import LoopRegistry
+        registry = LoopRegistry(instance_id)
+        existing = registry.list_loops()
+        if existing:
+            # Some loops already registered manually — write stamp so we
+            # don't auto-install on top of user intent next time.
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.write_text('skipped: registry already had entries\n')
+            return 0  # gate 3: not fresh
+
+        # All gates pass — queue install-pending for each canonical loop.
+        from empirica.core.cockpit.canonical_loops import CANONICAL_LOOPS
+        from empirica.core.cockpit.loop_install_request import write_pending
+
+        installed = 0
+        for entry in CANONICAL_LOOPS:
+            try:
+                write_pending(
+                    instance_id=instance_id,
+                    name=entry['name'],
+                    interval=entry.get('interval', '15m'),
+                    description=entry.get('description', ''),
+                    base_interval=entry.get('base_interval'),
+                    max_interval=entry.get('max_interval'),
+                    requested_by='session-init',
+                    body_skill=entry.get('body_skill'),
+                )
+                installed += 1
+            except Exception:
+                pass
+
+        if installed:
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.write_text(f'installed {installed} canonical loop(s) at session-init\n')
+        return installed
+    except Exception:
+        return 0
+
+
 def _build_preflight_prompt(session_id: str, context_text: str) -> str:
     """Build the PREFLIGHT prompt for a new session."""
     return f"""
@@ -1074,9 +1284,17 @@ def main():
 
     if not cwd_adopted:
         project_root = find_project_root(claude_session_id, allow_cwd_fallback=True, allow_git_root=True)
+        # STARTUP EXCEPTION (ARCHITECTURE.md; KNOWN_ISSUES 11.26): a fresh
+        # startup in a directory must override a stale instance binding left
+        # by a different conversation that reused this pane. Open transactions
+        # on the resolved project still win (guard lives in the helper).
+        if event_type == 'startup':
+            from project_resolver import _get_instance_suffix
+            project_root = _prefer_cwd_on_startup(
+                project_root, _find_git_root() or Path.cwd(), _get_instance_suffix())
 
     os.chdir(project_root)
-    ai_id = os.getenv('EMPIRICA_AI_ID', 'claude-code')
+    ai_id = _resolve_ai_id_for_session(project_root)
 
     # Housekeeping
     _run_stale_cleanup(claude_session_id)
@@ -1105,16 +1323,12 @@ def main():
     budget_summary = _init_context_budget(session_id, result.get("project_context", {}))
     dashboard_status = _init_dashboard(session_id, ai_id)
 
+    # Zero-touch: auto-install canonical loops if this instance is fresh
+    # on an empirica-aware project. One-time per instance (stamp file).
+    canonical_loops_installed = _maybe_auto_install_canonical_loops(project_root)
+
     # Build output
     context_text = format_context(result.get("project_context"))
-
-    # v2 supplemental: append persistent_reference + topic_relevant_backlog
-    # sections to the SessionStart additionalContext. See
-    # docs/specs/PROPOSAL_BOOTSTRAP_AGGREGATOR.md.
-    v2_supplemental = _v2_supplemental_safe(result.get("project_context"))
-    if v2_supplemental:
-        context_text = f"{context_text}\n\n{v2_supplemental}"
-
     prompt = _build_preflight_prompt(session_id, context_text)
 
     output = {
@@ -1134,11 +1348,16 @@ def main():
         budget_msg = f"\nBudget: {budget_summary.get('tokens_used', 0):,}t used / {budget_summary.get('tokens_available', 0):,}t avail ({budget_summary.get('utilization_pct', 0)}%)"
     dash_msg = f"\n{dashboard_status}" if dashboard_status else ""
     drift_msg = f"\n{version_drift_warning}" if version_drift_warning else ""
+    loops_msg = (
+        f"\nQueued {canonical_loops_installed} canonical loop(s) for install — "
+        f"will surface on your next /loop invocation"
+        if canonical_loops_installed else ""
+    )
     print(f"""
 Empirica: New Session Initialized
 
 Session created: {session_id}
-Project context loaded{archive_msg}{budget_msg}{dash_msg}{drift_msg}
+Project context loaded{archive_msg}{budget_msg}{dash_msg}{drift_msg}{loops_msg}
 
 Run PREFLIGHT to establish baseline, then CHECK before actions.
 """, file=sys.stderr)
