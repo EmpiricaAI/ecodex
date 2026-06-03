@@ -28,7 +28,10 @@ Add this to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.cortex]
-url = "https://cortex.getempirica.com/sse"
+# streamable_http endpoint (trailing slash required — bare /mcp 307-redirects).
+# ecodex's url-based MCP client uses streamable_http transport; the legacy
+# /sse path is GET-only and 405s the initialize handshake.
+url = "https://cortex.getempirica.com/mcp/"
 bearer_token_env_var = "CORTEX_API_KEY"
 startup_timeout_sec = 30
 tool_timeout_sec = 60
