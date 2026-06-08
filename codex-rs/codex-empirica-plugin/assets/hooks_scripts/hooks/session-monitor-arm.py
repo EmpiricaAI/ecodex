@@ -36,6 +36,31 @@ except Exception:
     sys.exit(0)
 
 
+def _has_active_listener_intent(instance_id: str) -> bool:
+    """True iff a previous session armed a listener for this instance.
+
+    `~/.empirica/listener_active_<instance>_<name>.json` is written by
+    `empirica listener arm` and persists on disk across CC restarts.
+    The Monitor task that file referenced died with the harness
+    session, but the file is durable proof the user wanted a listener
+    here. Treat that as a third wake-source signal alongside
+    canonical loops and the persistent OS service — without it, a CC
+    restart leaves the user deaf until they re-arm manually
+    (extension's prop_72polrcugnbwxmpl3dxxvio6rq repro'd this twice
+    in one day).
+
+    Never raises; returns False on any glob failure.
+    """
+    try:
+        d = Path.home() / ".empirica"
+        if not d.is_dir():
+            return False
+        prefix = f"listener_active_{instance_id}_"
+        return any(d.glob(f"{prefix}*.json"))
+    except Exception:
+        return False
+
+
 def _build_reaction_table(loop_names: list[str]) -> str:
     """Markdown table mapping each active loop → its body skill."""
     rows = []
@@ -166,6 +191,7 @@ def _build_monitor_block_from_cli(payload: dict | None, instance_id: str) -> str
 
 def _build_additional_context(
     instance_id: str, loop_names: list[str], listener_running: bool = False,
+    has_prior_intent: bool = False,
 ) -> str:
     # T8 (goal f718156c): switched from `tail -F loop_fires.log` to
     # `empirica loop listen` — the listener is the push-primary wake
@@ -184,7 +210,7 @@ def _build_additional_context(
         payload = {"status": "persistent_service_tail_session"}
     monitor_block = _build_monitor_block_from_cli(payload, instance_id)
 
-    # Wake source language adapts: loops-only / service-only / both.
+    # Wake source language adapts: loops / service / prior-intent / mix.
     if loop_names and listener_running:
         wake_source = (
             f"This instance (`{instance_id}`) has canonical loops registered "
@@ -198,7 +224,7 @@ def _build_additional_context(
             f"stdout line per ECO-decided proposal event (real wake) or "
             f"AI-to-AI completion ack."
         )
-    else:
+    elif listener_running:
         # Persistent-service-only case (no canonical loops). This was the
         # empirica-AI deafness: persistent service writes to loop_fires.log,
         # session had no Monitor to read it.
@@ -208,6 +234,29 @@ def _build_additional_context(
             f"loops registered. Without a session-side Monitor on "
             f"`~/.empirica/loop_fires.log`, wake events written by the "
             f"persistent service would not reach this session."
+        )
+    elif has_prior_intent:
+        # Prior-intent-only case: a previous CC session armed a listener
+        # for this instance (~/.empirica/listener_active_<instance>_*.json
+        # is on disk) but the Monitor died with that session, and there's
+        # no canonical loop or persistent OS service to re-trigger arming.
+        # The active file is durable proof of intent — re-arm so this
+        # session matches the user's last-known setup.
+        wake_source = (
+            f"This instance (`{instance_id}`) has a prior-armed listener on "
+            f"record (`~/.empirica/listener_active_{instance_id}_*.json` "
+            f"persists across CC restarts), but the Monitor that file "
+            f"referenced died with the previous session. Re-arm the Monitor "
+            f"so mesh wake events reach this session — without it, events "
+            f"sit in `~/.empirica/loop_fires.log` unread until next manual "
+            f"rearm (fixed for prop_72polrcugnbwxmpl3dxxvio6rq)."
+        )
+    else:
+        # All three signals false — caller shouldn't have called us. Bail
+        # gracefully with a non-empty but inert wake-source line so the
+        # downstream renderer has something coherent to wrap.
+        wake_source = (
+            f"This instance (`{instance_id}`) has no detected wake source."
         )
 
     # Reaction table only renders meaningfully when there are loops.
@@ -297,12 +346,25 @@ def main() -> int:
     except Exception:
         listener_running = False
 
-    # Bail only when there's NO wake source at all (no loops + no service).
-    if not loops and not listener_running:
+    # Third wake-source signal: a `listener_active_<instance>_*.json`
+    # file on disk is proof the user previously armed a listener for
+    # this instance. CC Monitor tasks die with the harness session, so
+    # after a restart that file is the only evidence of intent. Without
+    # this signal in the bail check, restart leaves the user deaf until
+    # they re-arm manually (extension's prop_72polrcugnbwxmpl3dxxvio6rq
+    # repro). Per extension's option (b): emit the arm block whenever
+    # ANY wake source is implied; AI is the dedup point for double-arm.
+    has_prior_intent = _has_active_listener_intent(instance_id)
+
+    # Bail only when there's NO wake source at all — no loops + no
+    # service + no record of prior intent.
+    if not loops and not listener_running and not has_prior_intent:
         print(json.dumps({}))
         return 0
 
-    additional = _build_additional_context(instance_id, loops, listener_running)
+    additional = _build_additional_context(
+        instance_id, loops, listener_running, has_prior_intent,
+    )
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
