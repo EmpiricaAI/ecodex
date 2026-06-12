@@ -141,7 +141,7 @@ mod tests {
         let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
         assert!(content.contains(BEGIN_MARKER));
         assert!(content.contains(END_MARKER));
-        assert!(content.contains("Empirica System Prompt"));
+        assert!(content.contains("Empirica Discipline"));
     }
 
     #[test]
@@ -180,7 +180,7 @@ mod tests {
         assert!(content.starts_with("Pre-amble"));
         assert!(content.contains("Post-amble"));
         assert!(!content.contains("stale empirica content"));
-        assert!(content.contains("Empirica System Prompt"));
+        assert!(content.contains("Empirica Discipline"));
     }
 
     #[test]
