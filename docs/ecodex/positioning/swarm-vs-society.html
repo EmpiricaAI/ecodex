@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Most AI teams are a swarm. We built a society.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Newsreader:ital,opsz,wght@0,6..72,300..500;1,6..72,300..420&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#2b241c; --muted:#8a8175; --faint:#b3aa9b;
+  --cold:#a6a7aa; --cold-2:#c7c8cb; --cold-line:#c2c2c4;
+  --clay:#c2562f; --gold:#cf942a; --green:#5f8a55; --plum:#8a5468; --teal:#3f8f86;
+  --warm-card:#fdf7ec; --line:rgba(43,36,28,.13); --line-2:rgba(43,36,28,.22);
+  --display:'Bricolage Grotesque',system-ui,sans-serif;
+  --body:'Newsreader',Georgia,serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; color:var(--ink); font-family:var(--body); font-weight:360; line-height:1.66;
+  font-size:18px; -webkit-font-smoothing:antialiased; overflow-x:hidden;
+  background:linear-gradient(180deg,#e8e7e4 0%, #efece4 26%, #f6efe2 58%, #fbf3e4 100%);
+}
+.wrap{max-width:1040px; margin:0 auto; padding:0 28px}
+h1,h2,h3{font-family:var(--display); font-weight:600; line-height:1.05; letter-spacing:-.02em; margin:0}
+em{font-style:italic; color:var(--clay)}
+.kick{font-family:var(--display); font-weight:600; font-size:.76rem; letter-spacing:.26em; text-transform:uppercase; color:var(--clay)}
+.kick.cool{color:var(--muted)}
+.lead{font-size:clamp(1.2rem,2.1vw,1.5rem); color:#4a4136; max-width:50ch; font-weight:340}
+.muted{color:var(--muted)} .faint{color:var(--faint)}
+section{position:relative; padding:clamp(80px,12vh,140px) 0}
+.divider{height:1px; background:linear-gradient(90deg,transparent,var(--line-2),transparent)}
+
+/* nav dots */
+.dots{position:fixed; right:24px; top:50%; transform:translateY(-50%); z-index:20; display:flex; flex-direction:column; gap:13px}
+.dots a{width:9px;height:9px;border-radius:50%;border:1px solid var(--faint); transition:.35s}
+.dots a.on{background:var(--clay); border-color:var(--clay)}
+@media(max-width:820px){.dots{display:none}}
+
+/* hero */
+.hero{min-height:96vh; display:flex; flex-direction:column; justify-content:center; padding-top:90px}
+.hero h1{font-size:clamp(2.5rem,6.6vw,5.2rem); font-weight:700; max-width:16ch}
+.hero h1 .a{color:var(--cold)} .hero h1 .b{color:var(--clay)}
+.hero .lead{margin-top:24px}
+.compare{display:grid; grid-template-columns:1fr auto 1fr; align-items:stretch; gap:0; margin-top:54px; border:1px solid var(--line); border-radius:20px; overflow:hidden; background:var(--warm-card)}
+.pane{padding:30px 28px}
+.pane.cool{background:#ececea}
+.pane .ptitle{font-family:var(--display); font-weight:600; font-size:.82rem; letter-spacing:.2em; text-transform:uppercase; margin-bottom:18px}
+.pane.cool .ptitle{color:var(--muted)} .pane.warm .ptitle{color:var(--clay)}
+.vs{display:flex; align-items:center; justify-content:center; padding:0 6px; font-family:var(--display); font-style:italic; color:var(--faint); font-size:1.1rem; background:linear-gradient(90deg,#ececea,var(--warm-card))}
+@media(max-width:720px){.compare{grid-template-columns:1fr}.vs{padding:10px;background:none}}
+
+/* swarm grid */
+.swarm{display:grid; grid-template-columns:repeat(7,1fr); gap:11px; max-width:300px}
+.drone{aspect-ratio:1; border-radius:50%; background:var(--cold-2); border:1px solid var(--cold); opacity:.9}
+.scratch{margin-top:18px; border:1px dashed var(--cold); border-radius:8px; padding:8px 12px; font-size:.82rem; color:var(--muted); display:inline-block}
+
+/* society cluster */
+.society{display:flex; flex-wrap:wrap; gap:14px 16px; align-content:flex-start}
+.member{display:flex; align-items:center; gap:11px}
+.badge{width:42px;height:42px;border-radius:50%; display:grid; place-items:center; color:#fff; font-family:var(--display); font-weight:600; font-size:.95rem; flex:none; box-shadow:0 4px 12px rgba(43,36,28,.16)}
+.member .nm{font-family:var(--display); font-weight:600; font-size:.92rem; line-height:1.1}
+.member .mt{font-size:.74rem; color:var(--muted)}
+.thread{height:2px; width:26px; border-radius:2px; background:linear-gradient(90deg,transparent,currentColor)}
+
+/* society section cards */
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-top:34px}
+@media(max-width:760px){.cards{grid-template-columns:1fr}.swarm{margin:0 auto}}
+.card{background:var(--warm-card); border:1px solid var(--line); border-radius:16px; padding:22px; transition:transform .4s, box-shadow .4s}
+.card:hover{transform:translateY(-5px); box-shadow:0 16px 36px rgba(43,36,28,.14)}
+.card .head{display:flex; align-items:center; gap:12px; margin-bottom:14px}
+.card .nm{font-family:var(--display); font-weight:600; font-size:1.15rem}
+.card .mt{font-size:.82rem; color:var(--muted)}
+.card p{margin:.5em 0 0; font-size:.98rem; color:#4a4136}
+.rep{margin-top:14px}
+.rep .lbl{display:flex; justify-content:space-between; font-size:.74rem; color:var(--muted); margin-bottom:5px}
+.rep .bar{height:7px; border-radius:4px; background:rgba(43,36,28,.10); overflow:hidden}
+.rep .bar i{display:block; height:100%; border-radius:4px; background:var(--green)}
+
+/* missing list */
+.miss{display:grid; grid-template-columns:repeat(2,1fr); gap:14px 28px; margin-top:30px}
+@media(max-width:680px){.miss{grid-template-columns:1fr}}
+.miss .it{border-left:2px solid var(--cold); padding:4px 0 4px 16px}
+.miss .it b{font-family:var(--display); font-weight:600; display:block; color:var(--ink)}
+.miss .it span{font-size:.92rem; color:var(--muted)}
+
+/* trust callout */
+.quote{background:var(--warm-card); border:1px solid var(--line); border-left:4px solid var(--gold); border-radius:14px; padding:26px 30px; margin-top:30px; max-width:60ch}
+.quote .say{font-size:clamp(1.15rem,2.2vw,1.5rem); font-style:italic; color:var(--ink)}
+.quote .conf{display:inline-flex; align-items:center; gap:8px; margin-top:14px; font-family:var(--display); font-size:.84rem; color:var(--gold); font-weight:600}
+.quote .tr{margin-top:10px; font-size:.92rem; color:var(--muted)}
+
+/* trust ladder */
+.ladder{margin-top:30px; display:flex; flex-direction:column; gap:10px}
+.rung{display:grid; grid-template-columns:1fr auto; align-items:center; gap:16px; padding:16px 20px; border-radius:12px; border:1px solid var(--line); background:var(--warm-card)}
+.rung .reach{font-family:var(--display); font-weight:600}
+.rung .reach span{display:block; font-family:var(--body); font-weight:340; font-size:.9rem; color:var(--muted)}
+.rung .gate{font-size:.86rem; padding:5px 12px; border-radius:20px; white-space:nowrap}
+.g0{background:rgba(95,138,85,.16); color:var(--green)}
+.g1{background:rgba(207,148,42,.18); color:#a6781f}
+.g2{background:rgba(194,86,47,.16); color:var(--clay)}
+.g3{background:rgba(138,84,104,.18); color:var(--plum)}
+
+/* reframe */
+.reframe{font-family:var(--display); font-size:clamp(1.9rem,4.6vw,3.4rem); font-weight:700; line-height:1.12; max-width:18ch}
+.reframe .x{color:var(--cold)} .reframe .y{color:var(--clay)}
+.foot{margin-top:54px; font-size:.86rem; color:var(--muted)}
+
+/* reveal */
+.reveal{opacity:0; transform:translateY(24px); transition:opacity .9s cubic-bezier(.2,.7,.2,1), transform .9s cubic-bezier(.2,.7,.2,1)}
+.reveal.in{opacity:1; transform:none}
+.d1{transition-delay:.08s}.d2{transition-delay:.16s}.d3{transition-delay:.24s}.d4{transition-delay:.32s}
+@media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}}
+</style>
+</head>
+<body>
+
+<nav class="dots" aria-hidden="true">
+  <a href="#hero" class="on"></a><a href="#swarm"></a><a href="#missing"></a>
+  <a href="#society"></a><a href="#trust"></a><a href="#rules"></a><a href="#reframe"></a>
+</nav>
+
+<!-- HERO -->
+<section id="hero" class="wrap hero">
+  <div class="kick reveal">Empirica · what we actually built</div>
+  <h1 class="reveal d1">Most AI teams are a <span class="a">swarm</span>.<br>We built a <span class="b">society</span>.</h1>
+  <p class="lead reveal d2">A swarm is interchangeable helpers — no one is anyone, and nothing remembers being itself. A society is members with histories, reputations you can check, and rules they act under.</p>
+  <div class="compare reveal d3">
+    <div class="pane cool">
+      <div class="ptitle">the swarm</div>
+      <div class="swarm" id="swarm-grid"></div>
+      <div class="scratch">shared scratchpad — at best</div>
+    </div>
+    <div class="vs">vs</div>
+    <div class="pane warm">
+      <div class="ptitle">the society</div>
+      <div class="society" id="society-cluster"></div>
+    </div>
+  </div>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- SWARM -->
+<section id="swarm" class="wrap">
+  <div class="kick cool reveal">Today</div>
+  <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.7rem);margin-top:14px;color:#3a342b">A swarm of disposable helpers</h2>
+  <p class="lead reveal d2" style="margin-top:18px;max-width:62ch">Spin one up, it does a job, it's gone. If they share anything, it's a common scratchpad. Even when a helper keeps its own notes, the notes are about <em>the task</em> — never about <em>who it is</em>, because it isn't anyone.</p>
+  <div class="miss reveal d3" style="grid-template-columns:1fr">
+    <div class="it"><b>No memory of itself</b><span>It may recall the job. It does not recall being a self that did jobs before.</span></div>
+    <div class="it"><b>No reputation</b><span>Nothing it did yesterday makes it more (or less) trustworthy today.</span></div>
+    <div class="it"><b>No accountability</b><span>When it's gone, there's no one to answer for the call it made.</span></div>
+  </div>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- MISSING -->
+<section id="missing" class="wrap">
+  <div class="kick cool reveal">The gap</div>
+  <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.7rem);margin-top:14px">Notes about a job aren't a <em>self</em></h2>
+  <p class="lead reveal d2" style="margin-top:16px;max-width:60ch">Giving each helper a little memory bank doesn't fix it. A notebook about today's errand isn't an identity. What's missing is everything that makes someone a <em>someone</em>:</p>
+  <div class="miss reveal d3">
+    <div class="it"><b>Identity</b><span>a continuous self that persists between jobs</span></div>
+    <div class="it"><b>History</b><span>a track record that travels with them</span></div>
+    <div class="it"><b>Reputation</b><span>judgment others have learned to trust — or not</span></div>
+    <div class="it"><b>Accountability</b><span>someone who owns the decision afterward</span></div>
+    <div class="it"><b>Growth</b><span>getting more reliable over time, visibly</span></div>
+    <div class="it"><b>Standing</b><span>a place in a network that knows them</span></div>
+  </div>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- SOCIETY -->
+<section id="society" class="wrap">
+  <div class="kick reveal">What we built</div>
+  <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.7rem);margin-top:14px">A society of <em>practitioners</em></h2>
+  <p class="lead reveal d2" style="margin-top:16px;max-width:62ch">Each one is <em>someone</em> — with a name, a history, and a reputation for how reliable their judgment is. That record follows them. They don't just do tasks; they build a track record, and they work together under rules.</p>
+  <div class="cards" id="society-cards"></div>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- TRUST -->
+<section id="trust" class="wrap">
+  <div class="kick reveal">Earned trust</div>
+  <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.7rem);margin-top:14px">They tell you how sure they are — and you can check</h2>
+  <p class="lead reveal d2" style="margin-top:16px;max-width:60ch">A practitioner doesn't just answer. It tells you its confidence, and that confidence has a <em>track record you can verify</em>. Over time, you learn exactly when to lean on it.</p>
+  <div class="quote reveal d2">
+    <div class="say">“I'd take this approach — but I'm only about 6 in 10 on the edge cases.”</div>
+    <div class="conf">● confidence: 6 / 10</div>
+    <div class="tr">Track record: when this practitioner says “6 in 10,” it's right about 6 in 10 times. The honesty is measured, not claimed — so the number actually means something.</div>
+  </div>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- RULES -->
+<section id="rules" class="wrap">
+  <div class="kick reveal">The rules</div>
+  <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.7rem);margin-top:14px">Asking is free. <em>Doing</em> needs a sign-off.</h2>
+  <p class="lead reveal d2" style="margin-top:16px;max-width:62ch">Practitioners consult each other freely — sharing knowledge can't harm you. But taking an action on your behalf is gated, and the gate gets stronger the further the action reaches.</p>
+  <div class="ladder reveal d2">
+    <div class="rung"><div class="reach">Ask a colleague<span>share knowledge, compare notes</span></div><div class="gate g0">free — no sign-off</div></div>
+    <div class="rung"><div class="reach">Act within its own area<span>routine, reversible work</span></div><div class="gate g1">light check</div></div>
+    <div class="rung"><div class="reach">Act across teams<span>touches someone else's work</span></div><div class="gate g2">sign-off required</div></div>
+    <div class="rung"><div class="reach">Act across organizations<span>crosses a trust boundary</span></div><div class="gate g3">strong sign-off</div></div>
+  </div>
+  <p class="reveal d3" style="margin-top:26px;max-width:62ch;color:#4a4136">Because every member is who they say they are, and every action carries a sign-off, the things that scare people about “AI agents loose on the internet” — impersonation, runaway actions, no one to blame — simply don't apply. Openness is replaced by <em>earned, gated trust</em>.</p>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- REFRAME -->
+<section id="reframe" class="wrap" style="padding-bottom:clamp(110px,16vh,180px)">
+  <div class="kick reveal">In a sentence</div>
+  <p class="reframe reveal d1" style="margin-top:24px">Not a <span class="x">swarm of tools</span>.<br>A <span class="y">society of accountable colleagues</span>.</p>
+  <p class="lead reveal d2" style="margin-top:30px;max-width:56ch">You can even put a sharper mind behind the same desk tomorrow — and it inherits the whole history. The role, and its reputation, stay. The individual is replaceable; the practice is not.</p>
+  <p class="foot reveal d3">Empirica — a federation of practitioners who remember, who are accountable, and who earn your trust.</p>
+</section>
+
+<script>
+(function(){
+  // populate swarm — 35 identical drones
+  var sg = document.getElementById('swarm-grid');
+  for(var i=0;i<35;i++){ var d=document.createElement('div'); d.className='drone'; sg.appendChild(d); }
+
+  // members data drives hero cluster + society cards
+  var COL = {clay:'#c2562f', gold:'#cf942a', green:'#5f8a55', plum:'#8a5468', teal:'#3f8f86'};
+  var members = [
+    {nm:'Mara',  in:'Ma', c:COL.clay,  since:'practicing 2 yrs', rep:86, line:'Careful with edge cases; flags what she doesn’t know.'},
+    {nm:'Ito',   in:'It', c:COL.teal,  since:'practicing 14 mo', rep:78, line:'Fast, well-calibrated, owns its mistakes.'},
+    {nm:'Vale',  in:'Va', c:COL.gold,  since:'practicing 8 mo',  rep:71, line:'Strong on research; says when it’s guessing.'},
+    {nm:'Bram',  in:'Br', c:COL.green, since:'practicing 3 yrs', rep:90, line:'The one you ask when it has to be right.'},
+    {nm:'Noor',  in:'No', c:COL.plum,  since:'practicing 6 mo',  rep:64, line:'Newer — reliable on its home turf.'},
+  ];
+
+  // hero cluster
+  var sc = document.getElementById('society-cluster');
+  members.forEach(function(m){
+    var el = document.createElement('div'); el.className='member'; el.style.color=m.c;
+    el.innerHTML = '<div class="badge" style="background:'+m.c+'">'+m.in+'</div>'
+      + '<div><div class="nm" style="color:#2b241c">'+m.nm+'</div><div class="mt">'+m.since+'</div></div>'
+      + '<div class="thread"></div>';
+    sc.appendChild(el);
+  });
+
+  // society cards
+  var cards = document.getElementById('society-cards');
+  members.slice(0,3).forEach(function(m){
+    var el = document.createElement('div'); el.className='card reveal';
+    el.innerHTML = '<div class="head"><div class="badge" style="background:'+m.c+'">'+m.in+'</div>'
+      + '<div><div class="nm">'+m.nm+'</div><div class="mt">'+m.since+'</div></div></div>'
+      + '<p>'+m.line+'</p>'
+      + '<div class="rep"><div class="lbl"><span>reputation (earned)</span><span>'+m.rep+'%</span></div>'
+      + '<div class="bar"><i style="width:'+m.rep+'%"></i></div></div>';
+    cards.appendChild(el);
+  });
+
+  // reveals
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target);} });
+  }, {threshold:.16, rootMargin:'0px 0px -8% 0px'});
+  document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
+
+  // nav dots
+  var dots=[].slice.call(document.querySelectorAll('.dots a'));
+  var secs=dots.map(function(d){return document.querySelector(d.getAttribute('href'));});
+  var so=new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ var i=secs.indexOf(e.target);
+      dots.forEach(function(d,j){ d.classList.toggle('on', j===i); }); }});
+  }, {threshold:.5});
+  secs.forEach(function(s){ if(s) so.observe(s); });
+})();
+</script>
+</body>
+</html>
