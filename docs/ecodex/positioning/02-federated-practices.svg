@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="664" height="260" style="display:block;margin:auto" class="mdview-diagram">
+
+  <style>
+    .mdview-diagram { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 13px; }
+    .mdview-diagram .box-fill { fill: #1a1b26; stroke: none; }
+    .mdview-diagram .box-border { stroke: #7aa2f7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .box-separator { stroke: #7aa2f7; stroke-width: 1; }
+    .mdview-diagram .box-text { fill: #a9b1d6; white-space: pre; }
+    .mdview-diagram .box-header { fill: #9ece6a; font-weight: 600; }
+    .mdview-diagram .arrow-line { stroke: #bb9af7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .arrow-head { fill: #bb9af7; stroke: none; }
+    .mdview-diagram .arrow-label { fill: #e0af68; font-size: 12px; text-anchor: middle; }
+    .mdview-diagram .arrow-label-bg { fill: #1a1b26; fill-opacity: 0.85; rx: 3; }
+    .mdview-diagram .bg { fill: #1a1b26; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .box-fill { fill: #f8f8fc; }
+      .mdview-diagram .box-border { stroke: #2e7de9; }
+      .mdview-diagram .box-separator { stroke: #2e7de9; }
+      .mdview-diagram .box-text { fill: #343b58; }
+      .mdview-diagram .box-header { fill: #587539; }
+      .mdview-diagram .arrow-line { stroke: #7847bd; }
+      .mdview-diagram .arrow-head { fill: #7847bd; }
+      .mdview-diagram .arrow-label { fill: #8c6c3e; }
+      .mdview-diagram .arrow-label-bg { fill: #f8f8fc; fill-opacity: 0.85; }
+      .mdview-diagram .bg { fill: #f8f8fc; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="664" height="260" rx="6"/>
+  <defs>
+    <clipPath id="d1-bc0"><rect x="20.0" y="20.0" width="302.0" height="100.0" rx="6"/></clipPath>
+    <clipPath id="d1-bc1"><rect x="342.0" y="20.0" width="302.0" height="100.0" rx="6"/></clipPath>
+    <clipPath id="d1-bc2"><rect x="20.0" y="140.0" width="302.0" height="100.0" rx="6"/></clipPath>
+  </defs>
+  <defs>
+    <marker id="d1-ah" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <polygon points="0,1 10,5 0,9" class="arrow-head"/>
+    </marker>
+  </defs>
+  <line class="arrow-line" x1="322.0" y1="70.0" x2="342.0" y2="70.0" marker-end="url(#d1-ah)"/>
+  <line class="arrow-line" x1="342.0" y1="70.0" x2="322.0" y2="190.0" marker-end="url(#d1-ah)"/>
+  <rect class="box-fill" x="20.0" y="20.0" width="302.0" height="100.0" rx="6"/>
+  <rect class="box-border" x="20.0" y="20.0" width="302.0" height="100.0" rx="6"/>
+  <g clip-path="url(#d1-bc0)">
+    <text class="box-header" x="171.0" y="40.0" text-anchor="middle" dominant-baseline="central">practice A (seat)</text>
+    <line class="box-separator" x1="20.0" y1="52.0" x2="322.0" y2="52.0"/>
+    <text class="box-text" x="32.0" y="74.0">own repo + history</text>
+    <text class="box-text" x="32.0" y="90.0">calibration trajectory</text>
+    <text class="box-text" x="32.0" y="106.0">practitioner [model] swappable</text>
+  </g>
+  <rect class="box-fill" x="342.0" y="20.0" width="302.0" height="100.0" rx="6"/>
+  <rect class="box-border" x="342.0" y="20.0" width="302.0" height="100.0" rx="6"/>
+  <g clip-path="url(#d1-bc1)">
+    <text class="box-header" x="493.0" y="40.0" text-anchor="middle" dominant-baseline="central">practice B (seat)</text>
+    <line class="box-separator" x1="342.0" y1="52.0" x2="644.0" y2="52.0"/>
+    <text class="box-text" x="354.0" y="74.0">own repo + history</text>
+    <text class="box-text" x="354.0" y="90.0">calibration trajectory</text>
+    <text class="box-text" x="354.0" y="106.0">practitioner [model] swappable</text>
+  </g>
+  <rect class="box-fill" x="20.0" y="140.0" width="302.0" height="100.0" rx="6"/>
+  <rect class="box-border" x="20.0" y="140.0" width="302.0" height="100.0" rx="6"/>
+  <g clip-path="url(#d1-bc2)">
+    <text class="box-header" x="171.0" y="160.0" text-anchor="middle" dominant-baseline="central">practice C (seat)</text>
+    <line class="box-separator" x1="20.0" y1="172.0" x2="322.0" y2="172.0"/>
+    <text class="box-text" x="32.0" y="194.0">own repo + history</text>
+    <text class="box-text" x="32.0" y="210.0">calibration trajectory</text>
+    <text class="box-text" x="32.0" y="226.0">practitioner [model] swappable</text>
+  </g>
+  <rect class="arrow-label-bg" x="245.2" y="61.0" width="173.6" height="16" rx="3"/>
+  <text class="arrow-label" x="332.0" y="70.0" dominant-baseline="central">collab (open / ungated)</text>
+  <rect class="arrow-label-bg" x="259.6" y="121.0" width="144.8" height="16" rx="3"/>
+  <text class="arrow-label" x="332.0" y="130.0" dominant-baseline="central">propose (+ECO gate)</text>
+</svg>

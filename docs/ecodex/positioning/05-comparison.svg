@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="722" height="280" style="display:block;margin:auto" class="mdview-diagram">
+
+  <style>
+    .mdview-diagram { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 13px; }
+    .mdview-diagram .box-fill { fill: #1a1b26; stroke: none; }
+    .mdview-diagram .box-border { stroke: #7aa2f7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .box-separator { stroke: #7aa2f7; stroke-width: 1; }
+    .mdview-diagram .box-text { fill: #a9b1d6; white-space: pre; }
+    .mdview-diagram .box-header { fill: #9ece6a; font-weight: 600; }
+    .mdview-diagram .arrow-line { stroke: #bb9af7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .arrow-head { fill: #bb9af7; stroke: none; }
+    .mdview-diagram .arrow-label { fill: #e0af68; font-size: 12px; text-anchor: middle; }
+    .mdview-diagram .arrow-label-bg { fill: #1a1b26; fill-opacity: 0.85; rx: 3; }
+    .mdview-diagram .bg { fill: #1a1b26; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .box-fill { fill: #f8f8fc; }
+      .mdview-diagram .box-border { stroke: #2e7de9; }
+      .mdview-diagram .box-separator { stroke: #2e7de9; }
+      .mdview-diagram .box-text { fill: #343b58; }
+      .mdview-diagram .box-header { fill: #587539; }
+      .mdview-diagram .arrow-line { stroke: #7847bd; }
+      .mdview-diagram .arrow-head { fill: #7847bd; }
+      .mdview-diagram .arrow-label { fill: #8c6c3e; }
+      .mdview-diagram .arrow-label-bg { fill: #f8f8fc; fill-opacity: 0.85; }
+      .mdview-diagram .bg { fill: #f8f8fc; }
+    }
+  </style>
+  <style>
+    .mdview-diagram .table-header-bg { fill: #24283b; }
+    .mdview-diagram .table-cell-bg { fill: none; }
+    .mdview-diagram .table-border { stroke: #7aa2f7; stroke-width: 1; fill: none; }
+    .mdview-diagram .table-header-text { fill: #9ece6a; font-weight: 600; white-space: pre; }
+    .mdview-diagram .table-cell-text { fill: #a9b1d6; white-space: pre; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .table-header-bg { fill: #e8e8f0; }
+      .mdview-diagram .table-border { stroke: #2e7de9; }
+      .mdview-diagram .table-header-text { fill: #587539; }
+      .mdview-diagram .table-cell-text { fill: #343b58; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="722" height="280" rx="6"/>
+  <rect class="table-border" x="20" y="20" width="681.6" height="240.0"/>
+  <rect class="table-header-bg" x="20" y="20.0" width="681.6" height="30"/>
+  <text class="table-header-text" x="109.8" y="35.0" text-anchor="middle" dominant-baseline="central"></text>
+  <text class="table-header-text" x="306.2" y="35.0" text-anchor="middle" dominant-baseline="central">worktree-style MAS</text>
+  <text class="table-header-text" x="557.2" y="35.0" text-anchor="middle" dominant-baseline="central">federated practices</text>
+  <line class="table-border" x1="20" y1="50.0" x2="701.6" y2="50.0"/>
+  <text class="table-cell-text" x="109.8" y="65.0" text-anchor="middle" dominant-baseline="central">unit</text>
+  <text class="table-cell-text" x="306.2" y="65.0" text-anchor="middle" dominant-baseline="central">N checkouts of ONE repo</text>
+  <text class="table-cell-text" x="557.2" y="65.0" text-anchor="middle" dominant-baseline="central">N independent practices</text>
+  <text class="table-cell-text" x="109.8" y="95.0" text-anchor="middle" dominant-baseline="central">authority</text>
+  <text class="table-cell-text" x="306.2" y="95.0" text-anchor="middle" dominant-baseline="central">single object store</text>
+  <text class="table-cell-text" x="557.2" y="95.0" text-anchor="middle" dominant-baseline="central">federated, each sovereign</text>
+  <text class="table-cell-text" x="109.8" y="125.0" text-anchor="middle" dominant-baseline="central">spans machines/orgs</text>
+  <text class="table-cell-text" x="306.2" y="125.0" text-anchor="middle" dominant-baseline="central">no (local FS)</text>
+  <text class="table-cell-text" x="557.2" y="125.0" text-anchor="middle" dominant-baseline="central">yes, governed</text>
+  <text class="table-cell-text" x="109.8" y="155.0" text-anchor="middle" dominant-baseline="central">lifetime</text>
+  <text class="table-cell-text" x="306.2" y="155.0" text-anchor="middle" dominant-baseline="central">ephemeral, dies at task</text>
+  <text class="table-cell-text" x="557.2" y="155.0" text-anchor="middle" dominant-baseline="central">persistent seat + trajectory</text>
+  <text class="table-cell-text" x="109.8" y="185.0" text-anchor="middle" dominant-baseline="central">identity</text>
+  <text class="table-cell-text" x="306.2" y="185.0" text-anchor="middle" dominant-baseline="central">none (clones)</text>
+  <text class="table-cell-text" x="557.2" y="185.0" text-anchor="middle" dominant-baseline="central">in the seat; model swaps in</text>
+  <text class="table-cell-text" x="109.8" y="215.0" text-anchor="middle" dominant-baseline="central">carries</text>
+  <text class="table-cell-text" x="306.2" y="215.0" text-anchor="middle" dominant-baseline="central">code diffs</text>
+  <text class="table-cell-text" x="557.2" y="215.0" text-anchor="middle" dominant-baseline="central">calibrated belief + gated action</text>
+  <text class="table-cell-text" x="109.8" y="245.0" text-anchor="middle" dominant-baseline="central">solves</text>
+  <text class="table-cell-text" x="306.2" y="245.0" text-anchor="middle" dominant-baseline="central">execution isolation</text>
+  <text class="table-cell-text" x="557.2" y="245.0" text-anchor="middle" dominant-baseline="central">coordination + governance</text>
+  <line class="table-border" x1="199.6" y1="20" x2="199.6" y2="260.0"/>
+  <line class="table-border" x1="412.8" y1="20" x2="412.8" y2="260.0"/>
+  <line class="table-border" x1="20" y1="50.0" x2="701.6" y2="50.0"/>
+  <line class="table-border" x1="20" y1="80.0" x2="701.6" y2="80.0"/>
+  <line class="table-border" x1="20" y1="110.0" x2="701.6" y2="110.0"/>
+  <line class="table-border" x1="20" y1="140.0" x2="701.6" y2="140.0"/>
+  <line class="table-border" x1="20" y1="170.0" x2="701.6" y2="170.0"/>
+  <line class="table-border" x1="20" y1="200.0" x2="701.6" y2="200.0"/>
+  <line class="table-border" x1="20" y1="230.0" x2="701.6" y2="230.0"/>
+</svg>

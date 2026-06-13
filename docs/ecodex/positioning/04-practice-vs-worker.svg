@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="619" height="172" style="display:block;margin:auto" class="mdview-diagram">
+
+  <style>
+    .mdview-diagram { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 13px; }
+    .mdview-diagram .box-fill { fill: #1a1b26; stroke: none; }
+    .mdview-diagram .box-border { stroke: #7aa2f7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .box-separator { stroke: #7aa2f7; stroke-width: 1; }
+    .mdview-diagram .box-text { fill: #a9b1d6; white-space: pre; }
+    .mdview-diagram .box-header { fill: #9ece6a; font-weight: 600; }
+    .mdview-diagram .arrow-line { stroke: #bb9af7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .arrow-head { fill: #bb9af7; stroke: none; }
+    .mdview-diagram .arrow-label { fill: #e0af68; font-size: 12px; text-anchor: middle; }
+    .mdview-diagram .arrow-label-bg { fill: #1a1b26; fill-opacity: 0.85; rx: 3; }
+    .mdview-diagram .bg { fill: #1a1b26; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .box-fill { fill: #f8f8fc; }
+      .mdview-diagram .box-border { stroke: #2e7de9; }
+      .mdview-diagram .box-separator { stroke: #2e7de9; }
+      .mdview-diagram .box-text { fill: #343b58; }
+      .mdview-diagram .box-header { fill: #587539; }
+      .mdview-diagram .arrow-line { stroke: #7847bd; }
+      .mdview-diagram .arrow-head { fill: #7847bd; }
+      .mdview-diagram .arrow-label { fill: #8c6c3e; }
+      .mdview-diagram .arrow-label-bg { fill: #f8f8fc; fill-opacity: 0.85; }
+      .mdview-diagram .bg { fill: #f8f8fc; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="619" height="172" rx="6"/>
+  <defs>
+    <clipPath id="d2-bc0"><rect x="20.0" y="20.0" width="248.0" height="116.0" rx="6"/></clipPath>
+    <clipPath id="d2-bc1"><rect x="288.0" y="20.0" width="311.0" height="132.0" rx="6"/></clipPath>
+  </defs>
+  <rect class="box-fill" x="20.0" y="20.0" width="248.0" height="116.0" rx="6"/>
+  <rect class="box-border" x="20.0" y="20.0" width="248.0" height="116.0" rx="6"/>
+  <g clip-path="url(#d2-bc0)">
+    <text class="box-header" x="144.0" y="40.0" text-anchor="middle" dominant-baseline="central">WORKER (today)</text>
+    <line class="box-separator" x1="20.0" y1="52.0" x2="268.0" y2="52.0"/>
+    <text class="box-text" x="32.0" y="74.0">spawn -&gt; work -&gt; die</text>
+    <text class="box-text" x="32.0" y="90.0">respawns fresh each task</text>
+    <text class="box-text" x="32.0" y="106.0">no identity, no memory</text>
+    <text class="box-text" x="32.0" y="122.0">leaves no trace</text>
+  </g>
+  <rect class="box-fill" x="288.0" y="20.0" width="311.0" height="132.0" rx="6"/>
+  <rect class="box-border" x="288.0" y="20.0" width="311.0" height="132.0" rx="6"/>
+  <g clip-path="url(#d2-bc1)">
+    <text class="box-header" x="443.5" y="40.0" text-anchor="middle" dominant-baseline="central">PRACTICE (ours)</text>
+    <line class="box-separator" x1="288.0" y1="52.0" x2="599.0" y2="52.0"/>
+    <text class="box-text" x="300.0" y="74.0">birth ---&gt; now (continuous)</text>
+    <text class="box-text" x="300.0" y="90.0">calibration trajectory persists</text>
+    <text class="box-text" x="300.0" y="106.0">identity lives in the SEAT</text>
+    <text class="box-text" x="300.0" y="122.0">model [a]-&gt;[b]-&gt;[c] swaps in</text>
+    <text class="box-text" x="300.0" y="138.0">every belief logged + gated</text>
+  </g>
+</svg>

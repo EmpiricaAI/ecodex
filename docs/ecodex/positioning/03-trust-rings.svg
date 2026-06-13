@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="534" height="288" style="display:block;margin:auto" class="mdview-diagram">
+
+  <style>
+    .mdview-diagram { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 13px; }
+    .mdview-diagram .box-fill { fill: #1a1b26; stroke: none; }
+    .mdview-diagram .box-border { stroke: #7aa2f7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .box-separator { stroke: #7aa2f7; stroke-width: 1; }
+    .mdview-diagram .box-text { fill: #a9b1d6; white-space: pre; }
+    .mdview-diagram .box-header { fill: #9ece6a; font-weight: 600; }
+    .mdview-diagram .arrow-line { stroke: #bb9af7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .arrow-head { fill: #bb9af7; stroke: none; }
+    .mdview-diagram .arrow-label { fill: #e0af68; font-size: 12px; text-anchor: middle; }
+    .mdview-diagram .arrow-label-bg { fill: #1a1b26; fill-opacity: 0.85; rx: 3; }
+    .mdview-diagram .bg { fill: #1a1b26; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .box-fill { fill: #f8f8fc; }
+      .mdview-diagram .box-border { stroke: #2e7de9; }
+      .mdview-diagram .box-separator { stroke: #2e7de9; }
+      .mdview-diagram .box-text { fill: #343b58; }
+      .mdview-diagram .box-header { fill: #587539; }
+      .mdview-diagram .arrow-line { stroke: #7847bd; }
+      .mdview-diagram .arrow-head { fill: #7847bd; }
+      .mdview-diagram .arrow-label { fill: #8c6c3e; }
+      .mdview-diagram .arrow-label-bg { fill: #f8f8fc; fill-opacity: 0.85; }
+      .mdview-diagram .bg { fill: #f8f8fc; }
+    }
+  </style>
+  <style>
+    .mdview-diagram .wf-panel { stroke: #7aa2f7; stroke-width: 1.5; fill: none; rx: 4; }
+    .mdview-diagram .wf-panel-fill { fill: #24283b; fill-opacity: 0.3; rx: 4; }
+    .mdview-diagram .wf-title { fill: #9ece6a; font-weight: 600; font-size: 13px; }
+    .mdview-diagram .wf-label { fill: #a9b1d6; font-size: 12px; }
+    .mdview-diagram .wf-input { stroke: #565f89; stroke-width: 1; fill: none; rx: 3; }
+    .mdview-diagram .wf-input-text { fill: #565f89; font-size: 11px; font-style: italic; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .wf-panel { stroke: #2e7de9; }
+      .mdview-diagram .wf-panel-fill { fill: #e8e8f0; }
+      .mdview-diagram .wf-title { fill: #587539; }
+      .mdview-diagram .wf-label { fill: #343b58; }
+      .mdview-diagram .wf-input { stroke: #9ca0b0; }
+      .mdview-diagram .wf-input-text { fill: #9ca0b0; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="534" height="288" rx="6"/>
+  <rect class="wf-panel-fill" x="20.0" y="20.0" width="494.0" height="248.0" style="fill-opacity:0.15"/>
+  <rect class="wf-panel" x="20.0" y="20.0" width="494.0" height="248.0"/>
+  <text class="wf-title" x="28.0" y="38.0">cross-org   - gate: L3 ECO + System tab</text>
+  <rect class="wf-panel-fill" x="32.0" y="48.0" width="470.0" height="196.0" style="fill-opacity:0.23"/>
+  <rect class="wf-panel" x="32.0" y="48.0" width="470.0" height="196.0"/>
+  <text class="wf-title" x="40.0" y="66.0">org   - gate: cross-org escalation</text>
+  <rect class="wf-panel-fill" x="44.0" y="76.0" width="446.0" height="144.0" style="fill-opacity:0.31"/>
+  <rect class="wf-panel" x="44.0" y="76.0" width="446.0" height="144.0"/>
+  <text class="wf-title" x="52.0" y="94.0">tenant   - gate: cross-tenant review</text>
+  <rect class="wf-panel-fill" x="56.0" y="104.0" width="422.0" height="92.0" style="fill-opacity:0.39"/>
+  <rect class="wf-panel" x="56.0" y="104.0" width="422.0" height="92.0"/>
+  <text class="wf-title" x="64.0" y="122.0">practice (seat)   - collab: open  |  propose: ECO</text>
+  <rect class="wf-panel-fill" x="68.0" y="132.0" width="366.0" height="40.0" style="fill-opacity:0.47"/>
+  <rect class="wf-panel" x="68.0" y="132.0" width="366.0" height="40.0"/>
+  <text class="wf-title" x="76.0" y="150.0">practitioner [model] - swappable, fungible</text>
+</svg>

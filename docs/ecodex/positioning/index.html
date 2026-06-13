@@ -1,0 +1,361 @@
+<!doctype html><meta charset=utf-8><title>Mesh vs worktree-MAS</title><style>body{font-family:system-ui;max-width:980px;margin:2rem auto;padding:0 1rem}section{margin:2.5rem 0;border-bottom:1px solid #ddd;padding-bottom:1.5rem}h2{font-size:1.1rem}</style><h1>Worktree-style MAS vs federated calibrated practices</h1><section><h2>Today: worktree-style multi-agent</h2>
+<svg xmlns="http://www.w3.org/2000/svg" width="588" height="200" style="display:block;margin:auto" class="mdview-diagram">
+
+  <style>
+    .mdview-diagram { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 13px; }
+    .mdview-diagram .box-fill { fill: #1a1b26; stroke: none; }
+    .mdview-diagram .box-border { stroke: #7aa2f7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .box-separator { stroke: #7aa2f7; stroke-width: 1; }
+    .mdview-diagram .box-text { fill: #a9b1d6; white-space: pre; }
+    .mdview-diagram .box-header { fill: #9ece6a; font-weight: 600; }
+    .mdview-diagram .arrow-line { stroke: #bb9af7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .arrow-head { fill: #bb9af7; stroke: none; }
+    .mdview-diagram .arrow-label { fill: #e0af68; font-size: 12px; text-anchor: middle; }
+    .mdview-diagram .arrow-label-bg { fill: #1a1b26; fill-opacity: 0.85; rx: 3; }
+    .mdview-diagram .bg { fill: #1a1b26; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .box-fill { fill: #f8f8fc; }
+      .mdview-diagram .box-border { stroke: #2e7de9; }
+      .mdview-diagram .box-separator { stroke: #2e7de9; }
+      .mdview-diagram .box-text { fill: #343b58; }
+      .mdview-diagram .box-header { fill: #587539; }
+      .mdview-diagram .arrow-line { stroke: #7847bd; }
+      .mdview-diagram .arrow-head { fill: #7847bd; }
+      .mdview-diagram .arrow-label { fill: #8c6c3e; }
+      .mdview-diagram .arrow-label-bg { fill: #f8f8fc; fill-opacity: 0.85; }
+      .mdview-diagram .bg { fill: #f8f8fc; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="588" height="200" rx="6"/>
+  <defs>
+    <clipPath id="d0-bc0"><rect x="20.0" y="20.0" width="149.0" height="100.0" rx="6"/></clipPath>
+    <clipPath id="d0-bc1"><rect x="189.0" y="20.0" width="113.0" height="100.0" rx="6"/></clipPath>
+    <clipPath id="d0-bc2"><rect x="322.0" y="20.0" width="113.0" height="100.0" rx="6"/></clipPath>
+    <clipPath id="d0-bc3"><rect x="455.0" y="20.0" width="113.0" height="100.0" rx="6"/></clipPath>
+  </defs>
+  <defs>
+    <marker id="d0-ah" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <polygon points="0,1 10,5 0,9" class="arrow-head"/>
+    </marker>
+  </defs>
+  <line class="arrow-line" x1="169.0" y1="70.0" x2="189.0" y2="70.0" marker-end="url(#d0-ah)"/>
+  <path class="arrow-line" d="M 94.5,120.0 L 94.5,140.0 L 378.5,140.0 L 378.5,120.0"  marker-end="url(#d0-ah)"/>
+  <path class="arrow-line" d="M 94.5,120.0 L 94.5,160.0 L 511.5,160.0 L 511.5,120.0"  marker-end="url(#d0-ah)"/>
+  <rect class="box-fill" x="20.0" y="20.0" width="149.0" height="100.0" rx="6"/>
+  <rect class="box-border" x="20.0" y="20.0" width="149.0" height="100.0" rx="6"/>
+  <g clip-path="url(#d0-bc0)">
+    <text class="box-header" x="94.5" y="40.0" text-anchor="middle" dominant-baseline="central">orchestrator</text>
+    <line class="box-separator" x1="20.0" y1="52.0" x2="169.0" y2="52.0"/>
+    <text class="box-text" x="32.0" y="74.0">one repo</text>
+    <text class="box-text" x="32.0" y="90.0">one machine</text>
+    <text class="box-text" x="32.0" y="106.0">one authority</text>
+  </g>
+  <rect class="box-fill" x="189.0" y="20.0" width="113.0" height="100.0" rx="6"/>
+  <rect class="box-border" x="189.0" y="20.0" width="113.0" height="100.0" rx="6"/>
+  <g clip-path="url(#d0-bc1)">
+    <text class="box-header" x="245.5" y="40.0" text-anchor="middle" dominant-baseline="central">worker 1</text>
+    <line class="box-separator" x1="189.0" y1="52.0" x2="302.0" y2="52.0"/>
+    <text class="box-text" x="201.0" y="74.0">ephemeral</text>
+    <text class="box-text" x="201.0" y="90.0">clone</text>
+    <text class="box-text" x="201.0" y="106.0">no memory</text>
+  </g>
+  <rect class="box-fill" x="322.0" y="20.0" width="113.0" height="100.0" rx="6"/>
+  <rect class="box-border" x="322.0" y="20.0" width="113.0" height="100.0" rx="6"/>
+  <g clip-path="url(#d0-bc2)">
+    <text class="box-header" x="378.5" y="40.0" text-anchor="middle" dominant-baseline="central">worker 2</text>
+    <line class="box-separator" x1="322.0" y1="52.0" x2="435.0" y2="52.0"/>
+    <text class="box-text" x="334.0" y="74.0">ephemeral</text>
+    <text class="box-text" x="334.0" y="90.0">clone</text>
+    <text class="box-text" x="334.0" y="106.0">no memory</text>
+  </g>
+  <rect class="box-fill" x="455.0" y="20.0" width="113.0" height="100.0" rx="6"/>
+  <rect class="box-border" x="455.0" y="20.0" width="113.0" height="100.0" rx="6"/>
+  <g clip-path="url(#d0-bc3)">
+    <text class="box-header" x="511.5" y="40.0" text-anchor="middle" dominant-baseline="central">worker 3</text>
+    <line class="box-separator" x1="455.0" y1="52.0" x2="568.0" y2="52.0"/>
+    <text class="box-text" x="467.0" y="74.0">ephemeral</text>
+    <text class="box-text" x="467.0" y="90.0">clone</text>
+    <text class="box-text" x="467.0" y="106.0">no memory</text>
+  </g>
+  <rect class="arrow-label-bg" x="110.2" y="61.0" width="137.6" height="16" rx="3"/>
+  <text class="arrow-label" x="179.0" y="70.0" dominant-baseline="central">fan-out (worktree)</text>
+  <rect class="arrow-label-bg" x="207.3" y="131.0" width="58.4" height="16" rx="3"/>
+  <text class="arrow-label" x="236.5" y="140.0" dominant-baseline="central">fan-out</text>
+  <rect class="arrow-label-bg" x="273.8" y="151.0" width="58.4" height="16" rx="3"/>
+  <text class="arrow-label" x="303.0" y="160.0" dominant-baseline="central">fan-out</text>
+</svg>
+</section>
+<section><h2>Ours: federation of calibrated practices</h2>
+<svg xmlns="http://www.w3.org/2000/svg" width="664" height="260" style="display:block;margin:auto" class="mdview-diagram">
+
+  <style>
+    .mdview-diagram { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 13px; }
+    .mdview-diagram .box-fill { fill: #1a1b26; stroke: none; }
+    .mdview-diagram .box-border { stroke: #7aa2f7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .box-separator { stroke: #7aa2f7; stroke-width: 1; }
+    .mdview-diagram .box-text { fill: #a9b1d6; white-space: pre; }
+    .mdview-diagram .box-header { fill: #9ece6a; font-weight: 600; }
+    .mdview-diagram .arrow-line { stroke: #bb9af7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .arrow-head { fill: #bb9af7; stroke: none; }
+    .mdview-diagram .arrow-label { fill: #e0af68; font-size: 12px; text-anchor: middle; }
+    .mdview-diagram .arrow-label-bg { fill: #1a1b26; fill-opacity: 0.85; rx: 3; }
+    .mdview-diagram .bg { fill: #1a1b26; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .box-fill { fill: #f8f8fc; }
+      .mdview-diagram .box-border { stroke: #2e7de9; }
+      .mdview-diagram .box-separator { stroke: #2e7de9; }
+      .mdview-diagram .box-text { fill: #343b58; }
+      .mdview-diagram .box-header { fill: #587539; }
+      .mdview-diagram .arrow-line { stroke: #7847bd; }
+      .mdview-diagram .arrow-head { fill: #7847bd; }
+      .mdview-diagram .arrow-label { fill: #8c6c3e; }
+      .mdview-diagram .arrow-label-bg { fill: #f8f8fc; fill-opacity: 0.85; }
+      .mdview-diagram .bg { fill: #f8f8fc; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="664" height="260" rx="6"/>
+  <defs>
+    <clipPath id="d1-bc0"><rect x="20.0" y="20.0" width="302.0" height="100.0" rx="6"/></clipPath>
+    <clipPath id="d1-bc1"><rect x="342.0" y="20.0" width="302.0" height="100.0" rx="6"/></clipPath>
+    <clipPath id="d1-bc2"><rect x="20.0" y="140.0" width="302.0" height="100.0" rx="6"/></clipPath>
+  </defs>
+  <defs>
+    <marker id="d1-ah" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <polygon points="0,1 10,5 0,9" class="arrow-head"/>
+    </marker>
+  </defs>
+  <line class="arrow-line" x1="322.0" y1="70.0" x2="342.0" y2="70.0" marker-end="url(#d1-ah)"/>
+  <line class="arrow-line" x1="342.0" y1="70.0" x2="322.0" y2="190.0" marker-end="url(#d1-ah)"/>
+  <rect class="box-fill" x="20.0" y="20.0" width="302.0" height="100.0" rx="6"/>
+  <rect class="box-border" x="20.0" y="20.0" width="302.0" height="100.0" rx="6"/>
+  <g clip-path="url(#d1-bc0)">
+    <text class="box-header" x="171.0" y="40.0" text-anchor="middle" dominant-baseline="central">practice A (seat)</text>
+    <line class="box-separator" x1="20.0" y1="52.0" x2="322.0" y2="52.0"/>
+    <text class="box-text" x="32.0" y="74.0">own repo + history</text>
+    <text class="box-text" x="32.0" y="90.0">calibration trajectory</text>
+    <text class="box-text" x="32.0" y="106.0">practitioner [model] swappable</text>
+  </g>
+  <rect class="box-fill" x="342.0" y="20.0" width="302.0" height="100.0" rx="6"/>
+  <rect class="box-border" x="342.0" y="20.0" width="302.0" height="100.0" rx="6"/>
+  <g clip-path="url(#d1-bc1)">
+    <text class="box-header" x="493.0" y="40.0" text-anchor="middle" dominant-baseline="central">practice B (seat)</text>
+    <line class="box-separator" x1="342.0" y1="52.0" x2="644.0" y2="52.0"/>
+    <text class="box-text" x="354.0" y="74.0">own repo + history</text>
+    <text class="box-text" x="354.0" y="90.0">calibration trajectory</text>
+    <text class="box-text" x="354.0" y="106.0">practitioner [model] swappable</text>
+  </g>
+  <rect class="box-fill" x="20.0" y="140.0" width="302.0" height="100.0" rx="6"/>
+  <rect class="box-border" x="20.0" y="140.0" width="302.0" height="100.0" rx="6"/>
+  <g clip-path="url(#d1-bc2)">
+    <text class="box-header" x="171.0" y="160.0" text-anchor="middle" dominant-baseline="central">practice C (seat)</text>
+    <line class="box-separator" x1="20.0" y1="172.0" x2="322.0" y2="172.0"/>
+    <text class="box-text" x="32.0" y="194.0">own repo + history</text>
+    <text class="box-text" x="32.0" y="210.0">calibration trajectory</text>
+    <text class="box-text" x="32.0" y="226.0">practitioner [model] swappable</text>
+  </g>
+  <rect class="arrow-label-bg" x="245.2" y="61.0" width="173.6" height="16" rx="3"/>
+  <text class="arrow-label" x="332.0" y="70.0" dominant-baseline="central">collab (open / ungated)</text>
+  <rect class="arrow-label-bg" x="259.6" y="121.0" width="144.8" height="16" rx="3"/>
+  <text class="arrow-label" x="332.0" y="130.0" dominant-baseline="central">propose (+ECO gate)</text>
+</svg>
+</section>
+<section><h2>Governance tightens with trust distance</h2>
+<svg xmlns="http://www.w3.org/2000/svg" width="534" height="288" style="display:block;margin:auto" class="mdview-diagram">
+
+  <style>
+    .mdview-diagram { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 13px; }
+    .mdview-diagram .box-fill { fill: #1a1b26; stroke: none; }
+    .mdview-diagram .box-border { stroke: #7aa2f7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .box-separator { stroke: #7aa2f7; stroke-width: 1; }
+    .mdview-diagram .box-text { fill: #a9b1d6; white-space: pre; }
+    .mdview-diagram .box-header { fill: #9ece6a; font-weight: 600; }
+    .mdview-diagram .arrow-line { stroke: #bb9af7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .arrow-head { fill: #bb9af7; stroke: none; }
+    .mdview-diagram .arrow-label { fill: #e0af68; font-size: 12px; text-anchor: middle; }
+    .mdview-diagram .arrow-label-bg { fill: #1a1b26; fill-opacity: 0.85; rx: 3; }
+    .mdview-diagram .bg { fill: #1a1b26; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .box-fill { fill: #f8f8fc; }
+      .mdview-diagram .box-border { stroke: #2e7de9; }
+      .mdview-diagram .box-separator { stroke: #2e7de9; }
+      .mdview-diagram .box-text { fill: #343b58; }
+      .mdview-diagram .box-header { fill: #587539; }
+      .mdview-diagram .arrow-line { stroke: #7847bd; }
+      .mdview-diagram .arrow-head { fill: #7847bd; }
+      .mdview-diagram .arrow-label { fill: #8c6c3e; }
+      .mdview-diagram .arrow-label-bg { fill: #f8f8fc; fill-opacity: 0.85; }
+      .mdview-diagram .bg { fill: #f8f8fc; }
+    }
+  </style>
+  <style>
+    .mdview-diagram .wf-panel { stroke: #7aa2f7; stroke-width: 1.5; fill: none; rx: 4; }
+    .mdview-diagram .wf-panel-fill { fill: #24283b; fill-opacity: 0.3; rx: 4; }
+    .mdview-diagram .wf-title { fill: #9ece6a; font-weight: 600; font-size: 13px; }
+    .mdview-diagram .wf-label { fill: #a9b1d6; font-size: 12px; }
+    .mdview-diagram .wf-input { stroke: #565f89; stroke-width: 1; fill: none; rx: 3; }
+    .mdview-diagram .wf-input-text { fill: #565f89; font-size: 11px; font-style: italic; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .wf-panel { stroke: #2e7de9; }
+      .mdview-diagram .wf-panel-fill { fill: #e8e8f0; }
+      .mdview-diagram .wf-title { fill: #587539; }
+      .mdview-diagram .wf-label { fill: #343b58; }
+      .mdview-diagram .wf-input { stroke: #9ca0b0; }
+      .mdview-diagram .wf-input-text { fill: #9ca0b0; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="534" height="288" rx="6"/>
+  <rect class="wf-panel-fill" x="20.0" y="20.0" width="494.0" height="248.0" style="fill-opacity:0.15"/>
+  <rect class="wf-panel" x="20.0" y="20.0" width="494.0" height="248.0"/>
+  <text class="wf-title" x="28.0" y="38.0">cross-org   - gate: L3 ECO + System tab</text>
+  <rect class="wf-panel-fill" x="32.0" y="48.0" width="470.0" height="196.0" style="fill-opacity:0.23"/>
+  <rect class="wf-panel" x="32.0" y="48.0" width="470.0" height="196.0"/>
+  <text class="wf-title" x="40.0" y="66.0">org   - gate: cross-org escalation</text>
+  <rect class="wf-panel-fill" x="44.0" y="76.0" width="446.0" height="144.0" style="fill-opacity:0.31"/>
+  <rect class="wf-panel" x="44.0" y="76.0" width="446.0" height="144.0"/>
+  <text class="wf-title" x="52.0" y="94.0">tenant   - gate: cross-tenant review</text>
+  <rect class="wf-panel-fill" x="56.0" y="104.0" width="422.0" height="92.0" style="fill-opacity:0.39"/>
+  <rect class="wf-panel" x="56.0" y="104.0" width="422.0" height="92.0"/>
+  <text class="wf-title" x="64.0" y="122.0">practice (seat)   - collab: open  |  propose: ECO</text>
+  <rect class="wf-panel-fill" x="68.0" y="132.0" width="366.0" height="40.0" style="fill-opacity:0.47"/>
+  <rect class="wf-panel" x="68.0" y="132.0" width="366.0" height="40.0"/>
+  <text class="wf-title" x="76.0" y="150.0">practitioner [model] - swappable, fungible</text>
+</svg>
+</section>
+<section><h2>Ephemeral worker vs persistent seat</h2>
+<svg xmlns="http://www.w3.org/2000/svg" width="619" height="172" style="display:block;margin:auto" class="mdview-diagram">
+
+  <style>
+    .mdview-diagram { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 13px; }
+    .mdview-diagram .box-fill { fill: #1a1b26; stroke: none; }
+    .mdview-diagram .box-border { stroke: #7aa2f7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .box-separator { stroke: #7aa2f7; stroke-width: 1; }
+    .mdview-diagram .box-text { fill: #a9b1d6; white-space: pre; }
+    .mdview-diagram .box-header { fill: #9ece6a; font-weight: 600; }
+    .mdview-diagram .arrow-line { stroke: #bb9af7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .arrow-head { fill: #bb9af7; stroke: none; }
+    .mdview-diagram .arrow-label { fill: #e0af68; font-size: 12px; text-anchor: middle; }
+    .mdview-diagram .arrow-label-bg { fill: #1a1b26; fill-opacity: 0.85; rx: 3; }
+    .mdview-diagram .bg { fill: #1a1b26; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .box-fill { fill: #f8f8fc; }
+      .mdview-diagram .box-border { stroke: #2e7de9; }
+      .mdview-diagram .box-separator { stroke: #2e7de9; }
+      .mdview-diagram .box-text { fill: #343b58; }
+      .mdview-diagram .box-header { fill: #587539; }
+      .mdview-diagram .arrow-line { stroke: #7847bd; }
+      .mdview-diagram .arrow-head { fill: #7847bd; }
+      .mdview-diagram .arrow-label { fill: #8c6c3e; }
+      .mdview-diagram .arrow-label-bg { fill: #f8f8fc; fill-opacity: 0.85; }
+      .mdview-diagram .bg { fill: #f8f8fc; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="619" height="172" rx="6"/>
+  <defs>
+    <clipPath id="d2-bc0"><rect x="20.0" y="20.0" width="248.0" height="116.0" rx="6"/></clipPath>
+    <clipPath id="d2-bc1"><rect x="288.0" y="20.0" width="311.0" height="132.0" rx="6"/></clipPath>
+  </defs>
+  <rect class="box-fill" x="20.0" y="20.0" width="248.0" height="116.0" rx="6"/>
+  <rect class="box-border" x="20.0" y="20.0" width="248.0" height="116.0" rx="6"/>
+  <g clip-path="url(#d2-bc0)">
+    <text class="box-header" x="144.0" y="40.0" text-anchor="middle" dominant-baseline="central">WORKER (today)</text>
+    <line class="box-separator" x1="20.0" y1="52.0" x2="268.0" y2="52.0"/>
+    <text class="box-text" x="32.0" y="74.0">spawn -&gt; work -&gt; die</text>
+    <text class="box-text" x="32.0" y="90.0">respawns fresh each task</text>
+    <text class="box-text" x="32.0" y="106.0">no identity, no memory</text>
+    <text class="box-text" x="32.0" y="122.0">leaves no trace</text>
+  </g>
+  <rect class="box-fill" x="288.0" y="20.0" width="311.0" height="132.0" rx="6"/>
+  <rect class="box-border" x="288.0" y="20.0" width="311.0" height="132.0" rx="6"/>
+  <g clip-path="url(#d2-bc1)">
+    <text class="box-header" x="443.5" y="40.0" text-anchor="middle" dominant-baseline="central">PRACTICE (ours)</text>
+    <line class="box-separator" x1="288.0" y1="52.0" x2="599.0" y2="52.0"/>
+    <text class="box-text" x="300.0" y="74.0">birth ---&gt; now (continuous)</text>
+    <text class="box-text" x="300.0" y="90.0">calibration trajectory persists</text>
+    <text class="box-text" x="300.0" y="106.0">identity lives in the SEAT</text>
+    <text class="box-text" x="300.0" y="122.0">model [a]-&gt;[b]-&gt;[c] swaps in</text>
+    <text class="box-text" x="300.0" y="138.0">every belief logged + gated</text>
+  </g>
+</svg>
+</section>
+<section><h2>Side-by-side comparison</h2>
+<svg xmlns="http://www.w3.org/2000/svg" width="722" height="280" style="display:block;margin:auto" class="mdview-diagram">
+
+  <style>
+    .mdview-diagram { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 13px; }
+    .mdview-diagram .box-fill { fill: #1a1b26; stroke: none; }
+    .mdview-diagram .box-border { stroke: #7aa2f7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .box-separator { stroke: #7aa2f7; stroke-width: 1; }
+    .mdview-diagram .box-text { fill: #a9b1d6; white-space: pre; }
+    .mdview-diagram .box-header { fill: #9ece6a; font-weight: 600; }
+    .mdview-diagram .arrow-line { stroke: #bb9af7; stroke-width: 1.5; fill: none; }
+    .mdview-diagram .arrow-head { fill: #bb9af7; stroke: none; }
+    .mdview-diagram .arrow-label { fill: #e0af68; font-size: 12px; text-anchor: middle; }
+    .mdview-diagram .arrow-label-bg { fill: #1a1b26; fill-opacity: 0.85; rx: 3; }
+    .mdview-diagram .bg { fill: #1a1b26; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .box-fill { fill: #f8f8fc; }
+      .mdview-diagram .box-border { stroke: #2e7de9; }
+      .mdview-diagram .box-separator { stroke: #2e7de9; }
+      .mdview-diagram .box-text { fill: #343b58; }
+      .mdview-diagram .box-header { fill: #587539; }
+      .mdview-diagram .arrow-line { stroke: #7847bd; }
+      .mdview-diagram .arrow-head { fill: #7847bd; }
+      .mdview-diagram .arrow-label { fill: #8c6c3e; }
+      .mdview-diagram .arrow-label-bg { fill: #f8f8fc; fill-opacity: 0.85; }
+      .mdview-diagram .bg { fill: #f8f8fc; }
+    }
+  </style>
+  <style>
+    .mdview-diagram .table-header-bg { fill: #24283b; }
+    .mdview-diagram .table-cell-bg { fill: none; }
+    .mdview-diagram .table-border { stroke: #7aa2f7; stroke-width: 1; fill: none; }
+    .mdview-diagram .table-header-text { fill: #9ece6a; font-weight: 600; white-space: pre; }
+    .mdview-diagram .table-cell-text { fill: #a9b1d6; white-space: pre; }
+    @media (prefers-color-scheme: light) {
+      .mdview-diagram .table-header-bg { fill: #e8e8f0; }
+      .mdview-diagram .table-border { stroke: #2e7de9; }
+      .mdview-diagram .table-header-text { fill: #587539; }
+      .mdview-diagram .table-cell-text { fill: #343b58; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="722" height="280" rx="6"/>
+  <rect class="table-border" x="20" y="20" width="681.6" height="240.0"/>
+  <rect class="table-header-bg" x="20" y="20.0" width="681.6" height="30"/>
+  <text class="table-header-text" x="109.8" y="35.0" text-anchor="middle" dominant-baseline="central"></text>
+  <text class="table-header-text" x="306.2" y="35.0" text-anchor="middle" dominant-baseline="central">worktree-style MAS</text>
+  <text class="table-header-text" x="557.2" y="35.0" text-anchor="middle" dominant-baseline="central">federated practices</text>
+  <line class="table-border" x1="20" y1="50.0" x2="701.6" y2="50.0"/>
+  <text class="table-cell-text" x="109.8" y="65.0" text-anchor="middle" dominant-baseline="central">unit</text>
+  <text class="table-cell-text" x="306.2" y="65.0" text-anchor="middle" dominant-baseline="central">N checkouts of ONE repo</text>
+  <text class="table-cell-text" x="557.2" y="65.0" text-anchor="middle" dominant-baseline="central">N independent practices</text>
+  <text class="table-cell-text" x="109.8" y="95.0" text-anchor="middle" dominant-baseline="central">authority</text>
+  <text class="table-cell-text" x="306.2" y="95.0" text-anchor="middle" dominant-baseline="central">single object store</text>
+  <text class="table-cell-text" x="557.2" y="95.0" text-anchor="middle" dominant-baseline="central">federated, each sovereign</text>
+  <text class="table-cell-text" x="109.8" y="125.0" text-anchor="middle" dominant-baseline="central">spans machines/orgs</text>
+  <text class="table-cell-text" x="306.2" y="125.0" text-anchor="middle" dominant-baseline="central">no (local FS)</text>
+  <text class="table-cell-text" x="557.2" y="125.0" text-anchor="middle" dominant-baseline="central">yes, governed</text>
+  <text class="table-cell-text" x="109.8" y="155.0" text-anchor="middle" dominant-baseline="central">lifetime</text>
+  <text class="table-cell-text" x="306.2" y="155.0" text-anchor="middle" dominant-baseline="central">ephemeral, dies at task</text>
+  <text class="table-cell-text" x="557.2" y="155.0" text-anchor="middle" dominant-baseline="central">persistent seat + trajectory</text>
+  <text class="table-cell-text" x="109.8" y="185.0" text-anchor="middle" dominant-baseline="central">identity</text>
+  <text class="table-cell-text" x="306.2" y="185.0" text-anchor="middle" dominant-baseline="central">none (clones)</text>
+  <text class="table-cell-text" x="557.2" y="185.0" text-anchor="middle" dominant-baseline="central">in the seat; model swaps in</text>
+  <text class="table-cell-text" x="109.8" y="215.0" text-anchor="middle" dominant-baseline="central">carries</text>
+  <text class="table-cell-text" x="306.2" y="215.0" text-anchor="middle" dominant-baseline="central">code diffs</text>
+  <text class="table-cell-text" x="557.2" y="215.0" text-anchor="middle" dominant-baseline="central">calibrated belief + gated action</text>
+  <text class="table-cell-text" x="109.8" y="245.0" text-anchor="middle" dominant-baseline="central">solves</text>
+  <text class="table-cell-text" x="306.2" y="245.0" text-anchor="middle" dominant-baseline="central">execution isolation</text>
+  <text class="table-cell-text" x="557.2" y="245.0" text-anchor="middle" dominant-baseline="central">coordination + governance</text>
+  <line class="table-border" x1="199.6" y1="20" x2="199.6" y2="260.0"/>
+  <line class="table-border" x1="412.8" y1="20" x2="412.8" y2="260.0"/>
+  <line class="table-border" x1="20" y1="50.0" x2="701.6" y2="50.0"/>
+  <line class="table-border" x1="20" y1="80.0" x2="701.6" y2="80.0"/>
+  <line class="table-border" x1="20" y1="110.0" x2="701.6" y2="110.0"/>
+  <line class="table-border" x1="20" y1="140.0" x2="701.6" y2="140.0"/>
+  <line class="table-border" x1="20" y1="170.0" x2="701.6" y2="170.0"/>
+  <line class="table-border" x1="20" y1="200.0" x2="701.6" y2="200.0"/>
+  <line class="table-border" x1="20" y1="230.0" x2="701.6" y2="230.0"/>
+</svg>
+</section>
