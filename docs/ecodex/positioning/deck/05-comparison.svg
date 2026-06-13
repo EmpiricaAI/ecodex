@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<defs><filter id="sh" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.10"/></filter><marker id="ah-t" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 Z" fill="#0d9488"/></marker><marker id="ah-v" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 Z" fill="#7c3aed"/></marker><marker id="ah-s" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 Z" fill="#94a3b8"/></marker><marker id="ah-d" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 Z" fill="#64748b"/></marker></defs>
+<rect width="1280" height="720" fill="#ffffff"/>
+<rect x="0" y="0" width="1280" height="6" fill="#0d9488"/>
+<text x="64.0" y="74.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:31px;font-weight:700;fill:#0f172a">Side by side</text>
+<text x="64.0" y="106.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;font-weight:400;fill:#64748b">Same number of agents on both sides — the contrast is kind, not scale.</text>
+<rect x="80.0" y="158.0" width="1120.0" height="448.0" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" filter="url(#sh)"/>
+<rect x="790" y="158" width="410" height="448" rx="0" fill="#f0fdfa"/>
+<rect x="80" y="158" width="1120" height="56" rx="0" fill="#f8fafc"/>
+<rect x="790" y="158" width="410" height="56" rx="0" fill="#0d9488"/>
+<text x="404.0" y="193.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;font-weight:700;fill:#475569">worktree-style MAS</text>
+<text x="814.0" y="193.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;font-weight:700;fill:#ffffff">federated practices</text>
+<text x="104.0" y="247.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;fill:#0f172a">unit</text>
+<text x="404.0" y="247.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:400;fill:#475569">N checkouts of ONE repo</text>
+<text x="814.0" y="247.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:600;fill:#0f766e">N independent practices</text>
+<rect x="80" y="270" width="710" height="56" fill="#f8fafc"/>
+<text x="104.0" y="303.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;fill:#0f172a">authority</text>
+<text x="404.0" y="303.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:400;fill:#475569">single object store</text>
+<text x="814.0" y="303.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:600;fill:#0f766e">federated · each sovereign</text>
+<text x="104.0" y="359.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;fill:#0f172a">reach</text>
+<text x="404.0" y="359.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:400;fill:#475569">one machine (local FS)</text>
+<text x="814.0" y="359.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:600;fill:#0f766e">machines · substrates · orgs</text>
+<rect x="80" y="382" width="710" height="56" fill="#f8fafc"/>
+<text x="104.0" y="415.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;fill:#0f172a">lifetime</text>
+<text x="404.0" y="415.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:400;fill:#475569">ephemeral · dies at task</text>
+<text x="814.0" y="415.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:600;fill:#0f766e">persistent seat + trajectory</text>
+<text x="104.0" y="471.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;fill:#0f172a">identity</text>
+<text x="404.0" y="471.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:400;fill:#475569">none (clones)</text>
+<text x="814.0" y="471.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:600;fill:#0f766e">in the seat · model swaps in</text>
+<rect x="80" y="494" width="710" height="56" fill="#f8fafc"/>
+<text x="104.0" y="527.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;fill:#0f172a">carries</text>
+<text x="404.0" y="527.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:400;fill:#475569">code diffs</text>
+<text x="814.0" y="527.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:600;fill:#0f766e">calibrated belief + gated action</text>
+<text x="104.0" y="583.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;fill:#0f172a">solves</text>
+<text x="404.0" y="583.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:400;fill:#475569">execution isolation</text>
+<text x="814.0" y="583.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:600;fill:#0f766e">coordination + governance</text>
+<line x1="380" y1="158" x2="380" y2="606" stroke="#cbd5e1" stroke-width="1"/>
+<line x1="790" y1="158" x2="790" y2="606" stroke="#cbd5e1" stroke-width="1"/>
+<line x1="80" y1="214" x2="1200" y2="214" stroke="#cbd5e1" stroke-width="1"/>
+<line x1="80" y1="270" x2="1200" y2="270" stroke="#cbd5e1" stroke-width="1"/>
+<line x1="80" y1="326" x2="1200" y2="326" stroke="#cbd5e1" stroke-width="1"/>
+<line x1="80" y1="382" x2="1200" y2="382" stroke="#cbd5e1" stroke-width="1"/>
+<line x1="80" y1="438" x2="1200" y2="438" stroke="#cbd5e1" stroke-width="1"/>
+<line x1="80" y1="494" x2="1200" y2="494" stroke="#cbd5e1" stroke-width="1"/>
+<line x1="80" y1="550" x2="1200" y2="550" stroke="#cbd5e1" stroke-width="1"/>
+<line x1="80" y1="606" x2="1200" y2="606" stroke="#cbd5e1" stroke-width="1"/>
+<line x1="64" y1="662" x2="1216" y2="662" stroke="#cbd5e1" stroke-width="1"/>
+<text x="64.0" y="688.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:400;fill:#64748b;font-style:italic">Worktrees parallelize one repo&#x27;s branches. The mesh coordinates many sovereign agents&#x27; decisions — a generalized pull request where calibration is the review signal.</text>
+</svg>

@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<defs><filter id="sh" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.10"/></filter><marker id="ah-t" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 Z" fill="#0d9488"/></marker><marker id="ah-v" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 Z" fill="#7c3aed"/></marker><marker id="ah-s" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 Z" fill="#94a3b8"/></marker><marker id="ah-d" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 Z" fill="#64748b"/></marker></defs>
+<rect width="1280" height="720" fill="#ffffff"/>
+<rect x="0" y="0" width="1280" height="6" fill="#0d9488"/>
+<text x="64.0" y="74.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:31px;font-weight:700;fill:#0f172a">Ours — a federation of calibrated practices</text>
+<text x="64.0" y="106.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;font-weight:400;fill:#64748b">collab carries knowledge (can&#x27;t act on you, so ungated). propose carries action (gated).</text>
+<rect x="80.0" y="160.0" width="300.0" height="380.0" rx="16" fill="#f0fdfa" stroke="#0d9488" stroke-width="2" filter="url(#sh)"/>
+<text x="100.0" y="196.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:19px;font-weight:700;fill:#0f766e">practice A</text>
+<text x="100.0" y="218.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:400;fill:#64748b">(a seat)</text>
+<rect x="285.5" y="176.0" width="61.0" height="28.0" rx="14" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.3"/><text x="316.0" y="194.0" text-anchor="middle" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:600;fill:#92400e">model</text>
+<text x="316.0" y="220.0" text-anchor="middle" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:500;fill:#64748b">swappable</text>
+<text x="100.0" y="256.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;font-weight:600;fill:#64748b">calibration trajectory</text>
+<line x1="104" y1="270" x2="356" y2="270" stroke="#0d9488" stroke-width="2"/>
+<circle cx="108.0" cy="270.0" r="4" fill="#ffffff" stroke="#0d9488" stroke-width="2"/>
+<circle cx="169.0" cy="270.0" r="4" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<circle cx="230.0" cy="270.0" r="4" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<circle cx="291.0" cy="270.0" r="4" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<circle cx="352.0" cy="270.0" r="6" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<text x="104.0" y="292.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10.5px;font-weight:400;fill:#64748b">birth</text>
+<text x="356.0" y="292.0" text-anchor="end" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10.5px;font-weight:600;fill:#0f766e">now</text>
+<circle cx="106.0" cy="336.0" r="3" fill="#0d9488" stroke="none" stroke-width="2"/>
+<text x="118.0" y="340.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;fill:#0f172a">own repo + history</text>
+<circle cx="106.0" cy="366.0" r="3" fill="#0d9488" stroke="none" stroke-width="2"/>
+<text x="118.0" y="370.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;fill:#0f172a">own calibration</text>
+<circle cx="106.0" cy="396.0" r="3" fill="#0d9488" stroke="none" stroke-width="2"/>
+<text x="118.0" y="400.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;fill:#0f172a">identity in the seat</text>
+<rect x="490.0" y="160.0" width="300.0" height="380.0" rx="16" fill="#f0fdfa" stroke="#0d9488" stroke-width="2" filter="url(#sh)"/>
+<text x="510.0" y="196.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:19px;font-weight:700;fill:#0f766e">practice B</text>
+<text x="510.0" y="218.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:400;fill:#64748b">(a seat)</text>
+<rect x="695.5" y="176.0" width="61.0" height="28.0" rx="14" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.3"/><text x="726.0" y="194.0" text-anchor="middle" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:600;fill:#92400e">model</text>
+<text x="726.0" y="220.0" text-anchor="middle" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:500;fill:#64748b">swappable</text>
+<text x="510.0" y="256.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;font-weight:600;fill:#64748b">calibration trajectory</text>
+<line x1="514" y1="270" x2="766" y2="270" stroke="#0d9488" stroke-width="2"/>
+<circle cx="518.0" cy="270.0" r="4" fill="#ffffff" stroke="#0d9488" stroke-width="2"/>
+<circle cx="579.0" cy="270.0" r="4" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<circle cx="640.0" cy="270.0" r="4" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<circle cx="701.0" cy="270.0" r="4" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<circle cx="762.0" cy="270.0" r="6" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<text x="514.0" y="292.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10.5px;font-weight:400;fill:#64748b">birth</text>
+<text x="766.0" y="292.0" text-anchor="end" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10.5px;font-weight:600;fill:#0f766e">now</text>
+<circle cx="516.0" cy="336.0" r="3" fill="#0d9488" stroke="none" stroke-width="2"/>
+<text x="528.0" y="340.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;fill:#0f172a">own repo + history</text>
+<circle cx="516.0" cy="366.0" r="3" fill="#0d9488" stroke="none" stroke-width="2"/>
+<text x="528.0" y="370.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;fill:#0f172a">own calibration</text>
+<circle cx="516.0" cy="396.0" r="3" fill="#0d9488" stroke="none" stroke-width="2"/>
+<text x="528.0" y="400.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;fill:#0f172a">identity in the seat</text>
+<rect x="900.0" y="160.0" width="300.0" height="380.0" rx="16" fill="#f0fdfa" stroke="#0d9488" stroke-width="2" filter="url(#sh)"/>
+<text x="920.0" y="196.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:19px;font-weight:700;fill:#0f766e">practice C</text>
+<text x="920.0" y="218.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:400;fill:#64748b">(a seat)</text>
+<rect x="1105.5" y="176.0" width="61.0" height="28.0" rx="14" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.3"/><text x="1136.0" y="194.0" text-anchor="middle" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:600;fill:#92400e">model</text>
+<text x="1136.0" y="220.0" text-anchor="middle" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:500;fill:#64748b">swappable</text>
+<text x="920.0" y="256.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;font-weight:600;fill:#64748b">calibration trajectory</text>
+<line x1="924" y1="270" x2="1176" y2="270" stroke="#0d9488" stroke-width="2"/>
+<circle cx="928.0" cy="270.0" r="4" fill="#ffffff" stroke="#0d9488" stroke-width="2"/>
+<circle cx="989.0" cy="270.0" r="4" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<circle cx="1050.0" cy="270.0" r="4" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<circle cx="1111.0" cy="270.0" r="4" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<circle cx="1172.0" cy="270.0" r="6" fill="#0d9488" stroke="#0d9488" stroke-width="2"/>
+<text x="924.0" y="292.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10.5px;font-weight:400;fill:#64748b">birth</text>
+<text x="1176.0" y="292.0" text-anchor="end" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10.5px;font-weight:600;fill:#0f766e">now</text>
+<circle cx="926.0" cy="336.0" r="3" fill="#0d9488" stroke="none" stroke-width="2"/>
+<text x="938.0" y="340.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;fill:#0f172a">own repo + history</text>
+<circle cx="926.0" cy="366.0" r="3" fill="#0d9488" stroke="none" stroke-width="2"/>
+<text x="938.0" y="370.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;fill:#0f172a">own calibration</text>
+<circle cx="926.0" cy="396.0" r="3" fill="#0d9488" stroke="none" stroke-width="2"/>
+<text x="938.0" y="400.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;fill:#0f172a">identity in the seat</text>
+<line x1="380.0" y1="390.0" x2="490.0" y2="390.0" stroke="#0d9488" stroke-width="2.4" marker-end="url(#ah-t)"/>
+<text x="435.0" y="378.0" text-anchor="middle" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;font-weight:700;fill:#0f766e">collab</text>
+<text x="435.0" y="412.0" text-anchor="middle" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;font-weight:400;fill:#64748b">open · ungated</text>
+<line x1="790.0" y1="390.0" x2="900.0" y2="390.0" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#ah-v)"/>
+<text x="845.0" y="378.0" text-anchor="middle" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;font-weight:700;fill:#7c3aed">propose</text>
+<text x="845.0" y="412.0" text-anchor="middle" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;font-weight:400;fill:#64748b">ECO-gated</text>
+<line x1="64" y1="662" x2="1216" y2="662" stroke="#cbd5e1" stroke-width="1"/>
+<text x="64.0" y="688.0" text-anchor="start" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;font-weight:400;fill:#64748b;font-style:italic">Sovereign: each practice has its own repo, history, calibration — possibly a different machine, user, substrate, or org. They coordinate by message, not by a shared filesystem.</text>
+</svg>
