@@ -106,7 +106,9 @@ section{position:relative; padding:clamp(80px,12vh,140px) 0}
 /* reframe */
 .reframe{font-family:var(--display); font-size:clamp(1.9rem,4.6vw,3.4rem); font-weight:700; line-height:1.12; max-width:18ch}
 .reframe .x{color:var(--cold)} .reframe .y{color:var(--clay)}
-.foot{margin-top:54px; font-size:.86rem; color:var(--muted)}
+.foot{margin-top:30px; font-size:.86rem; color:var(--muted)}
+.hint{margin-top:40px; font-family:var(--display); font-weight:500; font-size:1.05rem; color:#4a4136; max-width:54ch; border-top:1px solid var(--line); padding-top:24px}
+.hint b{color:var(--ink); font-weight:600} .hint .sw{color:var(--clay); font-style:italic; font-family:var(--body); font-weight:340}
 
 /* reveal */
 .reveal{opacity:0; transform:translateY(24px); transition:opacity .9s cubic-bezier(.2,.7,.2,1), transform .9s cubic-bezier(.2,.7,.2,1)}
@@ -147,7 +149,7 @@ section{position:relative; padding:clamp(80px,12vh,140px) 0}
 <section id="swarm" class="wrap">
   <div class="kick cool reveal">Today</div>
   <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.7rem);margin-top:14px;color:#3a342b">A swarm of disposable helpers</h2>
-  <p class="lead reveal d2" style="margin-top:18px;max-width:62ch">Spin one up, it does a job, it's gone. If they share anything, it's a common scratchpad. Even when a helper keeps its own notes, the notes are about <em>the task</em> — never about <em>who it is</em>, because it isn't anyone.</p>
+  <p class="lead reveal d2" style="margin-top:18px;max-width:62ch">An army of identical clones — issued, deployed, discarded. Spin one up, it does a job, it's gone. If they share anything, it's a common scratchpad. Even when a helper keeps its own notes, the notes are about <em>the task</em> — never about <em>who it is</em>, because it isn't anyone.</p>
   <div class="miss reveal d3" style="grid-template-columns:1fr">
     <div class="it"><b>No memory of itself</b><span>It may recall the job. It does not recall being a self that did jobs before.</span></div>
     <div class="it"><b>No reputation</b><span>Nothing it did yesterday makes it more (or less) trustworthy today.</span></div>
@@ -178,7 +180,7 @@ section{position:relative; padding:clamp(80px,12vh,140px) 0}
 <section id="society" class="wrap">
   <div class="kick reveal">What we built</div>
   <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.7rem);margin-top:14px">A society of <em>practitioners</em></h2>
-  <p class="lead reveal d2" style="margin-top:16px;max-width:62ch">Each one is <em>someone</em> — with a name, a history, and a reputation for how reliable their judgment is. That record follows them. They don't just do tasks; they build a track record, and they work together under rules.</p>
+  <p class="lead reveal d2" style="margin-top:16px;max-width:62ch">Each one is <em>someone</em> — with a name, a history, and a reputation for how reliable their judgment is. That record follows them. They don't just do tasks; they build a track record, and they work together under rules. It's an <em>order</em>, not an army — as many distinct, disciplined members as the work needs, never a single all-powerful figure that everything must funnel through.</p>
   <div class="cards" id="society-cards"></div>
 </section>
 
@@ -219,7 +221,8 @@ section{position:relative; padding:clamp(80px,12vh,140px) 0}
   <div class="kick reveal">In a sentence</div>
   <p class="reframe reveal d1" style="margin-top:24px">Not a <span class="x">swarm of tools</span>.<br>A <span class="y">society of accountable colleagues</span>.</p>
   <p class="lead reveal d2" style="margin-top:30px;max-width:56ch">You can even put a sharper mind behind the same desk tomorrow — and it inherits the whole history. The role, and its reputation, stay. The individual is replaceable; the practice is not.</p>
-  <p class="foot reveal d3">Empirica — a federation of practitioners who remember, who are accountable, and who earn your trust.</p>
+  <p class="hint reveal d3">Not a <b>clone army</b>. Not a <b>single all-powerful figure</b> who can only ever be one. An <b>order</b> — that grows to as many as the work needs. <span class="sw">(think Star Wars.)</span></p>
+  <p class="foot reveal d4">Empirica — a federation of practitioners who remember, who are accountable, and who earn your trust.</p>
 </section>
 
 <script>
