@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Not an agent internet — a federation of calibrated practices</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0e14; --bg2:#0c1119; --surface:#121a25; --surface2:#16202e;
+  --ink:#ece7da; --muted:#8a93a3; --faint:#5c6675;
+  --amber:#eab35a; --amber-2:#f4cd83; --teal:#46c6b6; --teal-2:#7fe0d2;
+  --violet:#a98bf2; --slate:#697483;
+  --line:rgba(236,231,218,.10); --line-2:rgba(236,231,218,.18);
+  --display:'Fraunces',Georgia,serif; --mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:
+    radial-gradient(1200px 800px at 78% -8%, rgba(70,198,182,.10), transparent 60%),
+    radial-gradient(1000px 700px at 8% 12%, rgba(169,139,242,.08), transparent 55%),
+    var(--bg);
+  color:var(--ink); font-family:var(--display); font-optical-sizing:auto;
+  font-weight:340; line-height:1.62; -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+/* grain */
+body::after{
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:9; opacity:.045;
+  mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+.wrap{max-width:1080px; margin:0 auto; padding:0 28px}
+.mono{font-family:var(--mono)}
+.kick{font-family:var(--mono); font-size:.74rem; letter-spacing:.34em; text-transform:uppercase; color:var(--amber); font-weight:500}
+h1,h2,h3{font-weight:380; letter-spacing:-.015em; line-height:1.08; margin:0}
+em{font-style:italic; color:var(--amber-2)}
+.lead{font-size:clamp(1.15rem,2vw,1.45rem); color:#cfd6e0; max-width:46ch; font-weight:330}
+.muted{color:var(--muted)}
+.faint{color:var(--faint)}
+section{position:relative; padding:clamp(80px,12vh,150px) 0}
+.divider{height:1px; background:linear-gradient(90deg,transparent,var(--line-2),transparent)}
+
+/* nav dots */
+.dots{position:fixed; right:26px; top:50%; transform:translateY(-50%); z-index:20; display:flex; flex-direction:column; gap:14px}
+.dots a{width:9px; height:9px; border-radius:50%; border:1px solid var(--faint); transition:.35s; display:block}
+.dots a.on{background:var(--amber); border-color:var(--amber); box-shadow:0 0 12px var(--amber)}
+@media(max-width:780px){.dots{display:none}}
+
+/* hero */
+.hero{min-height:100vh; display:grid; grid-template-columns:1.05fr .95fr; align-items:center; gap:30px}
+.hero-copy h1{font-size:clamp(2.6rem,6.4vw,5.4rem); font-weight:300}
+.hero-copy .sub{margin-top:26px}
+@media(max-width:880px){.hero{grid-template-columns:1fr; min-height:auto; padding-top:120px}.orbit-wrap{order:-1}}
+
+/* orbital instrument */
+.orbit-wrap{display:flex; justify-content:center; align-items:center}
+.orbit{width:min(480px,86vw); height:min(480px,86vw)}
+.ring{fill:none; transition:stroke .4s, filter .4s, opacity .4s}
+.ring.live{cursor:pointer}
+.ring.live:hover, .ring.active{filter:drop-shadow(0 0 10px currentColor)}
+.spin{transform-origin:center; animation:spin 90s linear infinite}
+.spin-rev{transform-origin:center; animation:spin 60s linear infinite reverse}
+.core-glow{animation:pulse 4.6s ease-in-out infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:.30; r:64} 50%{opacity:.62; r:74}}
+
+/* readout panel (governance) */
+.readout{font-family:var(--mono); font-size:.82rem; border:1px solid var(--line-2); border-radius:12px; background:rgba(18,26,37,.6); padding:18px 20px; min-height:108px; backdrop-filter:blur(4px)}
+.readout .tag{color:var(--amber); letter-spacing:.14em; text-transform:uppercase; font-size:.66rem}
+.readout .gate{margin-top:8px; color:var(--ink); font-size:.96rem; line-height:1.4}
+.readout .meta{margin-top:6px; color:var(--muted)}
+
+/* worktree diagram */
+.frame{border:1px dashed var(--line-2); border-radius:16px; padding:26px; background:linear-gradient(180deg,rgba(105,116,131,.06),transparent)}
+.frame-label{font-family:var(--mono); font-size:.72rem; letter-spacing:.2em; text-transform:uppercase; color:var(--slate)}
+.workers{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:22px}
+.worker{border:1px dashed var(--slate); border-radius:12px; padding:18px; text-align:center; color:var(--muted); background:rgba(105,116,131,.05)}
+.worker b{display:block; color:#aeb6c2; font-weight:500; font-size:1.05rem; margin-bottom:6px}
+.worker .x{color:#d8665e; font-family:var(--mono); font-size:.72rem; margin-top:10px}
+.orch{max-width:240px; margin:0 auto 6px; text-align:center; border:1px solid var(--slate); border-radius:10px; padding:12px; color:#aeb6c2; background:rgba(105,116,131,.08); font-weight:500}
+
+/* seats */
+.seats{display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-top:30px}
+.seat{position:relative; border:1px solid var(--line-2); border-radius:16px; padding:22px; background:linear-gradient(180deg,var(--surface),var(--bg2)); transition:transform .4s, border-color .4s, box-shadow .4s}
+.seat:hover{transform:translateY(-6px); border-color:rgba(70,198,182,.5); box-shadow:0 18px 40px rgba(0,0,0,.45)}
+.seat h3{font-size:1.35rem; color:var(--teal-2)}
+.seat .role{font-family:var(--mono); font-size:.68rem; color:var(--muted); letter-spacing:.1em}
+.chip{display:inline-block; font-family:var(--mono); font-size:.66rem; padding:4px 10px; border-radius:20px; border:1px solid var(--amber); color:var(--amber-2); background:rgba(234,179,90,.08); position:absolute; top:20px; right:18px}
+.spark{display:flex; align-items:center; gap:6px; margin:18px 0 4px}
+.spark i{width:7px; height:7px; border-radius:50%; background:var(--teal); display:block; opacity:.5}
+.spark i:last-child{opacity:1; box-shadow:0 0 8px var(--teal); width:9px; height:9px}
+.spark .ln{flex:1; height:1px; background:linear-gradient(90deg,var(--faint),var(--teal))}
+.seat ul{list-style:none; margin:14px 0 0; padding:0}
+.seat li{position:relative; padding-left:18px; color:#cdd4de; font-size:.98rem; margin:7px 0}
+.seat li::before{content:""; position:absolute; left:0; top:.62em; width:6px; height:6px; border-radius:50%; background:var(--teal)}
+.edges{display:flex; justify-content:center; gap:60px; margin-top:24px; flex-wrap:wrap}
+.edge{font-family:var(--mono); font-size:.74rem; text-align:center}
+.edge b{display:block; font-size:.86rem; letter-spacing:.06em}
+.edge.collab b{color:var(--teal-2)} .edge.propose b{color:var(--violet)}
+.edge span{color:var(--muted)}
+.edge .ar{font-size:1.1rem; letter-spacing:-2px}
+
+/* split */
+.split{display:grid; grid-template-columns:1fr 1fr; gap:22px; margin-top:30px}
+@media(max-width:780px){.split,.seats,.workers{grid-template-columns:1fr}}
+.col{border:1px solid var(--line-2); border-radius:16px; padding:26px}
+.col.old{background:linear-gradient(180deg,rgba(105,116,131,.07),transparent)}
+.col.ours{background:linear-gradient(180deg,rgba(70,198,182,.07),transparent); border-color:rgba(70,198,182,.3)}
+.col h3{font-family:var(--mono); font-size:.8rem; letter-spacing:.2em; text-transform:uppercase; margin-bottom:18px}
+.col.old h3{color:var(--slate)} .col.ours h3{color:var(--teal-2)}
+.life{display:flex; flex-direction:column; gap:4px; font-family:var(--mono); font-size:.84rem; color:var(--muted)}
+.life .cyc{padding:9px 0; border-bottom:1px dashed var(--line); display:flex; align-items:center; gap:10px}
+.life .o{width:9px;height:9px;border-radius:50%;border:1px solid var(--slate);display:inline-block}
+.life .xx{color:#d8665e}
+.timeline{position:relative; padding-left:26px}
+.timeline::before{content:""; position:absolute; left:7px; top:6px; bottom:6px; width:2px; background:linear-gradient(var(--teal),var(--teal-2))}
+.tp{position:relative; margin:14px 0; font-family:var(--mono); font-size:.84rem; color:#cdd4de}
+.tp::before{content:""; position:absolute; left:-23px; top:5px; width:9px; height:9px; border-radius:50%; background:var(--teal); box-shadow:0 0 8px var(--teal)}
+.swaps{display:flex; gap:8px; align-items:center; margin-top:16px; flex-wrap:wrap}
+.swaps .chip{position:static}
+.swaps .ar{color:var(--amber)}
+
+/* table */
+.cmp{width:100%; border-collapse:collapse; margin-top:28px; font-size:.98rem}
+.cmp th,.cmp td{padding:15px 18px; text-align:left; border-bottom:1px solid var(--line)}
+.cmp thead th{font-family:var(--mono); font-size:.72rem; letter-spacing:.16em; text-transform:uppercase; font-weight:500}
+.cmp .axis{font-family:var(--mono); font-size:.78rem; color:var(--muted); letter-spacing:.04em}
+.cmp .old{color:#9aa3b1}
+.cmp .ours{color:var(--teal-2); font-weight:400}
+.cmp col.ourscol+*{}
+.cmp td.ours, .cmp th.ours{background:rgba(70,198,182,.07)}
+.cmp th.ours{color:var(--teal-2)}
+
+/* reframe */
+.reframe{font-size:clamp(1.7rem,4.2vw,3.2rem); font-weight:300; line-height:1.18; max-width:20ch}
+.reframe .hl{color:var(--amber-2); font-style:italic}
+.foot{margin-top:60px; font-family:var(--mono); font-size:.74rem; color:var(--faint); letter-spacing:.06em}
+
+/* reveal */
+.reveal{opacity:0; transform:translateY(26px); transition:opacity .9s cubic-bezier(.2,.7,.2,1), transform .9s cubic-bezier(.2,.7,.2,1)}
+.reveal.in{opacity:1; transform:none}
+.reveal.d1{transition-delay:.08s}.reveal.d2{transition-delay:.16s}.reveal.d3{transition-delay:.24s}.reveal.d4{transition-delay:.32s}
+@media(prefers-reduced-motion:reduce){.spin,.spin-rev,.core-glow{animation:none}.reveal{opacity:1;transform:none;transition:none}}
+</style>
+</head>
+<body>
+
+<nav class="dots" aria-hidden="true">
+  <a href="#hero" class="on"></a><a href="#objection"></a><a href="#federation"></a>
+  <a href="#seat"></a><a href="#governance"></a><a href="#compare"></a><a href="#reframe"></a>
+</nav>
+
+<!-- HERO -->
+<section id="hero" class="wrap hero">
+  <div class="hero-copy">
+    <div class="kick reveal">Empirica · the mesh, explained</div>
+    <h1 class="reveal d1">Not an agent<br>internet.</h1>
+    <p class="lead sub reveal d2">A federation of <em>calibrated practices</em> — persistent epistemic seats with track records — coordinating actionable intent across machines, substrates, and orgs.</p>
+    <p class="mono reveal d3" style="margin-top:22px;font-size:.78rem;color:var(--muted);letter-spacing:.1em">scroll → why this isn't git worktrees</p>
+  </div>
+  <div class="orbit-wrap reveal d2">
+    <svg class="orbit" viewBox="0 0 400 400" role="img" aria-label="Concentric trust rings">
+      <circle class="core-glow" cx="200" cy="200" r="64" fill="#eab35a" opacity="0.4"/>
+      <g class="spin">
+        <circle class="ring" cx="200" cy="200" r="178" stroke="#a98bf2" stroke-width="1.2" stroke-dasharray="2 9" opacity="0.7"/>
+      </g>
+      <circle class="ring" cx="200" cy="200" r="146" stroke="#a98bf2" stroke-width="2.6" opacity="0.55"/>
+      <circle class="ring" cx="200" cy="200" r="110" stroke="#46c6b6" stroke-width="2" opacity="0.7"/>
+      <g class="spin-rev">
+        <circle class="ring" cx="200" cy="200" r="74" stroke="#7fe0d2" stroke-width="1.4" stroke-dasharray="1 8"/>
+        <circle cx="200" cy="126" r="4.5" fill="#7fe0d2"/>
+        <circle cx="264" cy="237" r="4.5" fill="#7fe0d2"/>
+        <circle cx="136" cy="237" r="4.5" fill="#7fe0d2"/>
+      </g>
+      <circle cx="200" cy="200" r="40" fill="none" stroke="#eab35a" stroke-width="1.6"/>
+      <text x="200" y="197" text-anchor="middle" fill="#f4cd83" font-family="'IBM Plex Mono',monospace" font-size="12" font-weight="600">practice</text>
+      <text x="200" y="213" text-anchor="middle" fill="#eab35a" font-family="'IBM Plex Mono',monospace" font-size="9">[model] swaps in</text>
+    </svg>
+  </div>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- OBJECTION -->
+<section id="objection" class="wrap">
+  <div class="kick reveal">The objection</div>
+  <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.8rem);margin-top:14px">“Why not just use git worktrees?”</h2>
+  <p class="lead reveal d2" style="margin-top:18px;max-width:60ch">Fair question — and worth conceding the true part. Worktrees <em>are</em> the common parallel-agent pattern. We use them. But notice what they actually are.</p>
+  <div class="frame reveal d2" style="margin-top:34px">
+    <div class="frame-label">one repo · one machine · one authority — shared object store</div>
+    <div class="orch" style="margin-top:18px">orchestrator</div>
+    <div class="workers">
+      <div class="worker"><b>worker</b>ephemeral · clone<br>no memory<div class="x">✕ dies at task end</div></div>
+      <div class="worker"><b>worker</b>ephemeral · clone<br>no memory<div class="x">✕ dies at task end</div></div>
+      <div class="worker"><b>worker</b>ephemeral · clone<br>no memory<div class="x">✕ dies at task end</div></div>
+    </div>
+  </div>
+  <p class="reveal d3" style="margin-top:28px;max-width:64ch;color:#cdd4de">A worktree solves <em>execution isolation</em> — a clean checkout so agents don't stomp each other's files. It carries code diffs. It says nothing about what an agent <span class="muted">knew</span>, with what <span class="muted">confidence</span>, or whether anyone <span class="muted">approved</span> the change. It's intra-repo, single-authority, code-only — the opposite of federation.</p>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- FEDERATION -->
+<section id="federation" class="wrap">
+  <div class="kick reveal">A different axis</div>
+  <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.8rem);margin-top:14px">Sovereign practices, coordinating by message</h2>
+  <p class="lead reveal d2" style="margin-top:16px;max-width:62ch">Each practice has its <em>own</em> repo, history, and calibration — possibly a different machine, user, substrate, or org. No shared filesystem. They coordinate by talking.</p>
+  <div class="seats">
+    <div class="seat reveal d1"><span class="chip">model</span><h3>practice A</h3><span class="role">a seat</span>
+      <div class="spark"><span class="faint mono" style="font-size:.62rem">birth</span><i></i><span class="ln"></span><i></i><i></i><span class="faint mono" style="font-size:.62rem">now</span></div>
+      <ul><li>own repo + history</li><li>own calibration trajectory</li><li>identity lives in the seat</li></ul></div>
+    <div class="seat reveal d2"><span class="chip">model</span><h3>practice B</h3><span class="role">a seat</span>
+      <div class="spark"><span class="faint mono" style="font-size:.62rem">birth</span><i></i><span class="ln"></span><i></i><i></i><span class="faint mono" style="font-size:.62rem">now</span></div>
+      <ul><li>own repo + history</li><li>own calibration trajectory</li><li>identity lives in the seat</li></ul></div>
+    <div class="seat reveal d3"><span class="chip">model</span><h3>practice C</h3><span class="role">a seat</span>
+      <div class="spark"><span class="faint mono" style="font-size:.62rem">birth</span><i></i><span class="ln"></span><i></i><i></i><span class="faint mono" style="font-size:.62rem">now</span></div>
+      <ul><li>own repo + history</li><li>own calibration trajectory</li><li>identity lives in the seat</li></ul></div>
+  </div>
+  <div class="edges reveal d3">
+    <div class="edge collab"><b>collab <span class="ar">→</span></b><span>open · ungated — knowledge can't act on you</span></div>
+    <div class="edge propose"><b>propose <span class="ar">→</span></b><span>ECO-gated — action can</span></div>
+  </div>
+  <p class="reveal d4" style="margin-top:28px;color:var(--muted);font-family:var(--mono);font-size:.82rem">↳ a Claude Code practice and an ecodex/codex practice are first-class peers on the same mesh. That's demonstrable, not aspirational.</p>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- SEAT VS WORKER -->
+<section id="seat" class="wrap">
+  <div class="kick reveal">The unit</div>
+  <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.8rem);margin-top:14px">A seat, not a worker</h2>
+  <p class="lead reveal d2" style="margin-top:16px;max-width:58ch">The deepest difference is what <em>persists</em>.</p>
+  <div class="split">
+    <div class="col old reveal d1">
+      <h3>worker — today</h3>
+      <div class="life">
+        <div class="cyc"><span class="o"></span> spawn → work → <span class="xx">✕ die</span></div>
+        <div class="cyc"><span class="o"></span> spawn → work → <span class="xx">✕ die</span> <span class="faint">(fresh)</span></div>
+        <div class="cyc"><span class="o"></span> spawn → work → <span class="xx">✕ die</span> <span class="faint">(fresh)</span></div>
+      </div>
+      <p class="muted mono" style="font-size:.78rem;margin-top:18px">no identity · no memory · no trace</p>
+    </div>
+    <div class="col ours reveal d2">
+      <h3>practice — ours</h3>
+      <div class="timeline">
+        <div class="tp">birth</div>
+        <div class="tp">calibration accrues…</div>
+        <div class="tp" style="color:var(--teal-2)">now — continuous</div>
+      </div>
+      <div class="swaps">
+        <span class="muted mono" style="font-size:.74rem">model</span>
+        <span class="chip">A</span><span class="ar">→</span><span class="chip">B</span><span class="ar">→</span><span class="chip">C</span>
+        <span class="muted mono" style="font-size:.72rem">swap into the same seat</span>
+      </div>
+      <p class="mono" style="font-size:.78rem;margin-top:18px;color:var(--teal-2)">identity in the SEAT · trajectory persists · every belief logged + gated</p>
+    </div>
+  </div>
+  <p class="reveal d3" style="margin-top:28px;max-width:60ch;color:#cdd4de">Swap one model for a better one into the same seat and it <em>inherits the trajectory</em>. Identity is the seat, not the instance — a role that outlives whoever holds it.</p>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- GOVERNANCE -->
+<section id="governance" class="wrap">
+  <div class="kick reveal">Governance</div>
+  <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.8rem);margin-top:14px">The gate hardens with distance</h2>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:34px;align-items:center;margin-top:30px" class="gov-grid">
+    <div class="orbit-wrap reveal d1">
+      <svg class="orbit" viewBox="0 0 400 400" role="img" aria-label="Interactive trust rings">
+        <circle class="ring live" data-tag="cross-org" data-gate="L3 ECO + System-tab routing" data-meta="hardest gate · cross-tenant + cross-org" cx="200" cy="200" r="178" stroke="#a98bf2" stroke-width="5" opacity="0.85"/>
+        <circle class="ring live" data-tag="org" data-gate="org-scoped review" data-meta="escalates toward cross-org" cx="200" cy="200" r="146" stroke="#a98bf2" stroke-width="3.6" opacity="0.7"/>
+        <circle class="ring live" data-tag="tenant" data-gate="cross-tenant: reviewed" data-meta="distinct owner_user_id" cx="200" cy="200" r="110" stroke="#46c6b6" stroke-width="2.6" opacity="0.85"/>
+        <circle class="ring live" data-tag="practice" data-gate="collab: open · propose: ECO" data-meta="same-practice = free flow" cx="200" cy="200" r="74" stroke="#7fe0d2" stroke-width="2"/>
+        <circle class="core-glow" cx="200" cy="200" r="44" fill="#eab35a" opacity="0.35"/>
+        <circle cx="200" cy="200" r="40" fill="none" stroke="#eab35a" stroke-width="1.6"/>
+        <text x="200" y="204" text-anchor="middle" fill="#f4cd83" font-family="'IBM Plex Mono',monospace" font-size="11" font-weight="600">practitioner</text>
+      </svg>
+    </div>
+    <div class="reveal d2">
+      <div class="readout" id="readout">
+        <div class="tag" id="r-tag">hover a ring</div>
+        <div class="gate" id="r-gate">Gating tightens as trust distance grows.</div>
+        <div class="meta" id="r-meta">Inner rings flow open; outer rings are hard-gated.</div>
+      </div>
+      <ul style="list-style:none;padding:0;margin:22px 0 0">
+        <li class="mono" style="font-size:.84rem;color:#cdd4de;margin:10px 0">↳ identity is canonical + server-resolved — senders can't be spoofed</li>
+        <li class="mono" style="font-size:.84rem;color:#cdd4de;margin:10px 0">↳ every actionable message traces to an ECO decision</li>
+        <li class="mono" style="font-size:.84rem;color:#cdd4de;margin:10px 0">↳ claims are checked against calibration</li>
+      </ul>
+    </div>
+  </div>
+  <p class="reveal d3" style="margin-top:30px;max-width:64ch;color:#cdd4de">The agentic-web failure modes — injection cascades, spoofed agents, runaway action with no accountability — don't land here. Openness is replaced by <em>gated trust</em>.</p>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- COMPARE -->
+<section id="compare" class="wrap">
+  <div class="kick reveal">Side by side</div>
+  <h2 class="reveal d1" style="font-size:clamp(1.8rem,3.6vw,2.8rem);margin-top:14px">Same agents. Different <em>kind</em>.</h2>
+  <table class="cmp reveal d2">
+    <thead><tr><th class="axis"></th><th class="old">worktree-style MAS</th><th class="ours">federated practices</th></tr></thead>
+    <tbody>
+      <tr><td class="axis">unit</td><td class="old">N checkouts of ONE repo</td><td class="ours">N independent practices</td></tr>
+      <tr><td class="axis">authority</td><td class="old">single object store</td><td class="ours">federated · each sovereign</td></tr>
+      <tr><td class="axis">reach</td><td class="old">one machine (local FS)</td><td class="ours">machines · substrates · orgs</td></tr>
+      <tr><td class="axis">lifetime</td><td class="old">ephemeral · dies at task</td><td class="ours">persistent seat + trajectory</td></tr>
+      <tr><td class="axis">identity</td><td class="old">none (clones)</td><td class="ours">in the seat · model swaps in</td></tr>
+      <tr><td class="axis">carries</td><td class="old">code diffs</td><td class="ours">calibrated belief + gated action</td></tr>
+      <tr><td class="axis">solves</td><td class="old">execution isolation</td><td class="ours">coordination + governance</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<div class="wrap"><div class="divider"></div></div>
+
+<!-- REFRAME -->
+<section id="reframe" class="wrap" style="padding-bottom:clamp(120px,18vh,200px)">
+  <div class="kick reveal">The reframe</div>
+  <p class="reframe reveal d1" style="margin-top:24px">It's a <span class="hl">generalized pull request</span> — over arbitrary shared state, not just code — where <span class="hl">calibration is the review signal</span>.</p>
+  <p class="lead reveal d2" style="margin-top:30px;max-width:58ch">Worktrees parallelize one repo's branches. The mesh coordinates many sovereign agents' decisions. We use worktrees — for isolation. This is the layer above.</p>
+  <p class="foot reveal d3">Empirica · ecodex · cortex — federation of governed agency</p>
+</section>
+
+<script>
+(function(){
+  // scroll reveals
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, {threshold:.16, rootMargin:'0px 0px -8% 0px'});
+  document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
+
+  // nav dots active state
+  var dots = [].slice.call(document.querySelectorAll('.dots a'));
+  var secs = dots.map(function(d){ return document.querySelector(d.getAttribute('href')); });
+  var so = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){
+      var i = secs.indexOf(e.target);
+      dots.forEach(function(d,j){ d.classList.toggle('on', j===i); });
+    }});
+  }, {threshold:.5});
+  secs.forEach(function(s){ if(s) so.observe(s); });
+
+  // ring readout
+  var tag=document.getElementById('r-tag'), gate=document.getElementById('r-gate'), meta=document.getElementById('r-meta');
+  document.querySelectorAll('.ring.live').forEach(function(r){
+    r.addEventListener('mouseenter', function(){
+      document.querySelectorAll('.ring.live').forEach(function(x){x.classList.remove('active')});
+      r.classList.add('active');
+      tag.textContent = r.dataset.tag;
+      gate.textContent = r.dataset.gate;
+      meta.textContent = r.dataset.meta;
+    });
+  });
+})();
+</script>
+</body>
+</html>
