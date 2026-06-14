@@ -13,7 +13,7 @@ Display modes:
 
 Environment:
   EMPIRICA_STATUS_MODE: basic|default|learning|full (default: default)
-  EMPIRICA_AI_ID: AI identifier (default: claude-code)
+  EMPIRICA_AI_ID: AI identifier override (default: resolved from project.yaml → basename, then 'claude-code')
   EMPIRICA_SIGNALING_LEVEL: basic|default|full (default: default)
 
 Author: Claude Code
@@ -49,8 +49,24 @@ class Colors:
 
 
 def get_ai_id() -> str:
-    """Get AI identifier from environment."""
-    return os.getenv('EMPIRICA_AI_ID', 'claude-code').strip()
+    """Resolve the AI identifier for session lookup.
+
+    Precedence: explicit EMPIRICA_AI_ID env override > canonical resolver
+    (project.yaml → basename) > legacy 'claude-code'. The statusline queries
+    sessions WHERE ai_id = ?, so the wrong id silently renders '[inactive]'
+    on a multi-practice machine.
+    """
+    env_id = os.getenv('EMPIRICA_AI_ID')
+    if env_id:
+        return env_id.strip()
+    try:
+        from empirica.utils.session_resolver import InstanceResolver as R
+        resolved = R.ai_id()
+        if resolved:
+            return resolved
+    except Exception:
+        pass
+    return 'claude-code'
 
 
 def get_open_counts(db: SessionDatabase, session_id: str, project_id: str | None = None) -> dict:
@@ -375,7 +391,9 @@ def get_dynamic_threshold(db) -> tuple:
     """
     try:
         from empirica.core.post_test.dynamic_thresholds import compute_dynamic_thresholds
-        dt = compute_dynamic_thresholds(ai_id="claude-code", db=db)
+        from empirica.utils.session_resolver import InstanceResolver as R
+        # Per-practice Brier thresholds — resolve the canonical ai_id.
+        dt = compute_dynamic_thresholds(ai_id=R.ai_id() or "claude-code", db=db)
         if dt.get("source") == "dynamic":
             noetic = dt.get("noetic", {})
             if noetic.get("brier_score") is not None:

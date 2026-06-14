@@ -306,7 +306,10 @@ def _get_dynamic_thresholds(db) -> tuple:
     """
     try:
         from empirica.core.post_test.dynamic_thresholds import compute_dynamic_thresholds
-        dt_result = compute_dynamic_thresholds(ai_id="claude-code", db=db)
+        from empirica.utils.session_resolver import InstanceResolver as R
+        # Brier thresholds are per-practice — resolve the canonical ai_id so a
+        # multi-practice machine doesn't read 'claude-code' calibration for all.
+        dt_result = compute_dynamic_thresholds(ai_id=R.ai_id() or "claude-code", db=db)
         if dt_result.get("source") == "dynamic":
             noetic = dt_result.get("noetic", {})
             if noetic.get("brier_score") is not None:
@@ -2664,7 +2667,14 @@ def _resolve_session(tx_session_id: str | None, claude_session_id: str | None,
             pass
 
     if not session_id:
-        respond("allow", f"WARNING: No session found. Run: empirica session-create --ai-id claude-code && empirica preflight-submit -{env_annotation}")
+        # Name the canonical practice in the suggested command, not a generic
+        # 'claude-code' the user would then have to correct by hand.
+        try:
+            from empirica.utils.session_resolver import InstanceResolver as R
+            hint_ai_id = R.ai_id() or 'claude-code'
+        except Exception:
+            hint_ai_id = 'claude-code'
+        respond("allow", f"WARNING: No session found. Run: empirica session-create --ai-id {hint_ai_id} && empirica preflight-submit -{env_annotation}")
         sys.exit(0)
 
     return session_id

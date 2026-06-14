@@ -30,7 +30,8 @@ def get_parent_session_id():
     """Get current Empirica session ID from active_session file or DB."""
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
-        session_id = R.latest_session_id(ai_id='claude-code', active_only=True)
+        # Canonical ai_id (project.yaml → basename); 'claude-code' only as last-resort fallback.
+        session_id = R.latest_session_id(ai_id=R.ai_id() or 'claude-code', active_only=True)
         if session_id:
             return session_id
     except ImportError:

@@ -153,7 +153,9 @@ def get_active_session() -> str | None:
     """Get active session ID."""
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
-        return R.latest_session_id(ai_id='claude-code', active_only=True)
+        # Resolve the canonical ai_id (project.yaml → basename); fall back to
+        # the legacy 'claude-code' literal only when resolution yields nothing.
+        return R.latest_session_id(ai_id=R.ai_id() or 'claude-code', active_only=True)
     except Exception:
         return None
 

@@ -520,7 +520,17 @@ def main():
         print(json.dumps({"ok": True, "skipped": True, "reason": "No active Empirica session"}))
         sys.exit(0)
 
-    ai_id = os.getenv('EMPIRICA_AI_ID', 'claude-code')
+    # Precedence: explicit env override > canonical resolver (project.yaml →
+    # basename) > legacy 'claude-code'. The wrong practice here re-anchors the
+    # post-compact context to the wrong calibration trajectory.
+    ai_id = os.getenv('EMPIRICA_AI_ID')
+    if not ai_id:
+        try:
+            from empirica.utils.session_resolver import InstanceResolver as R
+            ai_id = R.ai_id()
+        except Exception:
+            ai_id = None
+    ai_id = ai_id or 'claude-code'
 
     # Stage 3: Load state
     phase_state = _get_session_phase_state(empirica_session)
@@ -586,7 +596,12 @@ def _get_empirica_session(claude_session_id: str | None = None):
     # Priority 1: Database query (fallback)
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
-        for ai_pattern in ['claude-code', None]:
+        # Canonical ai_id first (project.yaml → basename), then legacy
+        # 'claude-code', then None wildcard. Prepend the resolved id ONLY when
+        # truthy — a leading None would short-circuit to the wildcard.
+        resolved = R.ai_id()
+        ai_patterns = ([resolved] if resolved else []) + ['claude-code', None]
+        for ai_pattern in ai_patterns:
             try:
                 return R.latest_session_id(ai_id=ai_pattern, active_only=True)
             except ValueError:

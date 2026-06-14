@@ -221,7 +221,13 @@ def _detect_empirica_session():
         sys.path.insert(0, str(Path.home() / 'empirical-ai' / 'empirica'))
         from empirica.utils.session_resolver import InstanceResolver as R
 
-        for ai_pattern in ['claude-code', None]:
+        # Try the canonical ai_id first (project.yaml → basename), then the
+        # legacy 'claude-code' literal, then the None wildcard. Prepend the
+        # resolved id ONLY when truthy — a leading None would short-circuit
+        # to the wildcard and skip the legacy-pattern lookup.
+        resolved = R.ai_id()
+        ai_patterns = ([resolved] if resolved else []) + ['claude-code', None]
+        for ai_pattern in ai_patterns:
             try:
                 return R.latest_session_id(ai_id=ai_pattern, active_only=True)
             except ValueError:
@@ -426,8 +432,18 @@ def main():
     # STEP 1: Capture fresh epistemic vectors
     fresh_vectors, assess_error = _assess_fresh_vectors(empirica_session)
 
-    # STEP 2: Run project-bootstrap for context anchor
-    ai_id = os.getenv('EMPIRICA_AI_ID', 'claude-code')
+    # STEP 2: Run project-bootstrap for context anchor.
+    # Precedence: explicit env override > canonical resolver (project.yaml →
+    # basename) > legacy 'claude-code'. Bootstrapping the wrong practice
+    # corrupts the post-compact context anchor, so resolve, don't guess.
+    ai_id = os.getenv('EMPIRICA_AI_ID')
+    if not ai_id:
+        try:
+            from empirica.utils.session_resolver import InstanceResolver as R
+            ai_id = R.ai_id()
+        except Exception:
+            ai_id = None
+    ai_id = ai_id or 'claude-code'
 
     try:
         result = subprocess.run(
