@@ -36,6 +36,15 @@ suite **skips** rather than fails (see `importorskip` in the test module).
   `created_timestamp`/`epistemic_importance` drift (fixed in `60a8c5b35e`) fell
   into. Dynamic queries are skipped on purpose; a ratchet `_KNOWN_VIOLATIONS`
   allow-list tracks any pre-existing cases (currently empty — clean baseline).
+- `test_import_budget.py` — adapted port of empirica's import-budget gate
+  (empirica `d1f5dc736`). The Rust layer spawns a vendored hook as a fresh
+  subprocess on every hot event (sentinel-gate on every Bash/Edit/Write,
+  tool-router on every prompt, …), so a heavy import at a hook's module top-level
+  taxes every spawn. Loads each hot-path hook by path in a fresh subprocess and
+  asserts none of `_HEAVY` (LLM/embedding SDKs, httpx, GitPython, qdrant, ML/data
+  libs, fastapi) landed in `sys.modules`. Presence-based (deterministic), not
+  time-based (flaky). `_BUDGET` per-hook allow-sets are empty — baseline confirms
+  every critical hook pulls empirica core lazily and nothing heavy.
 
 ## Adding coverage
 
