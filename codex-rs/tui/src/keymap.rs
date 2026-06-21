@@ -21,9 +21,11 @@
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use codex_config::types::KeybindingsSpec;
+use codex_config::types::MAX_FUNCTION_KEY;
 use codex_config::types::TuiKeymap;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Runtime keymap used by TUI input handlers.
@@ -158,6 +160,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) move_line_start: Vec<KeyBinding>,
     pub(crate) move_line_end: Vec<KeyBinding>,
     pub(crate) delete_char: Vec<KeyBinding>,
+    pub(crate) substitute_char: Vec<KeyBinding>,
     pub(crate) delete_to_line_end: Vec<KeyBinding>,
     pub(crate) change_to_line_end: Vec<KeyBinding>,
     pub(crate) yank_line: Vec<KeyBinding>,
@@ -421,7 +424,7 @@ impl RuntimeKeymap {
             )?,
         };
 
-        let chat = ChatKeymap {
+        let mut chat = ChatKeymap {
             interrupt_turn: resolve_bindings(
                 keymap.chat.interrupt_turn.as_ref(),
                 &defaults.chat.interrupt_turn,
@@ -494,6 +497,7 @@ impl RuntimeKeymap {
             move_line_start: resolve_local!(keymap, defaults, vim_normal, move_line_start),
             move_line_end: resolve_local!(keymap, defaults, vim_normal, move_line_end),
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
+            substitute_char: resolve_local!(keymap, defaults, vim_normal, substitute_char),
             delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
             change_to_line_end: resolve_local!(keymap, defaults, vim_normal, change_to_line_end),
             yank_line: resolve_local!(keymap, defaults, vim_normal, yank_line),
@@ -580,6 +584,10 @@ impl RuntimeKeymap {
                 vim_normal.delete_char.as_slice(),
             ),
             (
+                keymap.vim_normal.change_to_line_end.as_ref(),
+                vim_normal.change_to_line_end.as_slice(),
+            ),
+            (
                 keymap.vim_normal.delete_to_line_end.as_ref(),
                 vim_normal.delete_to_line_end.as_slice(),
             ),
@@ -600,6 +608,10 @@ impl RuntimeKeymap {
                 vim_normal.start_yank_operator.as_slice(),
             ),
             (
+                keymap.vim_normal.start_change_operator.as_ref(),
+                vim_normal.start_change_operator.as_slice(),
+            ),
+            (
                 keymap.vim_normal.cancel_operator.as_ref(),
                 vim_normal.cancel_operator.as_slice(),
             ),
@@ -608,6 +620,11 @@ impl RuntimeKeymap {
         if keymap.vim_normal.start_change_operator.is_none() {
             vim_normal
                 .start_change_operator
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.substitute_char.is_none() {
+            vim_normal
+                .substitute_char
                 .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
         }
 
@@ -721,6 +738,22 @@ impl RuntimeKeymap {
             backtick: resolve_local!(keymap, defaults, vim_text_object, backtick),
             cancel: resolve_local!(keymap, defaults, vim_text_object, cancel),
         };
+
+        // Reasoning arrow aliases are fallback defaults: existing explicit
+        // bindings on the same input path keep the keys, while explicit
+        // reasoning bindings remain authoritative.
+        if keymap.chat.decrease_reasoning_effort.is_none()
+            && configured_main_surface_alias_is_used(keymap, "shift-down")
+        {
+            chat.decrease_reasoning_effort
+                .retain(|binding| *binding != key_hint::shift(KeyCode::Down));
+        }
+        if keymap.chat.increase_reasoning_effort.is_none()
+            && configured_main_surface_alias_is_used(keymap, "shift-up")
+        {
+            chat.increase_reasoning_effort
+                .retain(|binding| *binding != key_hint::shift(KeyCode::Up));
+        }
 
         let pager = PagerKeymap {
             scroll_up: resolve_local!(keymap, defaults, pager, scroll_up),
@@ -886,8 +919,14 @@ impl RuntimeKeymap {
             },
             chat: ChatKeymap {
                 interrupt_turn: default_bindings![plain(KeyCode::Esc)],
-                decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
-                increase_reasoning_effort: default_bindings![alt(KeyCode::Char('.'))],
+                decrease_reasoning_effort: default_bindings![
+                    alt(KeyCode::Char(',')),
+                    shift(KeyCode::Down)
+                ],
+                increase_reasoning_effort: default_bindings![
+                    alt(KeyCode::Char('.')),
+                    shift(KeyCode::Up)
+                ],
                 edit_queued_message: default_bindings![alt(KeyCode::Up), shift(KeyCode::Left)],
             },
             composer: ComposerKeymap {
@@ -990,6 +1029,7 @@ impl RuntimeKeymap {
                     shift(KeyCode::Char('$'))
                 ],
                 delete_char: default_bindings![plain(KeyCode::Char('x'))],
+                substitute_char: default_bindings![plain(KeyCode::Char('s'))],
                 delete_to_line_end: default_bindings![
                     shift(KeyCode::Char('d')),
                     plain(KeyCode::Char('D'))
@@ -1435,6 +1475,10 @@ impl RuntimeKeymap {
                 ("move_line_end", self.vim_normal.move_line_end.as_slice()),
                 ("delete_char", self.vim_normal.delete_char.as_slice()),
                 (
+                    "substitute_char",
+                    self.vim_normal.substitute_char.as_slice(),
+                ),
+                (
                     "delete_to_line_end",
                     self.vim_normal.delete_to_line_end.as_slice(),
                 ),
@@ -1835,6 +1879,52 @@ fn configured_bindings_to_preserve<const N: usize>(
     configured_bindings
 }
 
+fn configured_main_surface_alias_is_used(keymap: &TuiKeymap, alias: &str) -> bool {
+    let mut global = keymap.global.clone();
+    if keymap.composer.submit.is_some() {
+        global.submit = None;
+    }
+    if keymap.composer.queue.is_some() {
+        global.queue = None;
+    }
+    if keymap.composer.toggle_shortcuts.is_some() {
+        global.toggle_shortcuts = None;
+    }
+
+    // Reasoning shortcuts run before composer/editor key handling, so fallback
+    // aliases must yield to any explicit binding on the same main-surface input
+    // path.
+    configured_context_alias_is_used(&global, alias)
+        || configured_context_alias_is_used(&keymap.chat, alias)
+        || configured_context_alias_is_used(&keymap.composer, alias)
+        || configured_context_alias_is_used(&keymap.editor, alias)
+        || configured_context_alias_is_used(&keymap.vim_normal, alias)
+        || configured_context_alias_is_used(&keymap.vim_operator, alias)
+        || configured_context_alias_is_used(&keymap.vim_text_object, alias)
+}
+
+fn configured_context_alias_is_used(context: &impl Serialize, alias: &str) -> bool {
+    let Ok(value) = serde_json::to_value(context) else {
+        return false;
+    };
+    keymap_value_contains_alias(&value, alias)
+}
+
+fn keymap_value_contains_alias(value: &serde_json::Value, alias: &str) -> bool {
+    match value {
+        serde_json::Value::String(value) => value == alias,
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| keymap_value_contains_alias(value, alias)),
+        serde_json::Value::Object(values) => values
+            .values()
+            .any(|value| keymap_value_contains_alias(value, alias)),
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) | serde_json::Value::Null => {
+            false
+        }
+    }
+}
+
 fn resolve_new_default_bindings(
     configured: Option<&KeybindingsSpec>,
     fallback: &[KeyBinding],
@@ -1919,7 +2009,7 @@ fn parse_keybinding(spec: &str) -> Option<KeyBinding> {
         other if other.len() == 1 => KeyCode::Char(char::from(other.as_bytes()[0])),
         other if other.starts_with('f') => {
             let number = other[1..].parse::<u8>().ok()?;
-            if (1..=12).contains(&number) {
+            if (1..=MAX_FUNCTION_KEY).contains(&number) {
                 KeyCode::F(number)
             } else {
                 return None;
@@ -2121,11 +2211,17 @@ mod tests {
         );
         assert_eq!(
             runtime.chat.decrease_reasoning_effort,
-            vec![key_hint::alt(KeyCode::Char(','))]
+            vec![
+                key_hint::alt(KeyCode::Char(',')),
+                key_hint::shift(KeyCode::Down),
+            ]
         );
         assert_eq!(
             runtime.chat.increase_reasoning_effort,
-            vec![key_hint::alt(KeyCode::Char('.'))]
+            vec![
+                key_hint::alt(KeyCode::Char('.')),
+                key_hint::shift(KeyCode::Up),
+            ]
         );
         assert_eq!(
             runtime.chat.edit_queued_message,
@@ -2197,6 +2293,38 @@ mod tests {
             runtime.list.jump_bottom,
             vec![key_hint::plain(KeyCode::End)]
         );
+    }
+
+    #[test]
+    fn configured_main_surface_bindings_prune_reasoning_fallback_aliases() {
+        let mut keymap = TuiKeymap::default();
+        keymap.editor.move_up = Some(one("shift-up"));
+        keymap.vim_text_object.word = Some(one("shift-down"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.editor.move_up, vec![key_hint::shift(KeyCode::Up)]);
+        assert_eq!(
+            runtime.vim_text_object.word,
+            vec![key_hint::shift(KeyCode::Down)]
+        );
+        assert_eq!(
+            runtime.chat.decrease_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char(','))]
+        );
+        assert_eq!(
+            runtime.chat.increase_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char('.'))]
+        );
+    }
+
+    #[test]
+    fn explicit_reasoning_binding_still_conflicts_with_editor_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.editor.move_up = Some(one("shift-up"));
+        keymap.chat.increase_reasoning_effort = Some(one("shift-up"));
+
+        expect_conflict(&keymap, "chat.increase_reasoning_effort", "editor.move_up");
     }
 
     #[test]
@@ -2309,6 +2437,29 @@ mod tests {
         keymap.vim_normal.start_change_operator = Some(one("c"));
 
         expect_conflict(&keymap, "move_left", "start_change_operator");
+    }
+
+    #[test]
+    fn configured_legacy_vim_normal_bindings_prune_new_substitute_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("s"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_normal.move_left,
+            vec![key_hint::plain(KeyCode::Char('s'))]
+        );
+        assert_eq!(runtime.vim_normal.substitute_char, Vec::new());
+    }
+
+    #[test]
+    fn explicit_new_vim_normal_substitute_binding_still_conflicts_with_legacy_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("s"));
+        keymap.vim_normal.substitute_char = Some(one("s"));
+
+        expect_conflict(&keymap, "move_left", "substitute_char");
     }
 
     #[test]
@@ -2593,7 +2744,11 @@ mod tests {
             parse_keybinding("f1").map(|binding| binding.parts()),
             Some((KeyCode::F(1), KeyModifiers::NONE))
         );
-        assert_eq!(parse_keybinding("f13"), None);
+        assert_eq!(
+            parse_keybinding("f24").map(|binding| binding.parts()),
+            Some((KeyCode::F(24), KeyModifiers::NONE))
+        );
+        assert_eq!(parse_keybinding("f25"), None);
     }
 
     #[test]

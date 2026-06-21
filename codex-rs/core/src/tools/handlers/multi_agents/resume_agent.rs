@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 pub(crate) struct Handler;
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "resume_agent")
@@ -17,11 +16,15 @@ impl ToolExecutor<ToolInvocation> for Handler {
         create_resume_agent_tool()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        handle_resume_agent(invocation).await.map(boxed_tool_output)
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "resume_agent resume reopen closed agent subagent thread id target",
+            self.spec(),
+        )
+    }
+
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async move { handle_resume_agent(invocation).await.map(boxed_tool_output) })
     }
 }
 
@@ -59,7 +62,7 @@ async fn handle_resume_agent(
             CollabResumeBeginEvent {
                 call_id: call_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.conversation_id,
+                sender_thread_id: session.thread_id,
                 receiver_thread_id,
                 receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
                 receiver_agent_role: receiver_agent.agent_role.clone(),
@@ -115,7 +118,7 @@ async fn handle_resume_agent(
             CollabResumeEndEvent {
                 call_id,
                 completed_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.conversation_id,
+                sender_thread_id: session.thread_id(),
                 receiver_thread_id,
                 receiver_agent_nickname: receiver_agent.agent_nickname,
                 receiver_agent_role: receiver_agent.agent_role,
@@ -135,13 +138,6 @@ async fn handle_resume_agent(
 }
 
 impl CoreToolRuntime for Handler {
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        multi_agent_tool_search_info(
-            "resume_agent resume reopen closed agent subagent thread id target",
-            self.spec(),
-        )
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
@@ -181,12 +177,12 @@ async fn try_resume_closed_agent(
     receiver_thread_id: ThreadId,
     child_depth: i32,
 ) -> Result<(), FunctionCallError> {
-    let config = build_agent_resume_config(turn.as_ref(), child_depth)?;
+    let config = build_agent_resume_config(turn.as_ref())?;
     Box::pin(session.services.agent_control.resume_agent_from_rollout(
         config,
         receiver_thread_id,
         thread_spawn_source(
-            session.conversation_id,
+            session.thread_id(),
             &turn.session_source,
             child_depth,
             /*agent_role*/ None,

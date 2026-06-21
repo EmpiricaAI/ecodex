@@ -44,11 +44,10 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
     pub(crate) plugins_command_enabled: bool,
+    pub(crate) token_activity_command_enabled: bool,
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
-    pub(crate) realtime_conversation_enabled: bool,
-    pub(crate) audio_device_selection_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
     pub(crate) side_conversation_active: bool,
 }
@@ -59,11 +58,10 @@ impl From<CommandPopupFlags> for BuiltinCommandFlags {
             collaboration_modes_enabled: value.collaboration_modes_enabled,
             connectors_enabled: value.connectors_enabled,
             plugins_command_enabled: value.plugins_command_enabled,
+            token_activity_command_enabled: value.token_activity_command_enabled,
             service_tier_commands_enabled: value.service_tier_commands_enabled,
             goal_command_enabled: value.goal_command_enabled,
             personality_command_enabled: value.personality_command_enabled,
-            realtime_conversation_enabled: value.realtime_conversation_enabled,
-            audio_device_selection_enabled: value.audio_device_selection_enabled,
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
             side_conversation_active: value.side_conversation_active,
         }
@@ -98,6 +96,7 @@ impl CommandPopup {
     /// to narrow down the list of available commands.
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
         let first_line = text.lines().next().unwrap_or("");
+        let previous_filter = self.command_filter.clone();
 
         if let Some(stripped) = first_line.strip_prefix('/') {
             // Extract the *first* token (sequence of non-whitespace
@@ -114,6 +113,10 @@ impl CommandPopup {
             // popup shows the *full* command list if it is still displayed
             // for some reason.
             self.command_filter.clear();
+        }
+
+        if self.command_filter != previous_filter {
+            self.state.reset();
         }
 
         // Reset or clamp selected index based on new filtered list.
@@ -388,6 +391,45 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn app_command_popup_snapshot() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
+        popup.on_composer_text_change("/app".to_string());
+
+        let width = 72;
+        let area = Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            width,
+            popup.calculate_required_height(width),
+        );
+        let mut buf = Buffer::empty(area);
+        popup.render_ref(area, &mut buf);
+
+        insta::assert_snapshot!("command_popup_app", format!("{buf:?}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn default_command_popup_items_snapshot() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
+        popup.on_composer_text_change("/".to_string());
+
+        let commands = popup
+            .filtered_items()
+            .into_iter()
+            .map(|item| {
+                let command = item.command();
+                let description = item.description();
+                format!("/{command} - {description}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        insta::assert_snapshot!("command_popup_default_items", commands);
+    }
+
     #[test]
     fn prefix_filter_limits_matches_for_ac() {
         let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
@@ -404,6 +446,38 @@ mod tests {
         assert!(
             !cmds.iter().any(|cmd| cmd == "compact"),
             "expected prefix search for '/ac' to exclude 'compact', got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn changing_filter_resets_selection_after_scrolling() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
+        popup.on_composer_text_change("/".to_string());
+
+        for _ in 0..MAX_POPUP_ROWS {
+            popup.move_down();
+        }
+        assert!(popup.state.scroll_top > 0);
+
+        popup.on_composer_text_change("/st".to_string());
+
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Builtin(SlashCommand::Status))
+        );
+        assert_eq!(popup.state.scroll_top, 0);
+        let width = 72;
+        let area = Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            width,
+            popup.calculate_required_height(width),
+        );
+        let mut buf = Buffer::empty(area);
+        popup.render_ref(area, &mut buf);
+        insta::assert_snapshot!(
+            "command_popup_filter_reset_after_scroll",
+            format!("{buf:?}")
         );
     }
 
@@ -457,11 +531,10 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 plugins_command_enabled: false,
+                token_activity_command_enabled: false,
                 service_tier_commands_enabled: false,
                 goal_command_enabled: false,
                 personality_command_enabled: true,
-                realtime_conversation_enabled: false,
-                audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
             },
@@ -485,11 +558,10 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 plugins_command_enabled: false,
+                token_activity_command_enabled: false,
                 service_tier_commands_enabled: false,
                 goal_command_enabled: false,
                 personality_command_enabled: false,
-                realtime_conversation_enabled: false,
-                audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
             },
@@ -518,11 +590,10 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 plugins_command_enabled: false,
+                token_activity_command_enabled: false,
                 service_tier_commands_enabled: false,
                 goal_command_enabled: false,
                 personality_command_enabled: true,
-                realtime_conversation_enabled: false,
-                audio_device_selection_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
             },
@@ -537,40 +608,6 @@ mod tests {
             }
             other => panic!("expected personality to be selected for exact match, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn settings_command_hidden_when_audio_device_selection_is_disabled() {
-        let mut popup = CommandPopup::new(
-            CommandPopupFlags {
-                collaboration_modes_enabled: false,
-                connectors_enabled: false,
-                plugins_command_enabled: false,
-                service_tier_commands_enabled: false,
-                goal_command_enabled: false,
-                personality_command_enabled: true,
-                realtime_conversation_enabled: true,
-                audio_device_selection_enabled: false,
-                windows_degraded_sandbox_active: false,
-                side_conversation_active: false,
-            },
-            Vec::new(),
-        );
-        popup.on_composer_text_change("/aud".to_string());
-
-        let cmds: Vec<String> = popup
-            .filtered_items()
-            .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command().to_string(),
-                CommandItem::ServiceTier(command) => command.name,
-            })
-            .collect();
-
-        assert!(
-            !cmds.iter().any(|cmd| cmd == "settings"),
-            "expected '/settings' to be hidden when audio device selection is disabled, got {cmds:?}"
-        );
     }
 
     #[test]

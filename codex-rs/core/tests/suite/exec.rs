@@ -24,7 +24,6 @@ fn skip_test() -> bool {
     false
 }
 
-#[expect(clippy::expect_used)]
 async fn run_test_cmd<I, S>(tmp: TempDir, command: I) -> Result<ExecToolCallOutput>
 where
     I: IntoIterator<Item = S>,
@@ -42,6 +41,7 @@ where
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
+        network_environment_id: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
@@ -53,6 +53,7 @@ where
         params,
         &PermissionProfile::read_only(),
         &cwd,
+        std::slice::from_ref(&cwd),
         &None,
         /*use_legacy_landlock*/ false,
         /*stdout_stream*/ None,

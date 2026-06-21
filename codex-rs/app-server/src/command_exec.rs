@@ -237,6 +237,10 @@ impl CommandExecManager {
             arg0,
             ..
         } = exec_request;
+        // TODO(anp): Keep PathUri through the local command launch boundary.
+        let cwd = cwd
+            .to_abs_path()
+            .map_err(|err| invalid_request(format!("invalid command cwd: {err}")))?;
 
         let stream_stdin = tty || stream_stdin;
         let stream_stdout_stderr = tty || stream_stdout_stderr;
@@ -697,12 +701,14 @@ mod tests {
         let cwd = AbsolutePathBuf::current_dir().expect("current dir");
         ExecRequest::new(
             vec!["cmd".to_string()],
-            cwd,
+            cwd.clone(),
             HashMap::new(),
             /*network*/ None,
+            /*network_environment_id*/ None,
             ExecExpiration::DefaultTimeout,
             codex_core::exec::ExecCapturePolicy::ShellTool,
             SandboxType::WindowsRestrictedToken,
+            vec![cwd],
             WindowsSandboxLevel::Disabled,
             /*windows_sandbox_private_desktop*/ false,
             PermissionProfile::read_only(),
@@ -816,9 +822,11 @@ mod tests {
                     cwd.clone(),
                     HashMap::new(),
                     /*network*/ None,
+                    /*network_environment_id*/ None,
                     ExecExpiration::Cancellation(CancellationToken::new()),
                     codex_core::exec::ExecCapturePolicy::ShellTool,
                     SandboxType::None,
+                    vec![cwd.clone()],
                     WindowsSandboxLevel::Disabled,
                     /*windows_sandbox_private_desktop*/ false,
                     PermissionProfile::read_only(),
@@ -887,6 +895,7 @@ mod tests {
         };
         let cancellation = CancellationToken::new();
         let cancel = cancellation.clone();
+        let cwd = AbsolutePathBuf::current_dir().expect("current dir");
 
         manager
             .start(StartCommandExecParams {
@@ -898,15 +907,17 @@ mod tests {
                 process_id: Some("proc-101".to_string()),
                 exec_request: ExecRequest::new(
                     vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
-                    AbsolutePathBuf::current_dir().expect("current dir"),
+                    cwd.clone(),
                     HashMap::new(),
                     /*network*/ None,
+                    /*network_environment_id*/ None,
                     ExecExpiration::TimeoutOrCancellation {
                         timeout: Duration::from_secs(30),
                         cancellation,
                     },
                     codex_core::exec::ExecCapturePolicy::ShellTool,
                     SandboxType::None,
+                    vec![cwd],
                     WindowsSandboxLevel::Disabled,
                     /*windows_sandbox_private_desktop*/ false,
                     PermissionProfile::read_only(),

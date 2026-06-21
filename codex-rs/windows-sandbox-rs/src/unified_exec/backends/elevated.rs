@@ -3,12 +3,16 @@ use super::windows_common::make_runner_resizer;
 use super::windows_common::start_runner_pipe_writer;
 use super::windows_common::start_runner_stdin_writer;
 use super::windows_common::start_runner_stdout_reader;
+use crate::identity::SandboxCreds;
+use crate::identity::refresh_logon_sandbox_creds;
 use crate::ipc_framed::EmptyPayload;
 use crate::ipc_framed::FramedMessage;
 use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+use crate::runner_client::RunnerTransport;
+use crate::runner_client::is_stale_sandbox_creds_error;
 use crate::runner_client::spawn_runner_transport;
 use crate::spawn_prep::prepare_elevated_spawn_context_for_permissions;
 use anyhow::Result;
@@ -23,14 +27,35 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
+async fn spawn_runner_transport_task(
+    codex_home: PathBuf,
+    cwd: PathBuf,
+    sandbox_creds: SandboxCreds,
+    logs_base_dir: Option<PathBuf>,
+    spawn_request: SpawnRequest,
+) -> Result<RunnerTransport> {
+    tokio::task::spawn_blocking(move || -> Result<_> {
+        spawn_runner_transport(
+            &codex_home,
+            &cwd,
+            &sandbox_creds,
+            logs_base_dir.as_deref(),
+            spawn_request,
+        )
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("runner handshake task failed: {err}"))?
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
     permission_profile: &PermissionProfile,
-    permission_profile_cwd: &Path,
+    workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
     mut env_map: HashMap<String, String>,
+    proxy_enforced: bool,
     timeout_ms: Option<u64>,
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
@@ -49,12 +74,13 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         .iter()
         .map(AbsolutePathBuf::to_path_buf)
         .collect::<Vec<_>>();
-    let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
-        permission_profile,
-        permission_profile_cwd,
-    )?;
+    let permissions =
+        ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+            permission_profile,
+            workspace_roots,
+        )?;
     let elevated = prepare_elevated_spawn_context_for_permissions(
-        permissions,
+        permissions.clone(),
         codex_home,
         cwd,
         &mut env_map,
@@ -64,6 +90,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         write_roots_override,
         &deny_read_paths_override,
         &deny_write_paths_override,
+        proxy_enforced,
     )?;
 
     let spawn_request = SpawnRequest {
@@ -71,7 +98,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         cwd: cwd.to_path_buf(),
         env: env_map.clone(),
         permission_profile: permission_profile.clone(),
-        permission_profile_cwd: permission_profile_cwd.to_path_buf(),
+        workspace_roots: workspace_roots.to_vec(),
         codex_home: elevated.sandbox_base.clone(),
         real_codex_home: codex_home.to_path_buf(),
         cap_sids: elevated.cap_sids.clone(),
@@ -82,19 +109,42 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     };
     let codex_home = codex_home.to_path_buf();
     let cwd = cwd.to_path_buf();
-    let sandbox_creds = elevated.sandbox_creds.clone();
+    let sandbox_creds = elevated.sandbox_creds;
     let logs_base_dir = elevated.logs_base_dir.clone();
-    let transport = tokio::task::spawn_blocking(move || -> Result<_> {
-        spawn_runner_transport(
-            &codex_home,
-            &cwd,
-            &sandbox_creds,
-            logs_base_dir.as_deref(),
-            spawn_request,
-        )
-    })
+    let transport = match spawn_runner_transport_task(
+        codex_home.clone(),
+        cwd.clone(),
+        sandbox_creds,
+        logs_base_dir.clone(),
+        spawn_request.clone(),
+    )
     .await
-    .map_err(|err| anyhow::anyhow!("runner handshake task failed: {err}"))??;
+    {
+        Ok(transport) => transport,
+        Err(err) if is_stale_sandbox_creds_error(&err) => {
+            let sandbox_creds = refresh_logon_sandbox_creds(
+                &permissions,
+                &cwd,
+                &env_map,
+                &codex_home,
+                read_roots_override,
+                read_roots_include_platform_defaults,
+                write_roots_override,
+                &deny_read_paths_override,
+                &deny_write_paths_override,
+                /*proxy_enforced*/ false,
+            )?;
+            spawn_runner_transport_task(
+                codex_home,
+                cwd,
+                sandbox_creds,
+                logs_base_dir,
+                spawn_request,
+            )
+            .await?
+        }
+        Err(err) => return Err(err),
+    };
     let (pipe_write, pipe_read) = transport.into_files();
 
     let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(128);

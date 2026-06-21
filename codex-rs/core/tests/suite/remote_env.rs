@@ -9,6 +9,7 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -22,21 +23,29 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
+use core_test_support::TestEnvironment;
 use core_test_support::get_remote_test_env;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
 use core_test_support::wait_for_event;
@@ -46,6 +55,7 @@ use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tempfile::TempDir;
@@ -66,18 +76,21 @@ async fn submit_turn_with_approval_and_environments(
     prompt: &str,
     environments: Vec<TurnEnvironmentSelection>,
 ) -> Result<()> {
+    let turn_environment_selections = codex_protocol::protocol::TurnEnvironmentSelections::new(
+        test.config.cwd.clone(),
+        environments,
+    );
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
-            environments: Some(environments),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.cwd.path().to_path_buf()),
+                environments: Some(turn_environment_selections),
                 approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(SandboxPolicy::new_read_only_policy()),
@@ -146,20 +159,21 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
     let test_env = test_env().await?;
     let file_system = test_env.environment().get_filesystem();
 
-    let file_path_abs = remote_test_file_path().abs();
+    let file_path_abs = test_env.cwd().join("remote-test-env-ok");
+    let file_path_uri = PathUri::from_path(&file_path_abs)?;
     let payload = b"remote-test-env-ok".to_vec();
 
     file_system
-        .write_file(&file_path_abs, payload.clone(), /*sandbox*/ None)
+        .write_file(&file_path_uri, payload.clone(), /*sandbox*/ None)
         .await?;
     let actual = file_system
-        .read_file(&file_path_abs, /*sandbox*/ None)
+        .read_file(&file_path_uri, /*sandbox*/ None)
         .await?;
     assert_eq!(actual, payload);
 
     file_system
         .remove(
-            &file_path_abs,
+            &file_path_uri,
             RemoveOptions {
                 recursive: false,
                 force: true,
@@ -171,11 +185,156 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let test = test_codex().build_with_remote_env(&server).await?;
+
+    test.submit_turn("report remote environment").await?;
+
+    let request = response_mock.single_request();
+    let environment_context = request
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.starts_with("<environment_context>"))
+        .context("environment context should be model visible")?;
+    // TODO(anp): Assert Wine-exec exposes a `C:\\...` cwd after model-visible paths preserve
+    // target-native spelling instead of the Linux orchestrator's `/C:/...` representation.
+    let expected_shell = match core_test_support::test_environment() {
+        TestEnvironment::Docker { .. } => "<shell>bash</shell>",
+        TestEnvironment::WineExec => "<shell>powershell</shell>",
+        TestEnvironment::Local => unreachable!("test requires a remote environment"),
+    };
+    assert_eq!(
+        environment_context
+            .lines()
+            .find(|line| line.trim_start().starts_with("<shell>"))
+            .map(str::trim),
+        Some(expected_shell),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
+    const CALL_ID: &str = "remote-explicit-shell";
+
+    let (shell, command) = match core_test_support::test_environment() {
+        TestEnvironment::Docker { .. } => (
+            "bash",
+            r#"case "$PWD" in /tmp/codex-core-test-cwd-*) ;; *) echo "unexpected cwd: $PWD" >&2; exit 1 ;; esac"#,
+        ),
+        TestEnvironment::WineExec => (
+            "powershell",
+            r#"$cwd = (Get-Location).Path; if ($cwd -notlike 'C:\codex-core-test-cwd-*') { Write-Error "unexpected cwd: $cwd"; exit 1 }"#,
+        ),
+        TestEnvironment::Local => return Ok(()),
+    };
+
+    let server = start_mock_server().await;
+    let arguments = serde_json::to_string(&json!({
+        "cmd": command,
+        "shell": shell,
+        "login": false,
+        "yield_time_ms": 10_000,
+    }))?;
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_remote_env(&server).await?;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(CALL_ID, "exec_command", &arguments),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn_with_environments(
+        "run the remote shell in the remote cwd",
+        Some(vec![TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: PathUri::from_abs_path(&test.config.cwd),
+        }]),
+    )
+    .await?;
+    let request = response_mock
+        .last_request()
+        .context("model should receive the command output")?;
+    let (output, success) = request
+        .function_call_output_content_and_success(CALL_ID)
+        .context("remote shell tool result should be present")?;
+    assert_ne!(success, Some(false));
+    assert!(
+        output.is_some_and(|output| output.contains("Process exited with code 0")),
+        "remote shell command should exit successfully",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_executor_reaches_model_before_remote_environment_is_ready() -> Result<()> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
+        .with_config(|config| {
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+        });
+
+    let test = tokio::time::timeout(Duration::from_secs(5), builder.build(&server))
+        .await
+        .context("thread startup should not wait for the remote environment")??;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        test.submit_turn("respond before the environment is ready"),
+    )
+    .await
+    .context("turn should reach the model before the remote environment is ready")??;
+
+    response_mock.single_request();
+    Ok(())
+}
+
 fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
-    match AbsolutePathBuf::try_from(path) {
-        Ok(path) => path,
-        Err(error) => panic!("path should be absolute: {error}"),
-    }
+    AbsolutePathBuf::try_from(path).expect("path should be absolute")
 }
 
 fn read_only_sandbox(readable_root: PathBuf) -> FileSystemSandboxContext {
@@ -225,8 +384,11 @@ fn assert_normalized_path_rejected(error: &std::io::Error) {
 
 fn remote_exec(script: &str) -> Result<()> {
     let remote_env = get_remote_test_env().context("remote env should be configured")?;
+    let container_name = remote_env
+        .docker_container_name()
+        .context("test requires direct access to the Docker container")?;
     let output = Command::new("docker")
-        .args(["exec", &remote_env.container_name, "sh", "-lc", script])
+        .args(["exec", container_name, "sh", "-lc", script])
         .output()?;
     assert!(
         output.status.success(),
@@ -272,6 +434,8 @@ async fn exec_command_routing_output(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Remove after remote path fixtures use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
     };
@@ -280,33 +444,32 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     let test = unified_exec_test(&server).await?;
     let local_cwd = TempDir::new()?;
     fs::write(local_cwd.path().join("marker.txt"), "local-routing")?;
-    let local_selection = TurnEnvironmentSelection {
-        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: local_cwd.path().abs(),
-    };
+    let local_selection = local(local_cwd.path().abs());
     let remote_cwd = PathBuf::from(format!(
         "/tmp/codex-remote-routing-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
     let remote_marker_name = "marker.txt";
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
+    let remote_marker_uri = PathUri::from_path(remote_cwd.join(remote_marker_name))?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &remote_cwd_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
         .await?;
     test.fs()
         .write_file(
-            &remote_cwd.join(remote_marker_name),
+            &remote_marker_uri,
             b"remote-routing".to_vec(),
             /*sandbox*/ None,
         )
         .await?;
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-        cwd: remote_cwd.clone(),
+        cwd: PathUri::from_abs_path(&remote_cwd),
     };
     let multi_env_output = exec_command_routing_output(
         &test,
@@ -333,7 +496,213 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
 
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    // TODO(anp): Remove after remote path fixtures use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.approvals_reviewer = ApprovalsReviewer::User;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ExecPermissionApprovals)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+
+    let local_cwd = TempDir::new()?;
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-request-permissions-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    let relative_write_root = "granted";
+    let relative_target_path = "granted/request-permissions-output.txt";
+    let remote_write_root = remote_cwd.join(relative_write_root);
+    let remote_target_path = remote_cwd.join(relative_target_path);
+    let local_write_root = local_cwd.path().join(relative_write_root);
+    let local_target_path = local_cwd.path().join(relative_target_path);
+    fs::create_dir(&local_write_root)?;
+    let remote_write_root_uri = PathUri::from_path(&remote_write_root)?;
+    test.fs()
+        .create_directory(
+            &remote_write_root_uri,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let expected_permissions = RequestPermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![remote_write_root.clone()]),
+        )),
+        ..RequestPermissionProfile::default()
+    };
+    let approved_response = RequestPermissionsResponse {
+        permissions: expected_permissions.clone(),
+        scope: PermissionGrantScope::Turn,
+        strict_auto_review: false,
+    };
+    let command = format!(
+        "printf 'remote-request-permissions-ok' > {relative_target_path} && cat {relative_target_path}"
+    );
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-request-permissions-remote-1"),
+                ev_function_call(
+                    "permissions-call",
+                    "request_permissions",
+                    &json!({
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                        "reason": "Allow writing inside the selected remote environment",
+                        "permissions": {
+                            "file_system": {
+                                "write": [relative_write_root],
+                            },
+                        },
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-request-permissions-remote-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-request-permissions-remote-2"),
+                ev_function_call(
+                    "exec-call",
+                    "exec_command",
+                    &json!({
+                        "shell": "/bin/sh",
+                        "cmd": command,
+                        "login": false,
+                        "yield_time_ms": 1_000,
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-request-permissions-remote-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-request-permissions-remote-3"),
+                ev_assistant_message("msg-request-permissions-remote-1", "done"),
+                ev_completed("resp-request-permissions-remote-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn_with_approval_and_environments(
+        &test,
+        "request permissions, then write in the remote environment",
+        vec![
+            local(local_cwd.path().abs()),
+            TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: PathUri::from_abs_path(&remote_cwd),
+            },
+        ],
+    )
+    .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::RequestPermissions(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::RequestPermissions(request) = event else {
+        panic!("expected remote request_permissions before completion: {event:?}");
+    };
+    assert_eq!(request.call_id, "permissions-call");
+    assert_eq!(
+        request.environment_id.as_deref(),
+        Some(REMOTE_ENVIRONMENT_ID)
+    );
+    assert_eq!(request.cwd.as_ref(), Some(&remote_cwd));
+    assert_eq!(request.permissions, expected_permissions);
+
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: approved_response.clone(),
+        })
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    match event {
+        EventMsg::TurnComplete(_) => {}
+        EventMsg::ExecApprovalRequest(approval) => {
+            panic!("remote request_permissions grant should preapprove exec: {approval:?}");
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let permissions_output: RequestPermissionsResponse = serde_json::from_str(
+        &response_mock
+            .function_call_output_text("permissions-call")
+            .expect("expected request_permissions output"),
+    )?;
+    assert_eq!(permissions_output, approved_response);
+    let exec_output = response_mock
+        .function_call_output_text("exec-call")
+        .expect("expected exec output");
+    assert!(
+        exec_output.contains("remote-request-permissions-ok"),
+        "unexpected exec output: {exec_output}",
+    );
+    assert_eq!(
+        test.fs()
+            .read_file_text(
+                &PathUri::from_path(&remote_target_path)?,
+                /*sandbox*/ None,
+            )
+            .await?,
+        "remote-request-permissions-ok"
+    );
+    assert!(
+        !local_target_path.exists(),
+        "remote exec should not write through the local environment"
+    );
+
+    test.fs()
+        .remove(
+            &PathUri::from_abs_path(&remote_cwd),
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -348,6 +717,8 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Remove after remote path fixtures use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
     };
@@ -362,9 +733,10 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &remote_cwd_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -394,13 +766,10 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
     test.submit_turn_with_environments(
         "apply patch to remote environment",
         Some(vec![
-            TurnEnvironmentSelection {
-                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: local_cwd.path().abs(),
-            },
+            local(local_cwd.path().abs()),
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                cwd: remote_cwd.clone(),
+                cwd: PathUri::from_abs_path(&remote_cwd),
             },
         ]),
     )
@@ -408,7 +777,10 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
 
     let remote_contents = test
         .fs()
-        .read_file_text(&remote_cwd.join(file_name), /*sandbox*/ None)
+        .read_file_text(
+            &PathUri::from_path(remote_cwd.join(file_name))?,
+            /*sandbox*/ None,
+        )
         .await?;
     assert_eq!(remote_contents, "patched remote freeform\n");
     assert!(
@@ -418,7 +790,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
 
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -433,6 +805,8 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Remove after remote path fixtures use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
     };
@@ -449,9 +823,10 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &remote_cwd_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -462,10 +837,11 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
+    let target_path_uri = PathUri::from_path(&target_path)?;
     let _ = fs::remove_file(&target_path);
     test.fs()
         .remove(
-            &target_path,
+            &target_path_uri,
             RemoveOptions {
                 recursive: false,
                 force: true,
@@ -475,13 +851,10 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         .await?;
 
     let environments = vec![
-        TurnEnvironmentSelection {
-            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-            cwd: local_cwd.path().abs(),
-        },
+        local(local_cwd.path().abs()),
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-            cwd: remote_cwd.clone(),
+            cwd: PathUri::from_abs_path(&remote_cwd),
         },
     ];
     let local_patch = format!(
@@ -572,7 +945,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     .await;
     assert_eq!(
         test.fs()
-            .read_file_text(&target_path, /*sandbox*/ None)
+            .read_file_text(&target_path_uri, /*sandbox*/ None)
             .await?,
         "remote\n"
     );
@@ -586,7 +959,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     wait_for_completion_without_patch_approval(&test).await;
     assert_eq!(
         test.fs()
-            .read_file_text(&target_path, /*sandbox*/ None)
+            .read_file_text(&target_path_uri, /*sandbox*/ None)
             .await?,
         "remote updated\n"
     );
@@ -594,7 +967,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     let _ = fs::remove_file(&target_path);
     test.fs()
         .remove(
-            &target_path,
+            &target_path_uri,
             RemoveOptions {
                 recursive: false,
                 force: true,
@@ -604,7 +977,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         .await?;
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -620,6 +993,8 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
 async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environment() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Remove after remote path fixtures use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
     };
@@ -633,9 +1008,10 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
+    let remote_cwd_uri = PathUri::from_path(&remote_cwd)?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &remote_cwd_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -675,13 +1051,10 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
     test.submit_turn_with_environments(
         "apply patch through exec command to remote environment",
         Some(vec![
-            TurnEnvironmentSelection {
-                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: local_cwd.path().abs(),
-            },
+            local(local_cwd.path().abs()),
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                cwd: remote_cwd.clone(),
+                cwd: PathUri::from_abs_path(&remote_cwd),
             },
         ]),
     )
@@ -689,7 +1062,10 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
 
     let remote_contents = test
         .fs()
-        .read_file_text(&remote_cwd.join(file_name), /*sandbox*/ None)
+        .read_file_text(
+            &PathUri::from_path(remote_cwd.join(file_name))?,
+            /*sandbox*/ None,
+        )
         .await?;
     assert_eq!(remote_contents, "patched remote exec\n");
     assert!(
@@ -699,7 +1075,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
 
     test.fs()
         .remove(
-            &remote_cwd,
+            &remote_cwd_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -713,6 +1089,8 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
+    // TODO(anp): Remove after remote sandbox fixtures use target-native paths.
+    skip_if_wine_exec!(Ok(()), "requires the Docker-backed POSIX executor");
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -723,16 +1101,18 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
     let allowed_dir = PathBuf::from(format!("/tmp/codex-remote-readable-{}", std::process::id()));
     let file_path = allowed_dir.join("note.txt");
+    let allowed_dir_uri = PathUri::from_path(&allowed_dir)?;
+    let file_path_uri = PathUri::from_path(&file_path)?;
     file_system
         .create_directory(
-            &absolute_path(allowed_dir.clone()),
+            &allowed_dir_uri,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
         .await?;
     file_system
         .write_file(
-            &absolute_path(file_path.clone()),
+            &file_path_uri,
             b"sandboxed hello".to_vec(),
             /*sandbox*/ None,
         )
@@ -740,13 +1120,13 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
     let sandbox = read_only_sandbox(allowed_dir.clone());
     let contents = file_system
-        .read_file(&absolute_path(file_path.clone()), Some(&sandbox))
+        .read_file(&file_path_uri, Some(&sandbox))
         .await?;
     assert_eq!(contents, b"sandboxed hello");
 
     file_system
         .remove(
-            &absolute_path(allowed_dir),
+            &allowed_dir_uri,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -760,6 +1140,7 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -> Result<()> {
+    skip_if_wine_exec!(Ok(()), "tests POSIX symlink and parent traversal semantics");
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -780,7 +1161,8 @@ async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -
         secret = secret_path.display(),
     ))?;
 
-    let requested_path = absolute_path(allowed_dir.join("link").join("..").join("secret.txt"));
+    let requested_path =
+        PathUri::from_path(allowed_dir.join("link").join("..").join("secret.txt"))?;
     let sandbox = read_only_sandbox(allowed_dir.clone());
     let error = match file_system.read_file(&requested_path, Some(&sandbox)).await {
         Ok(_) => anyhow::bail!("read should fail after path normalization"),
@@ -794,6 +1176,7 @@ async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
+    skip_if_wine_exec!(Ok(()), "tests POSIX symlink removal semantics");
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -827,7 +1210,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
     let sandbox = workspace_write_sandbox(allowed_dir.clone());
     file_system
         .remove(
-            &absolute_path(symlink_path.clone()),
+            &PathUri::from_path(&symlink_path)?,
             RemoveOptions {
                 recursive: false,
                 force: false,
@@ -837,18 +1220,21 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
         .await?;
 
     let symlink_exists = file_system
-        .get_metadata(&absolute_path(symlink_path), /*sandbox*/ None)
+        .get_metadata(
+            &PathUri::from_abs_path(&absolute_path(symlink_path)),
+            /*sandbox*/ None,
+        )
         .await
         .is_ok();
     assert!(!symlink_exists);
     let outside = file_system
-        .read_file_text(&absolute_path(outside_file.clone()), /*sandbox*/ None)
+        .read_file_text(&PathUri::from_path(&outside_file)?, /*sandbox*/ None)
         .await?;
     assert_eq!(outside, "outside");
 
     file_system
         .remove(
-            &absolute_path(root),
+            &PathUri::from_path(&root)?,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -861,6 +1247,7 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
+    skip_if_wine_exec!(Ok(()), "tests POSIX symlink copy semantics");
     skip_if_no_network!(Ok(()));
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -889,19 +1276,21 @@ async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
     let sandbox = workspace_write_sandbox(allowed_dir.clone());
     file_system
         .copy(
-            &absolute_path(source_symlink),
-            &absolute_path(copied_symlink.clone()),
+            &PathUri::from_path(&source_symlink)?,
+            &PathUri::from_path(&copied_symlink)?,
             CopyOptions { recursive: false },
             Some(&sandbox),
         )
         .await?;
 
+    let remote_env = get_remote_test_env().context("remote env should be configured")?;
+    let container_name = remote_env
+        .docker_container_name()
+        .context("test requires direct access to the Docker container")?;
     let link_target = Command::new("docker")
         .args([
             "exec",
-            &get_remote_test_env()
-                .context("remote env should still be configured")?
-                .container_name,
+            container_name,
             "readlink",
             copied_symlink
                 .to_str()
@@ -921,7 +1310,7 @@ async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
 
     file_system
         .remove(
-            &absolute_path(root),
+            &PathUri::from_path(&root)?,
             RemoveOptions {
                 recursive: true,
                 force: true,
@@ -930,15 +1319,4 @@ async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
         )
         .await?;
     Ok(())
-}
-
-fn remote_test_file_path() -> PathBuf {
-    let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_nanos(),
-        Err(_) => 0,
-    };
-    PathBuf::from(format!(
-        "/tmp/codex-remote-test-env-{}-{nanos}.txt",
-        std::process::id()
-    ))
 }

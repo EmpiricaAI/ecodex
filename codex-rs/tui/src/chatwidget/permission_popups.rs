@@ -29,7 +29,7 @@ impl ChatWidget {
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
         #[cfg(target_os = "windows")]
-        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+        let windows_sandbox_level = crate::windows_sandbox::level_from_config(&self.config);
         #[cfg(target_os = "windows")]
         let windows_degraded_sandbox_enabled =
             matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
@@ -37,9 +37,7 @@ impl ChatWidget {
         let windows_degraded_sandbox_enabled = false;
 
         let show_elevate_sandbox_hint =
-            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                && windows_degraded_sandbox_enabled
-                && presets.iter().any(|preset| preset.id == "auto");
+            windows_degraded_sandbox_enabled && presets.iter().any(|preset| preset.id == "auto");
 
         let guardian_disabled_reason = |enabled: bool| {
             let mut next_features = self.config.features.get().clone();
@@ -56,7 +54,9 @@ impl ChatWidget {
                 continue;
             }
             let base_name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
-                "Default (non-admin sandbox)".to_string()
+                format!("{ASK_FOR_APPROVAL_LABEL} (non-admin sandbox)")
+            } else if preset.id == "auto" {
+                ASK_FOR_APPROVAL_LABEL.to_string()
             } else {
                 preset.label.to_string()
             };
@@ -100,7 +100,7 @@ impl ChatWidget {
 
                 if guardian_approval_enabled {
                     items.push(SelectionItem {
-                        name: "Auto-review".to_string(),
+                        name: APPROVE_FOR_ME_LABEL.to_string(),
                         description: Some(AUTO_REVIEW_DESCRIPTION.to_string()),
                         is_current: current_review_policy == ApprovalsReviewer::AutoReview
                             && Self::preset_matches_current(
@@ -111,7 +111,7 @@ impl ChatWidget {
                             ),
                         actions: self.permission_mode_actions(
                             &preset,
-                            "Auto-review".to_string(),
+                            APPROVE_FOR_ME_LABEL.to_string(),
                             ApprovalsReviewer::AutoReview,
                             /*profile_selection*/ None,
                             /*return_to_permissions*/ !include_read_only,
@@ -324,13 +324,13 @@ impl ChatWidget {
         if approvals_reviewer == ApprovalsReviewer::User && preset.id == "auto" {
             #[cfg(target_os = "windows")]
             {
-                if WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled {
+                if crate::windows_sandbox::level_from_config(&self.config)
+                    == WindowsSandboxLevel::Disabled
+                {
                     let preset = preset.clone();
-                    if crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                        && crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
-                            self.config.codex_home.as_path(),
-                        )
-                    {
+                    if crate::windows_sandbox::sandbox_setup_is_complete(
+                        self.config.codex_home.as_path(),
+                    ) {
                         return vec![Box::new(move |tx| {
                             tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                                 preset: preset.clone(),

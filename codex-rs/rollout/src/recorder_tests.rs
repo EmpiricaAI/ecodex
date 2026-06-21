@@ -85,6 +85,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
         meta: SessionMeta {
             id: thread_id,
             forked_from_id: None,
+            parent_thread_id: None,
             timestamp: "2026-01-27T12:34:56Z".to_string(),
             cwd: home.path().to_path_buf(),
             originator: "test".to_string(),
@@ -98,6 +99,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
             base_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
+            multi_agent_version: None,
         },
         git: None,
     };
@@ -109,6 +111,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
         RolloutLine {
             timestamp: "2026-01-27T12:34:57Z".to_string(),
             item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "hello from startup backfill".to_string(),
                 images: None,
                 local_images: Vec::new(),
@@ -368,6 +371,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
         RolloutRecorderParams::new(
             thread_id,
             /*forked_from_id*/ None,
+            /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
             BaseInstructions::default(),
@@ -400,6 +404,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
     recorder
         .record_canonical_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
             UserMessageEvent {
+                client_id: None,
                 message: "first-user-message".to_string(),
                 images: None,
                 local_images: Vec::new(),
@@ -447,6 +452,7 @@ async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::i
         RolloutRecorderParams::new(
             thread_id,
             /*forked_from_id*/ None,
+            /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
             BaseInstructions::default(),
@@ -972,11 +978,13 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         git_sha: Some("filesystem-sha".to_string()),
         git_origin_url: Some("https://example.com/filesystem.git".to_string()),
         source: None,
+        parent_thread_id: None,
         agent_nickname: None,
         agent_role: None,
         model_provider: None,
         cli_version: None,
         created_at: None,
+        recency_at: Some("2025-01-03T15:59:00.000Z".to_string()),
         updated_at: None,
     };
     let state_item = ThreadItem {
@@ -989,11 +997,13 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         git_sha: Some("state-sha".to_string()),
         git_origin_url: Some("https://example.com/state.git".to_string()),
         source: Some(SessionSource::Exec),
+        parent_thread_id: None,
         agent_nickname: Some("state-agent".to_string()),
         agent_role: Some("state-role".to_string()),
         model_provider: Some("state-provider".to_string()),
         cli_version: Some("state-version".to_string()),
         created_at: Some("2025-01-03T16:00:00Z".to_string()),
+        recency_at: Some("2025-01-03T16:00:30.001Z".to_string()),
         updated_at: Some("2025-01-03T16:01:02.003Z".to_string()),
     };
 
@@ -1019,6 +1029,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
     assert_eq!(item.model_provider.as_deref(), Some("state-provider"));
     assert_eq!(item.cli_version.as_deref(), Some("state-version"));
     assert_eq!(item.created_at.as_deref(), Some("2025-01-03T16:00:00Z"));
+    assert_eq!(item.recency_at.as_deref(), Some("2025-01-03T16:00:30.001Z"));
     assert_eq!(item.updated_at.as_deref(), Some("2025-01-03T16:01:02.003Z"));
 }
 
@@ -1054,8 +1065,8 @@ async fn list_threads_search_repairs_stale_state_db_hits_before_returning() -> s
     builder.model_provider = Some(config.model_provider_id.clone());
     builder.cwd = home.path().to_path_buf();
     let mut metadata = builder.build(config.model_provider_id.as_str());
-    metadata.title = "needle stale title".to_string();
-    metadata.first_user_message = Some("stale first user".to_string());
+    metadata.title = "needle stale first user".to_string();
+    metadata.first_user_message = Some(metadata.title.clone());
     metadata.preview = metadata.first_user_message.clone();
     runtime
         .upsert_thread(&metadata)
@@ -1126,7 +1137,9 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
         timestamp: "2025-01-03T13:00:01Z".to_string(),
         item: RolloutItem::TurnContext(TurnContextItem {
             turn_id: Some("turn-1".to_string()),
-            cwd: latest_cwd.clone(),
+            cwd: serde_json::from_value(serde_json::json!(&latest_cwd))
+                .expect("absolute latest cwd"),
+            workspace_roots: None,
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
@@ -1135,8 +1148,11 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             network: None,
             file_system_sandbox_policy: None,
             model: "test-model".to_string(),
+            comp_hash: None,
             personality: None,
             collaboration_mode: None,
+            multi_agent_version: None,
+            multi_agent_mode: None,
             realtime_active: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,

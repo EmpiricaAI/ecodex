@@ -1,4 +1,5 @@
 use super::CoreShellActionProvider;
+use super::CoreShellCommandExecutor;
 use super::InterceptedExecPolicyContext;
 use super::ParsedShellCommand;
 use super::commands_for_intercepted_exec_policy;
@@ -16,6 +17,9 @@ use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
+use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
+use codex_network_proxy::PROXY_ENV_KEYS;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -29,6 +33,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianCommandSource;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::ExecResult;
@@ -36,6 +41,7 @@ use codex_shell_escalation::ResolvedPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,6 +70,23 @@ fn read_only_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
         },
         access: FileSystemAccessMode::Read,
     }])
+}
+
+fn denied_read_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
+    FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "**/*.env".to_string(),
+            },
+            access: FileSystemAccessMode::Deny,
+        },
+    ])
 }
 
 fn test_sandbox_cwd() -> AbsolutePathBuf {
@@ -289,11 +312,13 @@ fn shell_request_escalation_execution_is_explicit() {
         &file_system_sandbox_policy,
         network_sandbox_policy,
     );
+    let read_only_file_system_policy = read_only_file_system_sandbox_policy();
 
     assert_eq!(
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::UseDefault,
             &permission_profile,
+            &file_system_sandbox_policy,
             /*additional_permissions*/ None,
         ),
         EscalationExecution::TurnDefault,
@@ -302,20 +327,135 @@ fn shell_request_escalation_execution_is_explicit() {
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::RequireEscalated,
             &permission_profile,
+            &read_only_file_system_policy,
             /*additional_permissions*/ None,
         ),
         EscalationExecution::Unsandboxed,
     );
     assert_eq!(
         CoreShellActionProvider::shell_request_escalation_execution(
+            crate::sandboxing::SandboxPermissions::RequireEscalated,
+            &permission_profile,
+            &file_system_sandbox_policy,
+            /*additional_permissions*/ None,
+        ),
+        EscalationExecution::TurnDefault,
+    );
+    assert_eq!(
+        CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::WithAdditionalPermissions,
             &permission_profile,
+            &file_system_sandbox_policy,
             Some(&requested_permissions),
         ),
         EscalationExecution::Permissions(EscalationPermissions::ResolvedPermissionProfile(
             ResolvedPermissionProfile { permission_profile },
         )),
     );
+}
+
+#[tokio::test]
+async fn unsandboxed_intercepted_exec_strips_managed_network_env() -> anyhow::Result<()> {
+    let workdir = test_sandbox_cwd();
+    let executor = CoreShellCommandExecutor {
+        command: Vec::new(),
+        cwd: workdir.clone(),
+        permission_profile: PermissionProfile::workspace_write(),
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox: SandboxType::None,
+        env: HashMap::new(),
+        network: None,
+        network_environment_id: None,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        arg0: None,
+        sandbox_policy_cwd: workdir.clone(),
+        windows_sandbox_workspace_roots: vec![workdir.clone()],
+        codex_linux_sandbox_exe: None,
+        use_legacy_landlock: false,
+    };
+    let mut env = HashMap::new();
+    env.insert(PROXY_ACTIVE_ENV_KEY.to_string(), "1".to_string());
+    for key in PROXY_ENV_KEYS {
+        env.insert((*key).to_string(), format!("proxy-{key}"));
+    }
+
+    let prepared = executor
+        .prepare_escalated_exec(
+            &AbsolutePathBuf::from_absolute_path("/usr/bin/curl")?,
+            &["curl".to_string(), "example.com".to_string()],
+            &workdir,
+            env,
+            EscalationExecution::Unsandboxed,
+        )
+        .await?;
+
+    assert!(
+        !prepared.env.contains_key(PROXY_ACTIVE_ENV_KEY),
+        "unsandboxed intercepted exec should strip the managed-network active marker"
+    );
+    for key in PROXY_ENV_KEYS {
+        assert!(
+            !prepared.env.contains_key(*key),
+            "unsandboxed intercepted exec should strip managed-network proxy env var {key}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyhow::Result<()> {
+    let (session, turn_context) = make_session_and_context().await;
+    let requested_permissions = AdditionalPermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![
+                AbsolutePathBuf::from_absolute_path("/tmp/output").unwrap(),
+            ]),
+        )),
+        ..Default::default()
+    };
+    let workdir = test_sandbox_cwd();
+    let permission_profile = effective_permission_profile(
+        &PermissionProfile::workspace_write(),
+        Some(&requested_permissions),
+    );
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "preapproved-additional-permissions".to_string(),
+        environment_id: "local".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile: permission_profile.clone(),
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+        approval_sandbox_permissions: SandboxPermissions::UseDefault,
+        prompt_permissions: Some(requested_permissions),
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::from_absolute_path("/usr/bin/printf")?,
+        &["printf".to_string(), "hello".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    let expected = codex_shell_escalation::EscalationDecision::Escalate(
+        EscalationExecution::Permissions(EscalationPermissions::ResolvedPermissionProfile(
+            ResolvedPermissionProfile { permission_profile },
+        )),
+    );
+    assert_eq!(
+        action, expected,
+        "preapproved with_additional_permissions should escalate through the resolved permission profile"
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -422,11 +562,11 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         session: std::sync::Arc::new(session),
         turn: std::sync::Arc::new(turn_context),
         call_id: "execve-hook-call".to_string(),
+        environment_id: "local".to_string(),
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
         permission_profile: PermissionProfile::read_only(),
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
-        sandbox_policy_cwd: workdir.clone(),
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
         prompt_permissions: None,
@@ -478,7 +618,6 @@ fn evaluate_intercepted_exec_policy_uses_wrapper_command_when_shell_wrapper_pars
     parser.parse("test.rules", policy_src).unwrap();
     let policy = parser.build();
     let program = AbsolutePathBuf::try_from(host_absolute_path(&["bin", "zsh"])).unwrap();
-    let sandbox_cwd = test_sandbox_cwd();
 
     let enable_intercepted_exec_policy_shell_wrapper_parsing = false;
     let evaluation = evaluate_intercepted_exec_policy(
@@ -492,8 +631,7 @@ fn evaluate_intercepted_exec_policy_uses_wrapper_command_when_shell_wrapper_pars
         InterceptedExecPolicyContext {
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
-            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
-            sandbox_cwd: sandbox_cwd.as_path(),
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: enable_intercepted_exec_policy_shell_wrapper_parsing,
         },
@@ -531,7 +669,6 @@ fn evaluate_intercepted_exec_policy_matches_inner_shell_commands_when_enabled() 
     parser.parse("test.rules", policy_src).unwrap();
     let policy = parser.build();
     let program = AbsolutePathBuf::try_from(host_absolute_path(&["bin", "bash"])).unwrap();
-    let sandbox_cwd = test_sandbox_cwd();
 
     let enable_intercepted_exec_policy_shell_wrapper_parsing = true;
     let evaluation = evaluate_intercepted_exec_policy(
@@ -545,8 +682,7 @@ fn evaluate_intercepted_exec_policy_matches_inner_shell_commands_when_enabled() 
         InterceptedExecPolicyContext {
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
-            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
-            sandbox_cwd: sandbox_cwd.as_path(),
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: enable_intercepted_exec_policy_shell_wrapper_parsing,
         },
@@ -580,7 +716,6 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
     parser.parse("test.rules", &policy_src).unwrap();
     let policy = parser.build();
     let program = AbsolutePathBuf::try_from(git_path).unwrap();
-    let sandbox_cwd = test_sandbox_cwd();
 
     let evaluation = evaluate_intercepted_exec_policy(
         &policy,
@@ -589,8 +724,7 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
         InterceptedExecPolicyContext {
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
-            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
-            sandbox_cwd: sandbox_cwd.as_path(),
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: false,
         },
@@ -614,6 +748,102 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
     ));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn denied_reads_keep_prefix_rule_allow_inside_sandbox() -> anyhow::Result<()> {
+    let cat_path = host_absolute_path(&["usr", "bin", "cat"]);
+    let cat_path_literal = starlark_string(&cat_path);
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src).unwrap();
+    let policy = parser.build();
+
+    let (session, turn_context) = make_session_and_context().await;
+    let file_system_sandbox_policy = denied_read_file_system_sandbox_policy();
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(policy)),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "deny-read-prefix-allow".to_string(),
+        environment_id: "local".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile,
+        file_system_sandbox_policy,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        approval_sandbox_permissions: SandboxPermissions::UseDefault,
+        prompt_permissions: None,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::try_from(cat_path).unwrap(),
+        &["cat".to_string(), "/tmp/visible.txt".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(action, codex_shell_escalation::EscalationDecision::Run);
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow::Result<()> {
+    let (session, turn_context) = make_session_and_context().await;
+    let file_system_sandbox_policy = denied_read_file_system_sandbox_policy();
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(PolicyParser::new().build())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "deny-read-granular-sandbox-reject".to_string(),
+        environment_id: "local".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: false,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }),
+        permission_profile,
+        file_system_sandbox_policy,
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::try_from(host_absolute_path(&["usr", "bin", "printf"])).unwrap(),
+        &["printf".to_string(), "hello".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(
+        action,
+        codex_shell_escalation::EscalationDecision::Deny {
+            reason: Some("Execution forbidden by policy".to_string())
+        }
+    );
+    Ok(())
+}
+
 #[test]
 fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default() {
     let policy = PolicyParser::new().build();
@@ -621,8 +851,6 @@ fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default(
     let argv = ["printf".to_string(), "hello".to_string()];
     let approval_policy = AskForApproval::OnRequest;
     let permission_profile = PermissionProfile::workspace_write();
-    let file_system_sandbox_policy = read_only_file_system_sandbox_policy();
-    let sandbox_cwd = test_sandbox_cwd();
 
     let preapproved = evaluate_intercepted_exec_policy(
         &policy,
@@ -631,8 +859,7 @@ fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default(
         InterceptedExecPolicyContext {
             approval_policy,
             permission_profile: permission_profile.clone(),
-            file_system_sandbox_policy: &file_system_sandbox_policy,
-            sandbox_cwd: sandbox_cwd.as_path(),
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: super::approval_sandbox_permissions(
                 SandboxPermissions::WithAdditionalPermissions,
                 /*additional_permissions_preapproved*/ true,
@@ -647,8 +874,7 @@ fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default(
         InterceptedExecPolicyContext {
             approval_policy,
             permission_profile,
-            file_system_sandbox_policy: &file_system_sandbox_policy,
-            sandbox_cwd: sandbox_cwd.as_path(),
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
             enable_shell_wrapper_parsing: false,
         },
@@ -673,7 +899,6 @@ host_executable(name = "git", paths = ["{allowed_git_literal}"])
     parser.parse("test.rules", &policy_src).unwrap();
     let policy = parser.build();
     let program = AbsolutePathBuf::try_from(other_git.clone()).unwrap();
-    let sandbox_cwd = test_sandbox_cwd();
 
     let evaluation = evaluate_intercepted_exec_policy(
         &policy,
@@ -682,8 +907,7 @@ host_executable(name = "git", paths = ["{allowed_git_literal}"])
         InterceptedExecPolicyContext {
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
-            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
-            sandbox_cwd: sandbox_cwd.as_path(),
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: false,
         },

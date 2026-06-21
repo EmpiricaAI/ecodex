@@ -1,64 +1,42 @@
-use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
-use std::time::Instant;
 
 use super::ChatWidget;
+use super::plugin_catalog::marketplace_display_name;
+use super::plugin_catalog::marketplace_is_user_configured;
+use super::plugin_catalog::marketplace_is_user_configured_git;
+use super::plugin_catalog::marketplace_tab_id;
+use super::plugin_catalog::marketplace_tab_id_from_path;
+use super::plugin_catalog::marketplace_tab_id_matching_saved_id;
+use super::plugin_catalog::merge_remote_marketplaces;
+use super::plugin_catalog::plugin_detail_hint_line;
 use crate::app_event::AppEvent;
+use crate::app_event::PluginLocation;
+use crate::app_event::PluginRemoteSectionError;
 use crate::bottom_pane::ColumnWidthMode;
-use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
-use crate::bottom_pane::SelectionRowDisplay;
-use crate::bottom_pane::SelectionTab;
-use crate::bottom_pane::SelectionToggle;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::history_cell;
 use crate::key_hint;
-use crate::legacy_core::config::Config;
-use crate::motion::MotionMode;
-use crate::motion::shimmer_text;
-use crate::onboarding::mark_url_hyperlink;
 use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::Renderable;
-use crate::tui::FrameRequester;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
-use codex_app_server_protocol::PluginDetail;
-use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadResponse;
-use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_features::Feature;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::prelude::Widget;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
-use unicode_width::UnicodeWidthStr;
 
-const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
-const ALL_PLUGINS_TAB_ID: &str = "all-plugins";
-const INSTALLED_PLUGINS_TAB_ID: &str = "installed-plugins";
-const MARKETPLACE_TAB_ID_PREFIX: &str = "marketplace:";
-const OPENAI_CURATED_TAB_ID: &str = "marketplace:openai-curated";
-const ADD_MARKETPLACE_TAB_ID: &str = "add-marketplace";
-const PLUGIN_ROW_PREFIX_WIDTH: usize = 6;
-const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
-const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
+pub(super) const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
+pub(super) const ALL_PLUGINS_TAB_ID: &str = "all-plugins";
+pub(super) const ADD_MARKETPLACE_TAB_ID: &str = "add-marketplace";
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct PluginListFetchState {
@@ -70,92 +48,6 @@ pub(super) struct PluginListFetchState {
 pub(super) struct PluginInstallAuthFlowState {
     plugin_display_name: String,
     next_app_index: usize,
-}
-
-struct DelayedLoadingHeader {
-    started_at: Instant,
-    frame_requester: FrameRequester,
-    animations_enabled: bool,
-    loading_text: String,
-    note: Option<String>,
-}
-
-impl DelayedLoadingHeader {
-    fn new(
-        frame_requester: FrameRequester,
-        animations_enabled: bool,
-        loading_text: String,
-        note: Option<String>,
-    ) -> Self {
-        Self {
-            started_at: Instant::now(),
-            frame_requester,
-            animations_enabled,
-            loading_text,
-            note,
-        }
-    }
-}
-
-impl Renderable for DelayedLoadingHeader {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        if area.is_empty() {
-            return;
-        }
-
-        let mut lines = Vec::with_capacity(3);
-        lines.push(Line::from("Plugins".bold()));
-
-        let now = Instant::now();
-        let elapsed = now.saturating_duration_since(self.started_at);
-        if elapsed < LOADING_ANIMATION_DELAY {
-            self.frame_requester
-                .schedule_frame_in(LOADING_ANIMATION_DELAY - elapsed);
-            lines.push(Line::from(self.loading_text.as_str().dim()));
-        } else if self.animations_enabled {
-            self.frame_requester
-                .schedule_frame_in(LOADING_ANIMATION_INTERVAL);
-            lines.push(Line::from(shimmer_text(
-                self.loading_text.as_str(),
-                MotionMode::Animated,
-            )));
-        } else {
-            lines.push(Line::from(self.loading_text.as_str().dim()));
-        }
-
-        if let Some(note) = &self.note {
-            lines.push(Line::from(note.as_str().dim()));
-        }
-
-        Paragraph::new(lines).render_ref(area, buf);
-    }
-
-    fn desired_height(&self, _width: u16) -> u16 {
-        2 + u16::from(self.note.is_some())
-    }
-}
-
-const APPS_HELP_ARTICLE_URL: &str = "https://help.openai.com/en/articles/11487775-apps-in-chatgpt";
-
-struct PluginDisclosureLine {
-    line: Line<'static>,
-}
-
-impl Renderable for PluginDisclosureLine {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(self.line.clone())
-            .wrap(Wrap { trim: false })
-            .render(area, buf);
-        mark_url_hyperlink(buf, area, APPS_HELP_ARTICLE_URL);
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        Paragraph::new(self.line.clone())
-            .wrap(Wrap { trim: false })
-            .line_count(width)
-            .try_into()
-            .unwrap_or(u16::MAX)
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -199,7 +91,9 @@ impl ChatWidget {
         cwd: PathBuf,
         result: Result<PluginListResponse, String>,
     ) {
-        if self.plugins_fetch_state.in_flight_cwd.as_deref() == Some(cwd.as_path()) {
+        let request_was_in_flight =
+            self.plugins_fetch_state.in_flight_cwd.as_deref() == Some(cwd.as_path());
+        if request_was_in_flight {
             self.plugins_fetch_state.in_flight_cwd = None;
         }
 
@@ -208,10 +102,28 @@ impl ChatWidget {
         }
 
         let auth_flow_active = self.plugin_install_auth_flow.is_some();
+        let should_refresh_plugins_popup = !auth_flow_active
+            && (self
+                .bottom_pane
+                .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+                .is_some()
+                || self
+                    .bottom_pane
+                    .selected_index_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+                    .is_some()
+                || !matches!(
+                    self.plugins_cache_for_current_cwd(),
+                    PluginsCacheState::Ready(_)
+                ));
 
         match result {
             Ok(response) => {
                 self.plugins_fetch_state.cache_cwd = Some(cwd);
+                self.plugin_remote_sections_loading = request_was_in_flight;
+                if request_was_in_flight {
+                    self.plugin_remote_sections_loaded = false;
+                }
+                self.plugin_remote_section_errors.clear();
                 let active_tab_id = self
                     .plugins_active_tab_id
                     .as_deref()
@@ -227,13 +139,15 @@ impl ChatWidget {
                     });
                 self.plugins_active_tab_id = active_tab_id;
                 self.plugins_cache = PluginsCacheState::Ready(response.clone());
-                if !auth_flow_active {
+                if should_refresh_plugins_popup {
                     self.refresh_plugins_popup_if_open(&response);
                 }
                 self.newly_installed_marketplace_tab_id = None;
             }
             Err(err) => {
-                if !auth_flow_active {
+                self.plugin_remote_sections_loading = false;
+                self.plugin_remote_sections_loaded = false;
+                if should_refresh_plugins_popup {
                     self.plugins_fetch_state.cache_cwd = None;
                     self.plugins_cache = PluginsCacheState::Failed(err.clone());
                     let _ = self.bottom_pane.replace_selection_view_if_active(
@@ -245,9 +159,55 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn on_plugin_remote_sections_loaded(
+        &mut self,
+        cwd: PathBuf,
+        marketplaces: Vec<PluginMarketplaceEntry>,
+        section_errors: Vec<PluginRemoteSectionError>,
+    ) {
+        if self.config.cwd.as_path() != cwd.as_path() {
+            return;
+        }
+
+        let should_refresh_plugins_popup = self
+            .bottom_pane
+            .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+            .is_some();
+        self.plugin_remote_sections_loading = false;
+        self.plugin_remote_sections_loaded = true;
+        let refreshed_response = match &mut self.plugins_cache {
+            PluginsCacheState::Ready(response)
+                if self.plugins_fetch_state.cache_cwd.as_deref() == Some(cwd.as_path()) =>
+            {
+                merge_remote_marketplaces(response, marketplaces);
+                self.plugin_remote_section_errors = section_errors;
+                Some(response.clone())
+            }
+            _ => {
+                self.plugin_remote_section_errors = section_errors;
+                None
+            }
+        };
+
+        if let Some(response) = refreshed_response
+            && should_refresh_plugins_popup
+        {
+            self.refresh_plugins_popup_if_open(&response);
+        }
+    }
+
     fn prefetch_plugins(&mut self) {
         let cwd = self.config.cwd.to_path_buf();
         if self.plugins_fetch_state.in_flight_cwd.as_deref() == Some(cwd.as_path()) {
+            return;
+        }
+
+        self.on_plugins_list_fetch_started(cwd.clone());
+        self.app_event_tx.send(AppEvent::FetchPluginsList { cwd });
+    }
+
+    pub(crate) fn on_plugins_list_fetch_started(&mut self, cwd: PathBuf) {
+        if self.config.cwd.as_path() != cwd.as_path() {
             return;
         }
 
@@ -255,11 +215,9 @@ impl ChatWidget {
         if self.plugins_fetch_state.cache_cwd.as_deref() != Some(cwd.as_path()) {
             self.plugins_cache = PluginsCacheState::Loading;
         }
-
-        self.app_event_tx.send(AppEvent::FetchPluginsList { cwd });
     }
 
-    fn plugins_cache_for_current_cwd(&self) -> PluginsCacheState {
+    pub(super) fn plugins_cache_for_current_cwd(&self) -> PluginsCacheState {
         if self.plugins_fetch_state.cache_cwd.as_deref() == Some(self.config.cwd.as_path()) {
             self.plugins_cache.clone()
         } else {
@@ -453,7 +411,7 @@ impl ChatWidget {
     pub(crate) fn on_plugin_install_loaded(
         &mut self,
         cwd: PathBuf,
-        _marketplace_path: AbsolutePathBuf,
+        _location: PluginLocation,
         _plugin_name: String,
         plugin_display_name: String,
         result: Result<PluginInstallResponse, String>,

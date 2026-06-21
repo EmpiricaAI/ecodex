@@ -51,6 +51,7 @@ v2_enum_from_core!(
         SessionFlags,
         Plugin,
         CloudRequirements,
+        CloudManagedConfig,
         LegacyManagedConfigFile,
         LegacyManagedConfigMdm,
         Unknown,
