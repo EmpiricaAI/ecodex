@@ -27,6 +27,15 @@ suite **skips** rather than fails (see `importorskip` in the test module).
   back-compat match-lists prepend the resolved id **only when truthy** (a leading
   `None` would short-circuit `latest_session_id` to the wildcard — the silent
   regression this guards).
+- `test_sql_schema_references.py` — adapted port of empirica's SQL schema-ref
+  guard (empirica `168fd1041`). AST-extracts every *static* SQL string the
+  vendored hooks pass to `.execute()`/`.executemany()`/`.executescript()` and
+  validates each against empirica's **real** schema (built in-memory from the
+  production schema builders) via SQLite's own `EXPLAIN` parser. Fails on any
+  query referencing a missing column/table — the silent-no-op bug class that the
+  `created_timestamp`/`epistemic_importance` drift (fixed in `60a8c5b35e`) fell
+  into. Dynamic queries are skipped on purpose; a ratchet `_KNOWN_VIOLATIONS`
+  allow-list tracks any pre-existing cases (currently empty — clean baseline).
 
 ## Adding coverage
 
