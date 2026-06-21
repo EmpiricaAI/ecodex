@@ -595,8 +595,9 @@ def _mode_based_advice(
         return []
     if mode == "load_context":
         return [
-            "Context is low — run `mcp__empirica__project_bootstrap` "
-            "to load project context before proceeding."
+            "Project context not yet loaded (context vector low) — run "
+            "`mcp__empirica__project_bootstrap` to ground in project state "
+            "before proceeding."
         ]
     if mode == "investigate" and not has_agent_match:
         return [

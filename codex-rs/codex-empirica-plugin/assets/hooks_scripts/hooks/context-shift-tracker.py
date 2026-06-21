@@ -72,6 +72,12 @@ def _build_context_usage_output(claude_session_id):
     """Read context window usage from statusline state file.
 
     Returns a hook output dict with context percentage info, or empty dict.
+
+    The number is labeled unambiguously as USED (it grows toward 100%) —
+    practitioners have repeatedly misread a bare "context: 42%" as
+    remaining and rushed/deferred work off a miscalibrated budget feeling.
+    At high usage the message carries the lossless-compaction reminder so
+    self-assessment tracks the actual recovery model, not compaction fear.
     """
     import time as _time
 
@@ -88,7 +94,18 @@ def _build_context_usage_output(claude_session_id):
         if state_age >= 60 or used_pct <= 0:
             return {}
 
-        ctx_msg = f"context: {int(used_pct)}%"
+        ctx_msg = f"context: {int(used_pct)}% used"
+
+        # High usage: compaction may be near. State the abundance model
+        # affirmatively — the % is informational, not a deadline — so the
+        # practitioner keeps working at full quality instead of rushing.
+        if used_pct > 80:
+            ctx_msg += (
+                " | this is a buffer reading, not a deadline. If compaction "
+                "comes it's lossless: your logged goals/artifacts/git-notes "
+                "persist and bootstrap re-grounds you. Keep working at full "
+                "quality and keep logging — the log is the durable copy."
+            )
 
         # At >85% context, advise auto-switching to CWD project
         # if CWD differs from active transaction project
@@ -116,8 +133,8 @@ def _maybe_append_project_switch_hint(ctx_msg, claude_session_id):
             if tx_project and str(Path(tx_project).resolve()) != cwd:
                 ctx_msg += (
                     f" | CWD project differs from transaction project"
-                    f" — consider project-switch to {Path(cwd).name}"
-                    f" before compaction"
+                    f" — project-switch to {Path(cwd).name} when convenient"
+                    f" to keep artifacts attributed correctly"
                 )
     except Exception:
         pass

@@ -473,6 +473,7 @@ EMPIRICA_TIER2_PREFIXES = (
     'empirica preflight-submit', 'empirica check-submit', 'empirica postflight-submit',
     'empirica finding-log', 'empirica unknown-log', 'empirica deadend-log',
     'empirica mistake-log', 'empirica log-mistake',
+    'empirica note',  # Scratchpad note-to-self (metadata-only, ungated like *-log)
     'empirica log-artifacts', 'empirica resolve-artifacts', 'empirica delete-artifacts',  # Batch artifact operations
     'empirica goals-create', 'empirica goal-create', 'empirica gc',  # Goal create + aliases
     'empirica goals-complete', 'empirica goal-complete',  # Goal complete + alias
@@ -1200,6 +1201,11 @@ def _is_segment_safe(segment: str) -> bool:
     # 4. Original safe forms.
     if stripped.startswith('cd '):
         return True
+    # A piped segment (`empirica goals-list | tail`) must be validated
+    # stage-by-stage — the trailing pipe can otherwise smuggle an executor
+    # (`empirica goals-list | sh`) past the bare empirica-prefix match.
+    if _contains_outside_quotes(stripped, '|'):
+        return is_safe_pipe_chain(stripped)
     if is_safe_empirica_command(stripped):
         return True
     if stripped.startswith(('ssh ', 'rsync ', 'scp ', 'ssh-')):
@@ -1271,6 +1277,27 @@ def _maybe_nudge_remote_ops(cmd: str) -> None:
     )
 
 
+def _classify_chain(command: str) -> bool | None:
+    """Classify a multi-segment shell chain.
+
+    Returns True/False if `command` is a chain joined by &&/||/;/newline
+    (outside quotes) — True iff EVERY segment is safe. Returns None when it
+    isn't a chain (caller continues with single-command classification).
+
+    Newline counts as a separator (a multi-line payload of planning verbs is a
+    chain), EXCEPT when a heredoc (`<<`) is present — its body legitimately
+    spans lines, and splitting on those newlines would shred it.
+    """
+    chain_ops: tuple[str, ...] = ('&&', '||', ';')
+    if '<<' not in command:
+        chain_ops = (*chain_ops, '\n')
+    for chain_op in chain_ops:
+        if _contains_outside_quotes(command, chain_op):
+            segments = [s.strip() for s in _split_outside_quotes(command, chain_op)]
+            return all(_is_segment_safe(s) for s in segments)
+    return None
+
+
 def is_safe_bash_command(tool_input: dict) -> bool:
     """Check if a Bash command is in the safe (noetic) whitelist.
 
@@ -1282,17 +1309,18 @@ def is_safe_bash_command(tool_input: dict) -> bool:
     if not command:
         return False
 
-    # Chain commands (&&, ||, ;) first — safe ONLY if ALL segments are safe.
-    # This MUST happen before the single-command shortcuts below, otherwise
-    # `empirica goals-list && rm -rf /` slips through because the whole
-    # command starts with a safe empirica prefix. Quoted occurrences (e.g.,
-    # echo 'a;b') don't count as chain operators.
-    for chain_op in ('&&', '||', ';'):
-        if _contains_outside_quotes(command, chain_op):
-            segments = [s.strip() for s in _split_outside_quotes(command, chain_op)]
-            return all(_is_segment_safe(s) for s in segments)
+    # Chain commands (&&, ||, ;, newline) — safe ONLY if ALL segments are
+    # safe. MUST run before the single-command shortcuts, otherwise
+    # `empirica goals-list && rm -rf /` slips through on the leading safe
+    # prefix. See _classify_chain (handles the heredoc + newline nuances).
+    chain_result = _classify_chain(command)
+    if chain_result is not None:
+        return chain_result
 
-    if is_safe_empirica_command(command):
+    # Single command. A trailing pipe can smuggle an executor
+    # (`empirica goals-list | sh`), so a piped command is NOT safe on the bare
+    # empirica-prefix match — it goes through the pipe-chain check below.
+    if not _contains_outside_quotes(command, '|') and is_safe_empirica_command(command):
         return True
 
     # Work-type expansion: infra/config/debug/remote-ops get broader safe
@@ -2149,12 +2177,12 @@ def _validate_check_record(cursor, session_id: str, current_transaction_id, pref
         if noetic_duration < min_duration:
             cursor.execute("""
                 SELECT COUNT(*) FROM project_findings
-                WHERE session_id = ? AND timestamp > ? AND timestamp < ?
+                WHERE session_id = ? AND created_timestamp > ? AND created_timestamp < ?
             """, (session_id, preflight_ts, check_ts))
             findings = cursor.fetchone()[0]
             cursor.execute("""
                 SELECT COUNT(*) FROM project_unknowns
-                WHERE session_id = ? AND timestamp > ? AND timestamp < ?
+                WHERE session_id = ? AND created_timestamp > ? AND created_timestamp < ?
             """, (session_id, preflight_ts, check_ts))
             unknowns = cursor.fetchone()[0]
             if findings == 0 and unknowns == 0:

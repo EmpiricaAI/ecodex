@@ -259,25 +259,6 @@ def _stash_uncommitted_work(empirica_session):
     return False
 
 
-def _mark_goals_stale(empirica_session):
-    """Mark active goals as stale (context will be lost on compact).
-
-    Returns count of goals marked stale.
-    """
-    try:
-        stale_result = subprocess.run(
-            ['empirica', 'goals-mark-stale', '--session-id', empirica_session,
-             '--reason', 'memory_compact', '--output', 'json'],
-            capture_output=True, text=True, timeout=10, cwd=os.getcwd()
-        )
-        if stale_result.returncode == 0:
-            stale_data = json.loads(stale_result.stdout)
-            return stale_data.get('goals_marked_stale', 0)
-    except Exception:
-        pass
-    return 0
-
-
 def _run_context_budget_triage(empirica_session):
     """Run context budget triage (evict low-priority before compaction).
 
@@ -376,7 +357,7 @@ def _build_compact_guidance(breadcrumbs, active_transaction, display_vectors):
     else:
         vector_line = f"\n3. Session {session_short} COMPLETED (no open transaction). Previous vectors are historical — run fresh PREFLIGHT."
 
-    compact_guidance = f"""Compaction summary guidance: Epistemic state has been captured externally (Empirica breadcrumbs, git notes). The summarizer should prioritize:
+    compact_guidance = f"""Compaction summary guidance: Epistemic state has been captured externally (Empirica breadcrumbs, git notes) — compaction is routine and lossless for this session's work. The summarizer should prioritize:
 1. What the user asked for and decisions made (not file contents)
 2. Current task context and open questions (not code snippets){vector_line}{last_task_line}
 File contents read during this session are available via Read tool — do NOT include them in the summary."""
@@ -423,9 +404,13 @@ def main():
         print(json.dumps({}), file=sys.stdout)
         sys.exit(0)
 
-    # STEP 0.5-0.8: Pre-compaction housekeeping
+    # STEP 0.5-0.8: Pre-compaction housekeeping.
+    # NOTE: goals are deliberately NOT touched here. Goals are the durable
+    # layer that makes compaction lossless — flipping them stale on every
+    # compact encoded a compaction-as-loss model into goal state (and fought
+    # the migration-038 simplified lifecycle). Manual `goals-mark-stale`
+    # remains available for genuine staleness triage.
     stash_created = _stash_uncommitted_work(empirica_session)
-    stale_goals_count = _mark_goals_stale(empirica_session)
     budget_report = _run_context_budget_triage(empirica_session)
     active_transaction, hook_counters = _capture_transaction_state(project_root)
 
@@ -517,16 +502,15 @@ def main():
         # Print user-visible message to stderr
         session_id_str = breadcrumbs.get('session_id', 'Unknown')
         session_display = session_id_str[:8] if session_id_str else 'Unknown'
-        stale_msg = f", {stale_goals_count} goals marked stale" if stale_goals_count > 0 else ""
         notes_msg = "✓" if git_notes_written else "✗"
         stash_msg = " (stash: saved+restored)" if stash_created else ""
         tx_state_msg = "OPEN (carrying through)" if has_open_transaction else "CLOSED (vectors historical)"
         print(f"""
-📸 Empirica: Pre-compact snapshot saved
+📸 Empirica: Pre-compact snapshot saved — compaction is lossless (goals/artifacts/git-notes persist)
    Session: {session_display}...
    Trigger: {trigger}
    Transaction: {tx_state_msg}
-   Vectors: {vector_source} ({len(display_vectors)} captured){stale_msg}
+   Vectors: {vector_source} ({len(display_vectors)} captured)
    Snapshot: {snapshot_path.name}
    Git notes: {notes_msg}{stash_msg}
 """, file=sys.stderr)
