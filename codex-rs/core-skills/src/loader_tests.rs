@@ -1387,6 +1387,7 @@ async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
             plugin_id: Some("sample@test".to_string()),
         }]
     );
@@ -1489,6 +1490,7 @@ async fn loads_unquoted_description_containing_colon_space() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
             plugin_id: None,
         }]
     );
@@ -1521,6 +1523,7 @@ async fn loads_unquoted_short_description_containing_colon_space_and_apostrophe(
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
             plugin_id: None,
         }]
     );
@@ -1553,6 +1556,7 @@ async fn loads_unrecognized_frontmatter_fields_that_need_quotes() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
             plugin_id: None,
         }]
     );
@@ -1585,6 +1589,7 @@ async fn preserves_block_scalar_body_while_repairing_other_fields() {
             policy: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
+            pinned: false,
             plugin_id: None,
         }]
     );
