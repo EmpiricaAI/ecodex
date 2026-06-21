@@ -70,7 +70,6 @@ enum MonitorAction {
     List,
 }
 
-#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for MonitorHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("monitor")
@@ -80,80 +79,80 @@ impl ToolExecutor<ToolInvocation> for MonitorHandler {
         monitor_tool_spec()
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            session, payload, ..
-        } = invocation;
+    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session, payload, ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "monitor handler received unsupported payload".to_string(),
-                ));
-            }
-        };
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "monitor handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
 
-        let action: MonitorAction = serde_json::from_str(&arguments).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "monitor: invalid arguments: {err}. Expected one of: \
-                 {{\"action\":\"arm\",\"command\":[...],\"pattern\":\"...\"}} | \
-                 {{\"action\":\"kill\",\"monitor_id\":\"...\"}} | \
-                 {{\"action\":\"list\"}}"
-            ))
-        })?;
+            let action: MonitorAction = serde_json::from_str(&arguments).map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "monitor: invalid arguments: {err}. Expected one of: \
+                     {{\"action\":\"arm\",\"command\":[...],\"pattern\":\"...\"}} | \
+                     {{\"action\":\"kill\",\"monitor_id\":\"...\"}} | \
+                     {{\"action\":\"list\"}}"
+                ))
+            })?;
 
-        match action {
-            MonitorAction::Arm(options) => {
-                let monitor_id = spawn_monitor(session.clone(), options).await.map_err(|err| {
-                    FunctionCallError::RespondToModel(format!("monitor arm failed: {err}"))
-                })?;
-                let text = serde_json::json!({
-                    "ok": true,
-                    "monitor_id": monitor_id,
-                    "armed": true,
-                })
-                .to_string();
-                Ok(boxed_tool_output(MonitorToolOutput { text }))
-            }
-            MonitorAction::Kill { monitor_id } => {
-                let removed = session.services.monitor_registry.kill(&monitor_id).await;
-                let text = serde_json::json!({
-                    "ok": true,
-                    "killed": removed,
-                    "monitor_id": monitor_id,
-                })
-                .to_string();
-                Ok(boxed_tool_output(MonitorToolOutput { text }))
-            }
-            MonitorAction::List => {
-                // Hold the lock briefly to snapshot id+meta for each entry.
-                let guard = session.services.monitor_registry.inner.lock().await;
-                let entries: Vec<serde_json::Value> = guard
-                    .iter()
-                    .map(|(id, entry)| {
-                        serde_json::json!({
-                            "monitor_id": id,
-                            "command": entry.command,
-                            "pattern": entry.pattern,
-                            "persistent": entry.persistent,
-                        })
+            match action {
+                MonitorAction::Arm(options) => {
+                    let monitor_id =
+                        spawn_monitor(session.clone(), options).await.map_err(|err| {
+                            FunctionCallError::RespondToModel(format!("monitor arm failed: {err}"))
+                        })?;
+                    let text = serde_json::json!({
+                        "ok": true,
+                        "monitor_id": monitor_id,
+                        "armed": true,
                     })
-                    .collect();
-                let count = entries.len();
-                drop(guard);
-                let text = serde_json::json!({
-                    "ok": true,
-                    "count": count,
-                    "monitors": entries,
-                })
-                .to_string();
-                Ok(boxed_tool_output(MonitorToolOutput { text }))
+                    .to_string();
+                    Ok(boxed_tool_output(MonitorToolOutput { text }))
+                }
+                MonitorAction::Kill { monitor_id } => {
+                    let removed = session.services.monitor_registry.kill(&monitor_id).await;
+                    let text = serde_json::json!({
+                        "ok": true,
+                        "killed": removed,
+                        "monitor_id": monitor_id,
+                    })
+                    .to_string();
+                    Ok(boxed_tool_output(MonitorToolOutput { text }))
+                }
+                MonitorAction::List => {
+                    // Hold the lock briefly to snapshot id+meta for each entry.
+                    let guard = session.services.monitor_registry.inner.lock().await;
+                    let entries: Vec<serde_json::Value> = guard
+                        .iter()
+                        .map(|(id, entry)| {
+                            serde_json::json!({
+                                "monitor_id": id,
+                                "command": entry.command,
+                                "pattern": entry.pattern,
+                                "persistent": entry.persistent,
+                            })
+                        })
+                        .collect();
+                    let count = entries.len();
+                    drop(guard);
+                    let text = serde_json::json!({
+                        "ok": true,
+                        "count": count,
+                        "monitors": entries,
+                    })
+                    .to_string();
+                    Ok(boxed_tool_output(MonitorToolOutput { text }))
+                }
             }
-        }
+        })
     }
 }
 
