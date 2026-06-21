@@ -181,7 +181,12 @@ impl SessionStartupPrewarmHandle {
 
 impl Session {
     pub(crate) async fn schedule_startup_prewarm(self: &Arc<Self>, base_instructions: String) {
-        if !self.services.model_client.responses_websocket_enabled() {
+        if !self
+            .services
+            .model_client
+            .load()
+            .responses_websocket_enabled()
+        {
             return;
         }
 

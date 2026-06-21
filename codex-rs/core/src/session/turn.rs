@@ -410,7 +410,7 @@ pub(crate) async fn run_turn(
                     // here without changing Stop's continuation semantics.
                     let hooks = sess.hooks();
                     let task_completed_request = codex_hooks::TaskCompletedRequest {
-                        session_id: sess.conversation_id,
+                        session_id: sess.thread_id,
                         turn_id: turn_context.sub_id.clone(),
                         cwd: turn_context.cwd.clone(),
                         transcript_path: sess.hook_transcript_path().await,

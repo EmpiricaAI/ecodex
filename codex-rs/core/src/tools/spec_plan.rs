@@ -697,11 +697,13 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     // ecodex addition: Monitor tool registered unconditionally so all ecodex
     // sessions can arm background-subprocess watches for cross-AI mesh wake.
     planned_tools.add(MonitorHandler);
-    if goal_tools_enabled(turn_context) {
-        planned_tools.add(GetGoalHandler);
-        planned_tools.add(CreateGoalHandler);
-        planned_tools.add(UpdateGoalHandler);
-    }
+    // NOTE(sync 2026-06): upstream removed the goal-tools feature entirely
+    // (handlers/goal.rs, handlers/goal/, goal_spec.rs, the handler exports,
+    // and `TurnContext::goal_tools_enabled` are all gone on upstream/main).
+    // The merge dropped every supporting symbol but left this orphaned call
+    // block; completing the resolution means removing it too. If ecodex wants
+    // goal tools back, they must be re-ported onto upstream's new tool
+    // architecture as a follow-up.
 
     if turn_context.config.experimental_request_user_input_enabled {
         planned_tools.add_with_exposure(

@@ -311,7 +311,7 @@ pub(crate) async fn run_session_end_hooks(
     turn_count: u64,
 ) -> SessionEndOutcome {
     let request = SessionEndRequest {
-        session_id: sess.conversation_id,
+        session_id: sess.thread_id,
         turn_id: turn_context.sub_id.clone(),
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
@@ -343,7 +343,7 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
     duration_ms: u64,
 ) -> PostToolUseFailureOutcome {
     let request = PostToolUseFailureRequest {
-        session_id: sess.conversation_id,
+        session_id: sess.thread_id,
         turn_id: turn_context.sub_id.clone(),
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
