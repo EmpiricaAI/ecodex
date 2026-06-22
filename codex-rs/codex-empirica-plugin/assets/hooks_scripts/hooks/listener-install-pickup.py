@@ -40,14 +40,14 @@ except Exception:
 
 
 def _format_request(request) -> str:
-    requested_by = request.requested_by or 'cockpit'
+    requested_by = request.requested_by or "cockpit"
     return f"""\
 ## ⚙ Listener install request from {requested_by}
 
 A listener is queued for installation in this instance:
 - **name:** `{request.name}`
 - **topic:** `{request.topic}`
-- **description:** {request.description or '(none)'}
+- **description:** {request.description or "(none)"}
 
 Please run `/inbox-listener` with the prompt below to arm the listener.
 The empirica registry already has the listener registered (visible in
@@ -79,15 +79,19 @@ def main() -> int:
         return 0
 
     blocks = [_format_request(r) for r in requests]
-    additional = '\n\n'.join(blocks)
-    print(json.dumps({
-        'hookSpecificOutput': {
-            'hookEventName': 'UserPromptSubmit',
-            'additionalContext': additional,
-        },
-    }))
+    additional = "\n\n".join(blocks)
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": additional,
+                },
+            }
+        )
+    )
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

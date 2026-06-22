@@ -20,49 +20,50 @@ from pathlib import Path
 
 try:
     import yaml as _yaml_check  # noqa: F401 — availability check for HAS_YAML  # pyright: ignore[reportUnusedImport]
+
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
 
 # Patterns that look like prompt injection in YAML values
 INJECTION_PATTERNS = [
-    r'(?i)ignore\s+(previous|all|above)\s+(instructions?|rules?|prompts?)',
-    r'(?i)you\s+are\s+now\s+',
-    r'(?i)system\s*:\s*',
-    r'(?i)new\s+instructions?\s*:',
-    r'(?i)override\s+(safety|security|rules)',
-    r'(?i)act\s+as\s+(if|though)\s+you',
-    r'(?i)disregard\s+(all|any|previous)',
-    r'(?i)admin\s+(mode|override|access)',
+    r"(?i)ignore\s+(previous|all|above)\s+(instructions?|rules?|prompts?)",
+    r"(?i)you\s+are\s+now\s+",
+    r"(?i)system\s*:\s*",
+    r"(?i)new\s+instructions?\s*:",
+    r"(?i)override\s+(safety|security|rules)",
+    r"(?i)act\s+as\s+(if|though)\s+you",
+    r"(?i)disregard\s+(all|any|previous)",
+    r"(?i)admin\s+(mode|override|access)",
 ]
 
 
 def find_protocol() -> Path | None:
     """Find workflow-protocol.yaml — project dir first, then home."""
     search_paths = [
-        Path.cwd() / 'workflow-protocol.yaml',
-        Path.cwd() / '.empirica' / 'workflow-protocol.yaml',
+        Path.cwd() / "workflow-protocol.yaml",
+        Path.cwd() / ".empirica" / "workflow-protocol.yaml",
     ]
 
     # Check git root if different from cwd
     try:
         import subprocess
-        result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True, timeout=5
-        )
+
+        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
             git_root = Path(result.stdout.strip())
-            search_paths.insert(0, git_root / 'workflow-protocol.yaml')
-            search_paths.insert(1, git_root / '.empirica' / 'workflow-protocol.yaml')
+            search_paths.insert(0, git_root / "workflow-protocol.yaml")
+            search_paths.insert(1, git_root / ".empirica" / "workflow-protocol.yaml")
     except Exception:
         pass
 
     # Also check home-level for global protocol
-    search_paths.extend([
-        Path.home() / '.empirica' / 'workflow-protocol.yaml',
-        Path.home() / 'workflow-protocol.yaml',
-    ])
+    search_paths.extend(
+        [
+            Path.home() / ".empirica" / "workflow-protocol.yaml",
+            Path.home() / "workflow-protocol.yaml",
+        ]
+    )
 
     # Deduplicate while preserving order
     seen = set()
@@ -101,10 +102,10 @@ def check_file_permissions(path: Path) -> list[str]:
 
 def verify_integrity(path: Path) -> tuple[bool, str]:
     """Verify protocol integrity via SHA256 hash file."""
-    hash_path = path.with_suffix('.yaml.sha256')
+    hash_path = path.with_suffix(".yaml.sha256")
 
     # Compute current hash
-    with open(path, 'rb') as f:
+    with open(path, "rb") as f:
         current_hash = hashlib.sha256(f.read()).hexdigest()
 
     if not hash_path.exists():
@@ -160,6 +161,7 @@ def load_protocol(path: Path) -> dict | None:
     """Load workflow protocol YAML."""
     if HAS_YAML:
         import yaml as _yaml
+
         with open(path) as f:
             return _yaml.safe_load(f)
     else:
@@ -173,12 +175,12 @@ def load_protocol(path: Path) -> dict | None:
 def get_current_user() -> str | None:
     """Determine current user from env or context."""
     # Explicit env var
-    user = os.getenv('EMPIRICA_USER')
+    user = os.getenv("EMPIRICA_USER")
     if user:
         return user.lower().strip()
 
     # Check for user marker file
-    marker = Path.home() / '.empirica' / 'current_user'
+    marker = Path.home() / ".empirica" / "current_user"
     if marker.exists():
         return marker.read_text().strip().lower()
 
@@ -190,10 +192,10 @@ def format_user_preferences(protocol: dict, user_name: str) -> str:
     parts = []
 
     # Find user in team
-    team = protocol.get('team', [])
+    team = protocol.get("team", [])
     user_info = None
     for member in team:
-        if member.get('name', '').lower() == user_name:
+        if member.get("name", "").lower() == user_name:
             user_info = member
             break
 
@@ -205,35 +207,35 @@ def format_user_preferences(protocol: dict, user_name: str) -> str:
         parts.append(f"**User:** {user_name}")
 
     # Work preferences
-    prefs = protocol.get('work_preferences', {}).get(user_name, {})
+    prefs = protocol.get("work_preferences", {}).get(user_name, {})
     if prefs:
         parts.append("")
         parts.append("### Behavioral Configuration")
 
-        autonomy = prefs.get('ai_autonomy_level', 'collaborative')
-        uncertainty = prefs.get('uncertainty_surfacing', 'when_material')
-        pushback = prefs.get('pushback_style', 'direct_and_factual')
-        calibration = prefs.get('calibration_mode', 'single_pass')
+        autonomy = prefs.get("ai_autonomy_level", "collaborative")
+        uncertainty = prefs.get("uncertainty_surfacing", "when_material")
+        pushback = prefs.get("pushback_style", "direct_and_factual")
+        calibration = prefs.get("calibration_mode", "single_pass")
 
         autonomy_desc = {
-            'collaborative_equal_partner': 'Equal partner — check in on approach before acting, multi-round calibration',
-            'full_autonomy': 'Full autonomy — act decisively, surface uncertainty explicitly, maximize efficiency',
-            'ai_first_efficiency_maximizing': 'AI-first — lead with action, check in only when material',
-            'collaborative_with_checkpoints': 'Collaborative — act between checkpoints, verify at gates',
-            'assistant_mode': 'Assistant — wait for direction, execute precisely',
+            "collaborative_equal_partner": "Equal partner — check in on approach before acting, multi-round calibration",
+            "full_autonomy": "Full autonomy — act decisively, surface uncertainty explicitly, maximize efficiency",
+            "ai_first_efficiency_maximizing": "AI-first — lead with action, check in only when material",
+            "collaborative_with_checkpoints": "Collaborative — act between checkpoints, verify at gates",
+            "assistant_mode": "Assistant — wait for direction, execute precisely",
         }.get(autonomy, autonomy)
 
         uncertainty_desc = {
-            'empirica_managed': 'Empirica-managed — use measured vectors, not vibes',
-            'always_explicit': 'Always surface uncertainty explicitly in natural language',
-            'when_material': 'Surface only when it materially affects the decision',
-            'minimal': 'Minimal — only flag critical gaps',
+            "empirica_managed": "Empirica-managed — use measured vectors, not vibes",
+            "always_explicit": "Always surface uncertainty explicitly in natural language",
+            "when_material": "Surface only when it materially affects the decision",
+            "minimal": "Minimal — only flag critical gaps",
         }.get(uncertainty, uncertainty)
 
         pushback_desc = {
-            'direct_and_factual': 'Direct and factual — no hedging, no beating around the bush',
-            'gentle_reframe': 'Gentle reframe — redirect without confrontation',
-            'socratic': 'Socratic — ask questions until they see it themselves',
+            "direct_and_factual": "Direct and factual — no hedging, no beating around the bush",
+            "gentle_reframe": "Gentle reframe — redirect without confrontation",
+            "socratic": "Socratic — ask questions until they see it themselves",
         }.get(pushback, pushback)
 
         parts.append(f"- **Autonomy:** {autonomy_desc}")
@@ -242,24 +244,24 @@ def format_user_preferences(protocol: dict, user_name: str) -> str:
         parts.append(f"- **Calibration:** {calibration}")
 
         # Task splitting
-        splitting = prefs.get('task_splitting', {})
-        if splitting.get('ai_autonomous'):
+        splitting = prefs.get("task_splitting", {})
+        if splitting.get("ai_autonomous"):
             parts.append(f"- **AI autonomous:** {', '.join(splitting['ai_autonomous'])}")
-        if splitting.get('ai_with_checkpoint'):
+        if splitting.get("ai_with_checkpoint"):
             parts.append(f"- **Needs checkpoint:** {', '.join(splitting['ai_with_checkpoint'])}")
-        if splitting.get('human_only'):
+        if splitting.get("human_only"):
             parts.append(f"- **Human only:** {', '.join(splitting['human_only'])}")
 
     # Domains
-    domains = protocol.get('domains', {}).get(user_name, {})
+    domains = protocol.get("domains", {}).get(user_name, {})
     if domains:
         parts.append("")
         parts.append("### Domain Expertise")
-        if domains.get('expert'):
+        if domains.get("expert"):
             parts.append(f"- **Expert in:** {', '.join(domains['expert'])}")
-        if domains.get('learning'):
+        if domains.get("learning"):
             parts.append(f"- **Learning:** {', '.join(domains['learning'])}")
-        if domains.get('novice'):
+        if domains.get("novice"):
             parts.append(f"- **Novice in:** {', '.join(domains['novice'])}")
 
     return "\n".join(parts)
@@ -270,41 +272,41 @@ def format_shared_context(protocol: dict) -> str:
     parts = []
 
     # Goals summary
-    goals = protocol.get('goals', {})
-    primary = goals.get('primary', [])
+    goals = protocol.get("goals", {})
+    primary = goals.get("primary", [])
     if primary:
         parts.append("### Active Goals")
         for g in primary[:4]:
-            desc = g.get('description', str(g)) if isinstance(g, dict) else str(g)
+            desc = g.get("description", str(g)) if isinstance(g, dict) else str(g)
             parts.append(f"- {desc}")
 
     # AAP
-    aap = protocol.get('anti_agreement_protocol', {})
-    if aap.get('enabled'):
+    aap = protocol.get("anti_agreement_protocol", {})
+    if aap.get("enabled"):
         parts.append("")
         parts.append("### Anti-Agreement Protocol: ACTIVE")
         parts.append(f"- Mode: **{aap.get('mode', 'direct')}**")
-        regulation = aap.get('ai_self_regulation', {})
+        regulation = aap.get("ai_self_regulation", {})
         rules = []
-        if regulation.get('no_ungrounded_agreement'):
+        if regulation.get("no_ungrounded_agreement"):
             rules.append("never agree without grounding")
-        if regulation.get('no_hedge_mirroring'):
+        if regulation.get("no_hedge_mirroring"):
             rules.append("never mirror hedged language")
-        if regulation.get('quantify_confidence'):
+        if regulation.get("quantify_confidence"):
             rules.append("quantify confidence when relevant")
-        if regulation.get('name_uncertainties'):
+        if regulation.get("name_uncertainties"):
             rules.append("name uncertainties explicitly")
         if rules:
             parts.append(f"- Rules: {', '.join(rules)}")
 
     # Non-negotiables
-    trust = protocol.get('trust_building', {})
-    non_neg = trust.get('non_negotiables', [])
+    trust = protocol.get("trust_building", {})
+    non_neg = trust.get("non_negotiables", [])
     if non_neg:
         parts.append("")
         parts.append("### Non-Negotiables")
         for nn in non_neg:
-            if not nn.startswith('#'):  # Skip YAML comments
+            if not nn.startswith("#"):  # Skip YAML comments
                 parts.append(f"- {nn}")
 
     return "\n".join(parts)
@@ -312,11 +314,11 @@ def format_shared_context(protocol: dict) -> str:
 
 def format_unknown_user_prompt(protocol: dict) -> str:
     """Prompt to identify the user when not auto-detected."""
-    team = protocol.get('team', [])
+    team = protocol.get("team", [])
     if not team:
         return ""
 
-    names = [m.get('name', '?') for m in team]
+    names = [m.get("name", "?") for m in team]
     parts = [
         "### User Identification Required",
         "",
@@ -343,10 +345,7 @@ def main():
         output = {
             "ok": True,
             "ewm_active": False,
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": ""
-            }
+            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ""},
         }
         print(json.dumps(output))
         sys.exit(0)
@@ -365,15 +364,15 @@ def main():
 
     # --- Load and sanitize ---
     protocol = load_protocol(protocol_path)
-    if not protocol or '_raw' in protocol:
+    if not protocol or "_raw" in protocol:
         output = {
             "ok": True,
             "ewm_active": False,
             "error": "PyYAML not installed or parse failed",
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
-                "additionalContext": f"\n## EWM Protocol Found\n\nProtocol at `{protocol_path}` but PyYAML not available. Install: `pip install pyyaml`\n"
-            }
+                "additionalContext": f"\n## EWM Protocol Found\n\nProtocol at `{protocol_path}` but PyYAML not available. Install: `pip install pyyaml`\n",
+            },
         }
         print(json.dumps(output))
         sys.exit(0)
@@ -421,8 +420,8 @@ def main():
         context_parts.append(shared)
 
     # Ecosystem vision (if present)
-    ecosystem = protocol.get('ecosystem_vision', {})
-    if ecosystem.get('architecture'):
+    ecosystem = protocol.get("ecosystem_vision", {})
+    if ecosystem.get("architecture"):
         context_parts.append("")
         context_parts.append("### Ecosystem Vision")
         context_parts.append(f"*{ecosystem['architecture']}*")
@@ -435,10 +434,7 @@ def main():
         "protocol_path": str(protocol_path),
         "user_identified": current_user is not None,
         "current_user": current_user,
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": full_context
-        }
+        "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": full_context},
     }
 
     # Stderr for user-visible message
@@ -449,5 +445,5 @@ def main():
     sys.exit(0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

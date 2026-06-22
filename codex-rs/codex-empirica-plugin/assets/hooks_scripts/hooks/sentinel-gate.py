@@ -28,6 +28,7 @@ Related but NOT consumed here:
   output (PREFLIGHT/CHECK enrichment). Does NOT affect gating — the Sentinel always
   uses raw vectors. See workflow_commands.py for where this flag is consumed.
 """
+
 import json
 import os
 import sys
@@ -36,7 +37,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Add lib folder to path for shared modules
-_lib_path = Path(__file__).parent.parent / 'lib'
+_lib_path = Path(__file__).parent.parent / "lib"
 if str(_lib_path) not in sys.path:
     sys.path.insert(0, str(_lib_path))
 
@@ -44,126 +45,219 @@ from project_resolver import detect_environment, get_active_project_path, get_in
 
 # Noetic tools - read/investigate/search - always allowed (whitelist)
 NOETIC_TOOLS = {
-    'Read', 'Glob', 'Grep', 'LSP',           # File inspection
-    'WebFetch', 'WebSearch',                  # Web research
-    'ToolSearch',                             # Deferred tool discovery
-    'Task', 'TaskOutput',                     # Agent delegation
-    'TodoWrite',                              # Planning
-    'AskUserQuestion',                        # User interaction
-    'Skill',                                  # Skill invocation
-    'KillShell',                              # Process management (cleanup)
+    "Read",
+    "Glob",
+    "Grep",
+    "LSP",  # File inspection
+    "WebFetch",
+    "WebSearch",  # Web research
+    "ToolSearch",  # Deferred tool discovery
+    "Task",
+    "TaskOutput",  # Agent delegation
+    "TodoWrite",  # Planning
+    "AskUserQuestion",  # User interaction
+    "Skill",  # Skill invocation
+    "KillShell",  # Process management (cleanup)
 }
 
 # Chrome MCP tools classified by effect (noetic = read-only, praxic = mutating)
 NOETIC_MCP_CHROME = {
-    'mcp__claude-in-chrome__tabs_context_mcp',    # List open tabs
-    'mcp__claude-in-chrome__tabs_create_mcp',     # Open new tab (viewing, not mutation)
-    'mcp__claude-in-chrome__navigate',            # Navigate to URL (viewing)
-    'mcp__claude-in-chrome__read_page',           # Read page content
-    'mcp__claude-in-chrome__get_page_text',       # Get page text
-    'mcp__claude-in-chrome__find',                # Find text on page
-    'mcp__claude-in-chrome__read_console_messages',   # Read console output
-    'mcp__claude-in-chrome__read_network_requests',   # Read network activity
-    'mcp__claude-in-chrome__screenshot',          # Capture page screenshot
-    'mcp__claude-in-chrome__gif_creator',          # Record page interaction
+    "mcp__claude-in-chrome__tabs_context_mcp",  # List open tabs
+    "mcp__claude-in-chrome__tabs_create_mcp",  # Open new tab (viewing, not mutation)
+    "mcp__claude-in-chrome__navigate",  # Navigate to URL (viewing)
+    "mcp__claude-in-chrome__read_page",  # Read page content
+    "mcp__claude-in-chrome__get_page_text",  # Get page text
+    "mcp__claude-in-chrome__find",  # Find text on page
+    "mcp__claude-in-chrome__read_console_messages",  # Read console output
+    "mcp__claude-in-chrome__read_network_requests",  # Read network activity
+    "mcp__claude-in-chrome__screenshot",  # Capture page screenshot
+    "mcp__claude-in-chrome__gif_creator",  # Record page interaction
 }
 # Praxic Chrome MCP tools (require CHECK): form_input, javascript_tool, computer
 
 # Cortex MCP tools (all read-only search/investigate)
 NOETIC_MCP_CORTEX = {
-    'mcp__cortex__investigate',                # Query knowledge base
-    'mcp__cortex__search_knowledge',           # Semantic search
-    'mcp__cortex__get_entity_context',         # Entity lookup
-    'mcp__cortex__cortex_stats',               # Stats (read-only)
-    'mcp__cortex__cortex_session_init',        # Session init (read context)
-    'mcp__cortex__cortex_finding_log',         # Artifact logging (epistemic workflow)
-    'mcp__cortex__cortex_decision_log',        # Artifact logging
-    'mcp__cortex__cortex_unknown_log',         # Artifact logging
-    'mcp__cortex__cortex_goal_create',         # Goal creation
-    'mcp__cortex__cortex_log_artifacts',       # Batch artifact logging
-    'mcp__cortex__cortex_collab',              # Phase B: noetic collab (forces collab_brief+REFLEX)
-    'mcp__cortex__research',                   # Web research
-    'mcp__cortex__scrape_url',                 # URL scraping
-    'mcp__cortex__ingest_file',               # Knowledge ingestion
-    'mcp__cortex__ingest_batch',              # Batch ingestion
-    'mcp__cortex__cortex_bus_register',        # Bus operations
-    'mcp__cortex__cortex_bus_poll',            # Bus polling
-    'mcp__cortex__cortex_bus_dispatch',        # Bus dispatch
-    'mcp__cortex__cortex_bus_complete',        # Bus completion
+    "mcp__cortex__investigate",  # Query knowledge base
+    "mcp__cortex__search_knowledge",  # Semantic search
+    "mcp__cortex__get_entity_context",  # Entity lookup
+    "mcp__cortex__cortex_stats",  # Stats (read-only)
+    "mcp__cortex__cortex_session_init",  # Session init (read context)
+    "mcp__cortex__cortex_finding_log",  # Artifact logging (epistemic workflow)
+    "mcp__cortex__cortex_decision_log",  # Artifact logging
+    "mcp__cortex__cortex_unknown_log",  # Artifact logging
+    "mcp__cortex__cortex_goal_create",  # Goal creation
+    "mcp__cortex__cortex_log_artifacts",  # Batch artifact logging
+    "mcp__cortex__cortex_collab",  # Phase B: noetic collab (forces collab_brief+REFLEX)
+    "mcp__cortex__research",  # Web research
+    "mcp__cortex__scrape_url",  # URL scraping
+    "mcp__cortex__ingest_file",  # Knowledge ingestion
+    "mcp__cortex__ingest_batch",  # Batch ingestion
+    "mcp__cortex__cortex_bus_register",  # Bus operations
+    "mcp__cortex__cortex_bus_poll",  # Bus polling
+    "mcp__cortex__cortex_bus_dispatch",  # Bus dispatch
+    "mcp__cortex__cortex_bus_complete",  # Bus completion
 }
 
 # Empirica MCP tools — ALL are epistemic workflow, always allowed.
 # The empirica-mcp server wraps CLI commands — same trust as Tier 2.
-EMPIRICA_MCP_PREFIX = 'mcp__empirica__'
+EMPIRICA_MCP_PREFIX = "mcp__empirica__"
 
 # Safe Bash command prefixes - read-only operations (ACL)
 SAFE_BASH_PREFIXES = (
     # File inspection
-    'cat ', 'head ', 'tail ', 'less ', 'more ',
-    'ls', 'ls ', 'dir ', 'tree ', 'file ', 'stat ', 'wc ',
-    'find ', 'locate ', 'which ', 'type ', 'whereis ',
+    "cat ",
+    "head ",
+    "tail ",
+    "less ",
+    "more ",
+    "ls",
+    "ls ",
+    "dir ",
+    "tree ",
+    "file ",
+    "stat ",
+    "wc ",
+    "find ",
+    "locate ",
+    "which ",
+    "type ",
+    "whereis ",
     # File comparison (read-only)
-    'diff ', 'diff -', 'cmp ', 'comm ',
+    "diff ",
+    "diff -",
+    "cmp ",
+    "comm ",
     # Text/data search/processing (read-only)
-    'grep ', 'rg ', 'ag ', 'ack ', 'sed -n', 'awk ',
-    'jq ', 'jq.',  # JSON processing (read-only)
+    "grep ",
+    "rg ",
+    "ag ",
+    "ack ",
+    "sed -n",
+    "awk ",
+    "jq ",
+    "jq.",  # JSON processing (read-only)
     # Git read operations
-    'git status', 'git log', 'git diff', 'git show', 'git branch',
-    'git remote', 'git tag', 'git stash list', 'git blame',
-    'git ls-files', 'git ls-tree', 'git cat-file',
-    'git notes show', 'git notes list',
+    "git status",
+    "git log",
+    "git diff",
+    "git show",
+    "git branch",
+    "git remote",
+    "git tag",
+    "git stash list",
+    "git blame",
+    "git ls-files",
+    "git ls-tree",
+    "git cat-file",
+    "git notes show",
+    "git notes list",
     # GitHub CLI read operations
-    'gh issue list', 'gh issue view', 'gh issue status',
-    'gh pr list', 'gh pr view', 'gh pr diff', 'gh pr status', 'gh pr checks',
-    'gh repo view', 'gh release list', 'gh release view',
-    'gh run list', 'gh run view', 'gh run watch',  # CI/workflow run inspection (read-only)
-    'gh workflow list', 'gh workflow view',
-    'gh search ',  # Search repos, issues, PRs, code (read-only)
-    'gh api ',  # API calls (read-only by default)
+    "gh issue list",
+    "gh issue view",
+    "gh issue status",
+    "gh pr list",
+    "gh pr view",
+    "gh pr diff",
+    "gh pr status",
+    "gh pr checks",
+    "gh repo view",
+    "gh release list",
+    "gh release view",
+    "gh run list",
+    "gh run view",
+    "gh run watch",  # CI/workflow run inspection (read-only)
+    "gh workflow list",
+    "gh workflow view",
+    "gh search ",  # Search repos, issues, PRs, code (read-only)
+    "gh api ",  # API calls (read-only by default)
     # Environment inspection
-    'pwd', 'echo ', 'printf ', 'env', 'printenv', 'set',
-    'whoami', 'id', 'hostname', 'uname', 'date', 'cal',
+    "pwd",
+    "echo ",
+    "printf ",
+    "env",
+    "printenv",
+    "set",
+    "whoami",
+    "id",
+    "hostname",
+    "uname",
+    "date",
+    "cal",
     # Empirica CLI: read-only commands only (tiered whitelist - see is_safe_empirica_command)
     # NOTE: State-changing empirica commands (preflight-submit, goals-create, etc.)
     # are handled separately in is_safe_empirica_command() with loop-state checks.
     # Blanket 'empirica ' whitelist removed to prevent prompt injection bypass.
     # Package inspection (not install)
-    'pip show', 'pip list', 'pip freeze', 'pip index',
-    'npm list', 'npm ls', 'npm view', 'npm info',
-    'cargo tree', 'cargo metadata',
+    "pip show",
+    "pip list",
+    "pip freeze",
+    "pip index",
+    "npm list",
+    "npm ls",
+    "npm view",
+    "npm info",
+    "cargo tree",
+    "cargo metadata",
     # Version/help queries (always safe, any tool)
-    '--version', '--help',
-    'python3 --version', 'python --version', 'node --version',
-    'npm --version', 'cargo --version', 'go version',
+    "--version",
+    "--help",
+    "python3 --version",
+    "python --version",
+    "node --version",
+    "npm --version",
+    "cargo --version",
+    "go version",
     # Process inspection
-    'ps ', 'top -b -n 1', 'pgrep ', 'jobs',
+    "ps ",
+    "top -b -n 1",
+    "pgrep ",
+    "jobs",
     # Terminal/tmux inspection (read-only)
-    'tmux capture-pane', 'tmux list-panes', 'tmux list-windows',
-    'tmux list-sessions', 'tmux display-message', 'tmux show-option',
+    "tmux capture-pane",
+    "tmux list-panes",
+    "tmux list-windows",
+    "tmux list-sessions",
+    "tmux display-message",
+    "tmux show-option",
     # Disk inspection
-    'df ', 'du ', 'mount', 'lsblk',
+    "df ",
+    "du ",
+    "mount",
+    "lsblk",
     # Network inspection (not modification)
-    'curl ', 'wget -O-', 'ping -c', 'dig ', 'nslookup ', 'host ',
+    "curl ",
+    "wget -O-",
+    "ping -c",
+    "dig ",
+    "nslookup ",
+    "host ",
     # Remote inspection (read-only SSH)
-    'ssh ',
+    "ssh ",
     # Documentation
-    'man ', 'info ', 'help ',
+    "man ",
+    "info ",
+    "help ",
     # Testing (read-only check)
-    'test ', '[ ',
+    "test ",
+    "[ ",
     # Static analysis (read-only)
-    'pyright', 'ruff check', 'radon ',
-    'mypy ', 'flake8 ', 'pylint ',
+    "pyright",
+    "ruff check",
+    "radon ",
+    "mypy ",
+    "flake8 ",
+    "pylint ",
 )
 
 # Dangerous shell operators (command injection prevention)
 # Blocks: ls; rm -rf, echo > file, etc.
 # NOTE: Pipes handled separately - allowed only to safe targets
 DANGEROUS_SHELL_OPERATORS = (
-    ';',      # Command chaining
-    '&&',     # Conditional AND
-    '||',     # Conditional OR
-    '`',      # Backtick command substitution
-    '$(',     # Modern command substitution
+    ";",  # Command chaining
+    "&&",  # Conditional AND
+    "||",  # Conditional OR
+    "`",  # Backtick command substitution
+    "$(",  # Modern command substitution
     # NOTE: Redirection (>, >>, <) checked separately to allow safe patterns
 )
 
@@ -194,7 +288,7 @@ def _split_outside_quotes(command: str, separator: str) -> list[str]:
             escape = False
             i += 1
             continue
-        if c == '\\':
+        if c == "\\":
             current.append(c)
             escape = True
             i += 1
@@ -209,18 +303,14 @@ def _split_outside_quotes(command: str, separator: str) -> list[str]:
             current.append(c)
             i += 1
             continue
-        if (
-            not in_single
-            and not in_double
-            and command[i:i + sep_len] == separator
-        ):
-            segments.append(''.join(current))
+        if not in_single and not in_double and command[i : i + sep_len] == separator:
+            segments.append("".join(current))
             current = []
             i += sep_len
             continue
         current.append(c)
         i += 1
-    segments.append(''.join(current))
+    segments.append("".join(current))
     return segments
 
 
@@ -228,19 +318,36 @@ def _contains_outside_quotes(command: str, needle: str) -> bool:
     """True iff `needle` appears in `command` outside any quoted region."""
     return len(_split_outside_quotes(command, needle)) > 1
 
+
 # Safe redirection patterns (stderr suppression, etc.)
 import re  # noqa: E402 — grouped with related patterns below
 
-SAFE_REDIRECT_PATTERN = re.compile(r'2>/dev/null|2>&1|>/dev/null|2>\s*/dev/null')
+SAFE_REDIRECT_PATTERN = re.compile(r"2>/dev/null|2>&1|>/dev/null|2>\s*/dev/null")
 
 # Safe pipe targets - read-only commands that can receive piped input
 # Allows: grep ... | head, cat ... | wc -l, etc.
 SAFE_PIPE_TARGETS = (
-    'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'rg', 'awk', 'sed -n',
-    'cut', 'tr', 'less', 'more', 'cat', 'xargs echo', 'tee /dev/stderr',
-    'python3 -c', 'python -c',  # For simple JSON parsing
-    'jq', 'jq ',  # JSON processing (read-only)
-    'base64',  # Data encoding/decoding (read-only)
+    "head",
+    "tail",
+    "wc",
+    "sort",
+    "uniq",
+    "grep",
+    "rg",
+    "awk",
+    "sed -n",
+    "cut",
+    "tr",
+    "less",
+    "more",
+    "cat",
+    "xargs echo",
+    "tee /dev/stderr",
+    "python3 -c",
+    "python -c",  # For simple JSON parsing
+    "jq",
+    "jq ",  # JSON processing (read-only)
+    "base64",  # Data encoding/decoding (read-only)
 )
 
 # Work-type-aware command expansion.
@@ -259,27 +366,59 @@ _worktype_nudged: bool = False
 # Additional safe commands for infra/config/debug work types
 INFRA_SAFE_PREFIXES = (
     # System inspection
-    'systemctl status', 'systemctl is-active', 'systemctl list-units',
-    'journalctl --since', 'journalctl -u', 'journalctl --no-pager',
-    'free', 'uptime', 'lscpu', 'lsmem', 'lsusb', 'lspci',
-    'htop', 'vmstat', 'iostat', 'dmesg',
+    "systemctl status",
+    "systemctl is-active",
+    "systemctl list-units",
+    "journalctl --since",
+    "journalctl -u",
+    "journalctl --no-pager",
+    "free",
+    "uptime",
+    "lscpu",
+    "lsmem",
+    "lsusb",
+    "lspci",
+    "htop",
+    "vmstat",
+    "iostat",
+    "dmesg",
     # Docker inspection (not mutation)
-    'docker ps', 'docker images', 'docker logs', 'docker inspect',
-    'docker network ls', 'docker volume ls', 'docker stats',
-    'docker compose ps', 'docker compose logs',
+    "docker ps",
+    "docker images",
+    "docker logs",
+    "docker inspect",
+    "docker network ls",
+    "docker volume ls",
+    "docker stats",
+    "docker compose ps",
+    "docker compose logs",
     # Network inspection
-    'ss -', 'ip addr', 'ip link', 'ip route', 'ip -br',
-    'netstat -', 'traceroute ', 'mtr ',
-    'iptables -L', 'ufw status',
+    "ss -",
+    "ip addr",
+    "ip link",
+    "ip route",
+    "ip -br",
+    "netstat -",
+    "traceroute ",
+    "mtr ",
+    "iptables -L",
+    "ufw status",
     # Service inspection
-    'ollama list', 'ollama ps', 'ollama show',
-    'nginx -t', 'nginx -T',
+    "ollama list",
+    "ollama ps",
+    "ollama show",
+    "nginx -t",
+    "nginx -T",
     # Tmux full access
-    'tmux ',
+    "tmux ",
     # Cloud/infra read operations
-    'kubectl get', 'kubectl describe', 'kubectl logs',
-    'terraform plan', 'terraform show',
-    'cloudflared tunnel list', 'cloudflared tunnel info',
+    "kubectl get",
+    "kubectl describe",
+    "kubectl logs",
+    "terraform plan",
+    "terraform show",
+    "cloudflared tunnel list",
+    "cloudflared tunnel info",
 )
 
 # Thresholds for CHECK validation.
@@ -307,6 +446,7 @@ def _get_dynamic_thresholds(db) -> tuple:
     try:
         from empirica.core.post_test.dynamic_thresholds import compute_dynamic_thresholds
         from empirica.utils.session_resolver import InstanceResolver as R
+
         # Brier thresholds are per-practice — resolve the canonical ai_id so a
         # multi-practice machine doesn't read 'claude-code' calibration for all.
         dt_result = compute_dynamic_thresholds(ai_id=R.ai_id() or "claude-code", db=db)
@@ -339,6 +479,7 @@ def _get_domain_scaled_thresholds(
         from pathlib import Path
 
         from empirica.config.domain_registry import DomainKey, DomainRegistry
+
         reg = DomainRegistry(
             project_path=Path(project_path) if project_path else None,
         )
@@ -365,23 +506,24 @@ def _get_domain_scaled_thresholds(
     except Exception:
         return base_unc
 
+
 # Transition commands - allowed after POSTFLIGHT to enable new cycle
 # These are the commands needed to properly switch projects or start new sessions
 TRANSITION_COMMANDS = (
-    'cd ',                           # Directory change (project switch)
-    'empirica session-create',       # New session
-    'empirica project-bootstrap',    # Bootstrap new project context
-    'empirica project-init',         # Initialize new project
-    'empirica project-switch',       # Switch active project context
-    'empirica project-list',         # List available projects
-    'empirica preflight-submit',     # Start new epistemic cycle (was missing = chicken-and-egg bug)
-    'git add',                       # Stage work from completed transaction
-    'git commit',                    # Commit work from completed transaction
+    "cd ",  # Directory change (project switch)
+    "empirica session-create",  # New session
+    "empirica project-bootstrap",  # Bootstrap new project context
+    "empirica project-init",  # Initialize new project
+    "empirica project-switch",  # Switch active project context
+    "empirica project-list",  # List available projects
+    "empirica preflight-submit",  # Start new epistemic cycle (was missing = chicken-and-egg bug)
+    "git add",  # Stage work from completed transaction
+    "git commit",  # Commit work from completed transaction
 )
 
 
-PAUSE_FILE_BASE = Path.home() / '.empirica'
-PAUSE_FILE_GLOBAL = PAUSE_FILE_BASE / 'sentinel_paused'
+PAUSE_FILE_BASE = Path.home() / ".empirica"
+PAUSE_FILE_GLOBAL = PAUSE_FILE_BASE / "sentinel_paused"
 
 
 def get_pause_file_path() -> Path:
@@ -393,8 +535,8 @@ def get_pause_file_path() -> Path:
     instance_id = get_instance_id()
     if instance_id:
         # Sanitize instance_id for filename (remove special chars)
-        safe_id = instance_id.replace('/', '-').replace('%', '')
-        return PAUSE_FILE_BASE / f'sentinel_paused_{safe_id}'
+        safe_id = instance_id.replace("/", "-").replace("%", "")
+        return PAUSE_FILE_BASE / f"sentinel_paused_{safe_id}"
     return PAUSE_FILE_GLOBAL
 
 
@@ -419,50 +561,78 @@ def is_empirica_paused() -> bool:
 # Tier 1: Read-only commands - always safe, no state changes
 # Also includes administrative commands (project-switch, project-list) that should always be allowed
 EMPIRICA_TIER1_PREFIXES = (
-    'empirica epistemics-list', 'empirica epistemics-show',
-    'empirica goals-list', 'empirica goal-list', 'empirica gl',  # Goal list + aliases
-    'empirica goals-progress', 'empirica goal-progress',  # Goal progress + alias
-    'empirica get-goal-progress', 'empirica goals-get-tasks',
-    'empirica goals-discover', 'empirica goal-analysis',  # Goal queries
-    'empirica project-bootstrap', 'empirica project-search',
-    'empirica project-switch', 'empirica project-list',  # Administrative - always allowed
-    'empirica session-snapshot', 'empirica get-session-summary',
-    'empirica get-epistemic-state', 'empirica get-calibration-report',
-    'empirica monitor',
-    'empirica workspace-overview', 'empirica workspace-map',
-    'empirica entity-list', 'empirica entity-show',
-    'empirica entity-walk', 'empirica entity-search',
-    'empirica efficiency-report', 'empirica skill-suggest',
-    'empirica goals-ready', 'empirica list-goals',
-    'empirica query-mistakes', 'empirica query-handoff',
-    'empirica discover-goals', 'empirica list-identities',
-    'empirica issue-list',
-    'empirica docs-assess',  # Documentation assessment - read-only investigation tool
-    'empirica calibration-report',  # Calibration analysis - read-only
-    'empirica compact-analysis',  # Compact event analysis - read-only
-    'empirica commit-context',  # Per-commit artifact aggregator - read-only
-    'empirica practice-context',  # Roster lookup (Ambassador addressbook) - read-only
-    'empirica lesson-list', 'empirica lesson-search', 'empirica lesson-recommend',
-    'empirica lesson-stats',  # Lesson queries - read-only
-    'empirica sentinel-status', 'empirica sentinel-check',  # Sentinel queries - read-only
-    'empirica goals-search', 'empirica goals-get-stale',  # Goal queries - read-only
-    'empirica unknown-list', 'empirica assumption-list',  # Artifact queries - read-only
-    'empirica deadend-list', 'empirica finding-list',  # Artifact queries - read-only
-    'empirica decision-list', 'empirica mistake-list',  # Artifact queries - read-only
-    'empirica compliance-report',  # Compliance report - read-only
-    'empirica workspace-list', 'empirica ecosystem-check',  # Workspace queries - read-only
-    'empirica --help', 'empirica -h',
-    'empirica help',  # subcommand form (`empirica help` and `empirica help <category>`)
-    'empirica version',
-    'empirica profile-status',  # Profile status - read-only
-    'empirica noetic-batch',  # Batched noetic primitive — IS a noetic operation
-    'empirica sentinel ',  # Sentinel subcommand: pause/resume/status
-    'empirica loop ',  # Loop registry CRUD — instance-local control plane
-    'empirica listener ',  # Event-listener registry CRUD — instance-local control plane
-    'empirica instance ',  # Instance lifecycle: kill/forget/label
-    'empirica status',  # Multi-instance status overview
-    'empirica tui',  # Interactive cockpit (Textual app — destructive ops are modal-confirmed)
-    'empirica notify ',  # Notification primitive — loops/hooks call this in any phase
+    "empirica epistemics-list",
+    "empirica epistemics-show",
+    "empirica goals-list",
+    "empirica goal-list",
+    "empirica gl",  # Goal list + aliases
+    "empirica goals-progress",
+    "empirica goal-progress",  # Goal progress + alias
+    "empirica get-goal-progress",
+    "empirica goals-get-tasks",
+    "empirica goals-discover",
+    "empirica goal-analysis",  # Goal queries
+    "empirica project-bootstrap",
+    "empirica project-search",
+    "empirica project-switch",
+    "empirica project-list",  # Administrative - always allowed
+    "empirica session-snapshot",
+    "empirica get-session-summary",
+    "empirica get-epistemic-state",
+    "empirica get-calibration-report",
+    "empirica monitor",
+    "empirica workspace-overview",
+    "empirica workspace-map",
+    "empirica entity-list",
+    "empirica entity-show",
+    "empirica entity-walk",
+    "empirica entity-search",
+    "empirica efficiency-report",
+    "empirica skill-suggest",
+    "empirica goals-ready",
+    "empirica list-goals",
+    "empirica query-mistakes",
+    "empirica query-handoff",
+    "empirica discover-goals",
+    "empirica list-identities",
+    "empirica issue-list",
+    "empirica docs-assess",  # Documentation assessment - read-only investigation tool
+    "empirica doctor",  # Read-only diagnostic — MUST stay allowed (recovery escape hatch)
+    "empirica diagnose",  # Read-only mesh/listener diagnostic — recovery escape hatch
+    "empirica calibration-report",  # Calibration analysis - read-only
+    "empirica compact-analysis",  # Compact event analysis - read-only
+    "empirica commit-context",  # Per-commit artifact aggregator - read-only
+    "empirica practice-context",  # Roster lookup (Ambassador addressbook) - read-only
+    "empirica lesson-list",
+    "empirica lesson-search",
+    "empirica lesson-recommend",
+    "empirica lesson-stats",  # Lesson queries - read-only
+    "empirica sentinel-status",
+    "empirica sentinel-check",  # Sentinel queries - read-only
+    "empirica goals-search",
+    "empirica goals-get-stale",  # Goal queries - read-only
+    "empirica unknown-list",
+    "empirica assumption-list",  # Artifact queries - read-only
+    "empirica deadend-list",
+    "empirica finding-list",  # Artifact queries - read-only
+    "empirica decision-list",
+    "empirica mistake-list",  # Artifact queries - read-only
+    "empirica compliance-report",  # Compliance report - read-only
+    "empirica workspace-list",
+    "empirica ecosystem-check",  # Workspace queries - read-only
+    "empirica --help",
+    "empirica -h",
+    "empirica help",  # subcommand form (`empirica help` and `empirica help <category>`)
+    "empirica version",
+    "empirica profile-status",  # Profile status - read-only
+    "empirica noetic-batch",  # Batched noetic primitive — IS a noetic operation
+    "empirica sentinel ",  # Sentinel subcommand: pause/resume/status
+    "empirica loop ",  # Loop registry CRUD — instance-local control plane
+    "empirica listener ",  # Event-listener registry CRUD — instance-local control plane
+    "empirica instance ",  # Instance lifecycle: kill/forget/label
+    "empirica status",  # Multi-instance status overview
+    "empirica tui",  # Interactive cockpit (Textual app — destructive ops are modal-confirmed)
+    "empirica notify ",  # Notification primitive — loops/hooks call this in any phase
 )
 
 # Tier 2: State-changing commands - allowed (these ARE the epistemic workflow)
@@ -470,36 +640,65 @@ EMPIRICA_TIER1_PREFIXES = (
 # The Sentinel already gates praxic actions via vectors - these commands
 # are HOW the AI satisfies those gates.
 EMPIRICA_TIER2_PREFIXES = (
-    'empirica preflight-submit', 'empirica check-submit', 'empirica postflight-submit',
-    'empirica finding-log', 'empirica unknown-log', 'empirica deadend-log',
-    'empirica mistake-log', 'empirica log-mistake',
-    'empirica note',  # Scratchpad note-to-self (metadata-only, ungated like *-log)
-    'empirica log-artifacts', 'empirica resolve-artifacts', 'empirica delete-artifacts',  # Batch artifact operations
-    'empirica goals-create', 'empirica goal-create', 'empirica gc',  # Goal create + aliases
-    'empirica goals-complete', 'empirica goal-complete',  # Goal complete + alias
-    'empirica goals-add-task', 'empirica goal-add-task',  # Add task + alias
-    'empirica goals-complete-task', 'empirica goal-complete-task',  # Complete task + alias
-    'empirica goals-add-dependency', 'empirica goals-resume',  # Goal management
-    'empirica goals-claim',
-    'empirica session-create', 'empirica session-end',
-    'empirica create-goal', 'empirica add-task', 'empirica complete-task',
-    'empirica create-handoff', 'empirica resume-goal',
-    'empirica unknown-resolve', 'empirica issue-handoff',
-    'empirica project-init', 'empirica project-embed',
-    'empirica create-git-checkpoint', 'empirica load-git-checkpoint',
-    'empirica memory-compact', 'empirica resume-previous-session',
-    'empirica agent-spawn', 'empirica investigate',
-    'empirica source-add',
-    'empirica assumption-log', 'empirica decision-log',  # Noetic artifacts - assumptions/decisions
-    'empirica lesson-create', 'empirica lesson-load', 'empirica lesson-path',
-    'empirica lesson-replay-start', 'empirica lesson-replay-end',
-    'empirica lesson-embed',  # Lesson lifecycle commands
-    'empirica sentinel-orchestrate', 'empirica sentinel-load-profile',  # Sentinel management
-    'empirica artifacts-generate',  # Artifact generation
-    'empirica goals-mark-stale', 'empirica goals-refresh',  # Goal staleness management
-    'empirica goals-prune',  # Bulk close stale/duplicate/planned goals (dry-run default)
-    'empirica profile-sync', 'empirica profile-prune',  # Profile management - state-changing
-    'empirica release',  # Release pipeline — mechanical, no PREFLIGHT needed
+    "empirica preflight-submit",
+    "empirica check-submit",
+    "empirica postflight-submit",
+    "empirica finding-log",
+    "empirica unknown-log",
+    "empirica deadend-log",
+    "empirica mistake-log",
+    "empirica log-mistake",
+    "empirica note",  # Scratchpad note-to-self (metadata-only, ungated like *-log)
+    "empirica log-artifacts",
+    "empirica resolve-artifacts",
+    "empirica delete-artifacts",  # Batch artifact operations
+    "empirica goals-create",
+    "empirica goal-create",
+    "empirica gc",  # Goal create + aliases
+    "empirica goals-complete",
+    "empirica goal-complete",  # Goal complete + alias
+    "empirica goals-add-task",
+    "empirica goal-add-task",  # Add task + alias
+    "empirica goals-complete-task",
+    "empirica goal-complete-task",  # Complete task + alias
+    "empirica goals-add-dependency",
+    "empirica goals-resume",  # Goal management
+    "empirica goals-claim",
+    "empirica session-create",
+    "empirica session-end",
+    "empirica create-goal",
+    "empirica add-task",
+    "empirica complete-task",
+    "empirica create-handoff",
+    "empirica resume-goal",
+    "empirica unknown-resolve",
+    "empirica issue-handoff",
+    "empirica project-init",
+    "empirica project-embed",
+    "empirica create-git-checkpoint",
+    "empirica load-git-checkpoint",
+    "empirica memory-compact",
+    "empirica resume-previous-session",
+    "empirica agent-spawn",
+    "empirica investigate",
+    "empirica source-add",
+    "empirica assumption-log",
+    "empirica decision-log",  # Noetic artifacts - assumptions/decisions
+    "empirica lesson-create",
+    "empirica lesson-load",
+    "empirica lesson-path",
+    "empirica lesson-replay-start",
+    "empirica lesson-replay-end",
+    "empirica lesson-embed",  # Lesson lifecycle commands
+    "empirica sentinel-orchestrate",
+    "empirica sentinel-load-profile",  # Sentinel management
+    "empirica artifacts-generate",  # Artifact generation
+    "empirica goals-mark-stale",
+    "empirica goals-refresh",  # Goal staleness management
+    "empirica goals-prune",  # Bulk close stale/duplicate/planned goals (dry-run default)
+    "empirica profile-sync",
+    "empirica profile-prune",  # Profile management - state-changing
+    "empirica release",  # Release pipeline — mechanical, no PREFLIGHT needed
 )
 
 
@@ -513,7 +712,7 @@ def is_safe_empirica_command(command: str) -> bool:
     in the main gate logic to prevent prompt injection bypass.
     """
     cmd = command.lstrip()
-    if not cmd.startswith('empirica '):
+    if not cmd.startswith("empirica "):
         return False
 
     # Tier 1: Read-only - always safe
@@ -535,12 +734,12 @@ def is_toggle_command(command: str) -> str | None:
     cmd = command.lstrip()
 
     # Detect pause file write (python3 -c "..." writing sentinel_paused)
-    if 'sentinel_paused' in cmd and ('write_text' in cmd or 'open(' in cmd):
-        return 'pause'
+    if "sentinel_paused" in cmd and ("write_text" in cmd or "open(" in cmd):
+        return "pause"
 
     # Detect pause file removal
-    if cmd.startswith('rm ') and ('sentinel_paused' in cmd):
-        return 'unpause'
+    if cmd.startswith("rm ") and ("sentinel_paused" in cmd):
+        return "unpause"
 
     return None
 
@@ -570,19 +769,19 @@ def is_transition_command(command: str) -> bool:
             return True
 
     # Check pipe segments: echo '...' | empirica preflight-submit -
-    if '|' in cmd:
-        for segment in cmd.split('|'):
+    if "|" in cmd:
+        for segment in cmd.split("|"):
             segment = segment.strip()
             for prefix in TRANSITION_COMMANDS:
                 if segment.startswith(prefix):
                     return True
 
     # Check && chain segments: cd /path && empirica preflight-submit -
-    if '&&' in cmd:
-        for segment in cmd.split('&&'):
+    if "&&" in cmd:
+        for segment in cmd.split("&&"):
             segment = segment.strip()
             # Strip heredoc suffix for matching
-            segment_clean = segment.split('<<')[0].strip() if '<<' in segment else segment
+            segment_clean = segment.split("<<")[0].strip() if "<<" in segment else segment
             for prefix in TRANSITION_COMMANDS:
                 if segment_clean.startswith(prefix):
                     return True
@@ -597,13 +796,12 @@ def is_transition_command(command: str) -> bool:
 
 _autonomy_nudge = ""  # Module-level: set during increment, read by respond
 _goalless_nudge = ""  # Module-level: set when no goals detected, read by respond
-_reread_nudge = ""    # Module-level: set when Read tool targets already-read file
+_reread_nudge = ""  # Module-level: set when Read tool targets already-read file
 _file_relevance_nudge = ""  # Module-level: set when artifacts reference an Edit/Write target
 _last_read_count = 0  # Module-level: how many times current file was read this tx
 
 
-def _find_transaction_file(empirica_dir: Path, suffix: str,
-                           session_id: str | None = None) -> Path | None:
+def _find_transaction_file(empirica_dir: Path, suffix: str, session_id: str | None = None) -> Path | None:
     """Find the active transaction file, with suffix-mismatch fallback.
 
     Primary: exact file matching the current instance suffix.
@@ -615,18 +813,18 @@ def _find_transaction_file(empirica_dir: Path, suffix: str,
     See: docs/architecture/instance_isolation/KNOWN_ISSUES.md (11.21)
     """
     # Primary: exact suffix match
-    exact = empirica_dir / f'active_transaction{suffix}.json'
+    exact = empirica_dir / f"active_transaction{suffix}.json"
     if exact.exists():
         return exact
 
     # Fallback: scan for suffix-mismatched files matching this session
     if session_id:
         try:
-            for tx_file in sorted(empirica_dir.glob('active_transaction*.json')):
+            for tx_file in sorted(empirica_dir.glob("active_transaction*.json")):
                 try:
                     with open(tx_file) as f:
                         tx_data = json.load(f)
-                    if tx_data.get('session_id') == session_id:
+                    if tx_data.get("session_id") == session_id:
                         return tx_file
                 except Exception:
                     continue
@@ -641,18 +839,18 @@ def _resolve_empirica_session_id(claude_session_id: str | None) -> str | None:
     if not claude_session_id:
         return None
     try:
-        aw_file = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+        aw_file = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
         if aw_file.exists():
             with open(aw_file) as f:
-                return json.load(f).get('empirica_session_id')
+                return json.load(f).get("empirica_session_id")
     except Exception:
         pass
     return None
 
 
-def _locate_transaction_file(claude_session_id: str | None,
-                             suffix: str,
-                             empirica_session_id: str | None) -> Path | None:
+def _locate_transaction_file(
+    claude_session_id: str | None, suffix: str, empirica_session_id: str | None
+) -> Path | None:
     """Locate the active transaction file using priority chain.
 
     Try 1: active_work file for project_path
@@ -661,14 +859,13 @@ def _locate_transaction_file(claude_session_id: str | None,
     """
     # Try 1: active_work file
     if claude_session_id:
-        aw_file = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+        aw_file = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
         if aw_file.exists():
             try:
                 with open(aw_file) as f:
-                    pp = json.load(f).get('project_path')
+                    pp = json.load(f).get("project_path")
                 if pp:
-                    tx = _find_transaction_file(
-                        Path(pp) / '.empirica', suffix, empirica_session_id)
+                    tx = _find_transaction_file(Path(pp) / ".empirica", suffix, empirica_session_id)
                     if tx:
                         return tx
             except Exception:
@@ -677,14 +874,12 @@ def _locate_transaction_file(claude_session_id: str | None,
     # Try 2: project_resolver canonical path
     pp = get_active_project_path(claude_session_id)
     if pp:
-        tx = _find_transaction_file(
-            Path(pp) / '.empirica', suffix, empirica_session_id)
+        tx = _find_transaction_file(Path(pp) / ".empirica", suffix, empirica_session_id)
         if tx:
             return tx
 
     # Try 3: global fallback
-    return _find_transaction_file(
-        Path.home() / '.empirica', suffix, empirica_session_id)
+    return _find_transaction_file(Path.home() / ".empirica", suffix, empirica_session_id)
 
 
 def _is_empirica_mcp_tool(tool_name: str) -> bool:
@@ -699,79 +894,79 @@ def _classify_tool_phase(tool_name: str, tool_input: dict | None) -> bool:
         or tool_name in NOETIC_MCP_CHROME
         or tool_name in NOETIC_MCP_CORTEX
         or _is_empirica_mcp_tool(tool_name)
-        or (tool_name == 'Bash' and tool_input and is_safe_bash_command(tool_input))
-        or (tool_name in ('Write', 'Edit') and tool_input and is_plan_file(tool_input))
+        or (tool_name == "Bash" and tool_input and is_safe_bash_command(tool_input))
+        or (tool_name in ("Write", "Edit") and tool_input and is_plan_file(tool_input))
     )
 
 
 def _update_phase_counters(counters: dict, tool_name: str, is_noetic: bool) -> None:
     """Update phase-split counters for calibration."""
     if is_noetic:
-        counters['noetic_tool_calls'] = counters.get('noetic_tool_calls', 0) + 1
+        counters["noetic_tool_calls"] = counters.get("noetic_tool_calls", 0) + 1
     else:
-        counters['praxic_tool_calls'] = counters.get('praxic_tool_calls', 0) + 1
+        counters["praxic_tool_calls"] = counters.get("praxic_tool_calls", 0) + 1
 
 
 def _track_edited_files(counters: dict, tool_name: str, tool_input: dict | None) -> None:
     """Track edited file paths for non-git file change detection."""
-    if tool_name not in ('Edit', 'Write') or not tool_input:
+    if tool_name not in ("Edit", "Write") or not tool_input:
         return
-    fp = tool_input.get('file_path', '')
+    fp = tool_input.get("file_path", "")
     if fp:
-        edited = counters.get('edited_files', [])
+        edited = counters.get("edited_files", [])
         if fp not in edited:
             edited.append(fp)
-            counters['edited_files'] = edited
+            counters["edited_files"] = edited
 
 
 def _track_read_files(counters: dict, tool_name: str, tool_input: dict | None) -> None:
     """Track read file paths for re-read advisory. Sets global _last_read_count."""
     global _last_read_count
-    if tool_name != 'Read' or not tool_input:
+    if tool_name != "Read" or not tool_input:
         return
-    fp = tool_input.get('file_path', '')
+    fp = tool_input.get("file_path", "")
     if fp:
-        read_counts = counters.get('read_files', {})
+        read_counts = counters.get("read_files", {})
         read_counts[fp] = read_counts.get(fp, 0) + 1
-        counters['read_files'] = read_counts
+        counters["read_files"] = read_counts
         _last_read_count = read_counts[fp]
 
 
 def _extract_trace_target(tool_name: str, tool_input: dict | None) -> str:
     """Extract a compact target identifier for workflow trace recording."""
-    if tool_name in ('Read', 'Edit', 'Write') and tool_input:
-        target = tool_input.get('file_path', '')
+    if tool_name in ("Read", "Edit", "Write") and tool_input:
+        target = tool_input.get("file_path", "")
         if target:
-            return target.rsplit('/', 1)[-1]  # Just filename
-    elif tool_name == 'Bash' and tool_input:
-        cmd = tool_input.get('command', '')
-        return cmd.split()[0] if cmd else ''
-    elif tool_name in ('Grep', 'Glob') and tool_input:
-        return tool_input.get('pattern', '')[:30]
-    return ''
+            return target.rsplit("/", 1)[-1]  # Just filename
+    elif tool_name == "Bash" and tool_input:
+        cmd = tool_input.get("command", "")
+        return cmd.split()[0] if cmd else ""
+    elif tool_name in ("Grep", "Glob") and tool_input:
+        return tool_input.get("pattern", "")[:30]
+    return ""
 
 
-def _record_workflow_trace(counters: dict, tool_name: str, tool_input: dict | None,
-                           is_noetic: bool) -> None:
+def _record_workflow_trace(counters: dict, tool_name: str, tool_input: dict | None, is_noetic: bool) -> None:
     """Record tool sequence entry for pattern mining.
 
     Compact format: [tool_name, target, phase]. Capped at 200 entries.
     """
     target = _extract_trace_target(tool_name, tool_input)
-    phase = 'n' if is_noetic else 'p'
-    trace = counters.get('tool_trace', [])
+    phase = "n" if is_noetic else "p"
+    trace = counters.get("tool_trace", [])
     trace.append([tool_name, target[:40], phase])
     if len(trace) > 200:
         trace = trace[-200:]
-    counters['tool_trace'] = trace
+    counters["tool_trace"] = trace
 
 
 def _atomic_write_counters(counters: dict, counters_path: Path) -> None:
     """Atomic write to counters file (NOT the transaction file)."""
     import tempfile
+
     fd, tmp = tempfile.mkstemp(dir=str(counters_path.parent))
     try:
-        with os.fdopen(fd, 'w') as tf:
+        with os.fdopen(fd, "w") as tf:
             json.dump(counters, tf, indent=2)
         os.replace(tmp, str(counters_path))
     except BaseException:
@@ -781,9 +976,9 @@ def _atomic_write_counters(counters: dict, counters_path: Path) -> None:
             pass
 
 
-def _try_increment_tool_count(claude_session_id: str | None = None,
-                              tool_name: str | None = None,
-                              tool_input: dict | None = None) -> tuple:
+def _try_increment_tool_count(
+    claude_session_id: str | None = None, tool_name: str | None = None, tool_input: dict | None = None
+) -> tuple:
     """Increment tool_call_count in the hook counters file (separate from transaction).
 
     Orchestrates: transaction lookup, counter read-modify-write, phase tracking,
@@ -792,6 +987,7 @@ def _try_increment_tool_count(claude_session_id: str | None = None,
     Returns (tool_call_count, avg_turns) or (0, 0) if no transaction.
     """
     from empirica.utils.session_resolver import InstanceResolver as R
+
     suffix = R.instance_suffix()
     empirica_session_id = _resolve_empirica_session_id(claude_session_id)
 
@@ -803,13 +999,13 @@ def _try_increment_tool_count(claude_session_id: str | None = None,
         with open(tx_path) as f:
             tx = json.load(f)
 
-        if tx.get('status') != 'open':
+        if tx.get("status") != "open":
             return 0, 0
 
-        avg = tx.get('avg_turns', 0)
+        avg = tx.get("avg_turns", 0)
 
         # Read existing counters
-        counters_path = tx_path.parent / f'hook_counters{suffix}.json'
+        counters_path = tx_path.parent / f"hook_counters{suffix}.json"
         counters = {}
         if counters_path.exists():
             try:
@@ -818,8 +1014,8 @@ def _try_increment_tool_count(claude_session_id: str | None = None,
             except Exception:
                 counters = {}
 
-        counters['tool_call_count'] = counters.get('tool_call_count', 0) + 1
-        count = counters['tool_call_count']
+        counters["tool_call_count"] = counters.get("tool_call_count", 0) + 1
+        count = counters["tool_call_count"]
 
         # Phase-split counting and tracking
         is_noetic = False
@@ -831,8 +1027,8 @@ def _try_increment_tool_count(claude_session_id: str | None = None,
             _track_edited_files(counters, tool_name, tool_input)
             _track_read_files(counters, tool_name, tool_input)
 
-        if tool_name == 'AskUserQuestion':
-            counters['pending_user_response'] = True
+        if tool_name == "AskUserQuestion":
+            counters["pending_user_response"] = True
 
         if tool_name:
             _record_workflow_trace(counters, tool_name, tool_input, is_noetic)
@@ -877,8 +1073,26 @@ def respond(decision: str, reason: str = "") -> None:
     global _autonomy_nudge, _goalless_nudge, _reread_nudge, _remote_ops_nudge, _worktype_nudge, _file_relevance_nudge
     full_reason = reason
     show_nudge = False
-    if decision == "allow" and (_autonomy_nudge or _goalless_nudge or _reread_nudge or _remote_ops_nudge or _worktype_nudge or _file_relevance_nudge):
-        nudges = " | ".join(n for n in [_autonomy_nudge, _goalless_nudge, _reread_nudge, _remote_ops_nudge, _worktype_nudge, _file_relevance_nudge] if n)
+    if decision == "allow" and (
+        _autonomy_nudge
+        or _goalless_nudge
+        or _reread_nudge
+        or _remote_ops_nudge
+        or _worktype_nudge
+        or _file_relevance_nudge
+    ):
+        nudges = " | ".join(
+            n
+            for n in [
+                _autonomy_nudge,
+                _goalless_nudge,
+                _reread_nudge,
+                _remote_ops_nudge,
+                _worktype_nudge,
+                _file_relevance_nudge,
+            ]
+            if n
+        )
         full_reason = f"{reason} | {nudges}"
         show_nudge = True
 
@@ -886,7 +1100,7 @@ def respond(decision: str, reason: str = "") -> None:
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": decision,
-            "permissionDecisionReason": full_reason
+            "permissionDecisionReason": full_reason,
         }
     }
     # Suppress output for "allow" UNLESS there's a nudge to show Claude
@@ -910,7 +1124,7 @@ def resolve_project_root(claude_session_id: str | None = None) -> Path | None:
     project_path = get_active_project_path(claude_session_id)
     if project_path:
         project_root = Path(project_path)
-        if (project_root / '.empirica').exists():
+        if (project_root / ".empirica").exists():
             return project_root
     return None
 
@@ -928,13 +1142,14 @@ def find_empirica_package() -> Path | None:
     # Check if already importable (pip installed)
     try:
         import empirica.config.path_resolver  # noqa: F401  # pyright: ignore[reportUnusedImport,reportMissingImports]
+
         return None  # Already available, no path needed
     except ImportError:
         pass
 
     # Search for empirica package in known development locations
     def has_empirica_package(path: Path) -> bool:
-        return (path / 'empirica' / '__init__.py').exists()
+        return (path / "empirica" / "__init__.py").exists()
 
     # Check cwd and parents first (respect project context)
     current = Path.cwd()
@@ -946,8 +1161,8 @@ def find_empirica_package() -> Path | None:
 
     # Fallback to known dev paths
     known_paths = [
-        Path.home() / 'empirical-ai' / 'empirica',
-        Path.home() / 'empirica',
+        Path.home() / "empirical-ai" / "empirica",
+        Path.home() / "empirica",
     ]
     for path in known_paths:
         if has_empirica_package(path):
@@ -971,10 +1186,7 @@ def _get_current_project_id(db_conn, session_id: str) -> str | None:
         project_id (UUID) from the session, or None
     """
     try:
-        cursor = db_conn.execute(
-            "SELECT project_id FROM sessions WHERE session_id = ?",
-            (session_id,)
-        )
+        cursor = db_conn.execute("SELECT project_id FROM sessions WHERE session_id = ?", (session_id,))
         row = cursor.fetchone()
         if row and row[0]:
             return row[0]
@@ -1009,7 +1221,7 @@ def is_plan_file(tool_input: dict) -> bool:
     Plan files are noetic artifacts — planning is investigation, not execution.
     Allow writes to plan files without requiring CHECK authorization.
     """
-    file_path = tool_input.get('file_path', '')
+    file_path = tool_input.get("file_path", "")
     if not file_path:
         return False
     # Normalize path for reliable matching
@@ -1017,7 +1229,7 @@ def is_plan_file(tool_input: dict) -> bool:
         normalized = str(Path(file_path).resolve())
     except Exception:
         normalized = file_path
-    return '/.claude/plans/' in normalized
+    return "/.claude/plans/" in normalized
 
 
 def _matches_safe_prefix(cmd: str) -> bool:
@@ -1025,7 +1237,7 @@ def _matches_safe_prefix(cmd: str) -> bool:
     for prefix in SAFE_BASH_PREFIXES:
         if cmd.startswith(prefix):
             return True
-        if prefix.endswith(' ') and cmd == prefix.rstrip():
+        if prefix.endswith(" ") and cmd == prefix.rstrip():
             return True
     return False
 
@@ -1034,20 +1246,33 @@ def _matches_safe_prefix(cmd: str) -> bool:
 # A segment that's just one of these (or starts with one followed by an
 # already-validated body) is safe — the substitutions/commands embedded
 # inside the larger construct get validated separately via the chain split.
-_SHELL_KEYWORDS_INERT = frozenset({
-    'then', 'else', 'fi', 'elif',
-    'do', 'done',
-    'esac',
-    'true', 'false',  # bash builtins, no exec
-})
+_SHELL_KEYWORDS_INERT = frozenset(
+    {
+        "then",
+        "else",
+        "fi",
+        "elif",
+        "do",
+        "done",
+        "esac",
+        "true",
+        "false",  # bash builtins, no exec
+    }
+)
 
 # Compound keywords: `<keyword> <body>` — strip the keyword and recurse on body.
 # Covers `if cond`, `then cmd`, `else cmd`, `elif cond`, `while cond`, etc.
 _SHELL_COMPOUND_PREFIXES = (
-    'if ', 'elif ', 'then ', 'else ',
-    'while ', 'until ', 'for ', 'case ',
-    'do ',
-    '! ',  # negation: `! cmd` — strip and check rest
+    "if ",
+    "elif ",
+    "then ",
+    "else ",
+    "while ",
+    "until ",
+    "for ",
+    "case ",
+    "do ",
+    "! ",  # negation: `! cmd` — strip and check rest
 )
 
 
@@ -1062,25 +1287,25 @@ def _extract_command_substitutions(segment: str) -> list[str]:
     extracted: list[str] = []
     i = 0
     while i < len(segment):
-        if segment[i:i + 2] == '$(':
+        if segment[i : i + 2] == "$(":
             depth = 1
             j = i + 2
             while j < len(segment) and depth > 0:
-                if segment[j:j + 2] == '$(':
+                if segment[j : j + 2] == "$(":
                     depth += 1
                     j += 2
-                elif segment[j] == ')':
+                elif segment[j] == ")":
                     depth -= 1
                     j += 1
                 else:
                     j += 1
             if depth == 0:
-                extracted.append(segment[i + 2:j - 1])
+                extracted.append(segment[i + 2 : j - 1])
             i = j
         else:
             i += 1
     # Backticks (non-nested — bash doesn't allow nested backticks anyway)
-    for match in re.finditer(r'`([^`]*)`', segment):
+    for match in re.finditer(r"`([^`]*)`", segment):
         extracted.append(match.group(1))
     return extracted
 
@@ -1096,25 +1321,25 @@ def _strip_command_substitutions(segment: str) -> str:
     out: list[str] = []
     i = 0
     while i < len(segment):
-        if segment[i:i + 2] == '$(':
+        if segment[i : i + 2] == "$(":
             depth = 1
             j = i + 2
             while j < len(segment) and depth > 0:
-                if segment[j:j + 2] == '$(':
+                if segment[j : j + 2] == "$(":
                     depth += 1
                     j += 2
-                elif segment[j] == ')':
+                elif segment[j] == ")":
                     depth -= 1
                     j += 1
                 else:
                     j += 1
-            out.append('X')
+            out.append("X")
             i = j
         else:
             out.append(segment[i])
             i += 1
-    residue = ''.join(out)
-    return re.sub(r'`[^`]*`', 'X', residue)
+    residue = "".join(out)
+    return re.sub(r"`[^`]*`", "X", residue)
 
 
 def _is_inert_shape(stripped: str) -> bool:
@@ -1132,15 +1357,16 @@ def _is_inert_shape(stripped: str) -> bool:
     if stripped in _SHELL_KEYWORDS_INERT:
         return True
     # exit / return with optional integer
-    if re.match(r'^(exit|return)(\s+\d+)?$', stripped):
+    if re.match(r"^(exit|return)(\s+\d+)?$", stripped):
         return True
     # [ ... ] and [[ ... ]] — pure tests, no exec
-    if (stripped.startswith('[ ') and stripped.endswith(' ]')) or \
-       (stripped.startswith('[[ ') and stripped.endswith(' ]]')):
+    if (stripped.startswith("[ ") and stripped.endswith(" ]")) or (
+        stripped.startswith("[[ ") and stripped.endswith(" ]]")
+    ):
         return True
     # VAR=value assignment — the value here is the *placeholder* if it
     # had a substitution (which was already validated), or a literal.
-    return bool(re.match(r'^[A-Za-z_][A-Za-z0-9_]*=\S*$', stripped))
+    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$", stripped))
 
 
 def _is_segment_safe(segment: str) -> bool:
@@ -1168,8 +1394,8 @@ def _is_segment_safe(segment: str) -> bool:
     recognition only excuses inert *structure*, never grants safety to
     the commands inside it.
     """
-    clean = segment.split('<<')[0].strip() if '<<' in segment else segment
-    clean = SAFE_REDIRECT_PATTERN.sub('', clean).strip()
+    clean = segment.split("<<")[0].strip() if "<<" in segment else segment
+    clean = SAFE_REDIRECT_PATTERN.sub("", clean).strip()
     if not clean:
         return True
 
@@ -1193,22 +1419,22 @@ def _is_segment_safe(segment: str) -> bool:
     # 3. Compound keyword: `<keyword> <body>` — strip and recurse on body.
     for prefix in _SHELL_COMPOUND_PREFIXES:
         if stripped.startswith(prefix):
-            rest = stripped[len(prefix):].strip()
+            rest = stripped[len(prefix) :].strip()
             if not rest:
                 return True
             return _is_segment_safe(rest)
 
     # 4. Original safe forms.
-    if stripped.startswith('cd '):
+    if stripped.startswith("cd "):
         return True
     # A piped segment (`empirica goals-list | tail`) must be validated
     # stage-by-stage — the trailing pipe can otherwise smuggle an executor
     # (`empirica goals-list | sh`) past the bare empirica-prefix match.
-    if _contains_outside_quotes(stripped, '|'):
+    if _contains_outside_quotes(stripped, "|"):
         return is_safe_pipe_chain(stripped)
     if is_safe_empirica_command(stripped):
         return True
-    if stripped.startswith(('ssh ', 'rsync ', 'scp ', 'ssh-')):
+    if stripped.startswith(("ssh ", "rsync ", "scp ", "ssh-")):
         return is_safe_remote_command(stripped)
     if _matches_safe_prefix(stripped):
         return True
@@ -1226,9 +1452,9 @@ def _is_command_text_safe(cmd: str) -> bool:
     (via _is_segment_safe per segment). Mirrors the classification
     is_safe_bash_command applies at the top level.
     """
-    if _contains_outside_quotes(cmd, '|'):
+    if _contains_outside_quotes(cmd, "|"):
         return is_safe_pipe_chain(cmd)
-    for chain_op in ('&&', '||', ';'):
+    for chain_op in ("&&", "||", ";"):
         if _contains_outside_quotes(cmd, chain_op):
             segments = [s.strip() for s in _split_outside_quotes(cmd, chain_op)]
             return all(_is_segment_safe(s) for s in segments)
@@ -1242,7 +1468,7 @@ def _has_dangerous_operators(command: str) -> bool:
     literal is just text, not command substitution.
     """
     for operator in DANGEROUS_SHELL_OPERATORS:
-        if operator in ('&&', '||', ';'):
+        if operator in ("&&", "||", ";"):
             continue
         if _contains_outside_quotes(command, operator):
             return True
@@ -1256,16 +1482,16 @@ def _has_dangerous_redirects(command: str) -> bool:
     "if len(body) > 3000:" or jq '.x > 5') is data, not a redirect. Only
     redirects appearing OUTSIDE quoted regions are flagged.
     """
-    cmd_clean = SAFE_REDIRECT_PATTERN.sub('', command)
-    if _contains_outside_quotes(cmd_clean, '>>') or _contains_outside_quotes(cmd_clean, '>'):
+    cmd_clean = SAFE_REDIRECT_PATTERN.sub("", command)
+    if _contains_outside_quotes(cmd_clean, ">>") or _contains_outside_quotes(cmd_clean, ">"):
         return True
-    return _contains_outside_quotes(cmd_clean, '<') and '<<' not in command
+    return _contains_outside_quotes(cmd_clean, "<") and "<<" not in command
 
 
 def _maybe_nudge_remote_ops(cmd: str) -> None:
     """Set remote-ops nudge if work_type isn't already remote-ops or infra."""
     global _remote_ops_nudge, _remote_ops_nudged
-    if _remote_ops_nudged or _current_work_type in ('remote-ops', 'infra', 'config'):
+    if _remote_ops_nudged or _current_work_type in ("remote-ops", "infra", "config"):
         return
     _remote_ops_nudged = True
     _remote_ops_nudge = (
@@ -1288,9 +1514,9 @@ def _classify_chain(command: str) -> bool | None:
     chain), EXCEPT when a heredoc (`<<`) is present — its body legitimately
     spans lines, and splitting on those newlines would shred it.
     """
-    chain_ops: tuple[str, ...] = ('&&', '||', ';')
-    if '<<' not in command:
-        chain_ops = (*chain_ops, '\n')
+    chain_ops: tuple[str, ...] = ("&&", "||", ";")
+    if "<<" not in command:
+        chain_ops = (*chain_ops, "\n")
     for chain_op in chain_ops:
         if _contains_outside_quotes(command, chain_op):
             segments = [s.strip() for s in _split_outside_quotes(command, chain_op)]
@@ -1305,7 +1531,7 @@ def is_safe_bash_command(tool_input: dict) -> bool:
     system inspection commands (docker, systemctl, ss, tmux, etc.).
     """
     global _current_work_type
-    command = tool_input.get('command', '')
+    command = tool_input.get("command", "")
     if not command:
         return False
 
@@ -1320,14 +1546,14 @@ def is_safe_bash_command(tool_input: dict) -> bool:
     # Single command. A trailing pipe can smuggle an executor
     # (`empirica goals-list | sh`), so a piped command is NOT safe on the bare
     # empirica-prefix match — it goes through the pipe-chain check below.
-    if not _contains_outside_quotes(command, '|') and is_safe_empirica_command(command):
+    if not _contains_outside_quotes(command, "|") and is_safe_empirica_command(command):
         return True
 
     # Work-type expansion: infra/config/debug/remote-ops get broader safe
     # commands. remote-ops added here so system inspection (docker, systemctl,
     # ss, tmux) flows for a remote-ops AI that's inspecting locally before/
     # after SSH-recon. The SSH branch below is the load-bearing relaxation.
-    if _current_work_type in ('infra', 'config', 'debug', 'remote-ops'):
+    if _current_work_type in ("infra", "config", "debug", "remote-ops"):
         cmd = command.lstrip()
         if any(cmd.startswith(prefix) for prefix in INFRA_SAFE_PREFIXES):
             return True
@@ -1339,9 +1565,9 @@ def is_safe_bash_command(tool_input: dict) -> bool:
     # recon often uses stdin redirects (ssh host 'cmd' < script.sh) which
     # the per-command classifier rejects. Local writes (cat > /tmp/foo)
     # stay subject to normal gating — those ARE observable.
-    if _current_work_type == 'remote-ops':
+    if _current_work_type == "remote-ops":
         rcmd = command.lstrip()
-        if rcmd.startswith(('ssh ', 'rsync ', 'scp ', 'ssh-')):
+        if rcmd.startswith(("ssh ", "rsync ", "scp ", "ssh-")):
             _maybe_nudge_remote_ops(rcmd)
             return True
 
@@ -1351,18 +1577,18 @@ def is_safe_bash_command(tool_input: dict) -> bool:
     if _has_dangerous_redirects(command):
         return False
 
-    if _contains_outside_quotes(command, '|'):
+    if _contains_outside_quotes(command, "|"):
         return is_safe_pipe_chain(command)
 
     cmd = command.lstrip()
 
     # Special cases: remote, sqlite, python
-    if cmd.startswith(('ssh ', 'rsync ', 'scp ', 'ssh-')):
+    if cmd.startswith(("ssh ", "rsync ", "scp ", "ssh-")):
         _maybe_nudge_remote_ops(cmd)
         return is_safe_remote_command(cmd)
-    if cmd.startswith('sqlite3 ') and is_safe_sqlite_command(cmd):
+    if cmd.startswith("sqlite3 ") and is_safe_sqlite_command(cmd):
         return True
-    if cmd.startswith(('python3 -c ', 'python -c ')) and is_safe_python_command(cmd):
+    if cmd.startswith(("python3 -c ", "python -c ")) and is_safe_python_command(cmd):
         return True
 
     return _matches_safe_prefix(cmd)
@@ -1393,14 +1619,24 @@ def is_safe_sqlite_command(command: str) -> bool:
     query = match.group(1).strip().upper()
 
     # Safe meta commands (dot commands)
-    safe_meta = ('.SCHEMA', '.TABLES', '.DUMP', '.INDICES', '.INDEXES',
-                 '.MODE', '.HEADERS', '.WIDTH', '.HELP', '.DATABASES')
+    safe_meta = (
+        ".SCHEMA",
+        ".TABLES",
+        ".DUMP",
+        ".INDICES",
+        ".INDEXES",
+        ".MODE",
+        ".HEADERS",
+        ".WIDTH",
+        ".HELP",
+        ".DATABASES",
+    )
     for meta in safe_meta:
         if query.startswith(meta):
             return True
 
     # Safe SQL operations (read-only)
-    safe_sql = ('SELECT', 'PRAGMA', 'EXPLAIN', 'ANALYZE')
+    safe_sql = ("SELECT", "PRAGMA", "EXPLAIN", "ANALYZE")
     return any(query.startswith(sql) for sql in safe_sql)
 
 
@@ -1422,15 +1658,16 @@ def is_safe_python_command(command: str) -> bool:
     # Extract the Python code from the command
     # Handles: python3 -c "code" and python3 -c 'code'
     code = command
-    for prefix in ('python3 -c ', 'python -c '):
+    for prefix in ("python3 -c ", "python -c "):
         if command.startswith(prefix):
-            code = command[len(prefix):]
+            code = command[len(prefix) :]
             break
 
     # Strip outer quotes
     code_stripped = code.strip()
-    if (code_stripped.startswith('"') and code_stripped.endswith('"')) or \
-       (code_stripped.startswith("'") and code_stripped.endswith("'")):
+    if (code_stripped.startswith('"') and code_stripped.endswith('"')) or (
+        code_stripped.startswith("'") and code_stripped.endswith("'")
+    ):
         code_stripped = code_stripped[1:-1]
 
     code_upper = code_stripped.upper()
@@ -1438,19 +1675,43 @@ def is_safe_python_command(command: str) -> bool:
     # Block patterns: file writes, subprocess, deletion, network mutation
     write_patterns = (
         # File write operations
-        "OPEN(", ".WRITE(", ".WRITE_TEXT(", ".WRITE_BYTES(",
-        "SHUTIL.", "OS.REMOVE(", "OS.UNLINK(", "OS.RMDIR(",
-        "OS.MAKEDIRS(", "OS.MKDIR(",
+        "OPEN(",
+        ".WRITE(",
+        ".WRITE_TEXT(",
+        ".WRITE_BYTES(",
+        "SHUTIL.",
+        "OS.REMOVE(",
+        "OS.UNLINK(",
+        "OS.RMDIR(",
+        "OS.MAKEDIRS(",
+        "OS.MKDIR(",
         # Subprocess / shell execution
-        "SUBPROCESS.RUN(", "SUBPROCESS.CALL(", "SUBPROCESS.POPEN(",
-        "OS.SYSTEM(", "OS.POPEN(", "OS.EXEC",
+        "SUBPROCESS.RUN(",
+        "SUBPROCESS.CALL(",
+        "SUBPROCESS.POPEN(",
+        "OS.SYSTEM(",
+        "OS.POPEN(",
+        "OS.EXEC",
         # Network mutation
-        "REQUESTS.POST(", "REQUESTS.PUT(", "REQUESTS.DELETE(", "REQUESTS.PATCH(",
-        ".POST(", ".PUT(", ".DELETE(", ".PATCH(",
+        "REQUESTS.POST(",
+        "REQUESTS.PUT(",
+        "REQUESTS.DELETE(",
+        "REQUESTS.PATCH(",
+        ".POST(",
+        ".PUT(",
+        ".DELETE(",
+        ".PATCH(",
         # Database writes
-        "INSERT ", "UPDATE ", "DELETE ", "DROP ", "CREATE ", "ALTER ",
+        "INSERT ",
+        "UPDATE ",
+        "DELETE ",
+        "DROP ",
+        "CREATE ",
+        "ALTER ",
         # Dangerous builtins
-        "EXEC(", "EVAL(", "__IMPORT__(",
+        "EXEC(",
+        "EVAL(",
+        "__IMPORT__(",
     )
 
     # Allow: anything that's not writing is investigation
@@ -1484,23 +1745,23 @@ def is_safe_remote_command(command: str) -> bool:
     command_stripped = command.lstrip()
 
     # --- ssh-add, ssh-keygen, ssh-agent: local key management, always safe ---
-    if command_stripped.startswith(('ssh-add', 'ssh-keygen', 'ssh-agent', 'ssh -T')):
+    if command_stripped.startswith(("ssh-add", "ssh-keygen", "ssh-agent", "ssh -T")):
         return True
 
     # --- ssh-copy-id: modifies remote, always praxic ---
-    if command_stripped.startswith('ssh-copy-id'):
+    if command_stripped.startswith("ssh-copy-id"):
         return False
 
     # --- scp: check transfer direction ---
-    if command_stripped.startswith('scp '):
+    if command_stripped.startswith("scp "):
         return _classify_scp(command_stripped)
 
     # --- rsync: check direction and flags ---
-    if command_stripped.startswith('rsync '):
+    if command_stripped.startswith("rsync "):
         return _classify_rsync(command_stripped)
 
     # --- ssh: extract and classify the inner command ---
-    if command_stripped.startswith('ssh '):
+    if command_stripped.startswith("ssh "):
         return _classify_ssh(command_stripped)
 
     return False  # Unknown remote command type
@@ -1515,7 +1776,7 @@ def _classify_ssh(command: str) -> bool:
     """
     # Handle heredoc-style SSH: ssh user@host << 'EOF' ... EOF
     # These are complex multi-command blocks — treat as praxic
-    if '<<' in command:
+    if "<<" in command:
         # Extract the heredoc content and classify each line
         return _classify_ssh_heredoc(command)
 
@@ -1524,7 +1785,7 @@ def _classify_ssh(command: str) -> bool:
         return True  # Just 'ssh' alone, harmless
 
     # SSH options that consume the NEXT argument
-    ssh_opts_with_arg = set('BbcDEeFIiJLlmOopRSWw')
+    ssh_opts_with_arg = set("BbcDEeFIiJLlmOopRSWw")
 
     i = 1  # Skip 'ssh'
     skip_next = False
@@ -1539,14 +1800,14 @@ def _classify_ssh(command: str) -> bool:
             continue
 
         # ConnectTimeout and similar -o options
-        if part.startswith('-o'):
-            if part == '-o':
+        if part.startswith("-o"):
+            if part == "-o":
                 skip_next = True  # -o Option=Value
             # else: -oOption=Value (combined)
             continue
 
         # Options with arguments: -p 22, -i ~/.ssh/key, etc.
-        if part.startswith('-') and len(part) >= 2:
+        if part.startswith("-") and len(part) >= 2:
             opt_char = part[1]
             if opt_char in ssh_opts_with_arg:
                 if len(part) == 2:
@@ -1569,11 +1830,12 @@ def _classify_ssh(command: str) -> bool:
     # Reconstruct the remote command
     # Handle quoted strings: ssh host "ls -la && echo done"
     # The shell already split on spaces, so we rejoin
-    remote_cmd = ' '.join(remote_cmd_parts)
+    remote_cmd = " ".join(remote_cmd_parts)
 
     # Strip surrounding quotes if present
-    if (remote_cmd.startswith('"') and remote_cmd.endswith('"')) or \
-       (remote_cmd.startswith("'") and remote_cmd.endswith("'")):
+    if (remote_cmd.startswith('"') and remote_cmd.endswith('"')) or (
+        remote_cmd.startswith("'") and remote_cmd.endswith("'")
+    ):
         remote_cmd = remote_cmd[1:-1]
 
     # Now classify the remote command using the same logic as local commands
@@ -1598,7 +1860,7 @@ def _classify_ssh_heredoc(command: str) -> bool:
     heredoc_match = re.search(r"<<\s*'?(\w+)'?\s*\n(.*?)\n\1", command, re.DOTALL)
     if heredoc_match:
         heredoc_content = heredoc_match.group(2)
-        lines = [l.strip() for l in heredoc_content.strip().split('\n') if l.strip()]
+        lines = [l.strip() for l in heredoc_content.strip().split("\n") if l.strip()]
         return all(_is_remote_cmd_safe(line) for line in lines)
 
     # Can't parse heredoc content (probably not in the command string yet)
@@ -1618,14 +1880,14 @@ def _is_remote_cmd_safe(remote_cmd: str) -> bool:
 
     # Handle chains within the remote command: cmd1 && cmd2 && cmd3
     # (split outside quotes — `;` etc. inside a quoted string is not a chain op)
-    for chain_op in ('&&', '||', ';'):
+    for chain_op in ("&&", "||", ";"):
         if _contains_outside_quotes(remote_cmd, chain_op):
             segments = [s.strip() for s in _split_outside_quotes(remote_cmd, chain_op)]
             return all(_is_single_remote_cmd_safe(seg) for seg in segments if seg)
 
     # Handle pipes within the remote command
-    if _contains_outside_quotes(remote_cmd, '|'):
-        segments = [s.strip() for s in _split_outside_quotes(remote_cmd, '|')]
+    if _contains_outside_quotes(remote_cmd, "|"):
+        segments = [s.strip() for s in _split_outside_quotes(remote_cmd, "|")]
         if not segments:
             return False
         # First segment must be safe, rest must be safe pipe targets
@@ -1648,36 +1910,48 @@ def _is_single_remote_cmd_safe(cmd: str) -> bool:
         return True
 
     # Strip safe redirects
-    cmd_clean = SAFE_REDIRECT_PATTERN.sub('', cmd).strip()
+    cmd_clean = SAFE_REDIRECT_PATTERN.sub("", cmd).strip()
 
     # cd is always safe
-    if cmd_clean.startswith('cd '):
+    if cmd_clean.startswith("cd "):
         return True
 
     # Docker inspection commands (common in remote infra work)
     docker_safe = (
-        'docker ps', 'docker images', 'docker logs', 'docker inspect',
-        'docker stats', 'docker top', 'docker port', 'docker diff',
-        'docker info', 'docker version', 'docker network ls',
-        'docker network inspect', 'docker volume ls', 'docker volume inspect',
-        'docker compose ps', 'docker compose logs', 'docker-compose ps',
-        'docker-compose logs',
+        "docker ps",
+        "docker images",
+        "docker logs",
+        "docker inspect",
+        "docker stats",
+        "docker top",
+        "docker port",
+        "docker diff",
+        "docker info",
+        "docker version",
+        "docker network ls",
+        "docker network inspect",
+        "docker volume ls",
+        "docker volume inspect",
+        "docker compose ps",
+        "docker compose logs",
+        "docker-compose ps",
+        "docker-compose logs",
     )
     for prefix in docker_safe:
         if cmd_clean.startswith(prefix):
             return True
 
     # systemctl status/is-active (read-only)
-    if cmd_clean.startswith(('systemctl status', 'systemctl is-active', 'systemctl list-')):
+    if cmd_clean.startswith(("systemctl status", "systemctl is-active", "systemctl list-")):
         return True
 
     # journalctl (log reading)
-    if cmd_clean.startswith('journalctl'):
+    if cmd_clean.startswith("journalctl"):
         return True
 
     # Check standard SAFE_BASH_PREFIXES
     for prefix in SAFE_BASH_PREFIXES:
-        if cmd_clean.startswith(prefix) or (prefix.endswith(' ') and cmd_clean == prefix.rstrip()):
+        if cmd_clean.startswith(prefix) or (prefix.endswith(" ") and cmd_clean == prefix.rstrip()):
             return True
 
     return False
@@ -1693,18 +1967,18 @@ def _classify_rsync(command: str) -> bool:
     parts = command.split()
 
     # --dry-run or -n → always noetic (just showing what would happen)
-    if '--dry-run' in parts or '-n' in parts:
+    if "--dry-run" in parts or "-n" in parts:
         return True
 
     # --delete is always destructive → praxic
-    if '--delete' in parts or '--delete-before' in parts or '--delete-after' in parts:
+    if "--delete" in parts or "--delete-before" in parts or "--delete-after" in parts:
         return False
 
     # Determine direction by finding src and dest arguments
     # rsync [options] source... dest
     # Remote paths contain ':' (user@host:/path or host:/path)
     # Skip option arguments
-    rsync_opts_with_arg = set('efi')  # Common opts that take next arg
+    rsync_opts_with_arg = set("efi")  # Common opts that take next arg
     non_option_args = []
     skip_next = False
 
@@ -1712,20 +1986,43 @@ def _classify_rsync(command: str) -> bool:
         if skip_next:
             skip_next = False
             continue
-        if part.startswith('--'):
-            if '=' not in part and part in ('--rsh', '--filter', '--exclude', '--include',
-                                             '--exclude-from', '--include-from', '--files-from',
-                                             '--log-file', '--out-format', '--backup-dir',
-                                             '--suffix', '--compare-dest', '--copy-dest',
-                                             '--link-dest', '--compress-level', '--skip-compress',
-                                             '--max-size', '--min-size', '--timeout',
-                                             '--contimeout', '--address', '--port',
-                                             '--sockopts', '--outbuf', '--remote-option',
-                                             '--info', '--debug', '--chmod',
-                                             '--chown', '--groupmap', '--usermap'):
+        if part.startswith("--"):
+            if "=" not in part and part in (
+                "--rsh",
+                "--filter",
+                "--exclude",
+                "--include",
+                "--exclude-from",
+                "--include-from",
+                "--files-from",
+                "--log-file",
+                "--out-format",
+                "--backup-dir",
+                "--suffix",
+                "--compare-dest",
+                "--copy-dest",
+                "--link-dest",
+                "--compress-level",
+                "--skip-compress",
+                "--max-size",
+                "--min-size",
+                "--timeout",
+                "--contimeout",
+                "--address",
+                "--port",
+                "--sockopts",
+                "--outbuf",
+                "--remote-option",
+                "--info",
+                "--debug",
+                "--chmod",
+                "--chown",
+                "--groupmap",
+                "--usermap",
+            ):
                 skip_next = True
             continue
-        if part.startswith('-') and not part.startswith('--'):
+        if part.startswith("-") and not part.startswith("--"):
             # Short options, check if any consume next arg
             opt_chars = part[1:]
             if opt_chars and opt_chars[-1] in rsync_opts_with_arg:
@@ -1741,12 +2038,12 @@ def _classify_rsync(command: str) -> bool:
     sources = non_option_args[:-1]
 
     # If destination has ':' → uploading → praxic
-    if ':' in dest and not dest.startswith('/'):
+    if ":" in dest and not dest.startswith("/"):
         return False
 
     # If any source has ':' and dest is local → downloading → noetic
     # Both local (or can't tell) → praxic (conservative)
-    return any(':' in src and not src.startswith('/') for src in sources)
+    return any(":" in src and not src.startswith("/") for src in sources)
 
 
 def _classify_scp(command: str) -> bool:
@@ -1759,7 +2056,7 @@ def _classify_scp(command: str) -> bool:
     parts = command.split()
 
     # SCP options that consume next argument
-    scp_opts_with_arg = set('cFiloPSs')
+    scp_opts_with_arg = set("cFiloPSs")
     non_option_args = []
     skip_next = False
 
@@ -1767,7 +2064,7 @@ def _classify_scp(command: str) -> bool:
         if skip_next:
             skip_next = False
             continue
-        if part.startswith('-') and len(part) >= 2:
+        if part.startswith("-") and len(part) >= 2:
             opt_char = part[1]
             if opt_char in scp_opts_with_arg and len(part) == 2:
                 skip_next = True
@@ -1782,7 +2079,7 @@ def _classify_scp(command: str) -> bool:
 
     # If destination contains ':' (and isn't an absolute path) → uploading → praxic
     # Otherwise → downloading or local copy → noetic
-    return not (':' in dest and not dest.startswith('/'))
+    return not (":" in dest and not dest.startswith("/"))
 
 
 def is_safe_pipe_chain(command: str) -> bool:
@@ -1797,7 +2094,7 @@ def is_safe_pipe_chain(command: str) -> bool:
     Splits on `|` *outside* quoted regions — a `|` inside a quoted regex
     alternation is data, not a shell pipe.
     """
-    segments = [s.strip() for s in _split_outside_quotes(command, '|')]
+    segments = [s.strip() for s in _split_outside_quotes(command, "|")]
 
     if not segments:
         return False
@@ -1807,7 +2104,7 @@ def is_safe_pipe_chain(command: str) -> bool:
     first_is_safe = False
 
     # Check sqlite3 commands first
-    if first_cmd.startswith('sqlite3 ') and is_safe_sqlite_command(first_cmd):
+    if first_cmd.startswith("sqlite3 ") and is_safe_sqlite_command(first_cmd):
         first_is_safe = True
 
     # Check empirica CLI whitelist — Tier 1 commands (loop status, goals-list,
@@ -1820,7 +2117,7 @@ def is_safe_pipe_chain(command: str) -> bool:
     # Check standard safe prefixes
     if not first_is_safe:
         for prefix in SAFE_BASH_PREFIXES:
-            if first_cmd.startswith(prefix) or (prefix.endswith(' ') and first_cmd == prefix.rstrip()):
+            if first_cmd.startswith(prefix) or (prefix.endswith(" ") and first_cmd == prefix.rstrip()):
                 first_is_safe = True
                 break
 
@@ -1831,7 +2128,7 @@ def is_safe_pipe_chain(command: str) -> bool:
     for segment in segments[1:]:
         segment = segment.strip()
         # Strip heredoc suffix for matching (e.g., "empirica preflight-submit - << 'EOF'")
-        segment_clean = segment.split('<<')[0].strip() if '<<' in segment else segment
+        segment_clean = segment.split("<<")[0].strip() if "<<" in segment else segment
         segment_safe = False
 
         # Check empirica CLI whitelist (tiered)
@@ -1857,7 +2154,7 @@ def is_safe_pipe_chain(command: str) -> bool:
 # can't see the evidence. Thresholds match confidence_gate.py in empirica-autonomy.
 
 _CONFIDENCE_GATE_THRESHOLDS = {
-    'remote_infra': {'know_min': 0.70, 'uncertainty_max': 0.25},
+    "remote_infra": {"know_min": 0.70, "uncertainty_max": 0.25},
 }
 
 
@@ -1868,7 +2165,7 @@ def _is_praxic_remote_command(command: str) -> bool:
     Read-only remote commands are already handled by is_safe_remote_command().
     """
     cmd = command.lstrip()
-    if not cmd.startswith(('ssh ', 'scp ', 'rsync ')):
+    if not cmd.startswith(("ssh ", "scp ", "rsync ")):
         return False
     # If is_safe_remote_command says it's noetic, it's not praxic
     # It's a remote command that's NOT read-only → praxic remote
@@ -1881,43 +2178,47 @@ def _confidence_gate_remote(claude_session_id: str | None = None) -> str:
     Reads the most recent PREFLIGHT or CHECK vectors from the session DB.
     Returns a description string if gate passes, or empty string if fails.
     """
-    thresholds = _CONFIDENCE_GATE_THRESHOLDS['remote_infra']
+    thresholds = _CONFIDENCE_GATE_THRESHOLDS["remote_infra"]
 
     # Find vectors from the most recent assessment in this session
     try:
         empirica_session_id = _resolve_empirica_session_id(claude_session_id)
         if not empirica_session_id:
-            return ''
+            return ""
 
         pp = get_active_project_path(claude_session_id)
         if not pp:
-            return ''
+            return ""
 
-        db_path = Path(pp) / '.empirica' / 'sessions.db'
+        db_path = Path(pp) / ".empirica" / "sessions.db"
         if not db_path.exists():
             # Try home fallback
-            db_path = Path.home() / '.empirica' / 'sessions.db'
+            db_path = Path.home() / ".empirica" / "sessions.db"
         if not db_path.exists():
-            return ''
+            return ""
 
         import sqlite3
+
         db = sqlite3.connect(str(db_path))
         cursor = db.cursor()
 
         # Get latest vectors from PREFLIGHT or CHECK
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT phase,
                    json_extract(reflex_data, '$.vectors.know') as know,
                    json_extract(reflex_data, '$.vectors.uncertainty') as uncertainty
             FROM reflexes
             WHERE session_id = ? AND phase IN ('PREFLIGHT', 'CHECK')
             ORDER BY timestamp DESC LIMIT 1
-        """, (empirica_session_id,))
+        """,
+            (empirica_session_id,),
+        )
         row = cursor.fetchone()
         db.close()
 
         if not row:
-            return ''
+            return ""
 
         phase, know, uncertainty = row
         know = float(know) if know else 0.0
@@ -1928,12 +2229,12 @@ def _confidence_gate_remote(claude_session_id: str | None = None) -> str:
         # vectors. The 'know' threshold is no longer evaluated as a gating
         # condition — it remains in the thresholds dict for back-compat with
         # consumers that read it for display.
-        if uncertainty <= thresholds['uncertainty_max']:
+        if uncertainty <= thresholds["uncertainty_max"]:
             return f"unc={uncertainty:.2f}<={thresholds['uncertainty_max']}, from {phase}"
-        return ''
+        return ""
 
     except Exception:
-        return ''  # Fail-closed: if we can't read vectors, require normal gating
+        return ""  # Fail-closed: if we can't read vectors, require normal gating
 
 
 def _noetic_firewall_check(tool_name: str, tool_input: dict, hook_input: dict) -> tuple | None:
@@ -1943,33 +2244,58 @@ def _noetic_firewall_check(tool_name: str, tool_input: dict, hook_input: dict) -
     or None if the tool is not noetic (caller continues with praxic gating).
     """
     # Rule 1: Noetic tools always allowed (read/investigate)
-    if tool_name in NOETIC_TOOLS or tool_name in NOETIC_MCP_CHROME or tool_name in NOETIC_MCP_CORTEX or _is_empirica_mcp_tool(tool_name):
+    if (
+        tool_name in NOETIC_TOOLS
+        or tool_name in NOETIC_MCP_CHROME
+        or tool_name in NOETIC_MCP_CORTEX
+        or _is_empirica_mcp_tool(tool_name)
+    ):
         return (True, f"Noetic tool: {tool_name}")
 
     # Rule 2: Safe Bash commands always allowed (read-only shell)
-    if tool_name == 'Bash' and is_safe_bash_command(tool_input):
+    if tool_name == "Bash" and is_safe_bash_command(tool_input):
         return (True, "Safe Bash (read-only)")
 
     # Rule 2b: Plan file writes are noetic (planning is investigation, not execution)
     # Claude Code writes plan files to ~/.claude/plans/ during plan mode.
     # These should be allowed without CHECK since planning is inherently noetic work.
-    if tool_name in ('Write', 'Edit') and is_plan_file(tool_input):
+    if tool_name in ("Write", "Edit") and is_plan_file(tool_input):
         return (True, f"Plan file write (noetic): {tool_name}")
 
     # Rule 2c: CONFIDENCE GATE for praxic remote commands (SSH writes, scp uploads, etc.)
     # Remote infra work doesn't produce local evidence for grounded verification,
     # so full PREFLIGHT/POSTFLIGHT is meaningless. Instead, apply lightweight
     # threshold check against latest vectors. No transaction overhead.
-    if tool_name == 'Bash' and tool_input:
-        command = tool_input.get('command', '')
+    if tool_name == "Bash" and tool_input:
+        command = tool_input.get("command", "")
         if command and _is_praxic_remote_command(command):
-            gate_result = _confidence_gate_remote(hook_input.get('session_id'))
+            gate_result = _confidence_gate_remote(hook_input.get("session_id"))
             if gate_result:
                 return (True, f"ConfidenceGate: remote infra ({gate_result})")
             # If gate fails, fall through to normal praxic gating
             # (user needs PREFLIGHT or higher confidence)
 
     return None
+
+
+def _in_linked_git_worktree() -> bool:
+    """True if CWD is inside a LINKED git worktree (vs the main checkout).
+
+    A linked worktree (`git worktree add`) marks its root with a `.git` *file*
+    (`gitdir: …/worktrees/…`), whereas the main checkout has a `.git` *directory*.
+    Pure filesystem stat — no subprocess — so it's cheap enough for the per-tool
+    PreToolUse path. Used as a worktree-aware subagent signal: isolation:worktree
+    subagents run here; the real practitioner runs in the main checkout.
+    """
+    try:
+        cwd = Path.cwd()
+        for d in [cwd, *cwd.parents]:
+            g = d / ".git"
+            if g.exists():
+                return g.is_file()  # file → linked worktree; dir → main checkout
+    except Exception:
+        pass
+    return False
 
 
 def _detect_subagent(claude_session_id: str) -> bool:
@@ -1994,13 +2320,13 @@ def _detect_subagent(claude_session_id: str) -> bool:
     Returns True if this is a confirmed subagent invocation.
     """
     try:
-        _aw_file = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+        _aw_file = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
         if _aw_file.exists():
             # Path 1: flag-based detection (post-fix subagents)
             try:
                 with open(_aw_file) as _awf:
                     _aw_data = json.load(_awf)
-                if _aw_data.get('is_subagent') is True:
+                if _aw_data.get("is_subagent") is True:
                     return True
             except Exception:
                 pass  # corrupt file → fall through to absence path
@@ -2011,28 +2337,38 @@ def _detect_subagent(claude_session_id: str) -> bool:
         # No active_work file for this claude_session_id — likely a subagent
         # (or session-init failed / project initialized mid-session).
         #
+        # Worktree-aware signal (ecodex prop_3dih #3, David architectural flag):
+        # isolation:worktree subagents run in a LINKED git worktree where the
+        # active_work lookup above fails — without this they fall through and risk
+        # mis-detection as the PARENT (then get measured, polluting parent state).
+        # Safe: the real practitioner runs in the main checkout and has its
+        # active_work (Path 1), so only genuine subagents reach this Path-2 branch.
+        if _in_linked_git_worktree():
+            return True
+
         # TIGHTENED CHECK (fixes #68): Don't just check if active_session exists —
         # verify its session matches the current transaction. Stale active_session
         # files from other projects/sessions cause false positive subagent detection.
         from empirica.utils.session_resolver import InstanceResolver as R
+
         _as_suffix = R.instance_suffix()
-        _as_file = Path.home() / '.empirica' / f'active_session{_as_suffix}'
+        _as_file = Path.home() / ".empirica" / f"active_session{_as_suffix}"
         if _as_file.exists():
             # Read the active_session to get its empirica_session_id
             try:
                 with open(_as_file) as _asf:
                     _as_data = json.load(_asf)
-                _as_session_id = _as_data.get('empirica_session_id')
+                _as_session_id = _as_data.get("empirica_session_id")
 
                 # Find the current transaction to compare session IDs
                 _tx_session_match = False
                 if _as_session_id:
                     # Check if any active_work file has this session
-                    for _aw_candidate in Path.home().glob('.empirica/active_work_*.json'):
+                    for _aw_candidate in Path.home().glob(".empirica/active_work_*.json"):
                         try:
                             with open(_aw_candidate) as _awf:
                                 _aw_data = json.load(_awf)
-                            if _aw_data.get('empirica_session_id') == _as_session_id:
+                            if _aw_data.get("empirica_session_id") == _as_session_id:
                                 _tx_session_match = True
                                 break
                         except Exception:
@@ -2051,8 +2387,9 @@ def _detect_subagent(claude_session_id: str) -> bool:
     return False
 
 
-def _check_postflight_loop_closed(cursor, session_id: str, current_transaction_id: str | None,
-                                  preflight_timestamp, tool_name: str, tool_input: dict) -> tuple | None:
+def _check_postflight_loop_closed(
+    cursor, session_id: str, current_transaction_id: str | None, preflight_timestamp, tool_name: str, tool_input: dict
+) -> tuple | None:
     """Check if the epistemic loop is closed (POSTFLIGHT exists after PREFLIGHT).
 
     Returns (status, message) if the loop is closed and a decision was made,
@@ -2060,17 +2397,23 @@ def _check_postflight_loop_closed(cursor, session_id: str, current_transaction_i
     """
     # Scope by transaction_id to prevent cross-instance bleed (multiple Claudes sharing session)
     if current_transaction_id:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT timestamp FROM reflexes
             WHERE session_id = ? AND phase = 'POSTFLIGHT' AND transaction_id = ?
             ORDER BY timestamp DESC LIMIT 1
-        """, (session_id, current_transaction_id))
+        """,
+            (session_id, current_transaction_id),
+        )
     else:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT timestamp FROM reflexes
             WHERE session_id = ? AND phase = 'POSTFLIGHT'
             ORDER BY timestamp DESC LIMIT 1
-        """, (session_id,))
+        """,
+            (session_id,),
+        )
     postflight_row = cursor.fetchone()
 
     if not postflight_row:
@@ -2086,8 +2429,8 @@ def _check_postflight_loop_closed(cursor, session_id: str, current_transaction_i
             # Allow read-only, empirica workflow, toggles, and transitions.
             # This enables artifact lifecycle between transactions:
             # goals-list, goals-complete, unknown-resolve, finding-log, etc.
-            if tool_name == 'Bash':
-                command = tool_input.get('command', '')
+            if tool_name == "Bash":
+                command = tool_input.get("command", "")
 
                 # Safe Bash (read-only + empirica workflow) — always allowed
                 # This is a safety net: Rule 2 should catch most of these,
@@ -2097,9 +2440,9 @@ def _check_postflight_loop_closed(cursor, session_id: str, current_transaction_i
 
                 # Toggle commands (pause/unpause)
                 toggle_action = is_toggle_command(command)
-                if toggle_action == 'pause':
+                if toggle_action == "pause":
                     return ("allow", "Sentinel self-exemption: pause toggle (loop closed)")
-                elif toggle_action == 'unpause':
+                elif toggle_action == "unpause":
                     return ("allow", "Sentinel self-exemption: unpause toggle")
 
                 # Transition commands (cd, session-create, project-bootstrap)
@@ -2114,31 +2457,69 @@ def _check_postflight_loop_closed(cursor, session_id: str, current_transaction_i
                 if is_safe_empirica_command(command):
                     return ("allow", "Empirica command between transactions (artifact lifecycle / read-only)")
 
-            return ("deny", "Epistemic loop closed (POSTFLIGHT completed). Run new PREFLIGHT to start next goal. Command: empirica preflight-submit - (JSON with vectors on stdin)")
+            return (
+                "deny",
+                "Epistemic loop closed (POSTFLIGHT completed). Run new PREFLIGHT to start next goal. Command: empirica preflight-submit - (JSON with vectors on stdin)",
+            )
     except (ValueError, TypeError):
         pass  # If timestamps can't be compared, continue with other checks
 
     return None
 
 
-def _validate_check_record(cursor, session_id: str, current_transaction_id, preflight_timestamp, tool_input: dict | None = None, tool_name: str = ""):
+def _validate_check_record(
+    cursor,
+    session_id: str,
+    current_transaction_id,
+    preflight_timestamp,
+    tool_input: dict | None = None,
+    tool_name: str = "",
+):
     """Lookup CHECK record, verify sequence, detect rushed assessments.
 
     Returns (know, uncertainty, decision, check_timestamp) on success,
     or ("deny", message) tuple on failure.
     """
+    # ── RECOVERY ESCAPE HATCH (ecodex prop_3dih #1, David-flagged) ──────────
+    # A firewall must NEVER gate its own escape hatch. Empirica's discipline /
+    # recovery verbs (check/postflight-submit, *-log, note, doctor) + noetic
+    # tools must ALWAYS pass — regardless of CHECK / rush / stuck state. The
+    # safe-command escapes below live only in the no-CHECK-row branch; without
+    # this hoist, a rushed assessment (short noetic + 0 artifacts) makes EVERY
+    # praxic call — INCLUDING the postflight that would clear it — deny "Rushed
+    # assessment", an unrecoverable deadlock. Covers both the no-CHECK-row and
+    # the has-CHECK-row (rush) paths.
+    if (
+        tool_name in NOETIC_TOOLS
+        or tool_name in NOETIC_MCP_CHROME
+        or tool_name in NOETIC_MCP_CORTEX
+        or _is_empirica_mcp_tool(tool_name)
+        or (
+            tool_name == "Bash"
+            and tool_input
+            and (is_safe_bash_command(tool_input) or is_safe_empirica_command(tool_input.get("command", "")))
+        )
+    ):
+        return None
+
     if current_transaction_id:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT know, uncertainty, reflex_data, timestamp
             FROM reflexes WHERE session_id = ? AND phase = 'CHECK' AND transaction_id = ?
             ORDER BY timestamp DESC LIMIT 1
-        """, (session_id, current_transaction_id))
+        """,
+            (session_id, current_transaction_id),
+        )
     else:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT know, uncertainty, reflex_data, timestamp
             FROM reflexes WHERE session_id = ? AND phase = 'CHECK'
             ORDER BY timestamp DESC LIMIT 1
-        """, (session_id,))
+        """,
+            (session_id,),
+        )
     check_row = cursor.fetchone()
 
     if not check_row:
@@ -2148,15 +2529,20 @@ def _validate_check_record(cursor, session_id: str, current_transaction_id, pref
         # praxic tools (Edit, Write, destructive Bash) get denied.
 
         # Always allow check-submit (creates the CHECK record)
-        if tool_input and 'check-submit' in tool_input.get('command', ''):
+        if tool_input and "check-submit" in tool_input.get("command", ""):
             return None
 
         # Noetic tools: silent pass (no message, no logging)
-        if tool_name in NOETIC_TOOLS or tool_name in NOETIC_MCP_CHROME or tool_name in NOETIC_MCP_CORTEX or _is_empirica_mcp_tool(tool_name):
+        if (
+            tool_name in NOETIC_TOOLS
+            or tool_name in NOETIC_MCP_CHROME
+            or tool_name in NOETIC_MCP_CORTEX
+            or _is_empirica_mcp_tool(tool_name)
+        ):
             return None
-        if tool_name == 'Bash' and is_safe_bash_command(tool_input):
+        if tool_name == "Bash" and is_safe_bash_command(tool_input):
             return None
-        if tool_name == 'Bash' and is_safe_empirica_command(tool_input.get('command', '')):
+        if tool_name == "Bash" and is_safe_empirica_command(tool_input.get("command", "")):
             return None
 
         # Praxic tools: deny (need CHECK first)
@@ -2169,21 +2555,30 @@ def _validate_check_record(cursor, session_id: str, current_transaction_id, pref
         check_ts = float(check_timestamp)
 
         if check_ts < preflight_ts:
-            return ("deny", "CHECK is from previous transaction (before current PREFLIGHT). Run CHECK to validate readiness.")
+            return (
+                "deny",
+                "CHECK is from previous transaction (before current PREFLIGHT). Run CHECK to validate readiness.",
+            )
 
         noetic_duration = check_ts - preflight_ts
-        min_duration = float(os.getenv('EMPIRICA_MIN_NOETIC_DURATION', '30'))
+        min_duration = float(os.getenv("EMPIRICA_MIN_NOETIC_DURATION", "30"))
 
         if noetic_duration < min_duration:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT COUNT(*) FROM project_findings
                 WHERE session_id = ? AND created_timestamp > ? AND created_timestamp < ?
-            """, (session_id, preflight_ts, check_ts))
+            """,
+                (session_id, preflight_ts, check_ts),
+            )
             findings = cursor.fetchone()[0]
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT COUNT(*) FROM project_unknowns
                 WHERE session_id = ? AND created_timestamp > ? AND created_timestamp < ?
-            """, (session_id, preflight_ts, check_ts))
+            """,
+                (session_id, preflight_ts, check_ts),
+            )
             unknowns = cursor.fetchone()[0]
             if findings == 0 and unknowns == 0:
                 return ("deny", f"Rushed assessment ({noetic_duration:.0f}s). Investigate and log learnings first.")
@@ -2193,64 +2588,76 @@ def _validate_check_record(cursor, session_id: str, current_transaction_id, pref
     decision = None
     if reflex_data:
         try:
-            decision = json.loads(reflex_data).get('decision')
+            decision = json.loads(reflex_data).get("decision")
         except Exception:
             pass
 
     return (know, uncertainty, decision, check_timestamp)
 
 
-def _check_prior_investigate(cursor, session_id: str, current_transaction_id, preflight_timestamp,
-                             tool_name: str, tool_input: dict) -> 'tuple | None':
+def _check_prior_investigate(
+    cursor, session_id: str, current_transaction_id, preflight_timestamp, tool_name: str, tool_input: dict
+) -> "tuple | None":
     """Advisory nudge if previous transaction ended with INVESTIGATE and no evidence gathered.
 
     INVESTIGATE is a suggestion to gather more evidence, not a hard gate.
     The user starting a new PREFLIGHT overrides it. All noetic tools always
     pass through. Praxic tools get a one-time ask (per transaction).
     """
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT json_extract(reflex_data, '$.decision') as decision, transaction_id
         FROM reflexes WHERE session_id = ? AND phase = 'CHECK'
         ORDER BY timestamp DESC LIMIT 1
-    """, (session_id,))
+    """,
+        (session_id,),
+    )
     prev_check = cursor.fetchone()
     if not prev_check:
         return None
 
     prev_decision, prev_tx_id = prev_check
-    if prev_decision != 'investigate' or prev_tx_id == current_transaction_id:
+    if prev_decision != "investigate" or prev_tx_id == current_transaction_id:
         return None
 
     # If findings have been logged, INVESTIGATE is satisfied — allow everything
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT COUNT(*) FROM project_findings
         WHERE session_id = ? AND created_timestamp > ?
-    """, (session_id, preflight_timestamp))
+    """,
+        (session_id, preflight_timestamp),
+    )
     if (cursor.fetchone()[0] or 0) > 0:
         return None
 
     # All noetic tools always allowed — INVESTIGATE means "investigate more",
     # not "stop using tools". Read, Grep, Glob, Bash grep/ls/cat, etc.
-    if tool_name in NOETIC_TOOLS or tool_name in NOETIC_MCP_CHROME or tool_name in NOETIC_MCP_CORTEX or _is_empirica_mcp_tool(tool_name):
+    if (
+        tool_name in NOETIC_TOOLS
+        or tool_name in NOETIC_MCP_CHROME
+        or tool_name in NOETIC_MCP_CORTEX
+        or _is_empirica_mcp_tool(tool_name)
+    ):
         return None  # Silent allow — don't even log it as a decision
-    if tool_name == 'Bash' and is_safe_bash_command(tool_input):
+    if tool_name == "Bash" and is_safe_bash_command(tool_input):
         return None  # Safe Bash is noetic
 
     # Only genuinely praxic tools (Edit, Write, destructive Bash) get ask
     return ("ask", "Previous CHECK returned INVESTIGATE. Consider running CHECK with proceed before praxic actions.")
 
 
-def _check_goalless_work(cursor, session_id: str, preflight_project_id, claude_session_id, empirica_root, suffix) -> str:
+def _check_goalless_work(
+    cursor, session_id: str, preflight_project_id, claude_session_id, empirica_root, suffix
+) -> str:
     """Check if transaction has tool calls but no goals. Returns nudge string or empty."""
     try:
         _gl_count = 0
         if empirica_root:
-            _gl_tx_file = _find_transaction_file(
-                empirica_root, suffix,
-                _resolve_empirica_session_id(claude_session_id))
+            _gl_tx_file = _find_transaction_file(empirica_root, suffix, _resolve_empirica_session_id(claude_session_id))
             if _gl_tx_file:
                 with open(_gl_tx_file) as _gl_f:
-                    _gl_count = json.load(_gl_f).get('tool_call_count', 0)
+                    _gl_count = json.load(_gl_f).get("tool_call_count", 0)
 
         if _gl_count < 5:
             return ""
@@ -2262,10 +2669,13 @@ def _check_goalless_work(cursor, session_id: str, preflight_project_id, claude_s
             _gl_project_id = _gl_row[0] if _gl_row else None
 
         if _gl_project_id:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT COUNT(*) FROM goals
                 WHERE project_id = ? AND status = 'in_progress'
-            """, (_gl_project_id,))
+            """,
+                (_gl_project_id,),
+            )
             if cursor.fetchone()[0] == 0:
                 if _gl_count >= 10:
                     return (
@@ -2283,20 +2693,26 @@ def _check_goalless_work(cursor, session_id: str, preflight_project_id, claude_s
     return ""
 
 
-def _check_project_context(cursor, db, session_id: str, preflight_project_id) -> 'tuple | None':
+def _check_project_context(cursor, db, session_id: str, preflight_project_id) -> "tuple | None":
     """Check if project context changed since PREFLIGHT. Returns (status, msg) or None."""
     current_project_id = _get_current_project_id(db, session_id)
     if not (current_project_id and preflight_project_id and current_project_id != preflight_project_id):
         return None
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT timestamp FROM reflexes
         WHERE session_id = ? AND phase = 'POSTFLIGHT' AND project_id = ?
         ORDER BY timestamp DESC LIMIT 1
-    """, (session_id, preflight_project_id))
+    """,
+        (session_id, preflight_project_id),
+    )
     prev_postflight = cursor.fetchone()
     if prev_postflight:
         return ("deny", "Project context changed. Run PREFLIGHT for new project.")
-    return ("deny", "Project context changed (previous loop unclosed - consider POSTFLIGHT). Run PREFLIGHT for new project.")
+    return (
+        "deny",
+        "Project context changed (previous loop unclosed - consider POSTFLIGHT). Run PREFLIGHT for new project.",
+    )
 
 
 def _handle_no_preflight(tool_name: str, tool_input: dict, session_id: str, env_annotation: str) -> tuple:
@@ -2309,15 +2725,16 @@ def _handle_no_preflight(tool_name: str, tool_input: dict, session_id: str, env_
     counter_file = None
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         suffix = R.instance_suffix()
-        counter_file = Path.home() / '.empirica' / f'pre_tx_calls{suffix}.json'
+        counter_file = Path.home() / ".empirica" / f"pre_tx_calls{suffix}.json"
         count = 0
         if counter_file.exists():
             with open(counter_file) as f:
-                count = json.load(f).get('count', 0)
+                count = json.load(f).get("count", 0)
         count += 1
-        with open(counter_file, 'w') as f:
-            json.dump({'count': count, 'session_id': session_id}, f)
+        with open(counter_file, "w") as f:
+            json.dump({"count": count, "session_id": session_id}, f)
         if count >= 10:
             pre_tx_nudge = f" STRONGLY RECOMMENDED: {count} tool calls without a transaction. Submit PREFLIGHT now — this work is unmeasured."
         elif count >= 5:
@@ -2325,24 +2742,27 @@ def _handle_no_preflight(tool_name: str, tool_input: dict, session_id: str, env_
     except Exception:
         pass
 
-    if tool_name == 'Bash':
-        command = tool_input.get('command', '')
+    if tool_name == "Bash":
+        command = tool_input.get("command", "")
         if is_safe_bash_command(tool_input):
             return ("allow", f"Safe Bash before PREFLIGHT (artifact review).{pre_tx_nudge}")
         if is_transition_command(command):
-            if 'preflight' in command.lower() and counter_file is not None:
+            if "preflight" in command.lower() and counter_file is not None:
                 try:
                     counter_file.unlink(missing_ok=True)
                 except Exception:
                     pass
             return ("allow", f"Transition command (no PREFLIGHT yet - starting new cycle).{pre_tx_nudge}")
 
-    return ("deny", f"No open transaction. Submit PREFLIGHT with your self-assessed vectors to begin measured work.{pre_tx_nudge}{env_annotation}")
+    return (
+        "deny",
+        f"No open transaction. Submit PREFLIGHT with your self-assessed vectors to begin measured work.{pre_tx_nudge}{env_annotation}",
+    )
 
 
-def _handle_investigate_continuation(decision: str, tool_name: str, tool_input: dict,
-                                     suffix: str, tx_file: Path | None,
-                                     db) -> tuple | None:
+def _handle_investigate_continuation(
+    decision: str, tool_name: str, tool_input: dict, suffix: str, tx_file: Path | None, db
+) -> tuple | None:
     """Handle the case where CHECK returned 'investigate'.
 
     Noetic tools and safe Bash (read-only) are still allowed —
@@ -2355,7 +2775,7 @@ def _handle_investigate_continuation(decision: str, tool_name: str, tool_input: 
 
     Returns (status, message) if a decision was made, or None if not in investigate state.
     """
-    if decision != 'investigate':
+    if decision != "investigate":
         return None
 
     # INVESTIGATE COOL-DOWN: Track noetic tool calls since investigate.
@@ -2366,7 +2786,7 @@ def _handle_investigate_continuation(decision: str, tool_name: str, tool_input: 
     # Resolve counters file path (co-located with transaction file)
     _inv_counters_path = None
     if tx_file:
-        _inv_counters_path = tx_file.parent / f'hook_counters{suffix}.json'
+        _inv_counters_path = tx_file.parent / f"hook_counters{suffix}.json"
 
     def _read_inv_counters():
         if not _inv_counters_path or not _inv_counters_path.exists():
@@ -2382,38 +2802,49 @@ def _handle_investigate_continuation(decision: str, tool_name: str, tool_input: 
             return
         try:
             import tempfile
+
             _fd, _tmp = tempfile.mkstemp(dir=str(_inv_counters_path.parent))
-            with os.fdopen(_fd, 'w') as _tf:
+            with os.fdopen(_fd, "w") as _tf:
                 json.dump(data, _tf, indent=2)
             os.rename(_tmp, str(_inv_counters_path))
         except Exception:
             pass
 
-    if tool_name in NOETIC_TOOLS or tool_name in NOETIC_MCP_CHROME or tool_name in NOETIC_MCP_CORTEX or _is_empirica_mcp_tool(tool_name):
+    if (
+        tool_name in NOETIC_TOOLS
+        or tool_name in NOETIC_MCP_CHROME
+        or tool_name in NOETIC_MCP_CORTEX
+        or _is_empirica_mcp_tool(tool_name)
+    ):
         # Increment noetic counter in hook counters file
         _inv_c = _read_inv_counters()
-        _inv_c['noetic_since_investigate'] = _inv_c.get('noetic_since_investigate', 0) + 1
+        _inv_c["noetic_since_investigate"] = _inv_c.get("noetic_since_investigate", 0) + 1
         _write_inv_counters(_inv_c)
         return ("allow", f"Noetic tool during investigation phase: {tool_name}")
-    if tool_name == 'Bash' and is_safe_bash_command(tool_input):
-        command = tool_input.get('command', '')
+    if tool_name == "Bash" and is_safe_bash_command(tool_input):
+        command = tool_input.get("command", "")
         # Block check-submit if insufficient noetic work since investigate
-        if 'check-submit' in command or 'check ' in command:
+        if "check-submit" in command or "check " in command:
             _inv_c = _read_inv_counters()
-            _inv_noetic = _inv_c.get('noetic_since_investigate', 0)
+            _inv_noetic = _inv_c.get("noetic_since_investigate", 0)
             if _inv_noetic < MIN_NOETIC_AFTER_INVESTIGATE:
-                return ("deny",
+                return (
+                    "deny",
                     "Previous transaction ended with INVESTIGATE. "
-                    "Show evidence of investigation (findings) or submit CHECK with proceed decision.")
+                    "Show evidence of investigation (findings) or submit CHECK with proceed decision.",
+                )
         # Increment noetic counter for safe bash (read-only investigation)
         _inv_c = _read_inv_counters()
-        _inv_c['noetic_since_investigate'] = _inv_c.get('noetic_since_investigate', 0) + 1
+        _inv_c["noetic_since_investigate"] = _inv_c.get("noetic_since_investigate", 0) + 1
         _write_inv_counters(_inv_c)
         return ("allow", "Safe Bash during investigation phase (read-only)")
     # ADVISORY MODE: Sentinel surfaces the investigate recommendation but lets the AI decide.
     # The AI sees the message and can choose to investigate more or proceed with awareness.
     # This is a measurement system, not a rules-based gate — the holistic judgment is the AI's.
-    return ("allow", "ADVISORY: CHECK returned 'investigate'. Predictions in this domain may be ungrounded. Sentinel recommends noetic (read-only) work to gather grounding evidence before acting.")
+    return (
+        "allow",
+        "ADVISORY: CHECK returned 'investigate'. Predictions in this domain may be ungrounded. Sentinel recommends noetic (read-only) work to gather grounding evidence before acting.",
+    )
 
 
 def _track_tool_usage(hook_input: dict, tool_name: str, tool_input: dict) -> None:
@@ -2425,11 +2856,11 @@ def _track_tool_usage(hook_input: dict, tool_name: str, tool_input: dict) -> Non
     """
     global _autonomy_nudge, _reread_nudge
     try:
-        _claude_sid = hook_input.get('session_id')
+        _claude_sid = hook_input.get("session_id")
         # Only increment for sessions with active_work (parent sessions).
         # Subagent tool calls are counted from transcript by SubagentStop and
         # added to parent's delegated_tool_calls — no double-counting.
-        _aw_check = Path.home() / '.empirica' / f'active_work_{_claude_sid}.json'
+        _aw_check = Path.home() / ".empirica" / f"active_work_{_claude_sid}.json"
         if _claude_sid and _aw_check.exists():
             _count, _avg = _try_increment_tool_count(_claude_sid, tool_name, tool_input)
             _autonomy_nudge = _compute_nudge(_count, _avg)
@@ -2438,23 +2869,22 @@ def _track_tool_usage(hook_input: dict, tool_name: str, tool_input: dict) -> Non
 
     # _try_increment_tool_count sets _last_read_count when tracking Read tool calls.
     # Advisory only — never blocks. Helps AI conserve context window.
-    if tool_name == 'Read' and _last_read_count > 1:
-        _rd_fp = (tool_input or {}).get('file_path', '')
-        _short = Path(_rd_fp).name if _rd_fp else 'file'
+    if tool_name == "Read" and _last_read_count > 1:
+        _rd_fp = (tool_input or {}).get("file_path", "")
+        _short = Path(_rd_fp).name if _rd_fp else "file"
         _reread_nudge = f"Re-reading {_short} ({_last_read_count}x this tx). Consider using cached knowledge."
 
 
-def _set_file_relevance_nudge(tool_name: str, tool_input: dict | None,
-                                claude_session_id: str | None) -> None:
+def _set_file_relevance_nudge(tool_name: str, tool_input: dict | None, claude_session_id: str | None) -> None:
     """For Edit/Write/MultiEdit: surface artifacts that already mention the
     target file so the AI sees prior knowledge before overwriting.
 
     Advisory only. Never raises. Caps at ~50ms via per-table query limits.
     """
     global _file_relevance_nudge
-    if tool_name not in ('Edit', 'Write', 'MultiEdit') or not tool_input:
+    if tool_name not in ("Edit", "Write", "MultiEdit") or not tool_input:
         return
-    fp = tool_input.get('file_path') or ''
+    fp = tool_input.get("file_path") or ""
     if not fp:
         return
 
@@ -2493,7 +2923,7 @@ def _check_exemptions(hook_input: dict, tool_name: str) -> tuple | None:
     Returns (decision, reason) if an exemption applies, or None to continue gating.
     """
     # Rule 3a: SUBAGENT EXEMPTION - subagents bypass gating (parent CHECK authorized spawn)
-    claude_session_id = hook_input.get('session_id')
+    claude_session_id = hook_input.get("session_id")
     if claude_session_id and _detect_subagent(claude_session_id):
         return ("allow", f"Subagent exemption: {tool_name} (no active_work for {claude_session_id[:8]})")
 
@@ -2503,12 +2933,12 @@ def _check_exemptions(hook_input: dict, tool_name: str) -> tuple | None:
 
     # Check if sentinel looping is disabled (escape hatch)
     # Priority: file flag > env var (file is dynamically settable, env var requires restart)
-    sentinel_flag = Path.home() / '.empirica' / 'sentinel_enabled'
+    sentinel_flag = Path.home() / ".empirica" / "sentinel_enabled"
     if sentinel_flag.exists():
         flag_val = sentinel_flag.read_text().strip().lower()
-        if flag_val == 'false':
+        if flag_val == "false":
             return ("allow", "Sentinel disabled (file flag)")
-    elif os.getenv('EMPIRICA_SENTINEL_LOOPING', 'true').lower() == 'false':
+    elif os.getenv("EMPIRICA_SENTINEL_LOOPING", "true").lower() == "false":
         return ("allow", "Sentinel disabled (env var)")
 
     return None
@@ -2517,14 +2947,10 @@ def _check_exemptions(hook_input: dict, tool_name: str) -> tuple | None:
 def _build_env_annotation() -> str:
     """Detect remote/container/CI environments and build annotation string."""
     env_context = detect_environment()
-    if not (env_context['is_remote'] or env_context['is_container'] or env_context['is_ci']):
+    if not (env_context["is_remote"] or env_context["is_container"] or env_context["is_ci"]):
         return ""
-    env_type = (
-        "SSH" if env_context['is_remote']
-        else "container" if env_context['is_container']
-        else "CI"
-    )
-    if env_context['is_trusted']:
+    env_type = "SSH" if env_context["is_remote"] else "container" if env_context["is_container"] else "CI"
+    if env_context["is_trusted"]:
         return f" [REMOTE:{env_type}:trusted ({env_context['trust_source']})]"
     return (
         f" [REMOTE:{env_type}:UNTRUSTED — {env_context['trust_source']}. "
@@ -2552,13 +2978,14 @@ def _resolve_empirica_root(claude_session_id: str | None) -> Path | None:
     # gated behind EMPIRICA_CWD_RELIABLE for CLI commands where CWD IS reliable.
     project_root = resolve_project_root(claude_session_id=claude_session_id)
     if project_root:
-        empirica_root = project_root / '.empirica'
+        empirica_root = project_root / ".empirica"
         os.chdir(project_root)  # Set CWD to the correct project
         return empirica_root
 
     # Fallback to path_resolver if priority chain fails
     try:
         from empirica.config.path_resolver import get_empirica_root  # type: ignore[import-not-found]
+
         empirica_root = get_empirica_root()
         if empirica_root.exists():
             os.chdir(empirica_root.parent)
@@ -2568,8 +2995,9 @@ def _resolve_empirica_root(claude_session_id: str | None) -> Path | None:
         sys.exit(0)
 
 
-def _read_transaction_state(empirica_root: Path | None, claude_session_id: str | None,
-                            tool_name: str, tool_input: dict) -> dict:
+def _read_transaction_state(
+    empirica_root: Path | None, claude_session_id: str | None, tool_name: str, tool_input: dict
+) -> dict:
     """Read active transaction file and handle closed transactions.
 
     Returns dict with keys: current_transaction_id, tx_session_id, tx_file,
@@ -2578,24 +3006,25 @@ def _read_transaction_state(empirica_root: Path | None, claude_session_id: str |
     If the transaction is closed, responds and exits directly (closed-tx short-circuit).
     """
     result = {
-        'current_transaction_id': None,
-        'tx_session_id': None,
-        'tx_file': None,
-        'suffix': '',
-        '_current_work_type': None,
-        '_current_domain': None,
-        '_current_criticality': None,
+        "current_transaction_id": None,
+        "tx_session_id": None,
+        "tx_file": None,
+        "suffix": "",
+        "_current_work_type": None,
+        "_current_domain": None,
+        "_current_criticality": None,
     }
 
     if not empirica_root:
         return result
 
     from empirica.utils.session_resolver import InstanceResolver as R
+
     suffix = R.instance_suffix()
-    result['suffix'] = suffix
+    result["suffix"] = suffix
     empirica_session_id = _resolve_empirica_session_id(claude_session_id)
     tx_file = _find_transaction_file(empirica_root, suffix, empirica_session_id)
-    result['tx_file'] = str(tx_file) if tx_file else None
+    result["tx_file"] = str(tx_file) if tx_file else None
 
     if not tx_file:
         return result
@@ -2609,22 +3038,22 @@ def _read_transaction_state(empirica_root: Path | None, claude_session_id: str |
         # This allows post-compact to resolve the correct project even after
         # the loop closes. The file is overwritten by the next PREFLIGHT.
         # See: docs/architecture/instance_isolation/KNOWN_ISSUES.md
-        tx_candidate_session = tx_data.get('session_id')
-        _tx_closed = tx_data.get('status') != 'open'
+        tx_candidate_session = tx_data.get("session_id")
+        _tx_closed = tx_data.get("status") != "open"
 
         # Only use open transactions for gating; closed ones are just project anchors
         if not _tx_closed:
-            result['current_transaction_id'] = tx_data.get('transaction_id')
-            result['tx_session_id'] = tx_candidate_session
+            result["current_transaction_id"] = tx_data.get("transaction_id")
+            result["tx_session_id"] = tx_candidate_session
             # Extract work_type, domain, criticality for domain-aware gating
-            result['_current_work_type'] = tx_data.get('work_type')
-            result['_current_domain'] = tx_data.get('domain')
-            result['_current_criticality'] = tx_data.get('criticality')
+            result["_current_work_type"] = tx_data.get("work_type")
+            result["_current_domain"] = tx_data.get("domain")
+            result["_current_criticality"] = tx_data.get("criticality")
             # Set module-level work_type for is_safe_bash_command() expansion
             global _current_work_type, _worktype_nudge, _worktype_nudged
-            _current_work_type = result['_current_work_type']
+            _current_work_type = result["_current_work_type"]
             # Nudge once if PREFLIGHT omitted work_type
-            if not result['_current_work_type'] and not _worktype_nudged:
+            if not result["_current_work_type"] and not _worktype_nudged:
                 _worktype_nudged = True
                 _worktype_nudge = (
                     "WORK-TYPE: No work_type set in PREFLIGHT. Consider setting "
@@ -2649,24 +3078,31 @@ def _handle_closed_transaction(tool_name: str, tool_input: dict) -> None:
     Allow noetic tools (Read, Grep, Glob, etc.) and safe Bash
     to pass — only block praxic actions.
     """
-    if tool_name == 'Bash':
+    if tool_name == "Bash":
         if is_safe_bash_command(tool_input):
             respond("allow", "Safe Bash (transaction closed, artifact lifecycle)")
             sys.exit(0)
-        command = tool_input.get('command', '')
+        command = tool_input.get("command", "")
         if is_transition_command(command):
             respond("allow", "Transition command (starting new cycle)")
             sys.exit(0)
-    elif tool_name in NOETIC_TOOLS or tool_name in NOETIC_MCP_CHROME or tool_name in NOETIC_MCP_CORTEX or _is_empirica_mcp_tool(tool_name):
+    elif (
+        tool_name in NOETIC_TOOLS
+        or tool_name in NOETIC_MCP_CHROME
+        or tool_name in NOETIC_MCP_CORTEX
+        or _is_empirica_mcp_tool(tool_name)
+    ):
         respond("allow", "Noetic tool (transaction closed)")
         sys.exit(0)
     # Praxic tool with closed transaction → correct error message
-    respond("deny", "Epistemic loop closed (POSTFLIGHT completed). Run new PREFLIGHT to start next goal. Command: empirica preflight-submit - (JSON with vectors on stdin)")
+    respond(
+        "deny",
+        "Epistemic loop closed (POSTFLIGHT completed). Run new PREFLIGHT to start next goal. Command: empirica preflight-submit - (JSON with vectors on stdin)",
+    )
     sys.exit(0)
 
 
-def _resolve_session(tx_session_id: str | None, claude_session_id: str | None,
-                     env_annotation: str) -> str | None:
+def _resolve_session(tx_session_id: str | None, claude_session_id: str | None, env_annotation: str) -> str | None:
     """Resolve empirica session_id from transaction, active_work, or TTY fallback.
 
     Returns session_id, or None after responding with a warning and exiting.
@@ -2677,11 +3113,11 @@ def _resolve_session(tx_session_id: str | None, claude_session_id: str | None,
     if not session_id and claude_session_id:
         # Priority 1: active_work file (updated by PREFLIGHT, project-switch)
         try:
-            active_work_file = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+            active_work_file = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
             if active_work_file.exists():
                 with open(active_work_file) as f:
                     work_data = json.load(f)
-                session_id = work_data.get('empirica_session_id')
+                session_id = work_data.get("empirica_session_id")
         except Exception:
             pass
 
@@ -2690,6 +3126,7 @@ def _resolve_session(tx_session_id: str | None, claude_session_id: str | None,
         # Uses canonical resolver which has the full fallback chain
         try:
             from empirica.utils.session_resolver import InstanceResolver as R
+
             session_id = R.session_id(claude_session_id)
         except Exception:
             pass
@@ -2699,10 +3136,14 @@ def _resolve_session(tx_session_id: str | None, claude_session_id: str | None,
         # 'claude-code' the user would then have to correct by hand.
         try:
             from empirica.utils.session_resolver import InstanceResolver as R
-            hint_ai_id = R.ai_id() or 'claude-code'
+
+            hint_ai_id = R.ai_id() or "claude-code"
         except Exception:
-            hint_ai_id = 'claude-code'
-        respond("allow", f"WARNING: No session found. Run: empirica session-create --ai-id {hint_ai_id} && empirica preflight-submit -{env_annotation}")
+            hint_ai_id = "claude-code"
+        respond(
+            "allow",
+            f"WARNING: No session found. Run: empirica session-create --ai-id {hint_ai_id} && empirica preflight-submit -{env_annotation}",
+        )
         sys.exit(0)
 
     return session_id
@@ -2715,23 +3156,35 @@ def _lookup_preflight(cursor, session_id: str, current_transaction_id: str | Non
     or None if no PREFLIGHT found.
     """
     if current_transaction_id:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT know, uncertainty, timestamp, project_id FROM reflexes
             WHERE session_id = ? AND phase = 'PREFLIGHT' AND transaction_id = ?
             ORDER BY timestamp DESC LIMIT 1
-        """, (session_id, current_transaction_id))
+        """,
+            (session_id, current_transaction_id),
+        )
     else:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT know, uncertainty, timestamp, project_id FROM reflexes
             WHERE session_id = ? AND phase = 'PREFLIGHT'
             ORDER BY timestamp DESC LIMIT 1
-        """, (session_id,))
+        """,
+            (session_id,),
+        )
     return cursor.fetchone()
 
 
-def _check_auto_proceed(raw_know: float, raw_unc: float, db, tx_file,
-                        _current_domain: str | None, _current_criticality: str | None,
-                        env_annotation: str) -> tuple | None:
+def _check_auto_proceed(
+    raw_know: float,
+    raw_unc: float,
+    db,
+    tx_file,
+    _current_domain: str | None,
+    _current_criticality: str | None,
+    env_annotation: str,
+) -> tuple | None:
     """Check if PREFLIGHT vectors pass the auto-proceed threshold.
 
     Returns (decision, reason) if auto-proceed applies, or None to continue.
@@ -2748,7 +3201,10 @@ def _check_auto_proceed(raw_know: float, raw_unc: float, db, tx_file,
         _domain_info = ""
         if _current_domain or _current_criticality:
             _domain_info = f" [{_current_domain or 'default'}/{_current_criticality or 'medium'}]"
-        return ("allow", f"PREFLIGHT confidence sufficient - proceeding (threshold: U<={_domain_unc:.0%}{_domain_info}){env_annotation}")
+        return (
+            "allow",
+            f"PREFLIGHT confidence sufficient - proceeding (threshold: U<={_domain_unc:.0%}{_domain_info}){env_annotation}",
+        )
     return None
 
 
@@ -2759,12 +3215,14 @@ def _check_expiry_and_compact(check_timestamp, empirica_root: Path | None) -> tu
     """
     check_time = None
 
-    if os.getenv('EMPIRICA_SENTINEL_CHECK_EXPIRY', 'false').lower() == 'true':
+    if os.getenv("EMPIRICA_SENTINEL_CHECK_EXPIRY", "false").lower() == "true":
         try:
-            if isinstance(check_timestamp, (int, float)) or (isinstance(check_timestamp, str) and check_timestamp.replace('.', '').isdigit()):
+            if isinstance(check_timestamp, (int, float)) or (
+                isinstance(check_timestamp, str) and check_timestamp.replace(".", "").isdigit()
+            ):
                 check_time = datetime.fromtimestamp(float(check_timestamp))
             else:
-                check_time = datetime.fromisoformat(check_timestamp.replace('Z', '+00:00').replace('+00:00', ''))
+                check_time = datetime.fromisoformat(check_timestamp.replace("Z", "+00:00").replace("+00:00", ""))
             age_minutes = (datetime.now() - check_time).total_seconds() / 60
 
             if age_minutes > MAX_CHECK_AGE_MINUTES:
@@ -2772,7 +3230,7 @@ def _check_expiry_and_compact(check_timestamp, empirica_root: Path | None) -> tu
         except Exception:
             pass
 
-    if os.getenv('EMPIRICA_SENTINEL_COMPACT_INVALIDATION', 'false').lower() == 'true':
+    if os.getenv("EMPIRICA_SENTINEL_COMPACT_INVALIDATION", "false").lower() == "true":
         if empirica_root:
             last_compact = get_last_compact_timestamp(empirica_root.parent)
             if last_compact and check_time and last_compact > check_time:
@@ -2793,7 +3251,10 @@ def _evaluate_check_threshold(know, uncertainty, db, env_annotation: str) -> tup
     if raw_check_know >= _dyn_know and raw_check_unc <= _dyn_unc:
         return ("allow", f"CHECK passed - proceeding (threshold: K>={_dyn_know:.0%} U<={_dyn_unc:.0%}){env_annotation}")
     # ADVISORY MODE: Surface the gap but let the AI proceed with awareness.
-    return ("allow", f"ADVISORY: Prediction groundedness below threshold (K={raw_check_know:.0%} vs {_dyn_know:.0%}, U={raw_check_unc:.0%} vs {_dyn_unc:.0%}). Consider gathering more grounding evidence.{env_annotation}")
+    return (
+        "allow",
+        f"ADVISORY: Prediction groundedness below threshold (K={raw_check_know:.0%} vs {_dyn_know:.0%}, U={raw_check_unc:.0%} vs {_dyn_unc:.0%}). Consider gathering more grounding evidence.{env_annotation}",
+    )
 
 
 def _run_authorization_pipeline(hook_input: dict, tool_name: str, tool_input: dict) -> tuple[str, str]:
@@ -2803,19 +3264,20 @@ def _run_authorization_pipeline(hook_input: dict, tool_name: str, tool_input: di
     Returns (decision, message) tuple for respond(). db is closed internally.
     """
     env_annotation = _build_env_annotation()
-    claude_session_id = hook_input.get('session_id')
+    claude_session_id = hook_input.get("session_id")
 
     empirica_root = _resolve_empirica_root(claude_session_id)
     tx_state = _read_transaction_state(empirica_root, claude_session_id, tool_name, tool_input)
-    current_transaction_id = tx_state['current_transaction_id']
-    suffix = tx_state['suffix']
-    tx_file = tx_state['tx_file']
+    current_transaction_id = tx_state["current_transaction_id"]
+    suffix = tx_state["suffix"]
+    tx_file = tx_state["tx_file"]
 
-    session_id = _resolve_session(tx_state['tx_session_id'], claude_session_id, env_annotation)
+    session_id = _resolve_session(tx_state["tx_session_id"], claude_session_id, env_annotation)
     if not session_id:
         return ("allow", "No session resolved — sentinel inactive")
 
     from empirica.data.session_database import SessionDatabase  # type: ignore[import-not-found]
+
     db = SessionDatabase()
     if db.conn is None:
         return ("allow", "No database connection — sentinel inactive")
@@ -2823,7 +3285,7 @@ def _run_authorization_pipeline(hook_input: dict, tool_name: str, tool_input: di
 
     try:
         # Optional: Bootstrap requirement
-        if os.getenv('EMPIRICA_SENTINEL_REQUIRE_BOOTSTRAP', 'false').lower() == 'true':
+        if os.getenv("EMPIRICA_SENTINEL_REQUIRE_BOOTSTRAP", "false").lower() == "true":
             cursor.execute("SELECT project_id FROM sessions WHERE session_id = ?", (session_id,))
             row = cursor.fetchone()
             if not row or not row[0]:
@@ -2839,33 +3301,42 @@ def _run_authorization_pipeline(hook_input: dict, tool_name: str, tool_input: di
         # Goalless-work advisory nudge
         global _goalless_nudge
         _goalless_nudge = _check_goalless_work(
-            cursor, session_id, preflight_project_id, claude_session_id, empirica_root, suffix)
+            cursor, session_id, preflight_project_id, claude_session_id, empirica_root, suffix
+        )
 
         # Sequential pre-CHECK validations
         for check in (
             _check_project_context(cursor, db, session_id, preflight_project_id),
             _check_postflight_loop_closed(
-                cursor, session_id, current_transaction_id, preflight_timestamp, tool_name, tool_input),
+                cursor, session_id, current_transaction_id, preflight_timestamp, tool_name, tool_input
+            ),
             _check_prior_investigate(
-                cursor, session_id, current_transaction_id, preflight_timestamp, tool_name, tool_input),
+                cursor, session_id, current_transaction_id, preflight_timestamp, tool_name, tool_input
+            ),
             _check_auto_proceed(
-                preflight_know or 0, preflight_uncertainty or 1, db, tx_file,
-                tx_state['_current_domain'], tx_state['_current_criticality'], env_annotation),
+                preflight_know or 0,
+                preflight_uncertainty or 1,
+                db,
+                tx_file,
+                tx_state["_current_domain"],
+                tx_state["_current_criticality"],
+                env_annotation,
+            ),
         ):
             if check:
                 return check
 
         # CHECK validation: returns None (silent pass), len-2 tuple (deny), or len-4 tuple (success)
         check_result = _validate_check_record(
-            cursor, session_id, current_transaction_id, preflight_timestamp, tool_input, tool_name)
+            cursor, session_id, current_transaction_id, preflight_timestamp, tool_input, tool_name
+        )
         if check_result is None:
             return ("allow", "")
         if len(check_result) == 2:
             return (check_result[0], check_result[1])
         know, uncertainty, decision, check_timestamp = check_result
 
-        investigate_result = _handle_investigate_continuation(
-            decision, tool_name, tool_input, suffix, tx_file, db)
+        investigate_result = _handle_investigate_continuation(decision, tool_name, tool_input, suffix, tx_file, db)
         if investigate_result:
             return investigate_result
 
@@ -2899,9 +3370,9 @@ def _check_proportionality_budget(hook_input: dict, tool_name: str) -> str | Non
     Fail-quiet: any IO/JSON/path error returns None — we never block on
     our own state plumbing.
     """
-    if tool_name not in ('Read', 'Grep', 'Glob'):
+    if tool_name not in ("Read", "Grep", "Glob"):
         return None
-    session_id = hook_input.get('session_id', '')
+    session_id = hook_input.get("session_id", "")
     if not session_id:
         return None
     path = _proportionality_state_path(session_id)
@@ -2937,7 +3408,7 @@ def _check_proportionality_budget(hook_input: dict, tool_name: str) -> str | Non
             f"({count} read/grep/glob calls since the hypothesis-bearing prompt; "
             f"limit={limit}). The user gave you a hypothesis to test. "
             f"Your next action MUST be: (1) state the hypothesis explicitly "
-            f"in your reply (\"Hypothesis: ...\"), (2) run a single "
+            f'in your reply ("Hypothesis: ..."), (2) run a single '
             f"bash/grep/read that confirms or disconfirms it. "
             f"Survey-mode is blocked until the next user prompt resets "
             f"the budget. If you genuinely need to map this subsystem first, "
@@ -2949,15 +3420,15 @@ def _check_proportionality_budget(hook_input: dict, tool_name: str) -> str | Non
 
 def main():
     try:
-        hook_input = json.loads(sys.stdin.read() or '{}')
+        hook_input = json.loads(sys.stdin.read() or "{}")
     except Exception:
         hook_input = {}
 
-    tool_name = hook_input.get('tool_name', 'unknown')
-    tool_input = hook_input.get('tool_input', {})
+    tool_name = hook_input.get("tool_name", "unknown")
+    tool_input = hook_input.get("tool_input", {})
 
     _track_tool_usage(hook_input, tool_name, tool_input)
-    _set_file_relevance_nudge(tool_name, tool_input, hook_input.get('session_id'))
+    _set_file_relevance_nudge(tool_name, tool_input, hook_input.get("session_id"))
 
     # Tx-AG: investigation-proportionality budget enforcement. When
     # tool-router.py armed the budget on a hypothesis-bearing prompt,
@@ -2987,7 +3458,7 @@ def main():
     sys.exit(0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         main()
     except Exception as e:
@@ -3005,6 +3476,7 @@ if __name__ == '__main__':
         # failure mode than a noisy block. Default unchanged for dev.
         import os as _os
         import sys as _sys
+
         _sys.stderr.write(f"SENTINEL_CRASH: {type(e).__name__}: {e}\n")
         fail_closed = _os.environ.get("EMPIRICA_SENTINEL_FAIL_CLOSED", "").strip().lower() in {"1", "true", "yes"}
         if fail_closed:

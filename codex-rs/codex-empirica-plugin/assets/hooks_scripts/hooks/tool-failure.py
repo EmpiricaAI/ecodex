@@ -15,28 +15,28 @@ import subprocess
 import sys
 from pathlib import Path
 
-LOG_DIR = Path.home() / '.empirica' / 'logs'
+LOG_DIR = Path.home() / ".empirica" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-logger = logging.getLogger('empirica.tool-failure')
-handler = logging.FileHandler(LOG_DIR / 'tool-failure.log')
-handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+logger = logging.getLogger("empirica.tool-failure")
+handler = logging.FileHandler(LOG_DIR / "tool-failure.log")
+handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.DEBUG)
 
 # Tool failures that are noise (not worth logging as dead-ends)
 IGNORE_TOOLS = {
-    'Read',       # File not found is normal exploration
-    'Glob',       # No matches is normal
-    'Grep',       # No matches is normal
-    'LSP',        # LSP failures are common and transient
+    "Read",  # File not found is normal exploration
+    "Glob",  # No matches is normal
+    "Grep",  # No matches is normal
+    "LSP",  # LSP failures are common and transient
 }
 
 # Error patterns that are noise
 IGNORE_PATTERNS = [
-    'No such file or directory',
-    'No matches found',
-    'not a tty',
-    'Permission denied',  # Usually sandbox, not a real dead-end
+    "No such file or directory",
+    "No matches found",
+    "not a tty",
+    "Permission denied",  # Usually sandbox, not a real dead-end
 ]
 
 
@@ -53,7 +53,7 @@ def _is_interesting_failure(tool_name: str, error: str) -> bool:
 
 def _truncate(s: str, max_len: int = 200) -> str:
     """Truncate string for logging."""
-    return s[:max_len] + '...' if len(s) > max_len else s
+    return s[:max_len] + "..." if len(s) > max_len else s
 
 
 def main():
@@ -62,10 +62,10 @@ def main():
     except (json.JSONDecodeError, EOFError):
         hook_input = {}
 
-    tool_name = hook_input.get('tool_name', 'unknown')
-    tool_input = hook_input.get('tool_input', {})
-    error = hook_input.get('error', '')
-    is_interrupt = hook_input.get('is_interrupt', False)
+    tool_name = hook_input.get("tool_name", "unknown")
+    tool_input = hook_input.get("tool_input", {})
+    error = hook_input.get("error", "")
+    is_interrupt = hook_input.get("is_interrupt", False)
 
     logger.info(f"ToolFailure: {tool_name} | interrupt={is_interrupt} | {_truncate(error, 100)}")
 
@@ -80,11 +80,11 @@ def main():
         sys.exit(0)
 
     # Build a meaningful description of what failed
-    if tool_name == 'Bash':
-        command = tool_input.get('command', 'unknown command')
+    if tool_name == "Bash":
+        command = tool_input.get("command", "unknown command")
         approach = f"Bash: {_truncate(command, 150)}"
-    elif tool_name in ('Edit', 'Write'):
-        file_path = tool_input.get('file_path', 'unknown file')
+    elif tool_name in ("Edit", "Write"):
+        file_path = tool_input.get("file_path", "unknown file")
         approach = f"{tool_name}: {file_path}"
     else:
         approach = f"{tool_name}: {_truncate(str(tool_input), 150)}"
@@ -94,10 +94,10 @@ def main():
     # Log as dead-end
     try:
         result = subprocess.run(
-            ['empirica', 'deadend-log',
-             '--approach', approach,
-             '--why-failed', why_failed],
-            capture_output=True, text=True, timeout=5
+            ["empirica", "deadend-log", "--approach", approach, "--why-failed", why_failed],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
             logger.info(f"  Logged dead-end: {approach}")
@@ -109,5 +109,5 @@ def main():
     sys.exit(0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

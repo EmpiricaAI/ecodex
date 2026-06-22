@@ -24,12 +24,13 @@ from pathlib import Path
 from typing import Any
 
 # Import shared utilities from plugin lib
-sys.path.insert(0, str(Path(__file__).parent.parent / 'lib'))
+sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from project_resolver import _get_instance_suffix, find_project_root, get_instance_id
 
 # Import epistemic summarizer for confidence-weighted context
 try:
     from epistemic_summarizer import format_epistemic_focus
+
     EPISTEMIC_SUMMARIZER_AVAILABLE = True
 except ImportError:
     EPISTEMIC_SUMMARIZER_AVAILABLE = False
@@ -45,14 +46,15 @@ def _temporal_trail_section(project_path: str | Path | None) -> str:
         cwd = Path(project_path) if project_path else Path.cwd()
         if not (cwd / ".git").exists():
             return ""
-        types = ("findings", "decisions", "dead_ends", "mistakes",
-                 "unknowns", "assumptions", "goals", "cascades")
+        types = ("findings", "decisions", "dead_ends", "mistakes", "unknowns", "assumptions", "goals", "cascades")
         total = 0
         for t in types:
             r = subprocess.run(
-                ["git", "for-each-ref", "--format=%(refname)",
-                 f"refs/notes/empirica/{t}/"],
-                cwd=cwd, capture_output=True, text=True, timeout=5,
+                ["git", "for-each-ref", "--format=%(refname)", f"refs/notes/empirica/{t}/"],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if r.returncode == 0:
                 total += sum(1 for line in r.stdout.split("\n") if line.strip())
@@ -69,9 +71,7 @@ def _temporal_trail_section(project_path: str | Path | None) -> str:
 
 
 def _write_active_transaction_for_new_conversation(
-    active_transaction: dict,
-    project_path: str,
-    instance_id: str | None = None
+    active_transaction: dict, project_path: str, instance_id: str | None = None
 ) -> bool:
     """
     Write active_transaction file for the NEW conversation after compaction.
@@ -91,23 +91,23 @@ def _write_active_transaction_for_new_conversation(
         suffix = _get_instance_suffix()
 
         if project_path:
-            tx_file = Path(project_path) / '.empirica' / f'active_transaction{suffix}.json'
+            tx_file = Path(project_path) / ".empirica" / f"active_transaction{suffix}.json"
         else:
-            tx_file = Path.home() / '.empirica' / f'active_transaction{suffix}.json'
+            tx_file = Path.home() / ".empirica" / f"active_transaction{suffix}.json"
 
         tx_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Update timestamp but preserve original transaction data
         tx_data = {
-            'transaction_id': active_transaction.get('transaction_id'),
-            'session_id': active_transaction.get('session_id'),
-            'preflight_timestamp': active_transaction.get('preflight_timestamp'),
-            'status': active_transaction.get('status', 'open'),
-            'project_path': project_path,
-            'updated_at': datetime.now().timestamp()
+            "transaction_id": active_transaction.get("transaction_id"),
+            "session_id": active_transaction.get("session_id"),
+            "preflight_timestamp": active_transaction.get("preflight_timestamp"),
+            "status": active_transaction.get("status", "open"),
+            "project_path": project_path,
+            "updated_at": datetime.now().timestamp(),
         }
 
-        with open(tx_file, 'w') as f:
+        with open(tx_file, "w") as f:
             json.dump(tx_data, f, indent=2)
 
         return True
@@ -116,10 +116,7 @@ def _write_active_transaction_for_new_conversation(
 
 
 def _write_active_work_for_new_conversation(
-    claude_session_id: str,
-    project_path: str,
-    empirica_session_id: str,
-    instance_id: str | None = None
+    claude_session_id: str, project_path: str, empirica_session_id: str, instance_id: str | None = None
 ) -> bool:
     """
     Write active_work file for the NEW conversation after compaction.
@@ -141,32 +138,32 @@ def _write_active_work_for_new_conversation(
 
         # Write active_work file only if we have claude_session_id (it's the filename key)
         if claude_session_id:
-            active_work_file = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+            active_work_file = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
             work_data = {
-                'project_path': project_path,
-                'folder_name': folder_name,
-                'claude_session_id': claude_session_id,
-                'empirica_session_id': empirica_session_id,
-                'source': 'post-compact',
-                'timestamp': datetime.now().isoformat(),
-                'timestamp_epoch': datetime.now().timestamp()
+                "project_path": project_path,
+                "folder_name": folder_name,
+                "claude_session_id": claude_session_id,
+                "empirica_session_id": empirica_session_id,
+                "source": "post-compact",
+                "timestamp": datetime.now().isoformat(),
+                "timestamp_epoch": datetime.now().timestamp(),
             }
-            with open(active_work_file, 'w') as f:
+            with open(active_work_file, "w") as f:
                 json.dump(work_data, f, indent=2)
             os.chmod(active_work_file, 0o600)
 
         # ALWAYS update instance_projects - instance_id isolation works even without claude_session_id
         # This is the primary isolation mechanism for multi-pane tmux setups
         if instance_id:
-            instance_file = Path.home() / '.empirica' / 'instance_projects' / f'{instance_id}.json'
+            instance_file = Path.home() / ".empirica" / "instance_projects" / f"{instance_id}.json"
             instance_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             instance_data = {
-                'project_path': project_path,
-                'claude_session_id': claude_session_id,  # May be null, that's OK
-                'empirica_session_id': empirica_session_id,
-                'timestamp': datetime.now().isoformat()
+                "project_path": project_path,
+                "claude_session_id": claude_session_id,  # May be null, that's OK
+                "empirica_session_id": empirica_session_id,
+                "timestamp": datetime.now().isoformat(),
             }
-            with open(instance_file, 'w') as f:
+            with open(instance_file, "w") as f:
                 json.dump(instance_data, f, indent=2)
             os.chmod(instance_file, 0o600)
 
@@ -183,29 +180,27 @@ def _load_calibration_from_breadcrumbs_yaml() -> str:
     """
     git_root = None
     try:
-        result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True, timeout=5
-        )
+        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=5)
         git_root = result.stdout.strip()
     except Exception:
         pass
 
     config_path = None
-    if Path('.breadcrumbs.yaml').exists():
-        config_path = Path('.breadcrumbs.yaml')
-    elif git_root and Path(git_root, '.breadcrumbs.yaml').exists():
-        config_path = Path(git_root, '.breadcrumbs.yaml')
+    if Path(".breadcrumbs.yaml").exists():
+        config_path = Path(".breadcrumbs.yaml")
+    elif git_root and Path(git_root, ".breadcrumbs.yaml").exists():
+        config_path = Path(git_root, ".breadcrumbs.yaml")
 
     if not config_path:
         return ""
 
     try:
         import yaml
+
         with open(config_path) as f:
             config = yaml.safe_load(f) or {}
 
-        calibration = config.get('calibration')
+        calibration = config.get("calibration")
         if not calibration:
             return ""
 
@@ -232,15 +227,19 @@ def _resolve_project_and_setup(claude_session_id: str) -> tuple:
     """
     project_root = find_project_root(claude_session_id, check_compact_handoff=True)
     if project_root is None:
-        print(json.dumps({
-            "error": "Could not resolve project root. No active_work file, instance_projects, or EMPIRICA_WORKSPACE_ROOT found.",
-            "claude_session_id": claude_session_id,
-            "tmux_pane": os.environ.get('TMUX_PANE')
-        }))
+        print(
+            json.dumps(
+                {
+                    "error": "Could not resolve project root. No active_work file, instance_projects, or EMPIRICA_WORKSPACE_ROOT found.",
+                    "claude_session_id": claude_session_id,
+                    "tmux_pane": os.environ.get("TMUX_PANE"),
+                }
+            )
+        )
         sys.exit(1)
     os.chdir(project_root)
     instance_id = get_instance_id()
-    sys.path.insert(0, str(Path.home() / 'empirical-ai' / 'empirica'))
+    sys.path.insert(0, str(Path.home() / "empirical-ai" / "empirica"))
     return project_root, instance_id
 
 
@@ -248,6 +247,7 @@ def _try_memory_swap(claude_session_id: str) -> None:
     """Attempt memory swap for cross-project CWD mismatch. Non-fatal."""
     try:
         from empirica.utils.memory_swap import maybe_swap_for_active_transaction
+
         swap_result = maybe_swap_for_active_transaction(claude_session_id=claude_session_id)
         if swap_result.get("action") == "swapped":
             print(f"{swap_result.get('message', '')}", file=sys.stderr)
@@ -262,25 +262,23 @@ def _extract_pre_snapshot_data(pre_snapshot: dict) -> tuple:
     """
     if not pre_snapshot:
         return {}, None, None, None
-    pre_vectors = pre_snapshot.get('checkpoint', {}) or \
-                  (pre_snapshot.get('live_state') or {}).get('vectors', {})
-    pre_reasoning = (pre_snapshot.get('live_state') or {}).get('reasoning')
-    active_transaction = pre_snapshot.get('active_transaction')
-    hook_counters = pre_snapshot.get('hook_counters')
+    pre_vectors = pre_snapshot.get("checkpoint", {}) or (pre_snapshot.get("live_state") or {}).get("vectors", {})
+    pre_reasoning = (pre_snapshot.get("live_state") or {}).get("reasoning")
+    active_transaction = pre_snapshot.get("active_transaction")
+    hook_counters = pre_snapshot.get("hook_counters")
     return pre_vectors, pre_reasoning, active_transaction, hook_counters
 
 
-def _enrich_dynamic_context(dynamic_context: dict, active_transaction: dict,
-                            pre_snapshot: dict) -> None:
+def _enrich_dynamic_context(dynamic_context: dict, active_transaction: dict, pre_snapshot: dict) -> None:
     """Inject transaction, last_task, git_context, and calibration into dynamic_context."""
     if active_transaction:
-        dynamic_context['active_transaction'] = active_transaction
+        dynamic_context["active_transaction"] = active_transaction
     if pre_snapshot:
-        dynamic_context['last_task'] = pre_snapshot.get('last_task', '')
-        dynamic_context['git_context'] = pre_snapshot.get('git_context', {})
+        dynamic_context["last_task"] = pre_snapshot.get("last_task", "")
+        dynamic_context["git_context"] = pre_snapshot.get("git_context", {})
     calibration_text = _load_calibration_from_breadcrumbs_yaml()
     if calibration_text:
-        dynamic_context['calibration_biases'] = calibration_text
+        dynamic_context["calibration_biases"] = calibration_text
 
 
 def _lookup_project_id_from_trajectory(project_root: Path) -> str | None:
@@ -294,16 +292,14 @@ def _lookup_project_id_from_trajectory(project_root: Path) -> str | None:
     """
     try:
         import sqlite3
-        ws_db = Path.home() / '.empirica' / 'workspace' / 'workspace.db'
+
+        ws_db = Path.home() / ".empirica" / "workspace" / "workspace.db"
         if not ws_db.exists():
             return None
-        trajectory = str(Path(project_root) / '.empirica')
+        trajectory = str(Path(project_root) / ".empirica")
         conn = sqlite3.connect(str(ws_db))
         try:
-            cursor = conn.execute(
-                "SELECT id FROM global_projects WHERE trajectory_path = ?",
-                (trajectory,)
-            )
+            cursor = conn.execute("SELECT id FROM global_projects WHERE trajectory_path = ?", (trajectory,))
             row = cursor.fetchone()
             return row[0] if row else None
         finally:
@@ -312,8 +308,7 @@ def _lookup_project_id_from_trajectory(project_root: Path) -> str | None:
         return None
 
 
-def _auto_heal_session(tx_session_id: str, ai_id: str, project_id: str,
-                       instance_id: str, project_root: Path) -> None:
+def _auto_heal_session(tx_session_id: str, ai_id: str, project_id: str, instance_id: str, project_root: Path) -> None:
     """Auto-heal missing session + stale project_id in project DB.
 
     Two-stage heal at session boundaries (post-compact, session-init):
@@ -335,13 +330,14 @@ def _auto_heal_session(tx_session_id: str, ai_id: str, project_id: str,
         if not _validate_session_in_db(tx_session_id, project_path=str(project_root)):
             db = SessionDatabase()
             healed = db.ensure_session_exists(
-                session_id=tx_session_id, ai_id=ai_id,
-                project_id=project_id, instance_id=instance_id,
+                session_id=tx_session_id,
+                ai_id=ai_id,
+                project_id=project_id,
+                instance_id=instance_id,
             )
             db.close()
             if healed:
-                print(f"post-compact: auto-healed missing session {tx_session_id[:8]} in project DB",
-                      file=sys.stderr)
+                print(f"post-compact: auto-healed missing session {tx_session_id[:8]} in project DB", file=sys.stderr)
 
         # Stage 2: validate session.project_id against workspace.db canonical
         # cwd is reliable at session boundaries — workspace.db lookup grounds
@@ -378,61 +374,75 @@ def _restore_hook_counters(hook_counters: dict, project_root: Path) -> None:
         return
     try:
         suffix = _get_instance_suffix()
-        counters_file = Path(str(project_root)) / '.empirica' / f'hook_counters{suffix}.json'
-        with open(counters_file, 'w') as f:
+        counters_file = Path(str(project_root)) / ".empirica" / f"hook_counters{suffix}.json"
+        with open(counters_file, "w") as f:
             json.dump(hook_counters, f, indent=2)
     except Exception:
         pass
 
 
-def _handle_open_transaction(active_transaction: dict, pre_vectors: dict,
-                             dynamic_context: dict, claude_session_id: str,
-                             empirica_session: str, ai_id: str, instance_id: str,
-                             project_root: Path, hook_counters: dict) -> tuple:
+def _handle_open_transaction(
+    active_transaction: dict,
+    pre_vectors: dict,
+    dynamic_context: dict,
+    claude_session_id: str,
+    empirica_session: str,
+    ai_id: str,
+    instance_id: str,
+    project_root: Path,
+    hook_counters: dict,
+) -> tuple:
     """Handle CONTINUE_TRANSACTION path: open transaction survives compaction.
 
     Returns (recovery_prompt, action_required, empirica_session).
     """
     recovery_prompt = _generate_transaction_continue_prompt(
-        pre_vectors=pre_vectors,
-        dynamic_context=dynamic_context,
-        active_transaction=active_transaction
+        pre_vectors=pre_vectors, dynamic_context=dynamic_context, active_transaction=active_transaction
     )
-    tx_session_id = active_transaction.get('session_id') or empirica_session
+    tx_session_id = active_transaction.get("session_id") or empirica_session
 
-    project_id = dynamic_context.get('session_context', {}).get('project_id')
+    project_id = dynamic_context.get("session_context", {}).get("project_id")
     _auto_heal_session(tx_session_id, ai_id, project_id, instance_id, project_root)
 
     _write_active_work_for_new_conversation(
-        claude_session_id=claude_session_id, project_path=str(project_root),
-        empirica_session_id=tx_session_id, instance_id=instance_id
+        claude_session_id=claude_session_id,
+        project_path=str(project_root),
+        empirica_session_id=tx_session_id,
+        instance_id=instance_id,
     )
     _write_active_transaction_for_new_conversation(
-        active_transaction=active_transaction, project_path=str(project_root),
-        instance_id=instance_id
+        active_transaction=active_transaction, project_path=str(project_root), instance_id=instance_id
     )
     _restore_hook_counters(hook_counters, project_root)
     return recovery_prompt, "CONTINUE_TRANSACTION", tx_session_id
 
 
-def _handle_complete_session(pre_vectors: dict, dynamic_context: dict,
-                             empirica_session: str, ai_id: str, claude_session_id: str,
-                             instance_id: str, project_root: Path) -> tuple:
+def _handle_complete_session(
+    pre_vectors: dict,
+    dynamic_context: dict,
+    empirica_session: str,
+    ai_id: str,
+    claude_session_id: str,
+    instance_id: str,
+    project_root: Path,
+) -> tuple:
     """Handle NEW_SESSION_PREFLIGHT path: previous session was complete.
 
     Returns (recovery_prompt, action_required, empirica_session, session_bootstrap).
     """
-    project_id = dynamic_context.get('session_context', {}).get('project_id')
+    project_id = dynamic_context.get("session_context", {}).get("project_id")
     session_bootstrap = _create_session_and_bootstrap(ai_id, project_id)
 
     recovery_prompt = _generate_new_session_prompt(
-        pre_vectors=pre_vectors, dynamic_context=dynamic_context,
-        old_session_id=empirica_session, ai_id=ai_id,
-        session_bootstrap=session_bootstrap
+        pre_vectors=pre_vectors,
+        dynamic_context=dynamic_context,
+        old_session_id=empirica_session,
+        ai_id=ai_id,
+        session_bootstrap=session_bootstrap,
     )
 
-    if session_bootstrap.get('session_id'):
-        empirica_session = session_bootstrap['session_id']
+    if session_bootstrap.get("session_id"):
+        empirica_session = session_bootstrap["session_id"]
 
     # Defense-in-depth: validate the freshly-created session's project_id
     # against workspace.db canonical. Fresh sessions usually get the right
@@ -442,52 +452,63 @@ def _handle_complete_session(pre_vectors: dict, dynamic_context: dict,
     _auto_heal_session(empirica_session, ai_id, project_id, instance_id, project_root)
 
     _write_active_work_for_new_conversation(
-        claude_session_id=claude_session_id, project_path=str(project_root),
-        empirica_session_id=empirica_session, instance_id=instance_id
+        claude_session_id=claude_session_id,
+        project_path=str(project_root),
+        empirica_session_id=empirica_session,
+        instance_id=instance_id,
     )
     return recovery_prompt, "NEW_SESSION_PREFLIGHT", empirica_session, session_bootstrap
 
 
-def _handle_incomplete_session(pre_vectors: dict, pre_reasoning: str,
-                               dynamic_context: dict, empirica_session: str,
-                               claude_session_id: str, instance_id: str,
-                               project_root: Path) -> tuple:
+def _handle_incomplete_session(
+    pre_vectors: dict,
+    pre_reasoning: str,
+    dynamic_context: dict,
+    empirica_session: str,
+    claude_session_id: str,
+    instance_id: str,
+    project_root: Path,
+) -> tuple:
     """Handle CHECK_GATE path: session incomplete, need CHECK to continue.
 
     Returns (recovery_prompt, action_required).
     """
     recovery_prompt = _generate_check_prompt(
-        pre_vectors=pre_vectors, pre_reasoning=pre_reasoning,
-        dynamic_context=dynamic_context
+        pre_vectors=pre_vectors, pre_reasoning=pre_reasoning, dynamic_context=dynamic_context
     )
     _write_active_work_for_new_conversation(
-        claude_session_id=claude_session_id, project_path=str(project_root),
-        empirica_session_id=empirica_session, instance_id=instance_id
+        claude_session_id=claude_session_id,
+        project_path=str(project_root),
+        empirica_session_id=empirica_session,
+        instance_id=instance_id,
     )
     return recovery_prompt, "CHECK_GATE"
 
 
-def _build_output_payload(recovery_prompt: str, empirica_session: str,
-                          action_required: str, phase_state: dict,
-                          pre_vectors: dict, pre_reasoning: str,
-                          pre_snapshot: dict, potential_drift: dict,
-                          session_bootstrap: dict) -> dict:
+def _build_output_payload(
+    recovery_prompt: str,
+    empirica_session: str,
+    action_required: str,
+    phase_state: dict,
+    pre_vectors: dict,
+    pre_reasoning: str,
+    pre_snapshot: dict,
+    potential_drift: dict,
+    session_bootstrap: dict,
+) -> dict:
     """Build the injection payload using Claude Code's hook format."""
     return {
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": recovery_prompt
-        },
+        "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": recovery_prompt},
         "empirica_session_id": empirica_session,
         "action_required": action_required,
         "phase_state": phase_state,
         "pre_compact_state": {
             "vectors": pre_vectors,
             "reasoning": pre_reasoning,
-            "timestamp": pre_snapshot.get('timestamp') if pre_snapshot else None
+            "timestamp": pre_snapshot.get("timestamp") if pre_snapshot else None,
         },
         "potential_drift_warning": potential_drift,
-        "session_bootstrap": session_bootstrap
+        "session_bootstrap": session_bootstrap,
     }
 
 
@@ -496,7 +517,7 @@ def _cleanup_compact_handoff(instance_id: str) -> None:
     try:
         if instance_id:
             handoff_suffix = _get_instance_suffix()
-            handoff_file = Path.home() / '.empirica' / f'compact_handoff{handoff_suffix}.json'
+            handoff_file = Path.home() / ".empirica" / f"compact_handoff{handoff_suffix}.json"
             if handoff_file.exists():
                 handoff_file.unlink()
     except Exception:
@@ -511,7 +532,7 @@ def main():
     incomplete session -> CHECK gate.
     """
     hook_input = json.loads(sys.stdin.read())
-    claude_session_id = hook_input.get('session_id')
+    claude_session_id = hook_input.get("session_id")
 
     # Stage 1: Resolve project and setup environment
     project_root, instance_id = _resolve_project_and_setup(claude_session_id)
@@ -526,14 +547,15 @@ def main():
     # Precedence: explicit env override > canonical resolver (project.yaml →
     # basename) > legacy 'claude-code'. The wrong practice here re-anchors the
     # post-compact context to the wrong calibration trajectory.
-    ai_id = os.getenv('EMPIRICA_AI_ID')
+    ai_id = os.getenv("EMPIRICA_AI_ID")
     if not ai_id:
         try:
             from empirica.utils.session_resolver import InstanceResolver as R
+
             ai_id = R.ai_id()
         except Exception:
             ai_id = None
-    ai_id = ai_id or 'claude-code'
+    ai_id = ai_id or "claude-code"
 
     # Stage 3: Load state
     phase_state = _get_session_phase_state(empirica_session)
@@ -546,27 +568,39 @@ def main():
     # Stage 4: Route based on phase state
     session_bootstrap = None
 
-    if active_transaction and active_transaction.get('status') == 'open':
+    if active_transaction and active_transaction.get("status") == "open":
         recovery_prompt, action_required, empirica_session = _handle_open_transaction(
-            active_transaction, pre_vectors, dynamic_context, claude_session_id,
-            empirica_session, ai_id, instance_id, project_root, hook_counters
+            active_transaction,
+            pre_vectors,
+            dynamic_context,
+            claude_session_id,
+            empirica_session,
+            ai_id,
+            instance_id,
+            project_root,
+            hook_counters,
         )
-    elif phase_state.get('is_complete'):
+    elif phase_state.get("is_complete"):
         recovery_prompt, action_required, empirica_session, session_bootstrap = _handle_complete_session(
-            pre_vectors, dynamic_context, empirica_session, ai_id,
-            claude_session_id, instance_id, project_root
+            pre_vectors, dynamic_context, empirica_session, ai_id, claude_session_id, instance_id, project_root
         )
     else:
         recovery_prompt, action_required = _handle_incomplete_session(
-            pre_vectors, pre_reasoning, dynamic_context, empirica_session,
-            claude_session_id, instance_id, project_root
+            pre_vectors, pre_reasoning, dynamic_context, empirica_session, claude_session_id, instance_id, project_root
         )
 
     # Stage 5: Build output and emit
     potential_drift = _calculate_potential_drift(pre_vectors)
     output = _build_output_payload(
-        recovery_prompt, empirica_session, action_required, phase_state,
-        pre_vectors, pre_reasoning, pre_snapshot, potential_drift, session_bootstrap
+        recovery_prompt,
+        empirica_session,
+        action_required,
+        phase_state,
+        pre_vectors,
+        pre_reasoning,
+        pre_snapshot,
+        potential_drift,
+        session_bootstrap,
     )
 
     _cleanup_compact_handoff(instance_id)
@@ -586,11 +620,11 @@ def _get_empirica_session(claude_session_id: str | None = None):
     # Priority 0: Check active_work file (authoritative for this Claude instance)
     if claude_session_id:
         try:
-            active_work_file = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+            active_work_file = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
             if active_work_file.exists():
                 with open(active_work_file) as f:
                     work_data = json.load(f)
-                empirica_session_id = work_data.get('empirica_session_id')
+                empirica_session_id = work_data.get("empirica_session_id")
                 if empirica_session_id:
                     return empirica_session_id
         except Exception:
@@ -599,11 +633,12 @@ def _get_empirica_session(claude_session_id: str | None = None):
     # Priority 1: Database query (fallback)
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         # Canonical ai_id first (project.yaml → basename), then legacy
         # 'claude-code', then None wildcard. Prepend the resolved id ONLY when
         # truthy — a leading None would short-circuit to the wildcard.
         resolved = R.ai_id()
-        ai_patterns = ([resolved] if resolved else []) + ['claude-code', None]
+        ai_patterns = ([resolved] if resolved else []) + ["claude-code", None]
         for ai_pattern in ai_patterns:
             try:
                 return R.latest_session_id(ai_id=ai_pattern, active_only=True)
@@ -628,26 +663,25 @@ def _get_session_phase_state(session_id: str) -> dict:
     """
     try:
         from empirica.data.session_database import SessionDatabase
+
         db = SessionDatabase()
         cursor = db.conn.cursor()
 
         # Get all phases for this session
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT phase, timestamp
             FROM reflexes
             WHERE session_id = ?
             ORDER BY timestamp DESC
-        """, (session_id,))
+        """,
+            (session_id,),
+        )
         rows = cursor.fetchall()
         db.close()
 
         if not rows:
-            return {
-                "has_preflight": False,
-                "has_postflight": False,
-                "last_phase": None,
-                "is_complete": False
-            }
+            return {"has_preflight": False, "has_postflight": False, "last_phase": None, "is_complete": False}
 
         phases = [r[0] for r in rows]
         last_phase = phases[0] if phases else None
@@ -660,7 +694,7 @@ def _get_session_phase_state(session_id: str) -> dict:
             "has_preflight": "PREFLIGHT" in phases,
             "has_postflight": "POSTFLIGHT" in phases,
             "last_phase": last_phase,
-            "is_complete": is_complete
+            "is_complete": is_complete,
         }
     except Exception as e:
         return {
@@ -668,7 +702,7 @@ def _get_session_phase_state(session_id: str) -> dict:
             "has_postflight": False,
             "last_phase": None,
             "is_complete": False,
-            "error": str(e)
+            "error": str(e),
         }
 
 
@@ -697,6 +731,7 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
     """
     try:
         from empirica.data.session_database import SessionDatabase
+
         db = SessionDatabase()
         cursor = db.conn.cursor()
 
@@ -710,7 +745,7 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
             "recent_findings": [],
             "open_unknowns": [],
             "critical_dead_ends": [],
-            "session_context": {}
+            "session_context": {},
         }
 
         if not project_id:
@@ -718,25 +753,25 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
             return context
 
         # 1. Active goals (incomplete, high priority)
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT id, objective, status, scope, created_timestamp
             FROM goals
             WHERE project_id = ? AND status IN ('active', 'in_progress', 'blocked')
             ORDER BY created_timestamp DESC LIMIT 3
-        """, (project_id,))
+        """,
+            (project_id,),
+        )
         for row in cursor.fetchall():
-            context["active_goals"].append({
-                "id": row[0],
-                "objective": row[1],
-                "status": row[2],
-                "scope": row[3],
-                "created_timestamp": row[4]
-            })
+            context["active_goals"].append(
+                {"id": row[0], "objective": row[1], "status": row[2], "scope": row[3], "created_timestamp": row[4]}
+            )
 
         # 1b. Load subtasks for each active goal (for continuity across sessions)
         context["pending_subtasks"] = []
         for goal in context["active_goals"]:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT id, description, status, epistemic_importance, created_timestamp
                 FROM subtasks
                 WHERE goal_id = ? AND status != 'completed'
@@ -749,7 +784,9 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
                     END,
                     created_timestamp DESC
                 LIMIT 5
-            """, (goal["id"],))
+            """,
+                (goal["id"],),
+            )
             subtasks = []
             for st_row in cursor.fetchall():
                 subtask = {
@@ -759,7 +796,7 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
                     "importance": st_row[3],
                     "created_timestamp": st_row[4],
                     "goal_id": goal["id"],
-                    "goal_objective": goal["objective"][:50]  # Truncate for context
+                    "goal_objective": goal["objective"][:50],  # Truncate for context
                 }
                 subtasks.append(subtask)
                 # Also add to flat list for epistemic ranking
@@ -767,52 +804,50 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
             goal["subtasks"] = subtasks
 
         # 2. Recent findings (broader retrieval — epistemic_summarizer handles ranking)
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT finding, impact, created_timestamp
             FROM project_findings
             WHERE project_id = ?
             ORDER BY created_timestamp DESC LIMIT 10
-        """, (project_id,))
+        """,
+            (project_id,),
+        )
         for row in cursor.fetchall():
-            context["recent_findings"].append({
-                "finding": row[0],
-                "impact": row[1],
-                "when": str(row[2])[:19] if row[2] else None
-            })
+            context["recent_findings"].append(
+                {"finding": row[0], "impact": row[1], "when": str(row[2])[:19] if row[2] else None}
+            )
 
         # 3. Unresolved unknowns (open questions you need to address)
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT unknown, impact, created_timestamp
             FROM project_unknowns
             WHERE project_id = ? AND is_resolved = 0
             ORDER BY impact DESC, created_timestamp DESC LIMIT 10
-        """, (project_id,))
+        """,
+            (project_id,),
+        )
         for row in cursor.fetchall():
-            context["open_unknowns"].append({
-                "unknown": row[0],
-                "impact": row[1]
-            })
+            context["open_unknowns"].append({"unknown": row[0], "impact": row[1]})
 
         # 4. Critical dead ends (mistakes to avoid)
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT approach, why_failed, created_timestamp
             FROM project_dead_ends
             WHERE project_id = ?
             ORDER BY created_timestamp DESC LIMIT 5
-        """, (project_id,))
+        """,
+            (project_id,),
+        )
         for row in cursor.fetchall():
-            context["critical_dead_ends"].append({
-                "approach": row[0],
-                "why_failed": row[1],
-                "created_timestamp": row[2] if len(row) > 2 else None
-            })
+            context["critical_dead_ends"].append(
+                {"approach": row[0], "why_failed": row[1], "created_timestamp": row[2] if len(row) > 2 else None}
+            )
 
         # 5. Session context (what was happening)
-        context["session_context"] = {
-            "session_id": session_id,
-            "ai_id": ai_id,
-            "project_id": project_id
-        }
+        context["session_context"] = {"session_id": session_id, "ai_id": ai_id, "project_id": project_id}
 
         db.close()
         return context
@@ -823,7 +858,7 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
             "active_goals": [],
             "recent_findings": [],
             "open_unknowns": [],
-            "critical_dead_ends": []
+            "critical_dead_ends": [],
         }
 
 
@@ -850,28 +885,44 @@ def _fetch_optional_context(project_id: str, result: dict) -> None:
         return
 
     # Memory context from Qdrant
-    memory = _run_cli_json([
-        'empirica', 'project-search', '--project-id', project_id,
-        '--task', 'current context and recent work', '--output', 'json'
-    ])
+    memory = _run_cli_json(
+        [
+            "empirica",
+            "project-search",
+            "--project-id",
+            project_id,
+            "--task",
+            "current context and recent work",
+            "--output",
+            "json",
+        ]
+    )
     if memory:
         result["memory_context"] = memory
 
     # Semantic search for related goals
-    goals = _run_cli_json([
-        'empirica', 'goals-search', 'current work in progress',
-        '--project-id', project_id, '--status', 'in_progress',
-        '--limit', '5', '--output', 'json'
-    ])
-    if goals and goals.get('results'):
-        result["related_goals"] = goals['results']
+    goals = _run_cli_json(
+        [
+            "empirica",
+            "goals-search",
+            "current work in progress",
+            "--project-id",
+            project_id,
+            "--status",
+            "in_progress",
+            "--limit",
+            "5",
+            "--output",
+            "json",
+        ]
+    )
+    if goals and goals.get("results"):
+        result["related_goals"] = goals["results"]
 
     # Stale goals (marked during pre-compact)
-    stale = _run_cli_json([
-        'empirica', 'goals-get-stale', '--project-id', project_id, '--output', 'json'
-    ], timeout=10)
-    if stale and stale.get('stale_goals'):
-        result["stale_goals"] = stale['stale_goals']
+    stale = _run_cli_json(["empirica", "goals-get-stale", "--project-id", project_id, "--output", "json"], timeout=10)
+    if stale and stale.get("stale_goals"):
+        result["stale_goals"] = stale["stale_goals"]
 
 
 def _create_session_and_bootstrap(ai_id: str, project_id: str | None = None) -> dict:
@@ -881,22 +932,16 @@ def _create_session_and_bootstrap(ai_id: str, project_id: str | None = None) -> 
 
     Returns dict with session_id, bootstrap_output, memory_context, error.
     """
-    result = {
-        "session_id": None,
-        "bootstrap_output": None,
-        "memory_context": None,
-        "error": None
-    }
+    result = {"session_id": None, "bootstrap_output": None, "memory_context": None, "error": None}
 
     try:
         # Step 1: Create new session
-        create_output = _run_cli_json(
-            ['empirica', 'session-create', '--ai-id', ai_id, '--output', 'json'])
+        create_output = _run_cli_json(["empirica", "session-create", "--ai-id", ai_id, "--output", "json"])
         if not create_output:
             result["error"] = "session-create failed or returned invalid JSON"
             return result
 
-        new_session_id = create_output.get('session_id')
+        new_session_id = create_output.get("session_id")
         if not new_session_id:
             result["error"] = "session-create returned no session_id"
             return result
@@ -904,8 +949,8 @@ def _create_session_and_bootstrap(ai_id: str, project_id: str | None = None) -> 
 
         # Step 2: Run project-bootstrap
         bootstrap = _run_cli_json(
-            ['empirica', 'project-bootstrap', '--session-id', new_session_id, '--output', 'json'],
-            timeout=30)
+            ["empirica", "project-bootstrap", "--session-id", new_session_id, "--output", "json"], timeout=30
+        )
         if bootstrap:
             result["bootstrap_output"] = bootstrap
 
@@ -920,8 +965,9 @@ def _create_session_and_bootstrap(ai_id: str, project_id: str | None = None) -> 
     return result
 
 
-def _generate_new_session_prompt(pre_vectors: dict, dynamic_context: dict, old_session_id: str, ai_id: str,
-                                  session_bootstrap: dict | None = None) -> str:
+def _generate_new_session_prompt(
+    pre_vectors: dict, dynamic_context: dict, old_session_id: str, ai_id: str, session_bootstrap: dict | None = None
+) -> str:
     """
     Generate prompt for NEW session + PREFLIGHT when old session was complete.
 
@@ -931,24 +977,24 @@ def _generate_new_session_prompt(pre_vectors: dict, dynamic_context: dict, old_s
     If session_bootstrap is provided, the session was already created and bootstrapped
     by the hook - AI just needs to do PREFLIGHT with the loaded context.
     """
-    pre_know = pre_vectors.get('know', 'N/A')
-    pre_unc = pre_vectors.get('uncertainty', 'N/A')
+    pre_know = pre_vectors.get("know", "N/A")
+    pre_unc = pre_vectors.get("uncertainty", "N/A")
 
     # Determine session_id for retrieval guidance
     new_session_id = None
-    if session_bootstrap and session_bootstrap.get('session_id'):
-        new_session_id = session_bootstrap['session_id']
+    if session_bootstrap and session_bootstrap.get("session_id"):
+        new_session_id = session_bootstrap["session_id"]
 
     # Use epistemic summarizer for confidence-weighted ranking (no chronological fallback)
     if EPISTEMIC_SUMMARIZER_AVAILABLE:
         epistemic_focus = format_epistemic_focus(
-            findings=dynamic_context.get('recent_findings', []),
-            unknowns=dynamic_context.get('open_unknowns', []),
-            dead_ends=dynamic_context.get('critical_dead_ends', []),
-            goals=dynamic_context.get('active_goals', []),
-            subtasks=dynamic_context.get('pending_subtasks', []),
+            findings=dynamic_context.get("recent_findings", []),
+            unknowns=dynamic_context.get("open_unknowns", []),
+            dead_ends=dynamic_context.get("critical_dead_ends", []),
+            goals=dynamic_context.get("active_goals", []),
+            subtasks=dynamic_context.get("pending_subtasks", []),
             max_items=5,
-            session_id=new_session_id
+            session_id=new_session_id,
         )
     else:
         # Fallback to legacy formatting if summarizer not available
@@ -965,16 +1011,16 @@ def _generate_new_session_prompt(pre_vectors: dict, dynamic_context: dict, old_s
 {unknowns_text}"""
 
     # Include last task and calibration if available
-    last_task = dynamic_context.get('last_task', '')
+    last_task = dynamic_context.get("last_task", "")
     last_task_section = f"\n**Last task:** {last_task}\n" if last_task else ""
 
-    calibration = dynamic_context.get('calibration_biases', '')
+    calibration = dynamic_context.get("calibration_biases", "")
     calibration_section = f"\n{calibration}\n" if calibration else ""
-    temporal_trail = _temporal_trail_section(dynamic_context.get('project_path'))
+    temporal_trail = _temporal_trail_section(dynamic_context.get("project_path"))
 
     # If hook already created session and ran bootstrap, use that
     if new_session_id:
-        memory_text = _format_memory_context(session_bootstrap.get('memory_context'))
+        memory_text = _format_memory_context(session_bootstrap.get("memory_context"))
 
         return f"""
 ## POST-COMPACT: SESSION CREATED, PREFLIGHT REQUIRED
@@ -1077,7 +1123,7 @@ def _format_memory_context(memory_context: dict) -> str:
     if not memory_context:
         return "  (No memory context available - Qdrant may not be running)"
 
-    results = memory_context.get('results', {})
+    results = memory_context.get("results", {})
     if not results:
         return "  (No relevant memories found)"
 
@@ -1087,7 +1133,7 @@ def _format_memory_context(memory_context: dict) -> str:
     if isinstance(results, dict):
         # New format: {"docs": [...], "memory": [...]}
         all_results = []
-        for key in ['memory', 'docs', 'eidetic', 'episodic']:
+        for key in ["memory", "docs", "eidetic", "episodic"]:
             if key in results and isinstance(results[key], list):
                 all_results.extend(results[key])
         results = all_results
@@ -1098,8 +1144,8 @@ def _format_memory_context(memory_context: dict) -> str:
     for r in results[:5]:  # Top 5 memories
         if not isinstance(r, dict):
             continue
-        content = r.get('content', r.get('text', ''))[:150]
-        score = r.get('score', 0)
+        content = r.get("content", r.get("text", ""))[:150]
+        score = r.get("score", 0)
         lines.append(f"  - [{score:.2f}] {content}...")
 
     return "\n".join(lines) if lines else "  (No memories)"
@@ -1113,8 +1159,8 @@ def _format_goals(dynamic_context: dict) -> str:
     if dynamic_context.get("stale_goals"):
         lines.append("  **⚠️ STALE (context lost during compaction - re-evaluate before continuing):**")
         for g in dynamic_context["stale_goals"]:
-            obj = g.get('objective', 'Unknown')
-            reason = g.get('stale_reason', 'memory_compact')
+            obj = g.get("objective", "Unknown")
+            reason = g.get("stale_reason", "memory_compact")
             lines.append(f"  - ⚠️ {obj[:80]}... (stale: {reason})")
             lines.append(f"       Refresh with: empirica goals-refresh --goal-id {g['goal_id']}")
         lines.append("  ")  # separator
@@ -1130,10 +1176,10 @@ def _format_goals(dynamic_context: dict) -> str:
             lines.append("  ")  # separator
             lines.append("  **Semantically related (from Qdrant):**")
         for g in dynamic_context["related_goals"]:
-            obj = g.get('objective') or g.get('description', 'Unknown')
-            status = g.get('status', 'unknown')
-            score = g.get('score', 0)
-            goal_type = g.get('type', 'goal')
+            obj = g.get("objective") or g.get("description", "Unknown")
+            status = g.get("status", "unknown")
+            score = g.get("score", 0)
+            goal_type = g.get("type", "goal")
             lines.append(f"  - [{goal_type}] {obj[:80]} ({status}, score={score:.2f})")
 
     return "\n".join(lines) if lines else "  (No active goals)"
@@ -1142,30 +1188,31 @@ def _format_goals(dynamic_context: dict) -> str:
 def _format_findings(dynamic_context: dict) -> str:
     """Format findings for prompt."""
     if dynamic_context.get("recent_findings"):
-        return "\n".join([
-            f"  - {f['finding'][:100]}..." if len(f['finding']) > 100 else f"  - {f['finding']}"
-            for f in dynamic_context["recent_findings"]
-        ])
+        return "\n".join(
+            [
+                f"  - {f['finding'][:100]}..." if len(f["finding"]) > 100 else f"  - {f['finding']}"
+                for f in dynamic_context["recent_findings"]
+            ]
+        )
     return "  (No recent findings)"
 
 
 def _format_unknowns(dynamic_context: dict) -> str:
     """Format unknowns for prompt."""
     if dynamic_context.get("open_unknowns"):
-        return "\n".join([
-            f"  - {u['unknown'][:100]}..." if len(u['unknown']) > 100 else f"  - {u['unknown']}"
-            for u in dynamic_context["open_unknowns"]
-        ])
+        return "\n".join(
+            [
+                f"  - {u['unknown'][:100]}..." if len(u["unknown"]) > 100 else f"  - {u['unknown']}"
+                for u in dynamic_context["open_unknowns"]
+            ]
+        )
     return "  (No open unknowns)"
 
 
 def _format_dead_ends(dynamic_context: dict) -> str:
     """Format dead ends for prompt."""
     if dynamic_context.get("critical_dead_ends"):
-        return "\n".join([
-            f"  - {d['approach']}: {d['why_failed']}"
-            for d in dynamic_context["critical_dead_ends"]
-        ])
+        return "\n".join([f"  - {d['approach']}: {d['why_failed']}" for d in dynamic_context["critical_dead_ends"]])
     return "  (None recorded)"
 
 
@@ -1176,37 +1223,37 @@ def _generate_transaction_continue_prompt(pre_vectors: dict, dynamic_context: di
     When a transaction is open, the AI should just continue - no new PREFLIGHT or CHECK needed.
     The transaction file on disk is the source of truth.
     """
-    pre_know = pre_vectors.get('know', 'N/A')
-    pre_unc = pre_vectors.get('uncertainty', 'N/A')
-    session_id = dynamic_context.get('session_context', {}).get('session_id', 'unknown')
+    pre_know = pre_vectors.get("know", "N/A")
+    pre_unc = pre_vectors.get("uncertainty", "N/A")
+    session_id = dynamic_context.get("session_context", {}).get("session_id", "unknown")
 
-    tx_id = active_transaction.get('transaction_id', 'unknown')[:8]
-    tx_session = active_transaction.get('session_id', 'unknown')[:8]
-    tx_project = active_transaction.get('project_path', 'unknown')
-    if isinstance(tx_project, str) and '/' in tx_project:
-        tx_project = tx_project.split('/')[-1]
+    tx_id = active_transaction.get("transaction_id", "unknown")[:8]
+    tx_session = active_transaction.get("session_id", "unknown")[:8]
+    tx_project = active_transaction.get("project_path", "unknown")
+    if isinstance(tx_project, str) and "/" in tx_project:
+        tx_project = tx_project.split("/")[-1]
 
     # Use epistemic summarizer for focus section if available
     if EPISTEMIC_SUMMARIZER_AVAILABLE:
         epistemic_focus = format_epistemic_focus(
-            findings=dynamic_context.get('recent_findings', []),
-            unknowns=dynamic_context.get('open_unknowns', []),
-            dead_ends=dynamic_context.get('critical_dead_ends', []),
-            goals=dynamic_context.get('active_goals', []),
-            subtasks=dynamic_context.get('pending_subtasks', []),
+            findings=dynamic_context.get("recent_findings", []),
+            unknowns=dynamic_context.get("open_unknowns", []),
+            dead_ends=dynamic_context.get("critical_dead_ends", []),
+            goals=dynamic_context.get("active_goals", []),
+            subtasks=dynamic_context.get("pending_subtasks", []),
             max_items=5,
-            session_id=session_id if session_id != 'unknown' else None
+            session_id=session_id if session_id != "unknown" else None,
         )
     else:
         epistemic_focus = "*No breadcrumbs loaded.*"
 
     # Include last task and calibration if available
-    last_task = dynamic_context.get('last_task', '')
+    last_task = dynamic_context.get("last_task", "")
     last_task_section = f"\n**Last task:** {last_task}\n" if last_task else ""
 
-    calibration = dynamic_context.get('calibration_biases', '')
+    calibration = dynamic_context.get("calibration_biases", "")
     calibration_section = f"\n{calibration}\n" if calibration else ""
-    temporal_trail = _temporal_trail_section(dynamic_context.get('project_path'))
+    temporal_trail = _temporal_trail_section(dynamic_context.get("project_path"))
 
     return f"""## TRANSACTION CONTINUES
 
@@ -1234,20 +1281,20 @@ def _generate_check_prompt(pre_vectors: dict, pre_reasoning: str, dynamic_contex
     CHECK is correct when session is INCOMPLETE (no POSTFLIGHT yet) -
     we're continuing work and need to validate readiness.
     """
-    pre_know = pre_vectors.get('know', 'N/A')
-    pre_unc = pre_vectors.get('uncertainty', 'N/A')
-    session_id = dynamic_context.get('session_context', {}).get('session_id', 'unknown')
+    pre_know = pre_vectors.get("know", "N/A")
+    pre_unc = pre_vectors.get("uncertainty", "N/A")
+    session_id = dynamic_context.get("session_context", {}).get("session_id", "unknown")
 
     # Format active transaction context (if exists)
     tx_context = ""
     project_folder = "unknown"  # Default for bootstrap command
-    active_tx = dynamic_context.get('active_transaction')
+    active_tx = dynamic_context.get("active_transaction")
     if active_tx:
-        tx_id = active_tx.get('transaction_id', 'unknown')[:8]
-        tx_status = active_tx.get('status', 'unknown')
-        tx_project = active_tx.get('project_path', 'unknown')
-        if isinstance(tx_project, str) and '/' in tx_project:
-            project_folder = tx_project.split('/')[-1]  # Just folder name for commands
+        tx_id = active_tx.get("transaction_id", "unknown")[:8]
+        tx_status = active_tx.get("status", "unknown")
+        tx_project = active_tx.get("project_path", "unknown")
+        if isinstance(tx_project, str) and "/" in tx_project:
+            project_folder = tx_project.split("/")[-1]  # Just folder name for commands
             tx_project = project_folder
         tx_context = f"""
 **⚡ ACTIVE TRANSACTION (preserved across compact):**
@@ -1256,20 +1303,20 @@ def _generate_check_prompt(pre_vectors: dict, pre_reasoning: str, dynamic_contex
 """
     else:
         # Try to get project folder from session_context
-        project_id = dynamic_context.get('session_context', {}).get('project_id', '')
+        project_id = dynamic_context.get("session_context", {}).get("project_id", "")
         if project_id:
             project_folder = project_id  # May be UUID or folder name
 
     # Use epistemic summarizer for confidence-weighted ranking (no chronological fallback)
     if EPISTEMIC_SUMMARIZER_AVAILABLE:
         epistemic_focus = format_epistemic_focus(
-            findings=dynamic_context.get('recent_findings', []),
-            unknowns=dynamic_context.get('open_unknowns', []),
-            dead_ends=dynamic_context.get('critical_dead_ends', []),
-            goals=dynamic_context.get('active_goals', []),
-            subtasks=dynamic_context.get('pending_subtasks', []),
+            findings=dynamic_context.get("recent_findings", []),
+            unknowns=dynamic_context.get("open_unknowns", []),
+            dead_ends=dynamic_context.get("critical_dead_ends", []),
+            goals=dynamic_context.get("active_goals", []),
+            subtasks=dynamic_context.get("pending_subtasks", []),
             max_items=5,
-            session_id=session_id if session_id != 'unknown' else None
+            session_id=session_id if session_id != "unknown" else None,
         )
     else:
         # Fallback to legacy formatting if summarizer not available
@@ -1290,12 +1337,12 @@ def _generate_check_prompt(pre_vectors: dict, pre_reasoning: str, dynamic_contex
 {dead_ends_text}"""
 
     # Include last task and calibration if available
-    last_task = dynamic_context.get('last_task', '')
+    last_task = dynamic_context.get("last_task", "")
     last_task_section = f"\n**Last task:** {last_task}\n" if last_task else ""
 
-    calibration = dynamic_context.get('calibration_biases', '')
+    calibration = dynamic_context.get("calibration_biases", "")
     calibration_section = f"\n{calibration}\n" if calibration else ""
-    temporal_trail = _temporal_trail_section(dynamic_context.get('project_path'))
+    temporal_trail = _temporal_trail_section(dynamic_context.get("project_path"))
 
     prompt = f"""
 ## POST-COMPACT CHECK GATE
@@ -1366,41 +1413,44 @@ def _calculate_potential_drift(pre_vectors: dict) -> dict:
     # - Higher uncertainty (less confident)
     # - Similar or lower context (depends on evidence loaded)
 
-    pre_know = pre_vectors.get('know', 0.5)
-    pre_unc = pre_vectors.get('uncertainty', 0.5)
+    pre_know = pre_vectors.get("know", 0.5)
+    pre_unc = pre_vectors.get("uncertainty", 0.5)
 
     return {
-        "pre_compact": {
-            "know": pre_know,
-            "uncertainty": pre_unc
-        },
+        "pre_compact": {"know": pre_know, "uncertainty": pre_unc},
         "expected_honest_post_compact": {
             "know": max(0.3, pre_know - 0.2),  # Typically drops
-            "uncertainty": min(0.8, pre_unc + 0.2)  # Typically rises
+            "uncertainty": min(0.8, pre_unc + 0.2),  # Typically rises
         },
-        "message": "If your post-compact know equals pre-compact, you may be overestimating"
+        "message": "If your post-compact know equals pre-compact, you may be overestimating",
     }
 
 
-def _print_user_message(pre_vectors: dict, dynamic_context: dict, potential_drift: dict,
-                        phase_state: dict | None = None, ai_id: str = 'claude-code',
-                        session_bootstrap: dict | None = None):
+def _print_user_message(
+    pre_vectors: dict,
+    dynamic_context: dict,
+    potential_drift: dict,
+    phase_state: dict | None = None,
+    ai_id: str = "claude-code",
+    session_bootstrap: dict | None = None,
+):
     """Print user-visible summary to stderr"""
-    pre_know = pre_vectors.get('know', 'N/A')
-    pre_unc = pre_vectors.get('uncertainty', 'N/A')
+    pre_know = pre_vectors.get("know", "N/A")
+    pre_unc = pre_vectors.get("uncertainty", "N/A")
 
-    goals_count = len(dynamic_context.get('active_goals', []))
-    findings_count = len(dynamic_context.get('recent_findings', []))
-    unknowns_count = len(dynamic_context.get('open_unknowns', []))
+    goals_count = len(dynamic_context.get("active_goals", []))
+    findings_count = len(dynamic_context.get("recent_findings", []))
+    unknowns_count = len(dynamic_context.get("open_unknowns", []))
 
-    is_complete = phase_state.get('is_complete', False) if phase_state else False
-    last_phase = phase_state.get('last_phase', 'unknown') if phase_state else 'unknown'
+    is_complete = phase_state.get("is_complete", False) if phase_state else False
+    last_phase = phase_state.get("last_phase", "unknown") if phase_state else "unknown"
 
     if is_complete:
         # Session was complete - check if hook created new session
-        if session_bootstrap and session_bootstrap.get('session_id'):
-            new_session_id = session_bootstrap['session_id']
-            print(f"""
+        if session_bootstrap and session_bootstrap.get("session_id"):
+            new_session_id = session_bootstrap["session_id"]
+            print(
+                f"""
 🔄 Empirica: Post-Compact Recovery (Session Complete)
 
 📊 Previous Session State:
@@ -1421,10 +1471,13 @@ def _print_user_message(pre_vectors: dict, dynamic_context: dict, potential_drif
 
 💡 TIP: Your PREFLIGHT should reflect knowledge AFTER reading the bootstrap context.
    This makes the PREFLIGHT→POSTFLIGHT delta meaningful.
-""", file=sys.stderr)
+""",
+                file=sys.stderr,
+            )
         else:
             # Fallback: Hook couldn't create session
-            print(f"""
+            print(
+                f"""
 🔄 Empirica: Post-Compact Recovery (Session Complete)
 
 📊 Previous Session State:
@@ -1443,10 +1496,13 @@ def _print_user_message(pre_vectors: dict, dynamic_context: dict, potential_drif
    1. Create new session: empirica session-create --ai-id {ai_id}
    2. Load context: empirica project-bootstrap --session-id <NEW_ID>
    3. Run PREFLIGHT: empirica preflight-submit (AFTER loading context!)
-""", file=sys.stderr)
+""",
+                file=sys.stderr,
+            )
     else:
         # Session incomplete - need CHECK to continue
-        print(f"""
+        print(
+            f"""
 🔄 Empirica: Post-Compact CHECK Gate (Session Incomplete)
 
 📊 Pre-Compact State (NOW INVALID):
@@ -1465,8 +1521,10 @@ def _print_user_message(pre_vectors: dict, dynamic_context: dict, potential_drif
    1. Load context: empirica project-bootstrap --session-id <ID>
    2. Run CHECK: empirica check-submit (with honest assessment)
    3. Follow decision: "proceed" or "investigate"
-""", file=sys.stderr)
+""",
+            file=sys.stderr,
+        )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

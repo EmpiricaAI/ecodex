@@ -20,27 +20,27 @@ import tempfile
 from pathlib import Path
 
 # Add lib folder to path for shared modules
-_lib_path = Path(__file__).parent.parent / 'lib'
+_lib_path = Path(__file__).parent.parent / "lib"
 if str(_lib_path) not in sys.path:
     sys.path.insert(0, str(_lib_path))
 
 from project_resolver import _get_instance_suffix, get_instance_id  # noqa: E402 — after sys.path setup
 
 
-def _find_transaction_file(claude_session_id: 'str | None' = None) -> 'Path | None':
+def _find_transaction_file(claude_session_id: "str | None" = None) -> "Path | None":
     """Find the active transaction file using the same priority as sentinel-gate."""
     instance_id = get_instance_id()
     suffix = _get_instance_suffix()
 
     # Try 1: active_work file for project_path
     if claude_session_id:
-        aw_file = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+        aw_file = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
         if aw_file.exists():
             try:
                 with open(aw_file) as f:
-                    pp = json.load(f).get('project_path')
+                    pp = json.load(f).get("project_path")
                 if pp:
-                    candidate = Path(pp) / '.empirica' / f'active_transaction{suffix}.json'
+                    candidate = Path(pp) / ".empirica" / f"active_transaction{suffix}.json"
                     if candidate.exists():
                         return candidate
             except Exception:
@@ -48,20 +48,20 @@ def _find_transaction_file(claude_session_id: 'str | None' = None) -> 'Path | No
 
     # Try 2: instance_projects mapping
     if instance_id:
-        ip_file = Path.home() / '.empirica' / 'instance_projects' / f'{instance_id}.json'
+        ip_file = Path.home() / ".empirica" / "instance_projects" / f"{instance_id}.json"
         if ip_file.exists():
             try:
                 with open(ip_file) as f:
-                    pp = json.load(f).get('project_path')
+                    pp = json.load(f).get("project_path")
                 if pp:
-                    candidate = Path(pp) / '.empirica' / f'active_transaction{suffix}.json'
+                    candidate = Path(pp) / ".empirica" / f"active_transaction{suffix}.json"
                     if candidate.exists():
                         return candidate
             except Exception:
                 pass
 
     # Try 3: global fallback
-    candidate = Path.home() / '.empirica' / f'active_transaction{suffix}.json'
+    candidate = Path.home() / ".empirica" / f"active_transaction{suffix}.json"
     if candidate.exists():
         return candidate
 
@@ -83,13 +83,13 @@ def _build_context_usage_output(claude_session_id):
 
     try:
         suffix = _get_instance_suffix()
-        state_file = Path.home() / '.empirica' / f'context_usage{suffix}.json'
+        state_file = Path.home() / ".empirica" / f"context_usage{suffix}.json"
         if not state_file.exists():
             return {}
 
         state = json.loads(state_file.read_text())
-        used_pct = state.get('used_percentage', 0)
-        state_age = _time.time() - state.get('timestamp', 0)
+        used_pct = state.get("used_percentage", 0)
+        state_age = _time.time() - state.get("timestamp", 0)
 
         if state_age >= 60 or used_pct <= 0:
             return {}
@@ -112,12 +112,7 @@ def _build_context_usage_output(claude_session_id):
         if used_pct > 85:
             ctx_msg = _maybe_append_project_switch_hint(ctx_msg, claude_session_id)
 
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "UserPromptSubmit",
-                "additionalContext": ctx_msg
-            }
-        }
+        return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": ctx_msg}}
     except Exception:
         return {}
 
@@ -129,7 +124,7 @@ def _maybe_append_project_switch_hint(ctx_msg, claude_session_id):
         tx_file = _find_transaction_file(claude_session_id)
         if tx_file:
             tx_data = json.loads(Path(tx_file).read_text())
-            tx_project = tx_data.get('project_path', '')
+            tx_project = tx_data.get("project_path", "")
             if tx_project and str(Path(tx_project).resolve()) != cwd:
                 ctx_msg += (
                     f" | CWD project differs from transaction project"
@@ -156,11 +151,21 @@ def _build_no_transaction_nudge(hook_input):
     """Build a skill nudge message when no active transaction exists."""
     skill_nudge = "no active transaction — load /empirica-constitution for orientation before PREFLIGHT"
 
-    user_prompt = hook_input.get('prompt', '').lower()
+    user_prompt = hook_input.get("prompt", "").lower()
     complex_work_signals = [
-        'plan', 'implement', 'spec', 'transaction', 'transactions',
-        'preflight', 'artifacts', 'epistemic', 'break this down',
-        'how should i approach', 'decompose', 'multi-step', 'complex',
+        "plan",
+        "implement",
+        "spec",
+        "transaction",
+        "transactions",
+        "preflight",
+        "artifacts",
+        "epistemic",
+        "break this down",
+        "how should i approach",
+        "decompose",
+        "multi-step",
+        "complex",
     ]
     if any(signal in user_prompt for signal in complex_work_signals):
         skill_nudge += " | complex work detected — consider /epistemic-transaction for structured decomposition"
@@ -172,7 +177,7 @@ def _atomic_write_counters(counters, counters_path):
     """Atomically write counters dict to counters_path."""
     fd, tmp = tempfile.mkstemp(dir=str(counters_path.parent))
     try:
-        with os.fdopen(fd, 'w') as tf:
+        with os.fdopen(fd, "w") as tf:
             json.dump(counters, tf, indent=2)
         os.replace(tmp, str(counters_path))
     except BaseException:
@@ -187,15 +192,15 @@ def _get_reminder_turns(tx_path):
     reminder_turns = 15
     try:
         import yaml
+
         for cfg_path in [
-            tx_path.parent.parent / '.empirica-project' / 'PROJECT_CONFIG.yaml',
-            tx_path.parent.parent / 'PROJECT_CONFIG.yaml',
+            tx_path.parent.parent / ".empirica-project" / "PROJECT_CONFIG.yaml",
+            tx_path.parent.parent / "PROJECT_CONFIG.yaml",
         ]:
             if cfg_path.exists():
                 with open(cfg_path) as f:
                     cfg = yaml.safe_load(f) or {}
-                reminder_turns = int(cfg.get('transaction', {}).get(
-                    'log_artifacts_reminder_turns', reminder_turns))
+                reminder_turns = int(cfg.get("transaction", {}).get("log_artifacts_reminder_turns", reminder_turns))
                 break
     except Exception:
         pass
@@ -207,29 +212,36 @@ def _check_artifact_reminder(tx, tx_path, counters, counters_path, output):
 
     Mutates output and counters in-place if a reminder is needed.
     """
-    tool_calls = counters.get('tool_call_count', 0)
+    tool_calls = counters.get("tool_call_count", 0)
     reminder_turns = _get_reminder_turns(tx_path)
 
-    if tool_calls < reminder_turns or counters.get('artifact_reminded'):
+    if tool_calls < reminder_turns or counters.get("artifact_reminded"):
         return
 
     try:
-        tx_id = tx.get('transaction_id')
-        session_id = tx.get('session_id')
+        tx_id = tx.get("transaction_id")
+        session_id = tx.get("session_id")
         if not (tx_id and session_id):
             return
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
         from empirica.data.session_database import SessionDatabase
+
         db = SessionDatabase()
         cursor = db.conn.cursor()
         total = 0
-        for table in ('project_findings', 'project_unknowns', 'project_dead_ends',
-                      'mistakes_made', 'assumptions', 'decisions'):
+        for table in (
+            "project_findings",
+            "project_unknowns",
+            "project_dead_ends",
+            "mistakes_made",
+            "assumptions",
+            "decisions",
+        ):
             try:
                 cursor.execute(
-                    f"SELECT COUNT(*) FROM {table} WHERE session_id = ? AND transaction_id = ?",
-                    (session_id, tx_id))
+                    f"SELECT COUNT(*) FROM {table} WHERE session_id = ? AND transaction_id = ?", (session_id, tx_id)
+                )
                 total += cursor.fetchone()[0]
             except Exception:
                 pass
@@ -246,7 +258,7 @@ def _check_artifact_reminder(tx, tx_path, counters, counters_path, output):
         )
         _append_to_output(output, reminder)
 
-        counters['artifact_reminded'] = True
+        counters["artifact_reminded"] = True
         _atomic_write_counters(counters, counters_path)
     except Exception:
         pass
@@ -257,16 +269,20 @@ def _get_goal_hint(tx_id):
     try:
         sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
         from empirica.data.session_database import SessionDatabase
+
         cursor2 = SessionDatabase().conn.cursor()
-        cursor2.execute("""
+        cursor2.execute(
+            """
             SELECT objective, scope FROM goals
             WHERE transaction_id = ? AND status = 'in_progress'
             LIMIT 1
-        """, (tx_id,))
+        """,
+            (tx_id,),
+        )
         row = cursor2.fetchone()
         if row:
             scope = json.loads(row[1]) if row[1] else {}
-            breadth = scope.get('breadth', 0.3)
+            breadth = scope.get("breadth", 0.3)
             if breadth >= 0.5:
                 return f" Working on '{row[0][:50]}...' (breadth {breadth}) — decisions and assumptions are likely worth capturing."
             return f" Working on '{row[0][:50]}...' — at minimum log a finding."
@@ -276,8 +292,8 @@ def _get_goal_hint(tx_id):
 
 
 def main():
-    hook_input = json.loads(sys.stdin.read() or '{}')
-    claude_session_id = hook_input.get('session_id')
+    hook_input = json.loads(sys.stdin.read() or "{}")
+    claude_session_id = hook_input.get("session_id")
 
     # Context window monitoring
     output = _build_context_usage_output(claude_session_id)
@@ -293,13 +309,13 @@ def main():
         with open(tx_path) as f:
             tx = json.load(f)
 
-        if tx.get('status') != 'open':
+        if tx.get("status") != "open":
             print(json.dumps({}))
             return
 
         # READ-MODIFY-WRITE the hook counters file (hook-owned, no race with POSTFLIGHT)
         suffix = _get_instance_suffix()
-        counters_path = tx_path.parent / f'hook_counters{suffix}.json'
+        counters_path = tx_path.parent / f"hook_counters{suffix}.json"
         counters = {}
         if counters_path.exists():
             try:
@@ -308,11 +324,11 @@ def main():
             except Exception:
                 counters = {}
 
-        was_solicited = counters.pop('pending_user_response', False)
+        was_solicited = counters.pop("pending_user_response", False)
         if was_solicited:
-            counters['solicited_prompt_count'] = counters.get('solicited_prompt_count', 0) + 1
+            counters["solicited_prompt_count"] = counters.get("solicited_prompt_count", 0) + 1
         else:
-            counters['unsolicited_prompt_count'] = counters.get('unsolicited_prompt_count', 0) + 1
+            counters["unsolicited_prompt_count"] = counters.get("unsolicited_prompt_count", 0) + 1
 
         _atomic_write_counters(counters, counters_path)
 
@@ -325,5 +341,5 @@ def main():
     print(json.dumps(output))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

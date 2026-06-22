@@ -30,7 +30,7 @@ from pathlib import Path
 
 def find_subagent_session(agent_name: str) -> dict:
     """Find the most recent active subagent session for this agent."""
-    subagent_dir = Path.cwd() / '.empirica' / 'subagent_sessions'
+    subagent_dir = Path.cwd() / ".empirica" / "subagent_sessions"
     if not subagent_dir.exists():
         return {}
 
@@ -75,7 +75,7 @@ def count_transcript_tool_calls(transcript_path: str) -> int:
     count = 0
     try:
         content = Path(transcript_path).read_text()
-        for line in content.strip().split('\n'):
+        for line in content.strip().split("\n"):
             try:
                 entry = json.loads(line)
                 msg = entry.get("message", {})
@@ -120,9 +120,9 @@ def add_delegated_work_to_parent(tool_call_count: int) -> bool:
         project_path = R.project_path()
 
         if project_path:
-            tx_path = Path(project_path) / '.empirica' / f'active_transaction{suffix}.json'
+            tx_path = Path(project_path) / ".empirica" / f"active_transaction{suffix}.json"
         else:
-            tx_path = Path.home() / '.empirica' / f'active_transaction{suffix}.json'
+            tx_path = Path.home() / ".empirica" / f"active_transaction{suffix}.json"
 
         # Check transaction is open (read-only)
         if not tx_path.exists():
@@ -131,11 +131,11 @@ def add_delegated_work_to_parent(tool_call_count: int) -> bool:
         with open(tx_path) as f:
             tx_data = json.load(f)
 
-        if tx_data.get('status') != 'open':
+        if tx_data.get("status") != "open":
             return False
 
         # Read-modify-write the hook counters file
-        counters_path = tx_path.parent / f'hook_counters{suffix}.json'
+        counters_path = tx_path.parent / f"hook_counters{suffix}.json"
         counters = {}
         if counters_path.exists():
             try:
@@ -144,13 +144,13 @@ def add_delegated_work_to_parent(tool_call_count: int) -> bool:
             except Exception:
                 counters = {}
 
-        counters['tool_call_count'] = counters.get('tool_call_count', 0) + tool_call_count
-        counters['delegated_tool_calls'] = counters.get('delegated_tool_calls', 0) + tool_call_count
+        counters["tool_call_count"] = counters.get("tool_call_count", 0) + tool_call_count
+        counters["delegated_tool_calls"] = counters.get("delegated_tool_calls", 0) + tool_call_count
 
         # Atomic write to counters file
         fd, tmp = tempfile.mkstemp(dir=str(counters_path.parent))
         try:
-            with os.fdopen(fd, 'w') as tf:
+            with os.fdopen(fd, "w") as tf:
                 json.dump(counters, tf, indent=2)
             os.replace(tmp, str(counters_path))
         except BaseException:
@@ -183,8 +183,8 @@ def _extract_matching_sentence(text_content: str, pattern_start: str) -> str | N
     """Find the first sentence containing the pattern, return it truncated or None."""
     if pattern_start not in text_content:
         return None
-    keyword = pattern_start.rstrip(':')
-    for sentence in text_content.split('.'):
+    keyword = pattern_start.rstrip(":")
+    for sentence in text_content.split("."):
         if keyword in sentence:
             stripped = sentence.strip()
             if len(stripped) > 10:
@@ -211,7 +211,7 @@ def extract_findings_from_transcript(transcript_path: str) -> dict:
 
     try:
         content = Path(transcript_path).read_text()
-        for line in content.strip().split('\n'):
+        for line in content.strip().split("\n"):
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError:
@@ -241,12 +241,11 @@ def extract_findings_from_transcript(transcript_path: str) -> dict:
     return {
         "findings": findings[:5],  # Cap at 5 per type
         "unknowns": unknowns[:5],
-        "dead_ends": dead_ends[:3]
+        "dead_ends": dead_ends[:3],
     }
 
 
-def rollup_to_parent(parent_session_id: str, agent_name: str, extracted: dict,
-                     subagent_data: dict | None = None):
+def rollup_to_parent(parent_session_id: str, agent_name: str, extracted: dict, subagent_data: dict | None = None):
     """Log extracted findings/unknowns to parent session via epistemic rollup gate.
 
     Uses EpistemicRollupGate to score and filter findings before logging.
@@ -256,6 +255,7 @@ def rollup_to_parent(parent_session_id: str, agent_name: str, extracted: dict,
 
     try:
         from empirica.data.session_database import SessionDatabase
+
         db = SessionDatabase()
 
         # Resolve project_id from parent session
@@ -264,10 +264,7 @@ def rollup_to_parent(parent_session_id: str, agent_name: str, extracted: dict,
 
         # Try to use the epistemic rollup gate for scored rollup
         raw_findings = extracted.get("findings", [])
-        gated = _gated_rollup(
-            parent_session_id, project_id, agent_name, raw_findings, db,
-            subagent_data=subagent_data
-        )
+        gated = _gated_rollup(parent_session_id, project_id, agent_name, raw_findings, db, subagent_data=subagent_data)
 
         if gated is not None:
             # Gated rollup succeeded — log only accepted findings
@@ -277,7 +274,7 @@ def rollup_to_parent(parent_session_id: str, agent_name: str, extracted: dict,
                         project_id=project_id,
                         session_id=parent_session_id,
                         finding=f"[{agent_name}] {scored['finding']}",
-                        impact=min(1.0, scored.get("score", 0.5))
+                        impact=min(1.0, scored.get("score", 0.5)),
                     )
                     logged["findings"] += 1
                 except Exception:
@@ -291,7 +288,7 @@ def rollup_to_parent(parent_session_id: str, agent_name: str, extracted: dict,
                         project_id=project_id,
                         session_id=parent_session_id,
                         finding=f"[{agent_name}] {finding}",
-                        impact=0.5
+                        impact=0.5,
                     )
                     logged["findings"] += 1
                 except Exception:
@@ -300,11 +297,7 @@ def rollup_to_parent(parent_session_id: str, agent_name: str, extracted: dict,
         # Unknowns and dead ends pass through without gating
         for unknown in extracted.get("unknowns", []):
             try:
-                db.log_unknown(
-                    project_id=project_id,
-                    session_id=parent_session_id,
-                    unknown=f"[{agent_name}] {unknown}"
-                )
+                db.log_unknown(project_id=project_id, session_id=parent_session_id, unknown=f"[{agent_name}] {unknown}")
                 logged["unknowns"] += 1
             except Exception:
                 pass
@@ -315,7 +308,7 @@ def rollup_to_parent(parent_session_id: str, agent_name: str, extracted: dict,
                     project_id=project_id,
                     session_id=parent_session_id,
                     approach=f"[{agent_name}] {dead_end.get('approach', 'unknown')}",
-                    why_failed=dead_end.get('why_failed', 'unknown')
+                    why_failed=dead_end.get("why_failed", "unknown"),
                 )
                 logged["dead_ends"] += 1
             except Exception:
@@ -328,8 +321,7 @@ def rollup_to_parent(parent_session_id: str, agent_name: str, extracted: dict,
     return logged
 
 
-def _gated_rollup(parent_session_id, project_id, agent_name, raw_findings, db,
-                  subagent_data=None):
+def _gated_rollup(parent_session_id, project_id, agent_name, raw_findings, db, subagent_data=None):
     """Run findings through EpistemicRollupGate. Returns None if gate unavailable."""
     try:
         from empirica.core.epistemic_rollup import EpistemicRollupGate, log_rollup_decision
@@ -352,11 +344,14 @@ def _gated_rollup(parent_session_id, project_id, agent_name, raw_findings, db,
         existing = []
         try:
             cursor = db.conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT finding FROM project_findings
                 WHERE session_id = ?
                 ORDER BY created_timestamp DESC LIMIT 50
-            """, (parent_session_id,))
+            """,
+                (parent_session_id,),
+            )
             existing = [row[0] for row in cursor.fetchall()]
         except Exception:
             pass
@@ -366,10 +361,13 @@ def _gated_rollup(parent_session_id, project_id, agent_name, raw_findings, db,
         budget_remaining = 20  # Default max
         try:
             cursor = db.conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT id, remaining FROM attention_budgets
                 WHERE session_id = ? ORDER BY created_at DESC LIMIT 1
-            """, (parent_session_id,))
+            """,
+                (parent_session_id,),
+            )
             row = cursor.fetchone()
             if row:
                 budget_id = row[0]
@@ -395,14 +393,16 @@ def _gated_rollup(parent_session_id, project_id, agent_name, raw_findings, db,
         if budget_id and result.budget_consumed > 0:
             try:
                 cursor = db.conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     UPDATE attention_budgets
                     SET allocated = allocated + ?,
                         remaining = remaining - ?,
                         updated_at = ?
                     WHERE id = ?
-                """, (result.budget_consumed, result.budget_consumed,
-                      datetime.now().timestamp(), budget_id))
+                """,
+                    (result.budget_consumed, result.budget_consumed, datetime.now().timestamp(), budget_id),
+                )
                 db.conn.commit()
             except Exception:
                 pass
@@ -438,10 +438,13 @@ def _check_regulation(parent_session_id: str, logged: dict) -> dict:
         cursor = db.conn.cursor()
 
         # Get current budget state
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT total_budget, remaining FROM attention_budgets
             WHERE session_id = ? ORDER BY created_at DESC LIMIT 1
-        """, (parent_session_id,))
+        """,
+            (parent_session_id,),
+        )
         row = cursor.fetchone()
 
         if row:
@@ -489,7 +492,8 @@ def _cleanup_subagent_active_work(subagent_claude_session_id: str | None) -> Non
         return
     try:
         from pathlib import Path as _P
-        aw_file = _P.home() / '.empirica' / f'active_work_{subagent_claude_session_id}.json'
+
+        aw_file = _P.home() / ".empirica" / f"active_work_{subagent_claude_session_id}.json"
         if aw_file.exists():
             aw_file.unlink()
     except Exception:
@@ -512,7 +516,7 @@ def main():
     if not subagent_data:
         result = {
             "continue": True,
-            "message": f"SubagentStop: No active session found for '{agent_name}'. Skipping rollup."
+            "message": f"SubagentStop: No active session found for '{agent_name}'. Skipping rollup.",
         }
         print(json.dumps(result))
         return
@@ -528,7 +532,7 @@ def main():
     delegated_ok = False
     if subagent_tool_calls > 0:
         try:
-            sys.path.insert(0, str(Path.home() / 'empirical-ai' / 'empirica'))
+            sys.path.insert(0, str(Path.home() / "empirical-ai" / "empirica"))
             delegated_ok = add_delegated_work_to_parent(subagent_tool_calls)
         except Exception:
             pass
@@ -540,8 +544,7 @@ def main():
     # Roll up to parent session
     logged = {"findings": 0, "unknowns": 0, "dead_ends": 0}
     if parent_session_id and total_extracted > 0:
-        logged = rollup_to_parent(parent_session_id, agent_name, extracted,
-                                  subagent_data=subagent_data)
+        logged = rollup_to_parent(parent_session_id, agent_name, extracted, subagent_data=subagent_data)
 
     # Always close the child session in DB, regardless of extracted findings.
     # Subagent rows live in the dedicated subagent_sessions table (migration 034)
@@ -549,6 +552,7 @@ def main():
     if child_session_id:
         try:
             from empirica.data.session_database import SessionDatabase
+
             db = SessionDatabase()
             db.end_subagent_session(child_session_id)
             db.close()
@@ -562,13 +566,16 @@ def main():
 
     # Mark session completed
     if subagent_data.get("_file_path"):
-        mark_session_completed(subagent_data["_file_path"], {
-            "extracted": total_extracted,
-            "logged": logged,
-            "transcript_path": transcript_path,
-            "subagent_tool_calls": subagent_tool_calls,
-            "delegated_to_parent": delegated_ok
-        })
+        mark_session_completed(
+            subagent_data["_file_path"],
+            {
+                "extracted": total_extracted,
+                "logged": logged,
+                "transcript_path": transcript_path,
+                "subagent_tool_calls": subagent_tool_calls,
+                "delegated_to_parent": delegated_ok,
+            },
+        )
 
     rejected_count = logged.get("rejected", 0)
     accepted_count = logged.get("findings", 0) + logged.get("unknowns", 0) + logged.get("dead_ends", 0)
@@ -598,22 +605,18 @@ def main():
     regulation_directive = ""
     if regulation and not regulation.get("should_spawn_more", True):
         regulation_directive = (
-            " REGULATION: DO NOT spawn more agents — "
-            f"{regulation.get('reason', 'budget/gain threshold reached')}."
+            f" REGULATION: DO NOT spawn more agents — {regulation.get('reason', 'budget/gain threshold reached')}."
         )
 
     result = {
         "continue": True,
         "message": f"SubagentStop: Agent '{agent_name}' completed. "
-                   f"Extracted {total_extracted} artifacts, accepted {accepted_count}, "
-                   f"rejected {rejected_count} via rollup gate. "
-                   f"Parent: {parent_session_id[:8] if parent_session_id else 'none'}."
-                   f"{budget_msg}{delegation_msg}{regulation_directive}",
+        f"Extracted {total_extracted} artifacts, accepted {accepted_count}, "
+        f"rejected {rejected_count} via rollup gate. "
+        f"Parent: {parent_session_id[:8] if parent_session_id else 'none'}."
+        f"{budget_msg}{delegation_msg}{regulation_directive}",
         "regulation": regulation,
-        "delegated_work": {
-            "subagent_tool_calls": subagent_tool_calls,
-            "added_to_parent_transaction": delegated_ok
-        }
+        "delegated_work": {"subagent_tool_calls": subagent_tool_calls, "added_to_parent_transaction": delegated_ok},
     }
     print(json.dumps(result))
 

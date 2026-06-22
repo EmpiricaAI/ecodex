@@ -40,14 +40,10 @@ except Exception:
 
 
 def _format_request(request) -> str:
-    requested_by = request.requested_by or 'cockpit'
-    pid_line = (
-        f"- **curl_pid:** `{request.curl_pid}`\n"
-        if request.curl_pid is not None else ''
-    )
+    requested_by = request.requested_by or "cockpit"
+    pid_line = f"- **curl_pid:** `{request.curl_pid}`\n" if request.curl_pid is not None else ""
     pid_kill = (
-        f"     and `kill {request.curl_pid}` to drop the held connection.\n"
-        if request.curl_pid is not None else ''
+        f"     and `kill {request.curl_pid}` to drop the held connection.\n" if request.curl_pid is not None else ""
     )
     return f"""\
 ## ⚙ Listener uninstall request from {requested_by}
@@ -91,15 +87,19 @@ def main() -> int:
         return 0
 
     blocks = [_format_request(r) for r in requests]
-    additional = '\n\n'.join(blocks)
-    print(json.dumps({
-        'hookSpecificOutput': {
-            'hookEventName': 'UserPromptSubmit',
-            'additionalContext': additional,
-        },
-    }))
+    additional = "\n\n".join(blocks)
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": additional,
+                },
+            }
+        )
+    )
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

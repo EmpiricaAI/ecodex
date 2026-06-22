@@ -16,9 +16,7 @@ from typing import Any
 
 
 def should_keep_snapshot(
-    snapshot: dict[str, Any],
-    all_snapshots: list[dict[str, Any]],
-    recent_count: int = 5
+    snapshot: dict[str, Any], all_snapshots: list[dict[str, Any]], recent_count: int = 5
 ) -> dict[str, Any]:
     """
     Determine if snapshot should be kept using Impact + Completion curation.
@@ -31,18 +29,15 @@ def should_keep_snapshot(
     Returns:
         Dict with {"keep": bool, "reason": str}
     """
-    vectors = snapshot.get('checkpoint', {}).get('vectors', {})
-    timestamp = snapshot.get('timestamp')
+    vectors = snapshot.get("checkpoint", {}).get("vectors", {})
+    timestamp = snapshot.get("timestamp")
 
     # Extract impact and completion
-    impact = vectors.get('impact', 0.5)
-    completion = vectors.get('completion', 0.0)
+    impact = vectors.get("impact", 0.5)
+    completion = vectors.get("completion", 0.0)
 
     # Rule 1: Always keep recent snapshots (last N)
-    snapshot_index = next(
-        (i for i, s in enumerate(all_snapshots) if s.get('timestamp') == timestamp),
-        -1
-    )
+    snapshot_index = next((i for i, s in enumerate(all_snapshots) if s.get("timestamp") == timestamp), -1)
     if snapshot_index >= 0 and snapshot_index < recent_count:
         return {"keep": True, "reason": f"recent (rank {snapshot_index + 1}/{recent_count})"}
 
@@ -69,26 +64,22 @@ def should_keep_snapshot(
 def parse_snapshot_timestamp(ts: str) -> datetime:
     """Parse snapshot timestamp, handling both ISO and dash-separated formats"""
     # Handle format like "2026-01-08T03-17-11" (dashes in time)
-    ts = ts.replace('T', ' ').replace('Z', '')
+    ts = ts.replace("T", " ").replace("Z", "")
     # If time portion has dashes instead of colons, fix it
-    parts = ts.split(' ')
-    if len(parts) == 2 and '-' in parts[1]:
-        time_parts = parts[1].split('-')
+    parts = ts.split(" ")
+    if len(parts) == 2 and "-" in parts[1]:
+        time_parts = parts[1].split("-")
         if len(time_parts) == 3:
             ts = f"{parts[0]} {':'.join(time_parts)}"
     return datetime.fromisoformat(ts)
 
 
-def is_best_in_window(
-    snapshot: dict[str, Any],
-    all_snapshots: list[dict[str, Any]],
-    window_hours: int = 24
-) -> bool:
+def is_best_in_window(snapshot: dict[str, Any], all_snapshots: list[dict[str, Any]], window_hours: int = 24) -> bool:
     """Check if snapshot has highest impact in its time window"""
-    if 'timestamp' not in snapshot:
+    if "timestamp" not in snapshot:
         return False
-    snapshot_time = parse_snapshot_timestamp(snapshot['timestamp'])
-    snapshot_impact = snapshot.get('checkpoint', {}).get('vectors', {}).get('impact', 0.0)
+    snapshot_time = parse_snapshot_timestamp(snapshot["timestamp"])
+    snapshot_impact = snapshot.get("checkpoint", {}).get("vectors", {}).get("impact", 0.0)
 
     window_start = snapshot_time - timedelta(hours=window_hours / 2)
     window_end = snapshot_time + timedelta(hours=window_hours / 2)
@@ -96,9 +87,9 @@ def is_best_in_window(
     # Find all snapshots in window
     window_snapshots = []
     for s in all_snapshots:
-        if 'timestamp' not in s:
+        if "timestamp" not in s:
             continue
-        s_time = parse_snapshot_timestamp(s['timestamp'])
+        s_time = parse_snapshot_timestamp(s["timestamp"])
         if window_start <= s_time <= window_end:
             window_snapshots.append(s)
 
@@ -106,10 +97,7 @@ def is_best_in_window(
     if not window_snapshots:
         return False
 
-    max_impact = max(
-        s.get('checkpoint', {}).get('vectors', {}).get('impact', 0.0)
-        for s in window_snapshots
-    )
+    max_impact = max(s.get("checkpoint", {}).get("vectors", {}).get("impact", 0.0) for s in window_snapshots)
 
     return snapshot_impact >= max_impact
 
@@ -136,14 +124,11 @@ def curate_snapshots(ref_docs_dir: Path, dry_run: bool = False) -> dict[str, Any
     for f in snapshot_files:
         with open(f) as fp:
             snapshot = json.load(fp)
-            snapshot['_file_path'] = f
+            snapshot["_file_path"] = f
             snapshots.append(snapshot)
 
     # Sort by timestamp DESC (most recent first)
-    snapshots.sort(
-        key=lambda s: s.get('timestamp', ''),
-        reverse=True
-    )
+    snapshots.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
 
     # Create archive directory
     archive_dir = ref_docs_dir / "archive"
@@ -156,18 +141,20 @@ def curate_snapshots(ref_docs_dir: Path, dry_run: bool = False) -> dict[str, Any
 
     for snapshot in snapshots:
         decision = should_keep_snapshot(snapshot, snapshots)
-        file_path = snapshot['_file_path']
+        file_path = snapshot["_file_path"]
 
-        decisions.append({
-            "file": file_path.name,
-            "timestamp": snapshot.get('timestamp'),
-            "impact": snapshot.get('checkpoint', {}).get('vectors', {}).get('impact', 0.0),
-            "completion": snapshot.get('checkpoint', {}).get('vectors', {}).get('completion', 0.0),
-            "decision": "keep" if decision['keep'] else "archive",
-            "reason": decision['reason']
-        })
+        decisions.append(
+            {
+                "file": file_path.name,
+                "timestamp": snapshot.get("timestamp"),
+                "impact": snapshot.get("checkpoint", {}).get("vectors", {}).get("impact", 0.0),
+                "completion": snapshot.get("checkpoint", {}).get("vectors", {}).get("completion", 0.0),
+                "decision": "keep" if decision["keep"] else "archive",
+                "reason": decision["reason"],
+            }
+        )
 
-        if decision['keep']:
+        if decision["keep"]:
             kept += 1
         else:
             archived += 1
@@ -183,7 +170,7 @@ def curate_snapshots(ref_docs_dir: Path, dry_run: bool = False) -> dict[str, Any
         "archived": archived,
         "retention_rate": kept / len(snapshots) if snapshots else 0,
         "decisions": decisions,
-        "dry_run": dry_run
+        "dry_run": dry_run,
     }
 
 
@@ -192,22 +179,22 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Curate Empirica pre-summary snapshots")
-    parser.add_argument('--dry-run', action='store_true', help='Show what would be archived without moving files')
-    parser.add_argument('--ref-docs-dir', type=str, default='.empirica/ref-docs',
-                        help='Path to ref-docs directory (default: project-local .empirica/ref-docs)')
-    parser.add_argument('--output', choices=['default', 'json'], default='default',
-                        help='Output format')
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be archived without moving files")
+    parser.add_argument(
+        "--ref-docs-dir",
+        type=str,
+        default=".empirica/ref-docs",
+        help="Path to ref-docs directory (default: project-local .empirica/ref-docs)",
+    )
+    parser.add_argument("--output", choices=["default", "json"], default="default", help="Output format")
 
     args = parser.parse_args()
 
     ref_docs_dir = Path(args.ref_docs_dir).expanduser()
 
     if not ref_docs_dir.exists():
-        result = {
-            "ok": False,
-            "error": f"Ref-docs directory not found: {ref_docs_dir}"
-        }
-        if args.output == 'json':
+        result = {"ok": False, "error": f"Ref-docs directory not found: {ref_docs_dir}"}
+        if args.output == "json":
             print(json.dumps(result, indent=2))
         else:
             print(f"❌ {result['error']}", file=sys.stderr)
@@ -217,7 +204,7 @@ def main():
     result = curate_snapshots(ref_docs_dir, dry_run=args.dry_run)
 
     # Output results
-    if args.output == 'json':
+    if args.output == "json":
         print(json.dumps(result, indent=2))
     else:
         # Human-readable output
@@ -227,13 +214,13 @@ def main():
         print(f"Kept: {result['kept']} ({result['retention_rate']:.1%})")
         print(f"Archived: {result['archived']} ({1 - result['retention_rate']:.1%})")
 
-        if result.get('decisions'):
+        if result.get("decisions"):
             print("\nDecisions:")
-            for d in result['decisions'][:10]:  # Show first 10
-                action = "✓ KEEP" if d['decision'] == 'keep' else "📦 ARCHIVE"
+            for d in result["decisions"][:10]:  # Show first 10
+                action = "✓ KEEP" if d["decision"] == "keep" else "📦 ARCHIVE"
                 print(f"  {action}: {d['file'][:40]:<40} | impact={d['impact']:.2f} | {d['reason']}")
 
-            if len(result['decisions']) > 10:
+            if len(result["decisions"]) > 10:
                 print(f"  ... and {len(result['decisions']) - 10} more")
 
         print()
@@ -241,5 +228,5 @@ def main():
     sys.exit(0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

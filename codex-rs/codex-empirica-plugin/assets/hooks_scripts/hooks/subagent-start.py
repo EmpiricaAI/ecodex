@@ -30,8 +30,9 @@ def get_parent_session_id():
     """Get current Empirica session ID from active_session file or DB."""
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         # Canonical ai_id (project.yaml → basename); 'claude-code' only as last-resort fallback.
-        session_id = R.latest_session_id(ai_id=R.ai_id() or 'claude-code', active_only=True)
+        session_id = R.latest_session_id(ai_id=R.ai_id() or "claude-code", active_only=True)
         if session_id:
             return session_id
     except ImportError:
@@ -40,12 +41,13 @@ def get_parent_session_id():
     # Fallback: read active_session file
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         instance_id = R.instance_id()
         safe_instance = instance_id.replace(":", "_").replace("%", "") if instance_id else ""
         suffix = f"_{safe_instance}" if safe_instance else ""
 
-        for base in [Path.cwd() / '.empirica', Path.home() / '.empirica']:
-            active_file = base / f'active_session{suffix}'
+        for base in [Path.cwd() / ".empirica", Path.home() / ".empirica"]:
+            active_file = base / f"active_session{suffix}"
             if active_file.exists():
                 sid = active_file.read_text().strip()
                 if sid:
@@ -79,28 +81,29 @@ def create_child_session(parent_session_id: str, agent_name: str) -> dict:
             "ok": True,
             "child_session_id": child_session_id,
             "parent_session_id": parent_session_id,
-            "agent_name": agent_name
+            "agent_name": agent_name,
         }
     except Exception as e:
-        return {
-            "ok": False,
-            "error": str(e)
-        }
+        return {"ok": False, "error": str(e)}
 
 
 def get_budget_allocation(parent_session_id: str, agent_name: str) -> dict:
     """Get attention budget allocation for this agent, if one exists."""
     try:
         from empirica.data.session_database import SessionDatabase
+
         db = SessionDatabase()
         cursor = db.conn.cursor()
 
         # Find active budget for parent session
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT id, remaining, domain_allocations, strategy
             FROM attention_budgets
             WHERE session_id = ? ORDER BY created_at DESC LIMIT 1
-        """, (parent_session_id,))
+        """,
+            (parent_session_id,),
+        )
         row = cursor.fetchone()
         db.close()
 
@@ -142,7 +145,8 @@ def _create_default_budget(parent_session_id: str) -> dict:
     """
     try:
         import sys
-        sys.path.insert(0, str(Path.home() / 'empirical-ai' / 'empirica'))
+
+        sys.path.insert(0, str(Path.home() / "empirical-ai" / "empirica"))
         import uuid
 
         from empirica.core.attention_budget import AttentionBudget, DomainAllocation, persist_budget
@@ -151,10 +155,13 @@ def _create_default_budget(parent_session_id: str) -> dict:
         # Check if budget already exists (idempotent)
         db = SessionDatabase()
         cursor = db.conn.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT id, remaining FROM attention_budgets
             WHERE session_id = ? ORDER BY created_at DESC LIMIT 1
-        """, (parent_session_id,))
+        """,
+            (parent_session_id,),
+        )
         existing = cursor.fetchone()
         db.close()
 
@@ -199,7 +206,7 @@ def _create_default_budget(parent_session_id: str) -> dict:
 
 def store_subagent_session(agent_name: str, child_session_id: str, parent_session_id: str):
     """Store subagent session mapping for later rollup by SubagentStop."""
-    subagent_dir = Path.cwd() / '.empirica' / 'subagent_sessions'
+    subagent_dir = Path.cwd() / ".empirica" / "subagent_sessions"
     subagent_dir.mkdir(parents=True, exist_ok=True)
 
     # Use timestamp to allow multiple invocations of same agent
@@ -251,23 +258,20 @@ def _write_subagent_active_work(
     if not subagent_claude_session_id:
         return False
     try:
-        active_work_file = (
-            Path.home() / '.empirica' /
-            f'active_work_{subagent_claude_session_id}.json'
-        )
-        Path.home().joinpath('.empirica').mkdir(parents=True, exist_ok=True)
+        active_work_file = Path.home() / ".empirica" / f"active_work_{subagent_claude_session_id}.json"
+        Path.home().joinpath(".empirica").mkdir(parents=True, exist_ok=True)
         data = {
-            'claude_session_id': subagent_claude_session_id,
-            'empirica_session_id': child_session_id,
-            'is_subagent': True,
-            'parent_claude_session_id': parent_claude_session_id,
-            'parent_empirica_session_id': parent_session_id,
-            'agent_name': agent_name,
-            'source': 'subagent-start',
-            'timestamp': datetime.now().isoformat(),
-            'timestamp_epoch': datetime.now().timestamp(),
+            "claude_session_id": subagent_claude_session_id,
+            "empirica_session_id": child_session_id,
+            "is_subagent": True,
+            "parent_claude_session_id": parent_claude_session_id,
+            "parent_empirica_session_id": parent_session_id,
+            "agent_name": agent_name,
+            "source": "subagent-start",
+            "timestamp": datetime.now().isoformat(),
+            "timestamp_epoch": datetime.now().timestamp(),
         }
-        with open(active_work_file, 'w') as f:
+        with open(active_work_file, "w") as f:
             json.dump(data, f, indent=2)
         os.chmod(active_work_file, 0o600)
         return True
@@ -294,7 +298,7 @@ def main():
         # No active session — allow agent to proceed without tracking
         result = {
             "continue": True,
-            "message": f"SubagentStart: No active Empirica session. Agent '{agent_name}' proceeding without lineage tracking."
+            "message": f"SubagentStart: No active Empirica session. Agent '{agent_name}' proceeding without lineage tracking.",
         }
         print(json.dumps(result))
         return
@@ -337,13 +341,13 @@ def main():
 
         result = {
             "continue": True,
-            "message": f"SubagentStart: Created child session {child_session_id[:8]} for '{agent_name}' (parent: {parent_session_id[:8]}){aw_msg}{budget_warning}"
+            "message": f"SubagentStart: Created child session {child_session_id[:8]} for '{agent_name}' (parent: {parent_session_id[:8]}){aw_msg}{budget_warning}",
         }
     else:
         # Creation failed — allow agent to proceed anyway (fail-open)
         result = {
             "continue": True,
-            "message": f"SubagentStart: Failed to create child session for '{agent_name}': {child_result.get('error', 'unknown')}. Proceeding without tracking."
+            "message": f"SubagentStart: Failed to create child session for '{agent_name}': {child_result.get('error', 'unknown')}. Proceeding without tracking.",
         }
 
     print(json.dumps(result))

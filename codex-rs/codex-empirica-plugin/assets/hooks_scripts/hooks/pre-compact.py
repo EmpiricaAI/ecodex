@@ -21,16 +21,16 @@ from datetime import datetime
 from pathlib import Path
 
 # Import shared utilities from plugin lib
-sys.path.insert(0, str(Path(__file__).parent.parent / 'lib'))
+sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from project_resolver import _get_instance_suffix, find_project_root, get_instance_id
 
 # Patterns that indicate a message is system-injected, not human input
 _SKIP_PATTERNS = [
-    '<command-name>',        # Skill tool injections
-    '<system-reminder>',     # System reminders
-    'Base directory for this skill:',  # Skill headers
-    '[Request interrupted by user]',
-    '[Request interrupted by user for tool use]',
+    "<command-name>",  # Skill tool injections
+    "<system-reminder>",  # System reminders
+    "Base directory for this skill:",  # Skill headers
+    "[Request interrupted by user]",
+    "[Request interrupted by user for tool use]",
 ]
 
 
@@ -47,7 +47,7 @@ def _extract_last_task(transcript_path: str, max_chars: int = 500) -> str:
         return ""
 
     try:
-        lines = Path(transcript_path).read_text().strip().split('\n')
+        lines = Path(transcript_path).read_text().strip().split("\n")
         for line in reversed(lines):
             if not line.strip():
                 continue
@@ -56,11 +56,11 @@ def _extract_last_task(transcript_path: str, max_chars: int = 500) -> str:
             except json.JSONDecodeError:
                 continue
 
-            if entry.get('type') != 'user':
+            if entry.get("type") != "user":
                 continue
 
-            message = entry.get('message', {})
-            content = message.get('content', '')
+            message = entry.get("message", {})
+            content = message.get("content", "")
 
             # Content must be a string (array = tool result)
             if not isinstance(content, str):
@@ -92,37 +92,34 @@ def _extract_last_task(transcript_path: str, max_chars: int = 500) -> str:
 
 def _gather_git_context(num_commits: int = 5) -> dict:
     """Gather git context: branch, modified files, recent commits."""
-    context = {'branch': '', 'modified_files': '', 'recent_commits': ''}
+    context = {"branch": "", "modified_files": "", "recent_commits": ""}
 
     try:
         result = subprocess.run(
-            ['git', 'branch', '--show-current'],
-            capture_output=True, text=True, timeout=5, cwd=os.getcwd()
+            ["git", "branch", "--show-current"], capture_output=True, text=True, timeout=5, cwd=os.getcwd()
         )
-        context['branch'] = result.stdout.strip() or 'detached'
+        context["branch"] = result.stdout.strip() or "detached"
     except Exception:
         pass
 
     try:
         result = subprocess.run(
-            ['git', 'status', '--porcelain'],
-            capture_output=True, text=True, timeout=5, cwd=os.getcwd()
+            ["git", "status", "--porcelain"], capture_output=True, text=True, timeout=5, cwd=os.getcwd()
         )
         files = result.stdout.strip()
         if files:
-            lines = files.split('\n')[:20]
-            context['modified_files'] = '\n'.join(f'  {l}' for l in lines)
+            lines = files.split("\n")[:20]
+            context["modified_files"] = "\n".join(f"  {l}" for l in lines)
     except Exception:
         pass
 
     try:
         result = subprocess.run(
-            ['git', 'log', '--oneline', f'-{num_commits}'],
-            capture_output=True, text=True, timeout=5, cwd=os.getcwd()
+            ["git", "log", "--oneline", f"-{num_commits}"], capture_output=True, text=True, timeout=5, cwd=os.getcwd()
         )
         commits = result.stdout.strip()
         if commits:
-            context['recent_commits'] = '\n'.join(f'  {l}' for l in commits.split('\n'))
+            context["recent_commits"] = "\n".join(f"  {l}" for l in commits.split("\n"))
     except Exception:
         pass
 
@@ -136,21 +133,21 @@ def _write_unified_breadcrumbs_note(
     snapshot_filename: str,
     breadcrumbs_summary: dict,
     last_task: str,
-    git_context: dict
+    git_context: dict,
 ) -> bool:
     """Write unified breadcrumbs git note combining task context + epistemic state.
 
     Single note on 'breadcrumbs' ref replaces the old dual-system approach
     (separate bash breadcrumbs + empirica-precompact notes).
     """
-    know = vectors.get('know', 'N/A')
-    uncertainty = vectors.get('uncertainty', 'N/A')
-    completion = vectors.get('completion', 'N/A')
-    context_v = vectors.get('context', 'N/A')
+    know = vectors.get("know", "N/A")
+    uncertainty = vectors.get("uncertainty", "N/A")
+    completion = vectors.get("completion", "N/A")
+    context_v = vectors.get("context", "N/A")
 
-    branch = git_context.get('branch', 'unknown')
-    modified = git_context.get('modified_files', '') or '[Working tree clean]'
-    commits = git_context.get('recent_commits', '') or '[No recent commits]'
+    branch = git_context.get("branch", "unknown")
+    modified = git_context.get("modified_files", "") or "[Working tree clean]"
+    commits = git_context.get("recent_commits", "") or "[No recent commits]"
 
     note = f"""🍞 BREADCRUMBS - {timestamp}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -158,7 +155,7 @@ def _write_unified_breadcrumbs_note(
 BRANCH: {branch}
 
 LAST_TASK:
-{last_task or '[Could not extract from transcript]'}
+{last_task or "[Could not extract from transcript]"}
 
 MODIFIED_FILES:
 {modified}
@@ -171,7 +168,7 @@ Session: {session_id}
 Vectors: know={know}, uncertainty={uncertainty}, completion={completion}, context={context_v}
 Snapshot: {snapshot_filename}
 
-Artifacts: {breadcrumbs_summary.get('findings_count', 0)} findings, {breadcrumbs_summary.get('unknowns_count', 0)} unknowns, {breadcrumbs_summary.get('goals_count', 0)} goals, {breadcrumbs_summary.get('dead_ends_count', 0)} dead-ends
+Artifacts: {breadcrumbs_summary.get("findings_count", 0)} findings, {breadcrumbs_summary.get("unknowns_count", 0)} unknowns, {breadcrumbs_summary.get("goals_count", 0)} goals, {breadcrumbs_summary.get("dead_ends_count", 0)} dead-ends
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RETRIEVAL:
@@ -182,8 +179,11 @@ RETRIEVAL:
 
     try:
         subprocess.run(
-            ['git', 'notes', '--ref=breadcrumbs', 'add', '-f', '-m', note, 'HEAD'],
-            capture_output=True, text=True, timeout=5, cwd=os.getcwd()
+            ["git", "notes", "--ref=breadcrumbs", "add", "-f", "-m", note, "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=os.getcwd(),
         )
         return True
     except Exception:
@@ -199,14 +199,14 @@ def _write_compact_handoff(project_root, claude_session_id):
     try:
         instance_id = get_instance_id()
         handoff_suffix = _get_instance_suffix()
-        handoff_file = Path.home() / '.empirica' / f'compact_handoff{handoff_suffix}.json'
+        handoff_file = Path.home() / ".empirica" / f"compact_handoff{handoff_suffix}.json"
         handoff_data = {
-            'project_path': str(project_root),
-            'claude_session_id': claude_session_id,
-            'instance_id': instance_id,
-            'timestamp': datetime.now().isoformat()
+            "project_path": str(project_root),
+            "claude_session_id": claude_session_id,
+            "instance_id": instance_id,
+            "timestamp": datetime.now().isoformat(),
         }
-        with open(handoff_file, 'w') as f:
+        with open(handoff_file, "w") as f:
             json.dump(handoff_data, f, indent=2)
     except Exception:
         pass  # Handoff write failure is non-fatal
@@ -218,7 +218,7 @@ def _detect_empirica_session():
     Returns session ID string or None.
     """
     try:
-        sys.path.insert(0, str(Path.home() / 'empirical-ai' / 'empirica'))
+        sys.path.insert(0, str(Path.home() / "empirical-ai" / "empirica"))
         from empirica.utils.session_resolver import InstanceResolver as R
 
         # Try the canonical ai_id first (project.yaml → basename), then the
@@ -226,7 +226,7 @@ def _detect_empirica_session():
         # resolved id ONLY when truthy — a leading None would short-circuit
         # to the wildcard and skip the legacy-pattern lookup.
         resolved = R.ai_id()
-        ai_patterns = ([resolved] if resolved else []) + ['claude-code', None]
+        ai_patterns = ([resolved] if resolved else []) + ["claude-code", None]
         for ai_pattern in ai_patterns:
             try:
                 return R.latest_session_id(ai_id=ai_pattern, active_only=True)
@@ -244,14 +244,16 @@ def _stash_uncommitted_work(empirica_session):
     """
     try:
         status_result = subprocess.run(
-            ['git', 'status', '--porcelain'],
-            cwd=os.getcwd(), capture_output=True, text=True, timeout=5
+            ["git", "status", "--porcelain"], cwd=os.getcwd(), capture_output=True, text=True, timeout=5
         )
         if status_result.stdout.strip():
             stash_msg = f"empirica: pre-compact {empirica_session[:8]} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             result = subprocess.run(
-                ['git', 'stash', 'push', '-m', stash_msg, '--include-untracked'],
-                cwd=os.getcwd(), capture_output=True, text=True, timeout=10
+                ["git", "stash", "push", "-m", stash_msg, "--include-untracked"],
+                cwd=os.getcwd(),
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             return result.returncode == 0
     except Exception:
@@ -265,14 +267,17 @@ def _run_context_budget_triage(empirica_session):
     Returns budget report dict or None.
     """
     try:
-        sys.path.insert(0, str(Path.home() / 'empirical-ai' / 'empirica'))
+        sys.path.insert(0, str(Path.home() / "empirical-ai" / "empirica"))
         from empirica.core.context_budget import (
             ContextBudgetManager,
             load_thresholds_from_config,
         )
+
         thresholds = load_thresholds_from_config()
         manager = ContextBudgetManager(
-            session_id=empirica_session, thresholds=thresholds, auto_subscribe=False,
+            session_id=empirica_session,
+            thresholds=thresholds,
+            auto_subscribe=False,
         )
         manager._decay_all_items()
         report = manager.get_inventory_summary()
@@ -291,19 +296,20 @@ def _capture_transaction_state(project_root):
     hook_counters = None
     try:
         from project_resolver import _get_instance_suffix
+
         suffix = _get_instance_suffix()
 
         if suffix:
-            tx_path = project_root / '.empirica' / f'active_transaction{suffix}.json'
+            tx_path = project_root / ".empirica" / f"active_transaction{suffix}.json"
             if tx_path.exists():
                 with open(tx_path) as f:
                     active_transaction = json.load(f)
-            counters_path = project_root / '.empirica' / f'hook_counters{suffix}.json'
+            counters_path = project_root / ".empirica" / f"hook_counters{suffix}.json"
             if counters_path.exists():
                 with open(counters_path) as f:
                     hook_counters = json.load(f)
         else:
-            tx_files = list((project_root / '.empirica').glob('active_transaction_*.json'))
+            tx_files = list((project_root / ".empirica").glob("active_transaction_*.json"))
             if tx_files:
                 tx_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
                 with open(tx_files[0]) as f:
@@ -320,12 +326,15 @@ def _assess_fresh_vectors(empirica_session):
     """
     try:
         assess_result = subprocess.run(
-            ['empirica', 'assess-state', '--session-id', empirica_session, '--output', 'json'],
-            capture_output=True, text=True, timeout=10, cwd=os.getcwd()
+            ["empirica", "assess-state", "--session-id", empirica_session, "--output", "json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=os.getcwd(),
         )
         if assess_result.returncode == 0:
             assess_data = json.loads(assess_result.stdout)
-            return assess_data.get('state', {}).get('vectors', {}), None
+            return assess_data.get("state", {}).get("vectors", {}), None
         return {}, assess_result.stderr
     except subprocess.TimeoutExpired:
         return {}, "assess-state timed out (>10s)"
@@ -338,21 +347,20 @@ def _build_compact_guidance(breadcrumbs, active_transaction, display_vectors):
 
     Returns (compact_guidance_str, has_open_transaction_bool).
     """
-    session_short = (breadcrumbs.get('session_id') or 'unknown')[:8]
-    last_task = breadcrumbs.get('last_task', '')
+    session_short = (breadcrumbs.get("session_id") or "unknown")[:8]
+    last_task = breadcrumbs.get("last_task", "")
     last_task_line = f"\nLast task: {last_task}" if last_task else ""
 
-    has_open_transaction = (
-        active_transaction is not None
-        and active_transaction.get('status') not in ('closed', None)
-    )
+    has_open_transaction = active_transaction is not None and active_transaction.get("status") not in ("closed", None)
 
     if has_open_transaction:
-        tx_id = active_transaction.get('transaction_id', 'unknown')[:8]
-        tx_status = active_transaction.get('status', 'unknown')
-        know_val = display_vectors.get('know', 'N/A')
-        unc_val = display_vectors.get('uncertainty', 'N/A')
-        vector_line = f"\n3. OPEN TRANSACTION {tx_id} (status: {tx_status}) — vectors: know={know_val}, uncertainty={unc_val}"
+        tx_id = active_transaction.get("transaction_id", "unknown")[:8]
+        tx_status = active_transaction.get("status", "unknown")
+        know_val = display_vectors.get("know", "N/A")
+        unc_val = display_vectors.get("uncertainty", "N/A")
+        vector_line = (
+            f"\n3. OPEN TRANSACTION {tx_id} (status: {tx_status}) — vectors: know={know_val}, uncertainty={unc_val}"
+        )
         vector_line += "\n   These vectors represent mid-transaction state. Resume from where you left off."
     else:
         vector_line = f"\n3. Session {session_short} COMPLETED (no open transaction). Previous vectors are historical — run fresh PREFLIGHT."
@@ -371,8 +379,7 @@ def _restore_stash(stash_created):
         return False
     try:
         pop_result = subprocess.run(
-            ['git', 'stash', 'pop'],
-            cwd=os.getcwd(), capture_output=True, text=True, timeout=10
+            ["git", "stash", "pop"], cwd=os.getcwd(), capture_output=True, text=True, timeout=10
         )
         return pop_result.returncode == 0
     except Exception:
@@ -383,8 +390,8 @@ def main():
     # Read hook input from stdin (provided by Claude Code)
     hook_input = json.loads(sys.stdin.read())
 
-    trigger = hook_input.get('trigger', 'auto')  # 'auto' or 'manual'
-    claude_session_id = hook_input.get('session_id')
+    trigger = hook_input.get("trigger", "auto")  # 'auto' or 'manual'
+    claude_session_id = hook_input.get("session_id")
 
     # CRITICAL: Find and change to project root BEFORE importing empirica
     project_root = find_project_root(claude_session_id=claude_session_id)
@@ -394,7 +401,7 @@ def main():
     os.chdir(project_root)
 
     # STEP 0: Extract task context + git state
-    last_task = _extract_last_task(hook_input.get('transcript_path', ''))
+    last_task = _extract_last_task(hook_input.get("transcript_path", ""))
     git_context = _gather_git_context()
     _write_compact_handoff(project_root, claude_session_id)
 
@@ -421,20 +428,33 @@ def main():
     # Precedence: explicit env override > canonical resolver (project.yaml →
     # basename) > legacy 'claude-code'. Bootstrapping the wrong practice
     # corrupts the post-compact context anchor, so resolve, don't guess.
-    ai_id = os.getenv('EMPIRICA_AI_ID')
+    ai_id = os.getenv("EMPIRICA_AI_ID")
     if not ai_id:
         try:
             from empirica.utils.session_resolver import InstanceResolver as R
+
             ai_id = R.ai_id()
         except Exception:
             ai_id = None
-    ai_id = ai_id or 'claude-code'
+    ai_id = ai_id or "claude-code"
 
     try:
         result = subprocess.run(
-            ['empirica', 'project-bootstrap', '--ai-id', ai_id,
-             '--include-live-state', '--trigger', 'pre_compact', '--output', 'json'],
-            capture_output=True, text=True, timeout=30, cwd=os.getcwd()
+            [
+                "empirica",
+                "project-bootstrap",
+                "--ai-id",
+                ai_id,
+                "--include-live-state",
+                "--trigger",
+                "pre_compact",
+                "--output",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=os.getcwd(),
         )
 
         if result.returncode != 0:
@@ -442,7 +462,7 @@ def main():
             sys.exit(2)
 
         bootstrap = json.loads(result.stdout) if result.stdout else {}
-        breadcrumbs = bootstrap.get('breadcrumbs', bootstrap)
+        breadcrumbs = bootstrap.get("breadcrumbs", bootstrap)
 
         # Save snapshot to .empirica/ref-docs
         ref_docs_dir = Path.cwd() / ".empirica" / "ref-docs"
@@ -450,13 +470,13 @@ def main():
         timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
         snapshot_path = ref_docs_dir / f"pre_summary_{timestamp}.json"
 
-        live_state = breadcrumbs.get('live_state', {})
-        fallback_vectors = live_state.get('vectors', {}) if live_state else {}
+        live_state = breadcrumbs.get("live_state", {})
+        fallback_vectors = live_state.get("vectors", {}) if live_state else {}
 
         snapshot = {
             "type": "pre_summary_snapshot",
             "timestamp": timestamp,
-            "session_id": breadcrumbs.get('session_id'),
+            "session_id": breadcrumbs.get("session_id"),
             "trigger": trigger,
             "vectors_canonical": fresh_vectors,
             "vectors_source": "assess-state" if fresh_vectors else "live_state_fallback",
@@ -464,10 +484,10 @@ def main():
             "live_state": live_state,
             "assess_error": assess_error,
             "breadcrumbs_summary": {
-                "findings_count": len(breadcrumbs.get('findings', [])),
-                "unknowns_count": len(breadcrumbs.get('unknowns', [])),
-                "goals_count": len(breadcrumbs.get('goals', [])),
-                "dead_ends_count": len(breadcrumbs.get('dead_ends', []))
+                "findings_count": len(breadcrumbs.get("findings", [])),
+                "unknowns_count": len(breadcrumbs.get("unknowns", [])),
+                "goals_count": len(breadcrumbs.get("goals", [])),
+                "dead_ends_count": len(breadcrumbs.get("dead_ends", [])),
             },
             "context_budget": budget_report,
             "active_transaction": active_transaction,
@@ -476,17 +496,19 @@ def main():
             "git_context": git_context,
         }
 
-        with open(snapshot_path, 'w') as f:
+        with open(snapshot_path, "w") as f:
             json.dump(snapshot, f, indent=2)
 
         # Write unified breadcrumbs git note
-        session_id_for_notes = breadcrumbs.get('session_id') or empirica_session
+        session_id_for_notes = breadcrumbs.get("session_id") or empirica_session
         git_notes_written = _write_unified_breadcrumbs_note(
-            session_id=session_id_for_notes, timestamp=timestamp,
+            session_id=session_id_for_notes,
+            timestamp=timestamp,
             vectors=fresh_vectors or fallback_vectors,
             snapshot_filename=snapshot_path.name,
-            breadcrumbs_summary=snapshot['breadcrumbs_summary'],
-            last_task=last_task, git_context=git_context
+            breadcrumbs_summary=snapshot["breadcrumbs_summary"],
+            last_task=last_task,
+            git_context=git_context,
         )
 
         _restore_stash(stash_created)
@@ -500,12 +522,13 @@ def main():
         print(json.dumps({"systemMessage": compact_guidance}), file=sys.stdout)
 
         # Print user-visible message to stderr
-        session_id_str = breadcrumbs.get('session_id', 'Unknown')
-        session_display = session_id_str[:8] if session_id_str else 'Unknown'
+        session_id_str = breadcrumbs.get("session_id", "Unknown")
+        session_display = session_id_str[:8] if session_id_str else "Unknown"
         notes_msg = "✓" if git_notes_written else "✗"
         stash_msg = " (stash: saved+restored)" if stash_created else ""
         tx_state_msg = "OPEN (carrying through)" if has_open_transaction else "CLOSED (vectors historical)"
-        print(f"""
+        print(
+            f"""
 📸 Empirica: Pre-compact snapshot saved — compaction is lossless (goals/artifacts/git-notes persist)
    Session: {session_display}...
    Trigger: {trigger}
@@ -513,7 +536,9 @@ def main():
    Vectors: {vector_source} ({len(display_vectors)} captured)
    Snapshot: {snapshot_path.name}
    Git notes: {notes_msg}{stash_msg}
-""", file=sys.stderr)
+""",
+            file=sys.stderr,
+        )
 
         sys.exit(0)
 
@@ -524,5 +549,6 @@ def main():
         print(json.dumps({"stopReason": f"pre-compact error: {str(e)[:200]}"}), file=sys.stdout)
         sys.exit(2)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

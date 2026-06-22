@@ -40,14 +40,14 @@ except Exception:
 
 
 def _format_request(request) -> str:
-    requested_by = request.requested_by or 'cockpit'
+    requested_by = request.requested_by or "cockpit"
     return f"""\
 ## ⚙ Loop install request from {requested_by}
 
 A loop is queued for installation in this instance:
 - **name:** `{request.name}`
 - **interval:** `{request.interval}`
-- **description:** {request.description or '(none)'}
+- **description:** {request.description or "(none)"}
 - **scheduler:** {request.scheduler_kind}
 
 Please run `/loop` with the prompt below to install the cron via
@@ -76,19 +76,20 @@ def _maybe_auto_install_canonical_loops(instance_id: str, project_root: Path) ->
     makes this idempotent — subsequent prompts skip after first fire.
     """
     try:
-        if not project_root.joinpath('.empirica').is_dir():
+        if not project_root.joinpath(".empirica").is_dir():
             return 0  # gate 2
-        empirica_home = Path.home() / '.empirica'
-        safe_inst = instance_id.replace(':', '_').replace('/', '-')
-        stamp = empirica_home / f'canonical_loops_installed_{safe_inst}'
+        empirica_home = Path.home() / ".empirica"
+        safe_inst = instance_id.replace(":", "_").replace("/", "-")
+        stamp = empirica_home / f"canonical_loops_installed_{safe_inst}"
         if stamp.exists():
             return 0  # gate 4
 
         from empirica.core.cockpit.loop_registry import LoopRegistry
+
         registry = LoopRegistry(instance_id)
         if registry.list_loops():
             stamp.parent.mkdir(parents=True, exist_ok=True)
-            stamp.write_text('skipped: registry already had entries\n')
+            stamp.write_text("skipped: registry already had entries\n")
             return 0  # gate 3
 
         from empirica.core.cockpit.canonical_loops import CANONICAL_LOOPS
@@ -99,13 +100,13 @@ def _maybe_auto_install_canonical_loops(instance_id: str, project_root: Path) ->
             try:
                 write_pending(
                     instance_id=instance_id,
-                    name=entry['name'],
-                    interval=entry.get('interval', '15m'),
-                    description=entry.get('description', ''),
-                    base_interval=entry.get('base_interval'),
-                    max_interval=entry.get('max_interval'),
-                    requested_by='user-prompt-submit',
-                    body_skill=entry.get('body_skill'),
+                    name=entry["name"],
+                    interval=entry.get("interval", "15m"),
+                    description=entry.get("description", ""),
+                    base_interval=entry.get("base_interval"),
+                    max_interval=entry.get("max_interval"),
+                    requested_by="user-prompt-submit",
+                    body_skill=entry.get("body_skill"),
                 )
                 installed += 1
             except Exception:
@@ -113,7 +114,7 @@ def _maybe_auto_install_canonical_loops(instance_id: str, project_root: Path) ->
 
         if installed:
             stamp.parent.mkdir(parents=True, exist_ok=True)
-            stamp.write_text(f'installed {installed} canonical loop(s) via UserPromptSubmit\n')
+            stamp.write_text(f"installed {installed} canonical loop(s) via UserPromptSubmit\n")
         return installed
     except Exception:
         return 0  # never crash the user prompt
@@ -146,15 +147,19 @@ def main() -> int:
         return 0
 
     blocks = [_format_request(r) for r in requests]
-    additional = '\n\n'.join(blocks)
-    print(json.dumps({
-        'hookSpecificOutput': {
-            'hookEventName': 'UserPromptSubmit',
-            'additionalContext': additional,
-        },
-    }))
+    additional = "\n\n".join(blocks)
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": additional,
+                },
+            }
+        )
+    )
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

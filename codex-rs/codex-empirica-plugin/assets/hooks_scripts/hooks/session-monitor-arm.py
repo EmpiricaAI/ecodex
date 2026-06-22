@@ -70,11 +70,7 @@ def _build_reaction_table(loop_names: list[str]) -> str:
         rows.append(f"| `{name}` | `/{body_skill}` |")
     if not rows:
         return ""
-    return (
-        "| Loop name | Body skill to invoke on fire |\n"
-        "|---|---|\n"
-        + "\n".join(rows)
-    )
+    return "| Loop name | Body skill to invoke on fire |\n|---|---|\n" + "\n".join(rows)
 
 
 def _query_listener_on(instance_id: str) -> dict | None:
@@ -86,15 +82,24 @@ def _query_listener_on(instance_id: str) -> dict | None:
     rendering. This hook just renders the JSON response as markdown.
     """
     import subprocess
+
     try:
         proc = subprocess.run(
             [
-                "empirica", "listener", "on",
-                "--ai-id", instance_id,
-                "--instance", instance_id,
-                "--output", "json",
+                "empirica",
+                "listener",
+                "on",
+                "--ai-id",
+                instance_id,
+                "--instance",
+                instance_id,
+                "--output",
+                "json",
             ],
-            capture_output=True, text=True, timeout=10, check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
         if proc.returncode != 0 or not proc.stdout.strip():
             return None
@@ -135,9 +140,7 @@ def _build_monitor_block_from_cli(payload: dict | None, instance_id: str) -> str
     # same auto-relaunch semantics on hosts without an OS service. sleep 3
     # keeps a crash-loop from pinning CPU; reconnect/backoff is handled
     # internally by the listener loop itself. (cortex prop_6kevxb63 finding.)
-    _standalone_supervised = (
-        f"while true; do empirica loop listen --instance {instance_id}; sleep 3; done"
-    )
+    _standalone_supervised = f"while true; do empirica loop listen --instance {instance_id}; sleep 3; done"
     if monitor_args:
         description = monitor_args.get("description", f"Cortex orchestration push listener for {instance_id}")
         command = monitor_args.get("command", _standalone_supervised)
@@ -152,7 +155,8 @@ def _build_monitor_block_from_cli(payload: dict | None, instance_id: str) -> str
         f"\n\nAfter arming, run `{after_arm}` (replace `<monitor_task_id>` "
         f"with the actual id returned by Monitor) so `empirica listener off` "
         f"knows what to TaskStop later."
-        if after_arm else ""
+        if after_arm
+        else ""
     )
 
     # Mode-specific explainer so the reader knows WHY this Monitor shape
@@ -173,7 +177,7 @@ def _build_monitor_block_from_cli(payload: dict | None, instance_id: str) -> str
             "ntfy stream + catches up via content_poll on initial start, "
             "on each push arrival, AND on disconnect + reconnect. No "
             "periodic timer needed — push-primary, poll-on-reconnect-only "
-            "(\"epistemic email for the AI age\" — David, 2026-05-15)."
+            '("epistemic email for the AI age" — David, 2026-05-15).'
         )
 
     return (
@@ -202,6 +206,7 @@ def _build_orphan_warning() -> str:
         from empirica.core.cockpit.listener_processes import (
             walk_orphan_listener_processes,
         )
+
         orphan_count = len(walk_orphan_listener_processes())
     except Exception:
         return ""
@@ -216,7 +221,9 @@ def _build_orphan_warning() -> str:
 
 
 def _build_additional_context(
-    instance_id: str, loop_names: list[str], listener_running: bool = False,
+    instance_id: str,
+    loop_names: list[str],
+    listener_running: bool = False,
     has_prior_intent: bool = False,
 ) -> str:
     # T8 (goal f718156c): switched from `tail -F loop_fires.log` to
@@ -239,8 +246,7 @@ def _build_additional_context(
     # Wake source language adapts: loops / service / prior-intent / mix.
     if loop_names and listener_running:
         wake_source = (
-            f"This instance (`{instance_id}`) has canonical loops registered "
-            f"AND a persistent listener service running."
+            f"This instance (`{instance_id}`) has canonical loops registered AND a persistent listener service running."
         )
     elif loop_names:
         wake_source = (
@@ -281,15 +287,11 @@ def _build_additional_context(
         # All three signals false — caller shouldn't have called us. Bail
         # gracefully with a non-empty but inert wake-source line so the
         # downstream renderer has something coherent to wrap.
-        wake_source = (
-            f"This instance (`{instance_id}`) has no detected wake source."
-        )
+        wake_source = f"This instance (`{instance_id}`) has no detected wake source."
 
     # Reaction table only renders meaningfully when there are loops.
     reaction_section = (
-        f"### Active loops + their body skills\n\n"
-        f"{_build_reaction_table(loop_names)}\n"
-        if loop_names else ""
+        f"### Active loops + their body skills\n\n{_build_reaction_table(loop_names)}\n" if loop_names else ""
     )
 
     return f"""\
@@ -389,14 +391,21 @@ def main() -> int:
         return 0
 
     additional = _build_additional_context(
-        instance_id, loops, listener_running, has_prior_intent,
+        instance_id,
+        loops,
+        listener_running,
+        has_prior_intent,
     )
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": additional,
-        },
-    }))
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": additional,
+                },
+            }
+        )
+    )
     return 0
 
 

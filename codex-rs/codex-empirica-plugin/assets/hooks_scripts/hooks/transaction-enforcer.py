@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Import shared utilities from plugin lib
-sys.path.insert(0, str(Path(__file__).parent.parent / 'lib'))
+sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from project_resolver import _get_instance_suffix, get_instance_id
 
 
@@ -39,25 +39,27 @@ def _load_thresholds():
     soft, hard = 12, 20
     try:
         import yaml
+
         for cfg_path in [
-            Path.cwd() / '.empirica-project' / 'PROJECT_CONFIG.yaml',
-            Path.cwd() / 'PROJECT_CONFIG.yaml',
+            Path.cwd() / ".empirica-project" / "PROJECT_CONFIG.yaml",
+            Path.cwd() / "PROJECT_CONFIG.yaml",
         ]:
             if cfg_path.exists():
                 with open(cfg_path) as f:
                     cfg = yaml.safe_load(f) or {}
-                tx = cfg.get('transaction', {})
-                if tx.get('soft_reminder_turns'):
-                    soft = int(tx['soft_reminder_turns'])
-                if tx.get('max_transaction_turns'):
-                    hard = int(tx['max_transaction_turns'])
+                tx = cfg.get("transaction", {})
+                if tx.get("soft_reminder_turns"):
+                    soft = int(tx["soft_reminder_turns"])
+                if tx.get("max_transaction_turns"):
+                    hard = int(tx["max_transaction_turns"])
                 break
     except Exception:
         pass
     # Env vars override project config
-    soft = int(os.environ.get('EMPIRICA_TX_SOFT_TURNS', str(soft)))
-    hard = int(os.environ.get('EMPIRICA_TX_HARD_TURNS', str(hard)))
+    soft = int(os.environ.get("EMPIRICA_TX_SOFT_TURNS", str(soft)))
+    hard = int(os.environ.get("EMPIRICA_TX_HARD_TURNS", str(hard)))
     return soft, hard
+
 
 SOFT_THRESHOLD, HARD_THRESHOLD = _load_thresholds()
 
@@ -70,29 +72,29 @@ def _find_transaction_file(instance_id: str) -> Path | None:
     then looks for the transaction file there.
     """
     # Check instance_projects for current project
-    instance_file = Path.home() / '.empirica' / 'instance_projects' / f'{instance_id}.json'
+    instance_file = Path.home() / ".empirica" / "instance_projects" / f"{instance_id}.json"
     if instance_file.exists():
         try:
             with open(instance_file) as f:
                 data = json.load(f)
-            project_path = data.get('project_path')
+            project_path = data.get("project_path")
             if project_path:
                 suffix = _get_instance_suffix()
-                tx_file = Path(project_path) / '.empirica' / f'active_transaction{suffix}.json'
+                tx_file = Path(project_path) / ".empirica" / f"active_transaction{suffix}.json"
                 if tx_file.exists():
                     return tx_file
         except Exception:
             pass
 
     # Fallback: scan active_work files for project
-    for aw_file in Path.home().glob('.empirica/active_work_*.json'):
+    for aw_file in Path.home().glob(".empirica/active_work_*.json"):
         try:
             with open(aw_file) as f:
                 data = json.load(f)
-            project_path = data.get('project_path')
+            project_path = data.get("project_path")
             if project_path:
                 suffix = _get_instance_suffix()
-                tx_file = Path(project_path) / '.empirica' / f'active_transaction{suffix}.json'
+                tx_file = Path(project_path) / ".empirica" / f"active_transaction{suffix}.json"
                 if tx_file.exists():
                     return tx_file
         except Exception:
@@ -103,7 +105,7 @@ def _find_transaction_file(instance_id: str) -> Path | None:
 
 def _get_turn_counter_path(instance_id: str) -> Path:
     """Get path for the turn counter file."""
-    return Path.home() / '.empirica' / f'tx_turns_{instance_id}.json'
+    return Path.home() / ".empirica" / f"tx_turns_{instance_id}.json"
 
 
 def _read_turn_counter(instance_id: str) -> dict:
@@ -122,7 +124,7 @@ def _write_turn_counter(instance_id: str, counter: dict):
     """Write the turn counter state."""
     counter_path = _get_turn_counter_path(instance_id)
     counter_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(counter_path, 'w') as f:
+    with open(counter_path, "w") as f:
         json.dump(counter, f)
 
 
@@ -138,7 +140,7 @@ def main():
 
     # CRITICAL: Prevent infinite loops
     # If stop_hook_active is True, we already blocked once — let Claude stop
-    if hook_input.get('stop_hook_active'):
+    if hook_input.get("stop_hook_active"):
         print(json.dumps({}))
         sys.exit(0)
 
@@ -160,24 +162,24 @@ def main():
         print(json.dumps({}))
         sys.exit(0)
 
-    if tx_data.get('status') != 'open':
+    if tx_data.get("status") != "open":
         _clear_turn_counter(instance_id)
         print(json.dumps({}))
         sys.exit(0)
 
     # Transaction is open — increment turn counter
     counter = _read_turn_counter(instance_id)
-    tx_id = tx_data.get('transaction_id', 'unknown')
+    tx_id = tx_data.get("transaction_id", "unknown")
 
     # Reset counter if transaction changed
-    if counter.get('transaction_id') != tx_id:
+    if counter.get("transaction_id") != tx_id:
         counter = {"turns": 0, "transaction_id": tx_id, "soft_reminded": False}
 
-    counter['turns'] += 1
-    counter['last_stop'] = datetime.now().isoformat()
+    counter["turns"] += 1
+    counter["last_stop"] = datetime.now().isoformat()
     _write_turn_counter(instance_id, counter)
 
-    turns = counter['turns']
+    turns = counter["turns"]
 
     # Below soft threshold — allow stop silently
     if turns < SOFT_THRESHOLD:
@@ -186,11 +188,11 @@ def main():
 
     # Between soft and hard threshold — inject reminder via systemMessage but allow stop
     if turns < HARD_THRESHOLD:
-        if not counter.get('soft_reminded'):
-            counter['soft_reminded'] = True
+        if not counter.get("soft_reminded"):
+            counter["soft_reminded"] = True
             _write_turn_counter(instance_id, counter)
 
-        session_id = tx_data.get('session_id', 'unknown')
+        session_id = tx_data.get("session_id", "unknown")
         output = {
             "decision": "approve",
             "systemMessage": (
@@ -207,13 +209,13 @@ def main():
                 f'"vectors": {{"know": ..., "uncertainty": ..., "completion": ...}}, '
                 f'"reasoning": "<your assessment>"}}\n'
                 f"EOF\n```\n"
-            )
+            ),
         }
         print(json.dumps(output))
         sys.exit(0)
 
     # At or above hard threshold — BLOCK stop, force POSTFLIGHT
-    session_id = tx_data.get('session_id', 'unknown')
+    session_id = tx_data.get("session_id", "unknown")
     output = {
         "decision": "block",
         "reason": f"Open transaction requires POSTFLIGHT before stopping ({turns} turns).",
@@ -233,11 +235,11 @@ def main():
             f'"reasoning": "<what you believe about your epistemic state after this work>"}}\n'
             f"EOF\n```\n\n"
             f"After POSTFLIGHT, start a new PREFLIGHT for the next chunk of work.\n"
-        )
+        ),
     }
     print(json.dumps(output))
     sys.exit(0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

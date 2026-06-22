@@ -30,36 +30,75 @@ from pathlib import Path
 AGENT_DOMAINS = {
     "empirica:security": {
         "keywords": [
-            "security", "auth", "authentication", "authorization",
-            "encrypt", "vulnerability", "xss", "csrf", "injection",
-            "token", "credential", "permission", "access control",
-            "threat", "attack", "sanitiz",
+            "security",
+            "auth",
+            "authentication",
+            "authorization",
+            "encrypt",
+            "vulnerability",
+            "xss",
+            "csrf",
+            "injection",
+            "token",
+            "credential",
+            "permission",
+            "access control",
+            "threat",
+            "attack",
+            "sanitiz",
         ],
         "description": "Security analysis and hardening",
     },
     "empirica:architecture": {
         "keywords": [
-            "architecture", "design pattern", "refactor",
-            "modular", "coupling", "cohesion", "abstraction",
-            "interface", "dependency", "scalab", "structure",
-            "component", "layer", "separation of concerns",
+            "architecture",
+            "design pattern",
+            "refactor",
+            "modular",
+            "coupling",
+            "cohesion",
+            "abstraction",
+            "interface",
+            "dependency",
+            "scalab",
+            "structure",
+            "component",
+            "layer",
+            "separation of concerns",
             "system design",
         ],
         "description": "Architecture analysis and system design",
     },
     "empirica:performance": {
         "keywords": [
-            "performance", "optimiz", "latency", "throughput",
-            "memory", "cpu", "cache", "profil", "slow",
-            "bottleneck", "n+1", "query optim", "index",
+            "performance",
+            "optimiz",
+            "latency",
+            "throughput",
+            "memory",
+            "cpu",
+            "cache",
+            "profil",
+            "slow",
+            "bottleneck",
+            "n+1",
+            "query optim",
+            "index",
         ],
         "description": "Performance analysis and optimization",
     },
     "empirica:ux": {
         "keywords": [
-            "usability", "accessibility", "user flow", "ux",
-            "error message", "response time", "wcag", "a11y",
-            "user experience", "interaction design",
+            "usability",
+            "accessibility",
+            "user flow",
+            "ux",
+            "error message",
+            "response time",
+            "wcag",
+            "a11y",
+            "user experience",
+            "interaction design",
         ],
         "description": "UX and accessibility analysis",
     },
@@ -73,42 +112,56 @@ AGENT_DOMAINS = {
 HEDGE_PATTERNS = {
     "softening_qualifiers": {
         "patterns": [
-            r'\bkind of\b', r'\bsort of\b', r'\bmaybe\b', r'\bperhaps\b',
-            r'\bI guess\b', r'\bI suppose\b', r'\bprobably\b',
-            r'\bmight be\b', r'\bcould be\b',
+            r"\bkind of\b",
+            r"\bsort of\b",
+            r"\bmaybe\b",
+            r"\bperhaps\b",
+            r"\bI guess\b",
+            r"\bI suppose\b",
+            r"\bprobably\b",
+            r"\bmight be\b",
+            r"\bcould be\b",
         ],
         "deobfuscation": "You used softening language — what's the specific thing you mean?",
     },
     "dismissive_agreement": {
         "patterns": [
-            r'\byeah\s+(sure|fine|ok|whatever)\b',
-            r'\bI hear you\b', r'\bfair enough\b', r'\bif you say so\b',
-            r'\bI\'m not going to argue\b', r'\blet\'s just go with\b',
+            r"\byeah\s+(sure|fine|ok|whatever)\b",
+            r"\bI hear you\b",
+            r"\bfair enough\b",
+            r"\bif you say so\b",
+            r"\bI\'m not going to argue\b",
+            r"\blet\'s just go with\b",
         ],
         "deobfuscation": "That sounded like agreement without conviction — do you actually agree, or is there a reservation?",
     },
     "vague_deflection": {
         "patterns": [
-            r'\bit\'s complicated\b', r'\bit depends\b', r'\bnot really\b',
-            r'\bnot exactly\b', r'\bnot wrong\b', r'\bnot necessarily\b',
-            r'\bin a way\b', r'\bto some extent\b',
+            r"\bit\'s complicated\b",
+            r"\bit depends\b",
+            r"\bnot really\b",
+            r"\bnot exactly\b",
+            r"\bnot wrong\b",
+            r"\bnot necessarily\b",
+            r"\bin a way\b",
+            r"\bto some extent\b",
         ],
         "deobfuscation": "Can you be more specific? What exactly is complicated / what does it depend on?",
     },
     "passive_uncertainty": {
         "patterns": [
-            r'\bI\'?m not sure\s+(if|whether|about|that)\b',
-            r'\bI don\'?t know\s+(if|whether|about)\b',
-            r'\bI\'?m not (really\s+)?sure\b',
+            r"\bI\'?m not sure\s+(if|whether|about|that)\b",
+            r"\bI don\'?t know\s+(if|whether|about)\b",
+            r"\bI\'?m not (really\s+)?sure\b",
         ],
         "deobfuscation": "What specifically are you unsure about? Can you name the uncertainty?",
     },
     "false_modesty": {
         "patterns": [
-            r'\bI\'?m (probably|just)\s+(wrong|being|overthinking)\b',
-            r'\bthis is (probably\s+)?(stupid|dumb|obvious)\b',
-            r'\byou (probably\s+)?know better\b',
-            r'\bI\'?m no expert\b',
+            r"\bI\'?m (probably|just)\s+(wrong|being|overthinking)\b",
+            r"\bthis is (probably\s+)?(stupid|dumb|obvious)\b",
+            r"\byou (probably\s+)?know better\b",
+            r"\bI\'?m no expert\b",
         ],
         "deobfuscation": "Don't discount your own assessment — what's the actual concern you're raising?",
     },
@@ -326,9 +379,7 @@ def build_investigation_proportionality_check(prompt: str) -> str | None:
     if prompt.startswith("/"):
         return None
     lowered = prompt.lower()
-    has_marker = any(
-        _re.search(pat, lowered) for pat in PROPORTIONALITY_HYPOTHESIS_PATTERNS
-    ) or any(
+    has_marker = any(_re.search(pat, lowered) for pat in PROPORTIONALITY_HYPOTHESIS_PATTERNS) or any(
         _re.search(pat, lowered) for pat in PROPORTIONALITY_SCOPE_PATTERNS
     )
     if not has_marker:
@@ -344,12 +395,12 @@ def build_investigation_proportionality_check(prompt: str) -> str | None:
 # Patterns that indicate genuine epistemic humility (NOT hedging)
 # These should NOT trigger AAP
 GENUINE_HUMILITY_PATTERNS = [
-    r'\bI\'?m uncertain about .+ because\b',
-    r'\bmy confidence is (low|around|about)\b',
-    r'\bI don\'?t have (evidence|data|enough info)\b',
-    r'\bthe evidence (suggests|shows|indicates)\b',
-    r'\bbased on what I\'?ve (seen|read|found)\b',
-    r'\bI need to (check|verify|investigate)\b',
+    r"\bI\'?m uncertain about .+ because\b",
+    r"\bmy confidence is (low|around|about)\b",
+    r"\bI don\'?t have (evidence|data|enough info)\b",
+    r"\bthe evidence (suggests|shows|indicates)\b",
+    r"\bbased on what I\'?ve (seen|read|found)\b",
+    r"\bI need to (check|verify|investigate)\b",
 ]
 
 
@@ -360,10 +411,7 @@ def detect_hedges(text: str) -> list[dict]:
     text_lower = text.lower()
 
     # Check for genuine epistemic humility first — if present, reduce sensitivity
-    genuine_count = sum(
-        1 for pattern in GENUINE_HUMILITY_PATTERNS
-        if re.search(pattern, text_lower, re.IGNORECASE)
-    )
+    genuine_count = sum(1 for pattern in GENUINE_HUMILITY_PATTERNS if re.search(pattern, text_lower, re.IGNORECASE))
 
     # If the text shows genuine epistemic reasoning, skip hedge detection
     if genuine_count >= 2:
@@ -373,10 +421,12 @@ def detect_hedges(text: str) -> list[dict]:
     for category, config in HEDGE_PATTERNS.items():
         for pattern in config["patterns"]:
             if re.search(pattern, text_lower, re.IGNORECASE):
-                detected.append({
-                    "category": category,
-                    "deobfuscation": config["deobfuscation"],
-                })
+                detected.append(
+                    {
+                        "category": category,
+                        "deobfuscation": config["deobfuscation"],
+                    }
+                )
                 break  # One match per category is enough
 
     return detected
@@ -386,11 +436,12 @@ def load_aap_config() -> dict:
     """Load AAP configuration from workflow protocol."""
     try:
         import yaml as _yaml
-        protocol_path = Path.home() / '.empirica' / 'workflow-protocol.yaml'
+
+        protocol_path = Path.home() / ".empirica" / "workflow-protocol.yaml"
         if protocol_path.exists():
             with open(protocol_path) as f:
                 protocol = _yaml.safe_load(f)
-            return protocol.get('anti_agreement_protocol', {})
+            return protocol.get("anti_agreement_protocol", {})
     except Exception:
         pass
     return {"enabled": False}
@@ -399,16 +450,35 @@ def load_aap_config() -> dict:
 # Keywords that suggest investigation/exploration tasks
 # (where Empirica agents are most valuable vs built-in Explore)
 INVESTIGATION_KEYWORDS = [
-    "investigate", "explore", "understand", "analyze", "assess",
-    "audit", "review", "examine", "check", "inspect", "evaluate",
-    "figure out", "look into", "dig into", "deep dive",
+    "investigate",
+    "explore",
+    "understand",
+    "analyze",
+    "assess",
+    "audit",
+    "review",
+    "examine",
+    "check",
+    "inspect",
+    "evaluate",
+    "figure out",
+    "look into",
+    "dig into",
+    "deep dive",
 ]
 
 # Keywords that suggest epistemic workflow
 EPISTEMIC_KEYWORDS = [
-    "preflight", "postflight", "check", "cascade",
-    "epistemic", "vector", "calibrat", "drift",
-    "knowledge state", "confidence",
+    "preflight",
+    "postflight",
+    "check",
+    "cascade",
+    "epistemic",
+    "vector",
+    "calibrat",
+    "drift",
+    "knowledge state",
+    "confidence",
 ]
 
 
@@ -416,23 +486,24 @@ def get_active_session_vectors():
     """Get current session's epistemic vectors from DB. Fast path."""
     try:
         # Find active session ID using canonical instance resolution
-        _lib_path = Path(__file__).parent.parent / 'lib'
+        _lib_path = Path(__file__).parent.parent / "lib"
         if str(_lib_path) not in sys.path:
             sys.path.insert(0, str(_lib_path))
         from project_resolver import _get_instance_suffix
+
         suffix = _get_instance_suffix()
 
         session_id = None
-        for base in [Path.cwd() / '.empirica', Path.home() / '.empirica']:
-            active_file = base / f'active_session{suffix}'
+        for base in [Path.cwd() / ".empirica", Path.home() / ".empirica"]:
+            active_file = base / f"active_session{suffix}"
             if active_file.exists():
                 content = active_file.read_text().strip()
                 if content:
                     # Parse JSON format (CLI/MCP) or plain text (legacy)
-                    if content.startswith('{'):
+                    if content.startswith("{"):
                         try:
                             data = json.loads(content)
-                            session_id = data.get('session_id')
+                            session_id = data.get("session_id")
                         except json.JSONDecodeError:
                             session_id = content  # Fallback to raw content
                     else:
@@ -444,17 +515,21 @@ def get_active_session_vectors():
             return None, None
 
         # Read vectors from DB
-        sys.path.insert(0, str(Path.home() / 'empirical-ai' / 'empirica'))
+        sys.path.insert(0, str(Path.home() / "empirical-ai" / "empirica"))
         from empirica.data.session_database import SessionDatabase
+
         db = SessionDatabase()
         cursor = db.conn.cursor()
 
         # Get latest epistemic assessment for this session
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT vectors FROM epistemic_assessments
             WHERE session_id = ?
             ORDER BY created_timestamp DESC LIMIT 1
-        """, (session_id,))
+        """,
+            (session_id,),
+        )
         row = cursor.fetchone()
         db.close()
 
@@ -492,18 +567,17 @@ def match_agents(task_lower):
     """Match task keywords to domain-specific agents."""
     matches = []
     for agent_name, config in AGENT_DOMAINS.items():
-        keyword_hits = sum(
-            1 for kw in config["keywords"]
-            if kw in task_lower
-        )
+        keyword_hits = sum(1 for kw in config["keywords"] if kw in task_lower)
         if keyword_hits > 0:
             confidence = min(0.95, 0.5 + keyword_hits * 0.15)
-            matches.append({
-                "name": agent_name,
-                "confidence": confidence,
-                "description": config["description"],
-                "hits": keyword_hits,
-            })
+            matches.append(
+                {
+                    "name": agent_name,
+                    "confidence": confidence,
+                    "description": config["description"],
+                    "hits": keyword_hits,
+                }
+            )
     # Sort by confidence descending
     return sorted(matches, key=lambda m: -m["confidence"])
 
@@ -521,20 +595,27 @@ def is_epistemic_task(task_lower):
 def is_blindspot_relevant(task_lower, mode, vectors):
     """Check if blindspot scanning would be valuable for this task."""
     # Explicit blindspot keywords
-    if any(kw in task_lower for kw in ["blindspot", "blind spot", "unknown unknown",
-                                        "what am i missing", "what are we missing",
-                                        "what might i be missing", "negative space",
-                                        "coverage gap", "gap in", "gaps in"]):
+    if any(
+        kw in task_lower
+        for kw in [
+            "blindspot",
+            "blind spot",
+            "unknown unknown",
+            "what am i missing",
+            "what are we missing",
+            "what might i be missing",
+            "negative space",
+            "coverage gap",
+            "gap in",
+            "gaps in",
+        ]
+    ):
         return True
     # High uncertainty + investigation mode
     if vectors and vectors.get("uncertainty", 0) > 0.5 and mode in ("investigate", "clarify"):
         return True
     # Starting new work (low completion, low context)
-    return bool(
-        vectors
-        and vectors.get("completion", 0) < 0.15
-        and vectors.get("context", 0) < 0.5
-    )
+    return bool(vectors and vectors.get("completion", 0) < 0.15 and vectors.get("context", 0) < 0.5)
 
 
 # ============================================================================
@@ -546,15 +627,13 @@ def is_blindspot_relevant(task_lower, mode, vectors):
 # function (CC=18) to keep each branch independently testable and below
 # complexity threshold.
 
+
 def _agent_match_advice(agent_matches: list) -> list[str]:
     """Advice lines recommending the top-matched domain agent(s)."""
     if not agent_matches:
         return []
     top = agent_matches[0]
-    lines = [
-        f"For this task, consider using the `{top['name']}` agent "
-        f"({top['description']})."
-    ]
+    lines = [f"For this task, consider using the `{top['name']}` agent ({top['description']})."]
     if len(agent_matches) > 1:
         others = ", ".join(f"`{m['name']}`" for m in agent_matches[1:3])
         lines.append(f"Also relevant: {others}.")
@@ -607,10 +686,7 @@ def _mode_based_advice(
     if mode == "cautious_implementation" and any(
         kw in task_lower for kw in ["try", "attempt", "approach", "workaround", "fix"]
     ):
-        return [
-            "If this approach doesn't work, log it with "
-            "`mcp__empirica__deadend_log` to prevent re-exploration."
-        ]
+        return ["If this approach doesn't work, log it with `mcp__empirica__deadend_log` to prevent re-exploration."]
     return []
 
 
@@ -668,8 +744,7 @@ def _build_aap_context(prompt: str) -> str:
     ]
     return (
         "<aap-hedge-detected>\n"
-        "User language contains hedging patterns. Per AAP protocol:\n"
-        + "\n".join(hedge_lines) + "\n"
+        "User language contains hedging patterns. Per AAP protocol:\n" + "\n".join(hedge_lines) + "\n"
         "Surface the actual epistemic content. Don't mirror the hedging.\n"
         "</aap-hedge-detected>"
     )
@@ -680,8 +755,9 @@ def _resolve_project_id_for_session(session_id: str) -> str | None:
     if not session_id:
         return None
     try:
-        sys.path.insert(0, str(Path.home() / 'empirical-ai' / 'empirica'))
+        sys.path.insert(0, str(Path.home() / "empirical-ai" / "empirica"))
         from empirica.data.session_database import SessionDatabase
+
         db = SessionDatabase()
         if db.conn is None:
             return None
@@ -708,21 +784,22 @@ def _resolve_project_id_via_active_work(claude_session_id: str | None) -> tuple[
     if not claude_session_id:
         return None, None
     try:
-        active_work = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+        active_work = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
         if not active_work.exists():
             return None, None
         data = json.loads(active_work.read_text())
-        project_path = data.get('project_path')
+        project_path = data.get("project_path")
 
-        direct_pid = data.get('project_id')
+        direct_pid = data.get("project_id")
         if direct_pid:
             return direct_pid, project_path
 
-        empirica_sid = data.get('empirica_session_id')
+        empirica_sid = data.get("empirica_session_id")
         if empirica_sid and project_path:
-            db_path = Path(project_path) / '.empirica' / 'sessions' / 'sessions.db'
+            db_path = Path(project_path) / ".empirica" / "sessions" / "sessions.db"
             if db_path.exists():
                 import sqlite3 as _sql
+
                 conn = _sql.connect(str(db_path))
                 try:
                     cur = conn.cursor()
@@ -740,8 +817,7 @@ def _resolve_project_id_via_active_work(claude_session_id: str | None) -> tuple[
         return None, None
 
 
-def _build_prompt_relevance_block(prompt: str, session_id: str | None,
-                                   claude_session_id: str | None) -> str:
+def _build_prompt_relevance_block(prompt: str, session_id: str | None, claude_session_id: str | None) -> str:
     """Surface artifacts from prior project knowledge that are semantically
     similar to the user's prompt. Latency-bound (~200ms ceiling) and never
     raises — failures degrade to empty string.
@@ -759,8 +835,11 @@ def _build_prompt_relevance_block(prompt: str, session_id: str | None,
         return ""
     try:
         from empirica.core.bootstrap import build_prompt_relevance_context
+
         return build_prompt_relevance_context(
-            project_id, prompt, project_path=project_path,
+            project_id,
+            prompt,
+            project_path=project_path,
         )
     except Exception:
         return ""
@@ -813,9 +892,7 @@ def main():
     # knowledge that are semantically similar to the prompt. Conditions
     # the AI's first response on external grounding rather than internal
     # weights alone. ~200ms hot-path budget; always returns "" on failure.
-    prompt_relevance = _build_prompt_relevance_block(
-        prompt, session_id, input_data.get("session_id")
-    )
+    prompt_relevance = _build_prompt_relevance_block(prompt, session_id, input_data.get("session_id"))
 
     # Combine contexts. Order matters: routing first (high-level mode),
     # then aap (hedge correction), then proportionality (scope sizing),
@@ -834,11 +911,7 @@ def main():
         # Placed LAST — highest attention weight in the injected context window
         context_parts.append(semantic_check)
 
-    output = (
-        {"continue": True, "context": "\n".join(context_parts)}
-        if context_parts
-        else {"continue": True}
-    )
+    output = {"continue": True, "context": "\n".join(context_parts)} if context_parts else {"continue": True}
     print(json.dumps(output))
 
 

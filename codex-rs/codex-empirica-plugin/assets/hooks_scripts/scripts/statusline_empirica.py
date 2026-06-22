@@ -35,17 +35,17 @@ from empirica.data.session_database import SessionDatabase  # noqa: E402 — aft
 
 # ANSI color codes
 class Colors:
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-    GREEN = '\033[32m'
-    YELLOW = '\033[33m'
-    RED = '\033[31m'
-    BLUE = '\033[34m'
-    CYAN = '\033[36m'
-    GRAY = '\033[90m'
-    WHITE = '\033[37m'
-    BRIGHT_GREEN = '\033[92m'
-    BRIGHT_CYAN = '\033[96m'
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    RED = "\033[31m"
+    BLUE = "\033[34m"
+    CYAN = "\033[36m"
+    GRAY = "\033[90m"
+    WHITE = "\033[37m"
+    BRIGHT_GREEN = "\033[92m"
+    BRIGHT_CYAN = "\033[96m"
 
 
 def get_ai_id() -> str:
@@ -56,17 +56,18 @@ def get_ai_id() -> str:
     sessions WHERE ai_id = ?, so the wrong id silently renders '[inactive]'
     on a multi-practice machine.
     """
-    env_id = os.getenv('EMPIRICA_AI_ID')
+    env_id = os.getenv("EMPIRICA_AI_ID")
     if env_id:
         return env_id.strip()
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         resolved = R.ai_id()
         if resolved:
             return resolved
     except Exception:
         pass
-    return 'claude-code'
+    return "claude-code"
 
 
 def get_open_counts(db: SessionDatabase, session_id: str, project_id: str | None = None) -> dict:
@@ -94,11 +95,14 @@ def get_open_counts(db: SessionDatabase, session_id: str, project_id: str | None
     # Count open goals for THIS PROJECT (project-scoped, not session-scoped)
     # Use is_completed (source of truth) not status column (can be inconsistent)
     if project_id:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*)
             FROM goals
             WHERE is_completed = 0 AND project_id = ?
-        """, (project_id,))
+        """,
+            (project_id,),
+        )
     else:
         cursor.execute("""
             SELECT COUNT(*)
@@ -110,11 +114,14 @@ def get_open_counts(db: SessionDatabase, session_id: str, project_id: str | None
     # Count unresolved unknowns for THIS PROJECT
     # Use project_unknowns directly (has project_id column) - no session JOIN needed
     if project_id:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*)
             FROM project_unknowns
             WHERE is_resolved = 0 AND project_id = ?
-        """, (project_id,))
+        """,
+            (project_id,),
+        )
     else:
         cursor.execute("""
             SELECT COUNT(*)
@@ -125,11 +132,14 @@ def get_open_counts(db: SessionDatabase, session_id: str, project_id: str | None
 
     # Count goal-linked unresolved unknowns (blockers) for THIS PROJECT
     if project_id:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*)
             FROM project_unknowns
             WHERE is_resolved = 0 AND goal_id IS NOT NULL AND project_id = ?
-        """, (project_id,))
+        """,
+            (project_id,),
+        )
     else:
         cursor.execute("""
             SELECT COUNT(*)
@@ -139,21 +149,24 @@ def get_open_counts(db: SessionDatabase, session_id: str, project_id: str | None
     goal_linked_unknowns = cursor.fetchone()[0] or 0
 
     # Get completion from latest vector state
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT completion
         FROM reflexes
         WHERE session_id = ?
         ORDER BY timestamp DESC
         LIMIT 1
-    """, (session_id,))
+    """,
+        (session_id,),
+    )
     reflex_row = cursor.fetchone()
     completion = reflex_row[0] if reflex_row and reflex_row[0] is not None else 0.0
 
     return {
-        'open_goals': open_goals,
-        'open_unknowns': open_unknowns,
-        'goal_linked_unknowns': goal_linked_unknowns,
-        'completion': completion,
+        "open_goals": open_goals,
+        "open_unknowns": open_unknowns,
+        "goal_linked_unknowns": goal_linked_unknowns,
+        "completion": completion,
     }
 
 
@@ -173,13 +186,16 @@ def get_active_goal(db: SessionDatabase, session_id: str) -> dict | None:
     cursor = db.conn.cursor()
 
     # Get active (non-completed) goal for this session
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT id, objective, status
         FROM goals
         WHERE session_id = ? AND status != 'completed'
         ORDER BY created_timestamp DESC
         LIMIT 1
-    """, (session_id,))
+    """,
+        (session_id,),
+    )
     row = cursor.fetchone()
 
     if not row:
@@ -189,34 +205,40 @@ def get_active_goal(db: SessionDatabase, session_id: str) -> dict | None:
 
     # Get completion from latest vector state (epistemic measure)
     # This is the AI's self-assessed completion, not mechanical subtask checkboxes
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT completion
         FROM reflexes
         WHERE session_id = ?
         ORDER BY timestamp DESC
         LIMIT 1
-    """, (session_id,))
+    """,
+        (session_id,),
+    )
     reflex_row = cursor.fetchone()
     completion = reflex_row[0] if reflex_row and reflex_row[0] is not None else 0.0
 
     # Get subtask progress (for reference, not primary measure)
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT
             COUNT(*) as total,
             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
         FROM subtasks
         WHERE goal_id = ?
-    """, (goal_id,))
+    """,
+        (goal_id,),
+    )
     subtask_row = cursor.fetchone()
 
     total_subtasks = subtask_row[0] if subtask_row else 0
     completed_subtasks = subtask_row[1] if subtask_row else 0
 
     return {
-        'goal_id': goal_id,
-        'objective': objective,
-        'completion': completion,
-        'subtask_progress': (completed_subtasks, total_subtasks)
+        "goal_id": goal_id,
+        "objective": objective,
+        "completion": completion,
+        "subtask_progress": (completed_subtasks, total_subtasks),
     }
 
 
@@ -262,9 +284,9 @@ def format_open_counts(open_counts: dict | None) -> str:
     if not open_counts:
         return f"{Colors.GRAY}--{Colors.RESET}"
 
-    goals = open_counts.get('open_goals', 0)
-    unknowns = open_counts.get('open_unknowns', 0)
-    goal_linked = open_counts.get('goal_linked_unknowns', 0)
+    goals = open_counts.get("open_goals", 0)
+    unknowns = open_counts.get("open_unknowns", 0)
+    goal_linked = open_counts.get("goal_linked_unknowns", 0)
 
     # Color code based on counts
     if goals == 0:
@@ -301,17 +323,17 @@ def format_goal_progress(goal: dict, max_name_len: int = 12) -> str:
     if not goal:
         return f"{Colors.GRAY}no goal{Colors.RESET}"
 
-    objective = goal.get('objective', '')
-    completion = goal.get('completion', 0.0)
+    objective = goal.get("objective", "")
+    completion = goal.get("completion", 0.0)
 
     # Truncate objective for display
     if len(objective) > max_name_len:
-        name = objective[:max_name_len-2] + ".."
+        name = objective[: max_name_len - 2] + ".."
     else:
         name = objective
 
     # Simplify name: lowercase, replace spaces with dashes
-    name = name.lower().replace(' ', '-')[:max_name_len]
+    name = name.lower().replace(" ", "-")[:max_name_len]
 
     bar = format_progress_bar(completion, width=6)
 
@@ -336,17 +358,12 @@ def calculate_confidence(vectors: dict) -> float:
     if not vectors:
         return 0.0
 
-    know = vectors.get('know', 0.5)
-    uncertainty = vectors.get('uncertainty', 0.5)
-    context = vectors.get('context', 0.5)
-    completion = vectors.get('completion', 0.0)
+    know = vectors.get("know", 0.5)
+    uncertainty = vectors.get("uncertainty", 0.5)
+    context = vectors.get("context", 0.5)
+    completion = vectors.get("completion", 0.0)
 
-    confidence = (
-        0.40 * know +
-        0.30 * (1.0 - uncertainty) +
-        0.20 * context +
-        0.10 * completion
-    )
+    confidence = 0.40 * know + 0.30 * (1.0 - uncertainty) + 0.20 * context + 0.10 * completion
 
     return max(0.0, min(1.0, confidence))
 
@@ -392,6 +409,7 @@ def get_dynamic_threshold(db) -> tuple:
     try:
         from empirica.core.post_test.dynamic_thresholds import compute_dynamic_thresholds
         from empirica.utils.session_resolver import InstanceResolver as R
+
         # Per-practice Brier thresholds — resolve the canonical ai_id.
         dt = compute_dynamic_thresholds(ai_id=R.ai_id() or "claude-code", db=db)
         if dt.get("source") == "dynamic":
@@ -404,9 +422,9 @@ def get_dynamic_threshold(db) -> tuple:
                 if inflation <= 0.03:
                     color = Colors.BRIGHT_GREEN  # Trusted — at baseline
                 elif inflation <= 0.10:
-                    color = Colors.YELLOW         # Moderate inflation
+                    color = Colors.YELLOW  # Moderate inflation
                 else:
-                    color = Colors.RED             # Significant miscalibration
+                    color = Colors.RED  # Significant miscalibration
                 return (know_t, unc_t, color)
     except Exception:
         pass
@@ -430,12 +448,12 @@ def calculate_phase_composite(vectors: dict, phase: str) -> float:
     if not vectors:
         return 0.0
 
-    if phase == 'check':
-        keys = ['know', 'context', 'clarity', 'coherence', 'signal', 'density']
-    elif phase == 'noetic':
-        keys = ['clarity', 'coherence', 'signal', 'density']
+    if phase == "check":
+        keys = ["know", "context", "clarity", "coherence", "signal", "density"]
+    elif phase == "noetic":
+        keys = ["clarity", "coherence", "signal", "density"]
     else:
-        keys = ['state', 'change', 'completion', 'impact']
+        keys = ["state", "change", "completion", "impact"]
 
     values = [vectors.get(k, 0.0) for k in keys if vectors.get(k) is not None]
     return sum(values) / len(values) if values else 0.0
@@ -451,14 +469,14 @@ def determine_work_phase(phase: str, gate_decision: str | None = None) -> str:
       No phase → noetic (default to investigating)
     """
     if not phase:
-        return 'noetic'
-    if phase == 'PREFLIGHT':
-        return 'noetic'
-    if phase == 'CHECK':
-        return 'praxic' if gate_decision == 'proceed' else 'noetic'
-    if phase == 'POSTFLIGHT':
-        return 'praxic'  # Work completed
-    return 'noetic'
+        return "noetic"
+    if phase == "PREFLIGHT":
+        return "noetic"
+    if phase == "CHECK":
+        return "praxic" if gate_decision == "proceed" else "noetic"
+    if phase == "POSTFLIGHT":
+        return "praxic"  # Work completed
+    return "noetic"
 
 
 def format_phase_state(phase: str, work_phase: str, composite: float, gate_decision: str | None = None) -> str:
@@ -473,13 +491,13 @@ def format_phase_state(phase: str, work_phase: str, composite: float, gate_decis
     """
     # Phase abbreviation
     phase_abbrev = {
-        'PREFLIGHT': 'PRE',
-        'CHECK': 'CHK',
-        'POSTFLIGHT': 'POST',
-    }.get(phase, phase[:3] if phase else '---')
+        "PREFLIGHT": "PRE",
+        "CHECK": "CHK",
+        "POSTFLIGHT": "POST",
+    }.get(phase, phase[:3] if phase else "---")
 
     # Work state emoji + composite
-    if work_phase == 'noetic':
+    if work_phase == "noetic":
         emoji = "🔍"
     else:
         emoji = "🔨"
@@ -488,8 +506,8 @@ def format_phase_state(phase: str, work_phase: str, composite: float, gate_decis
     color = _color_by_value(composite)
 
     # CHECK with decision: show percentage AND transition indicator
-    if phase == 'CHECK' and gate_decision:
-        if gate_decision == 'proceed':
+    if phase == "CHECK" and gate_decision:
+        if gate_decision == "proceed":
             return f"{Colors.BLUE}{phase_abbrev}{Colors.RESET} {emoji}{color}{pct}%{Colors.GREEN}→{Colors.RESET}"
         else:
             return f"{Colors.BLUE}{phase_abbrev}{Colors.RESET} {emoji}{color}{pct}%{Colors.YELLOW}…{Colors.RESET}"
@@ -519,11 +537,11 @@ def read_statusline_extensions() -> str:
 
     parts = []
     for data in extensions:
-        label = data.get('label', '')
+        label = data.get("label", "")
         if label:
             parts.append(f"{Colors.CYAN}{label}{Colors.RESET}")
 
-    return ' '.join(parts)
+    return " ".join(parts)
 
 
 def _read_statusline_extensions_data() -> list:
@@ -535,17 +553,18 @@ def _read_statusline_extensions_data() -> list:
     Returns:
         [{"label": "WS:4", "color": "cyan"}, ...] or [] if none
     """
-    ext_dir = Path.home() / '.empirica' / 'statusline_ext'
+    ext_dir = Path.home() / ".empirica" / "statusline_ext"
     if not ext_dir.exists():
         return []
 
     results = []
     try:
-        for ext_file in sorted(ext_dir.glob('*.json')):
+        for ext_file in sorted(ext_dir.glob("*.json")):
             try:
                 import json as _json
+
                 data = _json.loads(ext_file.read_text())
-                if data.get('label'):
+                if data.get("label"):
                     results.append(data)
             except Exception:
                 continue
@@ -570,9 +589,10 @@ def _resolve_claude_session_id(stdin_claude_session_id: str | None = None):
 
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         tty_session = R.tty_session(warn_if_stale=False)
         if tty_session:
-            return tty_session.get('claude_session_id')
+            return tty_session.get("claude_session_id")
     except Exception:
         pass
 
@@ -581,13 +601,14 @@ def _resolve_claude_session_id(stdin_claude_session_id: str | None = None):
 
 def _has_db(path_str: str) -> bool:
     """Check if a project path has a valid sessions.db."""
-    return (Path(path_str) / '.empirica' / 'sessions' / 'sessions.db').exists()
+    return (Path(path_str) / ".empirica" / "sessions" / "sessions.db").exists()
 
 
-def _read_project_path_from_json(file_path: Path, key: str = 'project_path') -> str | None:
+def _read_project_path_from_json(file_path: Path, key: str = "project_path") -> str | None:
     """Read and validate a project_path from a JSON file."""
     try:
         import json as _json
+
         if file_path.exists():
             with open(file_path) as f:
                 pp = _json.load(f).get(key)
@@ -603,10 +624,10 @@ def _resolve_project_path(stdin_claude_session_id=None) -> str | None:
     # Priority 0: instance_projects
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         inst_id = R.instance_id()
         if inst_id:
-            result = _read_project_path_from_json(
-                Path.home() / '.empirica' / 'instance_projects' / f'{inst_id}.json')
+            result = _read_project_path_from_json(Path.home() / ".empirica" / "instance_projects" / f"{inst_id}.json")
             if result:
                 return result
     except Exception:
@@ -614,22 +635,22 @@ def _resolve_project_path(stdin_claude_session_id=None) -> str | None:
 
     # Priority 1: active_work
     if stdin_claude_session_id:
-        result = _read_project_path_from_json(
-            Path.home() / '.empirica' / f'active_work_{stdin_claude_session_id}.json')
+        result = _read_project_path_from_json(Path.home() / ".empirica" / f"active_work_{stdin_claude_session_id}.json")
         if result:
             return result
 
     # Priority 2: env var
-    env_path = os.getenv('EMPIRICA_PROJECT_PATH')
+    env_path = os.getenv("EMPIRICA_PROJECT_PATH")
     if env_path:
         return env_path
 
     # Priority 3: TTY session
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         tty = R.tty_session(warn_if_stale=False)
         if tty:
-            pp = tty.get('project_path')
+            pp = tty.get("project_path")
             if pp and _has_db(pp):
                 return pp
     except Exception:
@@ -638,8 +659,9 @@ def _resolve_project_path(stdin_claude_session_id=None) -> str | None:
     # Priority 4: path_resolver
     try:
         from empirica.config.path_resolver import get_empirica_root
+
         root = get_empirica_root()
-        if root and root.exists() and (root / 'sessions' / 'sessions.db').exists():
+        if root and root.exists() and (root / "sessions" / "sessions.db").exists():
             return str(root.parent)
     except Exception:
         pass
@@ -647,7 +669,7 @@ def _resolve_project_path(stdin_claude_session_id=None) -> str | None:
     # Priority 5: upward search
     current = Path.cwd()
     for parent in [current] + list(current.parents):
-        if (parent / '.empirica' / 'sessions' / 'sessions.db').exists():
+        if (parent / ".empirica" / "sessions" / "sessions.db").exists():
             return str(parent)
         if parent == Path.home() or parent == parent.parent:
             break
@@ -660,9 +682,10 @@ def _read_session_file(path: Path) -> str | None:
         content = path.read_text().strip()
         if not content:
             return None
-        if content.startswith('{'):
+        if content.startswith("{"):
             import json as _json
-            return _json.loads(content).get('session_id', '')
+
+            return _json.loads(content).get("session_id", "")
         return content
     except Exception:
         return None
@@ -673,15 +696,21 @@ def _lookup_session_by_id(cursor, session_id: str, require_active: bool = True) 
     if not session_id:
         return None
     if require_active:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT session_id, ai_id, start_time FROM sessions
             WHERE session_id = ? AND end_time IS NULL
-        """, (session_id,))
+        """,
+            (session_id,),
+        )
     else:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT session_id, ai_id, start_time FROM sessions
             WHERE session_id = ?
-        """, (session_id,))
+        """,
+            (session_id,),
+        )
     row = cursor.fetchone()
     return dict(row) if row else None
 
@@ -689,7 +718,7 @@ def _lookup_session_by_id(cursor, session_id: str, require_active: bool = True) 
 def _search_session_files(cursor, start_dir: Path, filename: str) -> dict | None:
     """Search upward from start_dir for a session file, query DB if found."""
     for parent in [start_dir] + list(start_dir.parents):
-        candidate = parent / '.empirica' / filename
+        candidate = parent / ".empirica" / filename
         if candidate.exists():
             session_id = _read_session_file(candidate)
             result = _lookup_session_by_id(cursor, session_id)
@@ -707,12 +736,13 @@ def _get_session_from_instance_projects(cursor):
         import json as _json
 
         from empirica.utils.session_resolver import InstanceResolver as R
+
         inst_id = R.instance_id()
         if inst_id:
-            inst_file = Path.home() / '.empirica' / 'instance_projects' / f'{inst_id}.json'
+            inst_file = Path.home() / ".empirica" / "instance_projects" / f"{inst_id}.json"
             if inst_file.exists():
                 with open(inst_file) as f:
-                    session_id = _json.load(f).get('empirica_session_id')
+                    session_id = _json.load(f).get("empirica_session_id")
                 return _lookup_session_by_id(cursor, session_id, require_active=False)
     except Exception:
         pass
@@ -723,22 +753,24 @@ def _get_session_from_claude_id(cursor, stdin_claude_session_id):
     """Priority 1: Claude session_id → active_work/TTY → empirica_session_id. Returns dict or None."""
     try:
         import json as _json
+
         claude_session_id = _resolve_claude_session_id(stdin_claude_session_id)
         if not claude_session_id:
             return None
 
         empirica_session_id = None
-        active_work_path = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+        active_work_path = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
         if active_work_path.exists():
             with open(active_work_path) as f:
-                empirica_session_id = _json.load(f).get('empirica_session_id')
+                empirica_session_id = _json.load(f).get("empirica_session_id")
 
         if not empirica_session_id:
             try:
                 from empirica.utils.session_resolver import InstanceResolver as R
+
                 tty_session = R.tty_session(warn_if_stale=False)
                 if tty_session:
-                    empirica_session_id = tty_session.get('empirica_session_id')
+                    empirica_session_id = tty_session.get("empirica_session_id")
             except Exception:
                 pass
 
@@ -751,6 +783,7 @@ def _get_session_from_files_or_db(cursor, ai_id):
     """Legacy priorities: instance-specific files, then DB query. Returns dict or None."""
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         current_instance_id = R.instance_id()
     except (ImportError, NameError):
         current_instance_id = None
@@ -758,33 +791,39 @@ def _get_session_from_files_or_db(cursor, ai_id):
     if current_instance_id:
         safe_instance = current_instance_id.replace(":", "_").replace("%", "")
         instance_suffix = f"_{safe_instance}"
-        result = _search_session_files(cursor, Path.cwd(), f'active_session{instance_suffix}')
+        result = _search_session_files(cursor, Path.cwd(), f"active_session{instance_suffix}")
         if result:
             return result
-        global_file = Path.home() / '.empirica' / f'active_session{instance_suffix}'
+        global_file = Path.home() / ".empirica" / f"active_session{instance_suffix}"
         if global_file.exists():
             session_id = _read_session_file(global_file)
             result = _lookup_session_by_id(cursor, session_id)
             if result:
                 return result
     else:
-        result = _search_session_files(cursor, Path.cwd(), 'active_session')
+        result = _search_session_files(cursor, Path.cwd(), "active_session")
         if result:
             return result
 
     # DB query: exact ai_id + STRICT instance_id (no NULL fallback)
     if current_instance_id:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT session_id, ai_id, start_time FROM sessions
             WHERE end_time IS NULL AND ai_id = ? AND instance_id = ?
             ORDER BY start_time DESC LIMIT 1
-        """, (ai_id, current_instance_id))
+        """,
+            (ai_id, current_instance_id),
+        )
     else:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT session_id, ai_id, start_time FROM sessions
             WHERE end_time IS NULL AND ai_id = ?
             ORDER BY start_time DESC LIMIT 1
-        """, (ai_id,))
+        """,
+            (ai_id,),
+        )
     row = cursor.fetchone()
     return dict(row) if row else None
 
@@ -814,7 +853,9 @@ def get_active_session(db: SessionDatabase, ai_id: str, stdin_claude_session_id:
     return _get_session_from_files_or_db(cursor, ai_id)
 
 
-def get_latest_vectors(db: SessionDatabase, session_id: str, transaction_session_id: str | None = None, transaction_id: str | None = None) -> tuple:
+def get_latest_vectors(
+    db: SessionDatabase, session_id: str, transaction_session_id: str | None = None, transaction_id: str | None = None
+) -> tuple:
     """
     Get latest vectors, phase, and gate decision from reflexes table.
 
@@ -835,7 +876,8 @@ def get_latest_vectors(db: SessionDatabase, session_id: str, transaction_session
     # CRITICAL: Filter by transaction_id to prevent cross-instance bleed
     # Without this, two Claudes sharing a session see each other's phases
     if transaction_id:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT phase, engagement, know, do, context,
                    clarity, coherence, signal, density,
                    state, change, completion, impact, uncertainty,
@@ -844,9 +886,12 @@ def get_latest_vectors(db: SessionDatabase, session_id: str, transaction_session
             WHERE session_id = ? AND transaction_id = ?
             ORDER BY timestamp DESC
             LIMIT 1
-        """, (lookup_session_id, transaction_id))
+        """,
+            (lookup_session_id, transaction_id),
+        )
     else:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT phase, engagement, know, do, context,
                    clarity, coherence, signal, density,
                    state, change, completion, impact, uncertainty,
@@ -855,7 +900,9 @@ def get_latest_vectors(db: SessionDatabase, session_id: str, transaction_session
             WHERE session_id = ?
             ORDER BY timestamp DESC
             LIMIT 1
-        """, (lookup_session_id,))
+        """,
+            (lookup_session_id,),
+        )
     row = cursor.fetchone()
 
     if not row:
@@ -863,19 +910,19 @@ def get_latest_vectors(db: SessionDatabase, session_id: str, transaction_session
 
     phase = row[0]
     vectors = {
-        'engagement': row[1],
-        'know': row[2],
-        'do': row[3],
-        'context': row[4],
-        'clarity': row[5],
-        'coherence': row[6],
-        'signal': row[7],
-        'density': row[8],
-        'state': row[9],
-        'change': row[10],
-        'completion': row[11],
-        'impact': row[12],
-        'uncertainty': row[13],
+        "engagement": row[1],
+        "know": row[2],
+        "do": row[3],
+        "context": row[4],
+        "clarity": row[5],
+        "coherence": row[6],
+        "signal": row[7],
+        "density": row[8],
+        "state": row[9],
+        "change": row[10],
+        "completion": row[11],
+        "impact": row[12],
+        "uncertainty": row[13],
     }
 
     # Filter out None values
@@ -886,8 +933,9 @@ def get_latest_vectors(db: SessionDatabase, session_id: str, transaction_session
     if row[14]:  # reflex_data column
         try:
             import json
+
             reflex_data = json.loads(row[14])
-            gate_decision = reflex_data.get('decision')
+            gate_decision = reflex_data.get("decision")
         except Exception:
             pass
 
@@ -904,34 +952,43 @@ def get_vector_deltas(db: SessionDatabase, session_id: str) -> dict:
     cursor = db.conn.cursor()
 
     # Get PREFLIGHT baseline (first PREFLIGHT in session)
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT know, uncertainty, context, completion, engagement
         FROM reflexes
         WHERE session_id = ? AND phase = 'PREFLIGHT'
         ORDER BY timestamp ASC
         LIMIT 1
-    """, (session_id,))
+    """,
+        (session_id,),
+    )
     preflight = cursor.fetchone()
 
     # Get latest POSTFLIGHT (final state)
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT know, uncertainty, context, completion, engagement
         FROM reflexes
         WHERE session_id = ? AND phase = 'POSTFLIGHT'
         ORDER BY timestamp DESC
         LIMIT 1
-    """, (session_id,))
+    """,
+        (session_id,),
+    )
     postflight = cursor.fetchone()
 
     if not preflight or not postflight:
         # Fallback: if no complete cycle, show sequential delta
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT know, uncertainty, context, completion, engagement
             FROM reflexes
             WHERE session_id = ?
             ORDER BY timestamp DESC
             LIMIT 2
-        """, (session_id,))
+        """,
+            (session_id,),
+        )
         rows = cursor.fetchall()
         if len(rows) < 2:
             return {}
@@ -939,7 +996,7 @@ def get_vector_deltas(db: SessionDatabase, session_id: str) -> dict:
         preflight = rows[1]
 
     deltas = {}
-    keys = ['know', 'uncertainty', 'context', 'completion', 'engagement']
+    keys = ["know", "uncertainty", "context", "completion", "engagement"]
 
     for i, key in enumerate(keys):
         post_val = postflight[i]
@@ -965,7 +1022,7 @@ def format_deltas(deltas: dict) -> str:
     # For uncertainty, invert sign (lower uncertainty = improvement)
     net = 0.0
     for key, delta in deltas.items():
-        if key == 'uncertainty':
+        if key == "uncertainty":
             net -= delta  # Lower uncertainty is positive
         else:
             net += delta
@@ -988,35 +1045,40 @@ def format_context_window(stdin_context: dict) -> str:
       - ~/.empirica/context_usage_{id}.json    (per-instance, what the
         cockpit TUI and context-shift-tracker hook read)
     """
-    ctx = stdin_context.get('context_window', {})
-    used_pct = ctx.get('used_percentage', 0)
+    ctx = stdin_context.get("context_window", {})
+    used_pct = ctx.get("used_percentage", 0)
     if not used_pct:
         return ""
 
     try:
         import json as _json_ctx
         import time as _time
-        empirica_dir = Path.home() / '.empirica'
+
+        empirica_dir = Path.home() / ".empirica"
         empirica_dir.mkdir(parents=True, exist_ok=True)
-        payload = _json_ctx.dumps({
-            'used_percentage': used_pct,
-            'timestamp': _time.time(),
-        })
+        payload = _json_ctx.dumps(
+            {
+                "used_percentage": used_pct,
+                "timestamp": _time.time(),
+            }
+        )
         # Legacy shared (for older readers)
-        (empirica_dir / 'context_usage.json').write_text(payload)
+        (empirica_dir / "context_usage.json").write_text(payload)
         # Per-instance (cockpit, context-shift-tracker)
         try:
             from project_resolver import get_instance_id  # type: ignore
+
             instance_id = get_instance_id()
         except Exception:
             try:
                 from empirica.utils.session_resolver import get_instance_id
+
                 instance_id = get_instance_id()
             except Exception:
                 instance_id = None
         if instance_id:
-            safe_id = instance_id.replace('/', '-').replace('%', '')
-            (empirica_dir / f'context_usage_{safe_id}.json').write_text(payload)
+            safe_id = instance_id.replace("/", "-").replace("%", "")
+            (empirica_dir / f"context_usage_{safe_id}.json").write_text(payload)
     except Exception:
         pass
 
@@ -1032,7 +1094,7 @@ def format_context_window(stdin_context: dict) -> str:
 
 def _append_postflight_deltas(parts, phase, deltas):
     """Append delta indicator to parts if phase is POSTFLIGHT and deltas exist."""
-    if phase == 'POSTFLIGHT' and deltas:
+    if phase == "POSTFLIGHT" and deltas:
         delta_str = format_deltas(deltas)
         if delta_str:
             parts.append(f"Δ {delta_str}")
@@ -1043,9 +1105,9 @@ def _format_statusline_header(project_name, vectors, threshold_info):
 
     Returns (label, parts_list).
     """
-    label = project_name or 'empirica'
+    label = project_name or "empirica"
     if len(label) > 20:
-        label = label[:18] + '..'
+        label = label[:18] + ".."
 
     confidence = calculate_confidence(vectors)
     conf_str = format_confidence(confidence)
@@ -1072,7 +1134,7 @@ def _format_statusline_default(parts, phase, vectors, deltas, gate_decision, ope
     composite_phase: str | None = None
     if phase:
         work_phase = determine_work_phase(phase, gate_decision)
-        composite_phase = 'check' if phase == 'CHECK' else work_phase
+        composite_phase = "check" if phase == "CHECK" else work_phase
         composite = calculate_phase_composite(vectors, composite_phase)
         parts.append(format_phase_state(phase, work_phase, composite, gate_decision))
 
@@ -1086,13 +1148,13 @@ def _format_statusline_default(parts, phase, vectors, deltas, gate_decision, ope
     # decision, so K/C stays through CHECK→proceed (matches composite).
     # POSTFLIGHT composite uses execution vectors, pair switches to S/Δ.
     if vectors:
-        if composite_phase == 'praxic':
-            state = vectors.get('state', 0.0)
-            change = vectors.get('change', 0.0)
+        if composite_phase == "praxic":
+            state = vectors.get("state", 0.0)
+            change = vectors.get("change", 0.0)
             parts.append(f"{format_vector_colored('S', state)} {format_vector_colored('Δ', change)}")
         else:
-            know = vectors.get('know', 0.0)
-            context = vectors.get('context', 0.0)
+            know = vectors.get("know", 0.0)
+            context = vectors.get("context", 0.0)
             parts.append(f"{format_vector_colored('K', know)} {format_vector_colored('C', context)}")
 
     _append_postflight_deltas(parts, phase, deltas)
@@ -1102,7 +1164,7 @@ def _format_statusline_default(parts, phase, vectors, deltas, gate_decision, ope
         if ctx_str:
             parts.append(ctx_str)
 
-    return ' │ '.join(parts)
+    return " │ ".join(parts)
 
 
 def _format_statusline_learning(parts, phase, vectors, deltas, open_counts):
@@ -1113,21 +1175,21 @@ def _format_statusline_learning(parts, phase, vectors, deltas, open_counts):
         parts.append(f"{phase}")
 
     if vectors:
-        all_keys = ['know', 'uncertainty', 'context', 'clarity', 'completion']
+        all_keys = ["know", "uncertainty", "context", "clarity", "completion"]
         parts.append(format_vectors_compact(vectors, keys=all_keys, use_percentage=True))
 
     _append_postflight_deltas(parts, phase, deltas)
-    return ' │ '.join(parts)
+    return " │ ".join(parts)
 
 
 def _format_statusline_full(label, session, phase, vectors, deltas, goal):
     """Format the 'full' mode statusline."""
-    ai_id = session.get('ai_id', 'unknown')
-    session_id = session.get('session_id', '????')[:4]
+    ai_id = session.get("ai_id", "unknown")
+    session_id = session.get("session_id", "????")[:4]
     parts = [f"{Colors.BRIGHT_CYAN}[{label}:{ai_id}@{session_id}]{Colors.RESET}"]
 
     if goal:
-        completed, total = goal.get('subtask_progress', (0, 0))
+        completed, total = goal.get("subtask_progress", (0, 0))
         goal_str = format_goal_progress(goal)
         if total > 0:
             goal_str += f" ({completed}/{total})"
@@ -1139,11 +1201,11 @@ def _format_statusline_full(label, session, phase, vectors, deltas, goal):
         parts.append(f"{Colors.BLUE}{phase}{Colors.RESET}")
 
     if vectors:
-        all_keys = ['know', 'uncertainty', 'context', 'clarity', 'engagement', 'completion', 'impact']
+        all_keys = ["know", "uncertainty", "context", "clarity", "engagement", "completion", "impact"]
         parts.append(format_vectors_compact(vectors, keys=all_keys, use_percentage=True))
 
     _append_postflight_deltas(parts, phase, deltas)
-    return ' │ '.join(parts)
+    return " │ ".join(parts)
 
 
 def format_statusline(
@@ -1151,7 +1213,7 @@ def format_statusline(
     phase: str,
     vectors: dict,
     deltas: dict | None = None,
-    mode: str = 'default',
+    mode: str = "default",
     gate_decision: str | None = None,
     goal: dict | None = None,
     open_counts: dict | None = None,
@@ -1162,11 +1224,11 @@ def format_statusline(
     """Format the statusline based on mode."""
     label, parts = _format_statusline_header(project_name, vectors, threshold_info)
 
-    if mode == 'basic':
-        return ' '.join(parts)
-    elif mode == 'default':
+    if mode == "basic":
+        return " ".join(parts)
+    elif mode == "default":
         return _format_statusline_default(parts, phase, vectors, deltas, gate_decision, open_counts, stdin_context)
-    elif mode == 'learning':
+    elif mode == "learning":
         return _format_statusline_learning(parts, phase, vectors, deltas, open_counts)
     else:
         return _format_statusline_full(label, session, phase, vectors, deltas, goal)
@@ -1210,34 +1272,34 @@ def build_statusline_data(
     extensions = _read_statusline_extensions_data()
 
     return {
-        'project': {
-            'name': project_name,
-            'path': project_path,
+        "project": {
+            "name": project_name,
+            "path": project_path,
         },
-        'session': {
-            'id': session.get('session_id') if session else None,
-            'ai_id': ai_id or (session.get('ai_id') if session else None),
+        "session": {
+            "id": session.get("session_id") if session else None,
+            "ai_id": ai_id or (session.get("ai_id") if session else None),
         },
-        'epistemic': {
-            'phase': phase,
-            'vectors': vectors or {},
-            'deltas': deltas or {},
-            'confidence': confidence,
+        "epistemic": {
+            "phase": phase,
+            "vectors": vectors or {},
+            "deltas": deltas or {},
+            "confidence": confidence,
         },
-        'goals': {
-            'open': open_counts.get('open_goals', 0) if open_counts else 0,
-            'active': goal.get('objective') if goal else None,
-            'completion': open_counts.get('completion', 0.0) if open_counts else 0.0,
+        "goals": {
+            "open": open_counts.get("open_goals", 0) if open_counts else 0,
+            "active": goal.get("objective") if goal else None,
+            "completion": open_counts.get("completion", 0.0) if open_counts else 0.0,
         },
-        'unknowns': {
-            'open': open_counts.get('open_unknowns', 0) if open_counts else 0,
-            'blockers': open_counts.get('goal_linked_unknowns', 0) if open_counts else 0,
+        "unknowns": {
+            "open": open_counts.get("open_unknowns", 0) if open_counts else 0,
+            "blockers": open_counts.get("goal_linked_unknowns", 0) if open_counts else 0,
         },
-        'gate': {
-            'decision': gate_decision,
+        "gate": {
+            "decision": gate_decision,
         },
-        'extensions': extensions,
-        'timestamp': time.time(),
+        "extensions": extensions,
+        "timestamp": time.time(),
     }
 
 
@@ -1262,11 +1324,11 @@ def format_tmux_statusline(confidence: float, phase: str) -> str:
 
     # Phase abbreviation
     phase_abbrev = {
-        'PREFLIGHT': 'PRE',
-        'CHECK': 'CHK',
-        'POSTFLIGHT': 'POST',
-        'INVESTIGATE': 'INV',
-    }.get(phase, phase[:3] if phase else '---')
+        "PREFLIGHT": "PRE",
+        "CHECK": "CHK",
+        "POSTFLIGHT": "POST",
+        "INVESTIGATE": "INV",
+    }.get(phase, phase[:3] if phase else "---")
 
     return f"E:{emoji}{pct}% {phase_abbrev}"
 
@@ -1279,14 +1341,15 @@ def _check_off_record() -> bool:
     `~/.empirica/sentinel_paused_{instance_id}`. The global file is the
     fallback for "all instances paused" scope.
     """
-    base_dir = Path.home() / '.empirica'
+    base_dir = Path.home() / ".empirica"
     instance_pause_file: Path | None = None
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         inst_id = R.instance_id()
         if inst_id:
-            safe_id = inst_id.replace('/', '-').replace('%', '')
-            instance_pause_file = base_dir / f'sentinel_paused_{safe_id}'
+            safe_id = inst_id.replace("/", "-").replace("%", "")
+            instance_pause_file = base_dir / f"sentinel_paused_{safe_id}"
     except Exception:
         instance_pause_file = None
 
@@ -1294,7 +1357,7 @@ def _check_off_record() -> bool:
     if instance_pause_file is not None and instance_pause_file.exists():
         pause_file = instance_pause_file
     else:
-        global_file = base_dir / 'sentinel_paused'
+        global_file = base_dir / "sentinel_paused"
         if global_file.exists():
             pause_file = global_file
 
@@ -1304,27 +1367,25 @@ def _check_off_record() -> bool:
     try:
         import json as _json
         import time as _time
+
         text = pause_file.read_text().strip()
-        gap_str = ''
+        gap_str = ""
         # TUI / CLI write a plain reason string; the legacy global file
         # used a JSON blob with paused_at. Render age from mtime when no
         # JSON is parseable, falling back to no age string.
         try:
             pause_data = _json.loads(text) if text else {}
-            paused_at = pause_data.get('paused_at', 0)
+            paused_at = pause_data.get("paused_at", 0)
         except (ValueError, _json.JSONDecodeError):
             paused_at = pause_file.stat().st_mtime
         if paused_at:
             gap_minutes = int((_time.time() - paused_at) / 60)
             if gap_minutes < 60:
-                gap_amount = f'{gap_minutes}m'
+                gap_amount = f"{gap_minutes}m"
             else:
-                gap_amount = f'{gap_minutes // 60}h{gap_minutes % 60}m'
+                gap_amount = f"{gap_minutes // 60}h{gap_minutes % 60}m"
             gap_str = f" {Colors.GRAY}({gap_amount}){Colors.RESET}"
-        print(
-            f"{Colors.GRAY}[empirica]{Colors.RESET} "
-            f"{Colors.YELLOW}OFF-RECORD{Colors.RESET}{gap_str}"
-        )
+        print(f"{Colors.GRAY}[empirica]{Colors.RESET} {Colors.YELLOW}OFF-RECORD{Colors.RESET}{gap_str}")
     except Exception:
         print(f"{Colors.GRAY}[empirica]{Colors.RESET} {Colors.YELLOW}OFF-RECORD{Colors.RESET}")
     return True
@@ -1335,13 +1396,14 @@ def _read_stdin_context() -> tuple:
     try:
         import json as _json
         import select
+
         if not sys.stdin.isatty():
             ready, _, _ = select.select([sys.stdin], [], [], 0.1)
             if ready:
                 raw = sys.stdin.read()
                 if raw and raw.strip():
                     ctx = _json.loads(raw.strip())
-                    return ctx, ctx.get('session_id')
+                    return ctx, ctx.get("session_id")
     except Exception:
         pass
     return {}, None
@@ -1357,7 +1419,7 @@ def _resolve_project_name(db, session) -> tuple:
     cursor = db.conn.cursor()
 
     if session:
-        cursor.execute("SELECT project_id FROM sessions WHERE session_id = ?", (session['session_id'],))
+        cursor.execute("SELECT project_id FROM sessions WHERE session_id = ?", (session["session_id"],))
         row = cursor.fetchone()
         if row and row[0]:
             project_id = row[0]
@@ -1388,16 +1450,17 @@ def _read_open_transaction(project_path) -> tuple:
         import json as _json
 
         from empirica.utils.session_resolver import InstanceResolver as R
+
         suffix = R.instance_suffix()
         if project_path:
-            tx_path = Path(project_path) / '.empirica' / f'active_transaction{suffix}.json'
+            tx_path = Path(project_path) / ".empirica" / f"active_transaction{suffix}.json"
         else:
-            tx_path = Path.home() / '.empirica' / f'active_transaction{suffix}.json'
+            tx_path = Path.home() / ".empirica" / f"active_transaction{suffix}.json"
         if tx_path and tx_path.exists():
             with open(tx_path) as f:
                 tx_data = _json.load(f)
-            if tx_data.get('status') == 'open':
-                return tx_data.get('session_id'), tx_data.get('transaction_id')
+            if tx_data.get("status") == "open":
+                return tx_data.get("session_id"), tx_data.get("transaction_id")
     except Exception:
         pass
     return None, None
@@ -1406,14 +1469,15 @@ def _read_open_transaction(project_path) -> tuple:
 def main():
     """Main statusline generation."""
     try:
-        mode = os.getenv('EMPIRICA_STATUS_MODE', 'default').lower()
-        output_json = '--json' in sys.argv or os.getenv('EMPIRICA_STATUS_JSON', '').lower() == 'true'
-        output_tmux = '--tmux' in sys.argv or os.getenv('EMPIRICA_STATUS_TMUX', '').lower() == 'true'
+        mode = os.getenv("EMPIRICA_STATUS_MODE", "default").lower()
+        output_json = "--json" in sys.argv or os.getenv("EMPIRICA_STATUS_JSON", "").lower() == "true"
+        output_tmux = "--tmux" in sys.argv or os.getenv("EMPIRICA_STATUS_TMUX", "").lower() == "true"
         ai_id = get_ai_id()
 
         # HEADLESS CHECK
         try:
             from empirica.utils.session_resolver import InstanceResolver as R
+
             if R.is_headless():
                 return
         except ImportError:
@@ -1429,7 +1493,7 @@ def main():
             print(f"{Colors.GRAY}[no project]{Colors.RESET}")
             return
 
-        db_path = Path(project_path) / '.empirica' / 'sessions' / 'sessions.db'
+        db_path = Path(project_path) / ".empirica" / "sessions" / "sessions.db"
         db = SessionDatabase(db_path=str(db_path))
 
         session = get_active_session(db, ai_id, stdin_claude_session_id=stdin_claude_session_id)
@@ -1438,12 +1502,12 @@ def main():
         if not session:
             label = project_name or ai_id
             if len(label) > 20:
-                label = label[:18] + '..'
+                label = label[:18] + ".."
             print(f"{Colors.GRAY}[{label}:inactive]{Colors.RESET}")
             db.close()
             return
 
-        session_id = session['session_id']
+        session_id = session["session_id"]
         transaction_session_id, transaction_id = _read_open_transaction(project_path)
 
         if transaction_id:
@@ -1459,10 +1523,18 @@ def main():
 
         if output_json:
             import json
+
             data = build_statusline_data(
-                session, phase, vectors, deltas,
-                gate_decision=gate_decision, goal=goal, open_counts=open_counts,
-                project_name=project_name, project_path=project_path, ai_id=ai_id,
+                session,
+                phase,
+                vectors,
+                deltas,
+                gate_decision=gate_decision,
+                goal=goal,
+                open_counts=open_counts,
+                project_name=project_name,
+                project_path=project_path,
+                ai_id=ai_id,
             )
             print(json.dumps(data, indent=2))
             return
@@ -1473,9 +1545,16 @@ def main():
             return
 
         output = format_statusline(
-            session, phase, vectors, deltas, mode,
-            gate_decision=gate_decision, goal=goal, open_counts=open_counts,
-            project_name=project_name, threshold_info=None,
+            session,
+            phase,
+            vectors,
+            deltas,
+            mode,
+            gate_decision=gate_decision,
+            goal=goal,
+            open_counts=open_counts,
+            project_name=project_name,
+            threshold_info=None,
             stdin_context=stdin_context,
         )
         print(output)
@@ -1484,11 +1563,12 @@ def main():
         print(f"{Colors.GRAY}[empirica:error]{Colors.RESET}")
         try:
             from empirica.config.path_resolver import get_empirica_root
-            with open(get_empirica_root() / 'statusline.log', 'a') as f:
+
+            with open(get_empirica_root() / "statusline.log", "a") as f:
                 f.write(f"ERROR: {e}\n")
         except Exception:
             pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

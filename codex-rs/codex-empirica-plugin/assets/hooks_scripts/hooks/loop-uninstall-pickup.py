@@ -40,7 +40,7 @@ except Exception:
 
 
 def _format_request(request) -> str:
-    requested_by = request.requested_by or 'cockpit'
+    requested_by = request.requested_by or "cockpit"
     return f"""\
 ## ⚙ Loop uninstall request from {requested_by}
 
@@ -82,15 +82,19 @@ def main() -> int:
         return 0
 
     blocks = [_format_request(r) for r in requests]
-    additional = '\n\n'.join(blocks)
-    print(json.dumps({
-        'hookSpecificOutput': {
-            'hookEventName': 'UserPromptSubmit',
-            'additionalContext': additional,
-        },
-    }))
+    additional = "\n\n".join(blocks)
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": additional,
+                },
+            }
+        )
+    )
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

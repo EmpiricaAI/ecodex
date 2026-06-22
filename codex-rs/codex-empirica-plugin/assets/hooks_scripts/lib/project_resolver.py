@@ -41,6 +41,7 @@ from pathlib import Path
 # InstanceResolver — Hook-side facade that delegates to canonical
 # =============================================================================
 
+
 class InstanceResolver:
     """Hook-compatible resolver that delegates to the canonical InstanceResolver.
 
@@ -57,6 +58,7 @@ class InstanceResolver:
         self._canonical = None
         try:
             from empirica.utils.session_resolver import InstanceResolver as _Canonical
+
             self._canonical = _Canonical()
         except ImportError:
             pass
@@ -119,28 +121,29 @@ def get_instance_id() -> str | None:
     # Try empirica import first
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         return R.instance_id()
     except ImportError:
         pass
 
     # Fallback implementation
     # Priority 1: Explicit override
-    explicit_id = os.environ.get('EMPIRICA_INSTANCE_ID')
+    explicit_id = os.environ.get("EMPIRICA_INSTANCE_ID")
     if explicit_id:
         return explicit_id
 
     # Priority 2: tmux pane (most common for multi-instance work)
-    tmux_pane = os.environ.get('TMUX_PANE')
+    tmux_pane = os.environ.get("TMUX_PANE")
     if tmux_pane:
         return f"tmux_{tmux_pane.lstrip('%')}"
 
     # Priority 3: macOS Terminal.app session
-    term_session = os.environ.get('TERM_SESSION_ID')
+    term_session = os.environ.get("TERM_SESSION_ID")
     if term_session:
         return f"term:{term_session[:16]}"
 
     # Priority 4: X11 window ID
-    window_id = os.environ.get('WINDOWID')
+    window_id = os.environ.get("WINDOWID")
     if window_id:
         return f"x11:{window_id}"
 
@@ -177,6 +180,7 @@ def detect_environment() -> dict:
     """
     try:
         from empirica.utils.session_resolver import detect_environment as _canonical_de
+
         return _canonical_de()
     except ImportError:
         pass
@@ -185,9 +189,9 @@ def detect_environment() -> dict:
     import socket
 
     hostname = socket.gethostname()
-    is_remote = bool(os.environ.get('SSH_CONNECTION') or os.environ.get('SSH_CLIENT') or os.environ.get('SSH_TTY'))
-    is_container = os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv')
-    is_ci = bool(os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS') or os.environ.get('GITLAB_CI'))
+    is_remote = bool(os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"))
+    is_container = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+    is_ci = bool(os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") or os.environ.get("GITLAB_CI"))
 
     # Determine trust
     is_trusted = None
@@ -195,14 +199,11 @@ def detect_environment() -> dict:
 
     if is_remote or is_container or is_ci:
         # Check trusted_hosts file
-        trusted_file = Path.home() / '.empirica' / 'trusted_hosts'
+        trusted_file = Path.home() / ".empirica" / "trusted_hosts"
         if trusted_file.exists():
             try:
                 lines = trusted_file.read_text().splitlines()
-                patterns = [
-                    line.strip() for line in lines
-                    if line.strip() and not line.strip().startswith('#')
-                ]
+                patterns = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
                 for pattern in patterns:
                     if fnmatch.fnmatch(hostname, pattern):
                         is_trusted = True
@@ -219,12 +220,12 @@ def detect_environment() -> dict:
             trust_source = "no trusted_hosts file"
 
     return {
-        'hostname': hostname,
-        'is_remote': is_remote,
-        'is_container': is_container,
-        'is_ci': is_ci,
-        'is_trusted': is_trusted,
-        'trust_source': trust_source,
+        "hostname": hostname,
+        "is_remote": is_remote,
+        "is_container": is_container,
+        "is_ci": is_ci,
+        "is_trusted": is_trusted,
+        "trust_source": trust_source,
     }
 
 
@@ -245,6 +246,7 @@ def get_active_project_path(claude_session_id: str | None = None) -> str | None:
     # Try empirica import first
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         return R.project_path(claude_session_id)
     except ImportError:
         pass
@@ -255,24 +257,24 @@ def get_active_project_path(claude_session_id: str | None = None) -> str | None:
 
     # Read active_work file (if claude_session_id provided)
     if claude_session_id:
-        active_work_file = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+        active_work_file = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
         if active_work_file.exists():
             try:
                 with open(active_work_file) as f:
                     data = json.load(f)
-                    active_work_path = data.get('project_path')
+                    active_work_path = data.get("project_path")
             except Exception:
                 pass
 
     # Read instance_projects (TMUX_PANE-based) - AUTHORITATIVE source
     instance_id = get_instance_id()
     if instance_id:
-        instance_file = Path.home() / '.empirica' / 'instance_projects' / f'{instance_id}.json'
+        instance_file = Path.home() / ".empirica" / "instance_projects" / f"{instance_id}.json"
         if instance_file.exists():
             try:
                 with open(instance_file) as f:
                     data = json.load(f)
-                    instance_path = data.get('project_path')
+                    instance_path = data.get("project_path")
             except Exception:
                 pass
 
@@ -292,20 +294,20 @@ def _session_from_transaction(project_path):
     if not project_path:
         return None
     suffix = _get_instance_suffix()
-    tx_file = Path(project_path) / '.empirica' / f'active_transaction{suffix}.json'
+    tx_file = Path(project_path) / ".empirica" / f"active_transaction{suffix}.json"
     if not tx_file.exists():
         return None
     try:
         with open(tx_file) as f:
             tx_data = json.load(f)
-        if tx_data.get('status') == 'open':
-            return tx_data.get('session_id')
+        if tx_data.get("status") == "open":
+            return tx_data.get("session_id")
     except Exception:
         pass
     return None
 
 
-def _session_from_json_file(file_path, key='empirica_session_id'):
+def _session_from_json_file(file_path, key="empirica_session_id"):
     """Try to get session_id from a JSON file. Returns session_id or None."""
     if not file_path.exists():
         return None
@@ -336,6 +338,7 @@ def get_active_session_id(claude_session_id: str | None = None) -> str | None:
     # Try empirica import first
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         return R.session_id(claude_session_id)
     except ImportError:
         pass
@@ -350,32 +353,31 @@ def get_active_session_id(claude_session_id: str | None = None) -> str | None:
 
     # Priority 2: active_work file
     if claude_session_id:
-        result = _session_from_json_file(
-            Path.home() / '.empirica' / f'active_work_{claude_session_id}.json')
+        result = _session_from_json_file(Path.home() / ".empirica" / f"active_work_{claude_session_id}.json")
         if result:
             return result
 
     # Priority 3: instance_projects (TMUX-based)
     instance_id = get_instance_id()
     if instance_id:
-        result = _session_from_json_file(
-            Path.home() / '.empirica' / 'instance_projects' / f'{instance_id}.json')
+        result = _session_from_json_file(Path.home() / ".empirica" / "instance_projects" / f"{instance_id}.json")
         if result:
             return result
 
     # Priority 4: TTY session
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
+
         tty_session = R.tty_session()
         if tty_session:
-            session_id = tty_session.get('empirica_session_id')
+            session_id = tty_session.get("empirica_session_id")
             if session_id:
                 return session_id
     except Exception:
         pass
 
     # Priority 5: Generic active_work.json
-    return _session_from_json_file(Path.home() / '.empirica' / 'active_work.json')
+    return _session_from_json_file(Path.home() / ".empirica" / "active_work.json")
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +398,7 @@ try:
 except ImportError:
     # Minimal fallbacks for bare-plugin environments
     def has_valid_db(project_path: Path) -> bool:
-        db_path = project_path / '.empirica' / 'sessions' / 'sessions.db'
+        db_path = project_path / ".empirica" / "sessions" / "sessions.db"
         if not db_path.exists():
             return False
         try:
@@ -410,8 +412,10 @@ except ImportError:
     def _find_git_root() -> Path | None:
         try:
             result = subprocess.run(
-                ['git', 'rev-parse', '--show-toplevel'],
-                capture_output=True, text=True, timeout=5,
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if result.returncode == 0 and result.stdout.strip():
                 return Path(result.stdout.strip())
@@ -447,25 +451,25 @@ def _collect_candidate_paths(claude_session_id, instance_id):
     """
     candidates = set()
     if claude_session_id:
-        aw_file = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+        aw_file = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
         data = _read_json_file(aw_file)
-        if data and data.get('project_path'):
-            candidates.add(data['project_path'])
+        if data and data.get("project_path"):
+            candidates.add(data["project_path"])
     if instance_id:
-        ip_file = Path.home() / '.empirica' / 'instance_projects' / f'{instance_id}.json'
+        ip_file = Path.home() / ".empirica" / "instance_projects" / f"{instance_id}.json"
         data = _read_json_file(ip_file)
-        if data and data.get('project_path'):
-            candidates.add(data['project_path'])
+        if data and data.get("project_path"):
+            candidates.add(data["project_path"])
     return candidates
 
 
 def _find_open_transaction_project(candidate_paths, suffix):
     """Check candidates for an open transaction file. Returns Path or None."""
     for cpath in candidate_paths:
-        tx_file = Path(cpath) / '.empirica' / f'active_transaction{suffix}.json'
+        tx_file = Path(cpath) / ".empirica" / f"active_transaction{suffix}.json"
         tx_data = _read_json_file(tx_file)
-        if tx_data and tx_data.get('status') == 'open':
-            tx_project = tx_data.get('project_path', cpath)
+        if tx_data and tx_data.get("status") == "open":
+            tx_project = tx_data.get("project_path", cpath)
             result = _validated_project_path(tx_project)
             if result:
                 return result
@@ -475,16 +479,16 @@ def _find_open_transaction_project(candidate_paths, suffix):
 def _find_from_file_sources(claude_session_id, instance_id):
     """Priority 3-4: instance_projects then active_work. Returns Path or None."""
     if instance_id:
-        ip_file = Path.home() / '.empirica' / 'instance_projects' / f'{instance_id}.json'
+        ip_file = Path.home() / ".empirica" / "instance_projects" / f"{instance_id}.json"
         data = _read_json_file(ip_file)
-        result = _validated_project_path(data.get('project_path') if data else None)
+        result = _validated_project_path(data.get("project_path") if data else None)
         if result:
             return result
 
     if claude_session_id:
-        aw_file = Path.home() / '.empirica' / f'active_work_{claude_session_id}.json'
+        aw_file = Path.home() / ".empirica" / f"active_work_{claude_session_id}.json"
         data = _read_json_file(aw_file)
-        result = _validated_project_path(data.get('project_path') if data else None)
+        result = _validated_project_path(data.get("project_path") if data else None)
         if result:
             return result
 
@@ -540,6 +544,7 @@ def find_project_root(
     # Delegate to canonical when available (v1.8.14 resolver dedup)
     try:
         from empirica.utils.session_resolver import find_project_root as _canonical_fpr
+
         return _canonical_fpr(
             claude_session_id,
             check_compact_handoff=check_compact_handoff,
@@ -555,8 +560,8 @@ def find_project_root(
 
     # Priority 1: Compact handoff (post-compact only)
     if check_compact_handoff and instance_id:
-        data = _read_json_file(Path.home() / '.empirica' / f'compact_handoff{suffix}.json')
-        result = _validated_project_path(data.get('project_path') if data else None)
+        data = _read_json_file(Path.home() / ".empirica" / f"compact_handoff{suffix}.json")
+        result = _validated_project_path(data.get("project_path") if data else None)
         if result:
             return result
 
@@ -578,7 +583,7 @@ def find_project_root(
             return ws_result
 
     # Priority 6: EMPIRICA_WORKSPACE_ROOT env var
-    ws_root = os.environ.get('EMPIRICA_WORKSPACE_ROOT')
+    ws_root = os.environ.get("EMPIRICA_WORKSPACE_ROOT")
     if ws_root and has_valid_db(Path(ws_root)):
         return Path(ws_root)
 

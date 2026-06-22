@@ -16,23 +16,32 @@ import sys
 import time
 from pathlib import Path
 
-LOG_DIR = Path.home() / '.empirica' / 'logs'
+LOG_DIR = Path.home() / ".empirica" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-logger = logging.getLogger('empirica.entity-extractor')
-handler = logging.FileHandler(LOG_DIR / 'entity-extractor.log')
-handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+logger = logging.getLogger("empirica.entity-extractor")
+handler = logging.FileHandler(LOG_DIR / "entity-extractor.log")
+handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.DEBUG)
 
 # Add lib folder to path for shared modules
-_lib_path = Path(__file__).parent.parent / 'lib'
+_lib_path = Path(__file__).parent.parent / "lib"
 if str(_lib_path) not in sys.path:
     sys.path.insert(0, str(_lib_path))
 
 # Supported file extensions for entity extraction
 EXTRACTABLE_EXTENSIONS = {
-    '.py', '.ts', '.tsx', '.js', '.jsx', '.go', '.rs',
-    '.java', '.rb', '.sh', '.bash',
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".go",
+    ".rs",
+    ".java",
+    ".rb",
+    ".sh",
+    ".bash",
 }
 
 # Rate limit: don't re-extract same file within this window (seconds)
@@ -85,7 +94,7 @@ def _should_extract(file_path: str) -> bool:
 def _get_file_content(file_path: str) -> str:
     """Read file content, returning empty string on failure."""
     try:
-        return Path(file_path).read_text(encoding='utf-8', errors='replace')
+        return Path(file_path).read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.debug(f"  Cannot read {file_path}: {e}")
         return ""
@@ -120,7 +129,7 @@ def _extract_and_store(file_path: str, session_id: str) -> dict:
         return {"skipped": "import_error"}
 
     # Get project_id from database
-    db_path = Path(project_path) / '.empirica' / 'sessions' / 'sessions.db'
+    db_path = Path(project_path) / ".empirica" / "sessions" / "sessions.db"
     if not db_path.exists():
         logger.debug(f"  No sessions.db at {db_path}")
         return {"skipped": "no_db"}
@@ -136,13 +145,10 @@ def _extract_and_store(file_path: str, session_id: str) -> dict:
         project_id = None
         if empirica_session_id:
             cursor = db.conn.cursor()
-            cursor.execute(
-                "SELECT project_id FROM sessions WHERE session_id = ?",
-                (empirica_session_id,)
-            )
+            cursor.execute("SELECT project_id FROM sessions WHERE session_id = ?", (empirica_session_id,))
             row = cursor.fetchone()
             if row:
-                project_id = row[0] if isinstance(row, tuple) else row['project_id']
+                project_id = row[0] if isinstance(row, tuple) else row["project_id"]
 
         # Make file_path relative to project root for cleaner storage
         try:
@@ -152,7 +158,8 @@ def _extract_and_store(file_path: str, session_id: str) -> dict:
 
         # Extract entities and relationships
         entities, relationships = extract_entities_from_content(
-            rel_path, content,
+            rel_path,
+            content,
             project_id=project_id,
             session_id=empirica_session_id,
         )
@@ -196,15 +203,13 @@ def _extract_and_store(file_path: str, session_id: str) -> dict:
         existing = db.codebase_model.entities_for_file(rel_path, project_id=project_id)
         current_names = {e.name for e in entities}
         for existing_entity in existing:
-            if existing_entity['name'] not in current_names:
-                db.codebase_model.invalidate_entity(existing_entity['id'])
+            if existing_entity["name"] not in current_names:
+                db.codebase_model.invalidate_entity(existing_entity["id"])
 
         return {
             "entities": len(entities),
             "relationships": rel_count,
-            "invalidated": sum(
-                1 for e in existing if e['name'] not in current_names
-            ),
+            "invalidated": sum(1 for e in existing if e["name"] not in current_names),
         }
 
     finally:
@@ -217,15 +222,15 @@ def main():
     except (json.JSONDecodeError, EOFError):
         hook_input = {}
 
-    tool_name = hook_input.get('tool_name', 'unknown')
-    tool_input = hook_input.get('tool_input', {})
-    session_id = hook_input.get('session_id', '')
+    tool_name = hook_input.get("tool_name", "unknown")
+    tool_input = hook_input.get("tool_input", {})
+    session_id = hook_input.get("session_id", "")
 
     # Only process Edit and Write
-    if tool_name not in ('Edit', 'Write'):
+    if tool_name not in ("Edit", "Write"):
         sys.exit(0)
 
-    file_path = tool_input.get('file_path', '')
+    file_path = tool_input.get("file_path", "")
     if not file_path:
         sys.exit(0)
 
@@ -246,5 +251,5 @@ def main():
     sys.exit(0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
