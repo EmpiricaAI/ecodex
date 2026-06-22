@@ -14,9 +14,12 @@ ecodex's brand identity is "Empirica's branded codex for open-weights operators.
 | **Qwen** (Alibaba Cloud / Dashscope) | `qwen` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | OpenAI-chat | `DASHSCOPE_API_KEY` |
 | **GLM** (Zhipu AI) | `glm` | `https://open.bigmodel.cn/api/paas/v4` | OpenAI-chat | `ZHIPU_API_KEY` |
 | **Kimi** (Moonshot AI) | `kimi` | `https://api.moonshot.cn/v1` | OpenAI-chat | `MOONSHOT_API_KEY` |
+| **Mistral** (EU — Paris) 🇪🇺 | `mistral` | `https://api.mistral.ai/v1` | OpenAI-chat | `MISTRAL_API_KEY` |
 | **empirica-server** (David's local Empirica server) | `empirica-local` | `http://empirica-server:<port>/v1` | OpenAI-chat | TBD (likely none on private network) |
 
 All are OpenAI-compatible chat completions endpoints, which codex's existing provider abstraction handles natively. No custom adapters required.
+
+**EU data-sovereignty:** `mistral` is the EU-hosted cloud route — Mistral AI is EU-domiciled (Paris), so code never leaves the EU. It's the answer for users who legally/contractually cannot route to US (DeepSeek-via-OpenRouter, OpenAI) or CN (DeepSeek/Qwen/GLM/Kimi direct) providers. Devstral 2 (`devstral-2-latest`, agentic coding) and Codestral (`codestral-latest`, completion) are the coding tiers. Both are *also* open-weights — for full air-gap, self-host them on EU hardware via the local backends below (the `[EU]`-tagged entries in `ecodex models`).
 
 ### Local serving backends
 
@@ -68,6 +71,14 @@ name = "Kimi (Moonshot AI)"
 base_url = "https://api.moonshot.cn/v1"
 env_key = "MOONSHOT_API_KEY"
 env_key_instructions = "Get an API key at https://platform.moonshot.cn/console/api-keys, then export MOONSHOT_API_KEY in your shell."
+wire_api = "responses"
+
+# EU data-sovereignty route (Mistral AI, Paris — EU-hosted).
+[model_providers.mistral]
+name = "Mistral (EU — Paris)"
+base_url = "https://api.mistral.ai/v1"
+env_key = "MISTRAL_API_KEY"
+env_key_instructions = "Get an API key at https://console.mistral.ai/api-keys, then export MISTRAL_API_KEY in your shell."
 wire_api = "responses"
 
 # ─── Local LLM hosts ─────────────────────────────────────────────────

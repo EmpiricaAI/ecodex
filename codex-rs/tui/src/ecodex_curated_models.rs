@@ -118,6 +118,13 @@ pub(crate) fn curated_models() -> Vec<EcodexCuratedModel> {
             provider: "anthropic",
             category: EcodexModelCategory::CloudCoding,
         },
+        EcodexCuratedModel {
+            slug: "devstral-2-latest",
+            display_name: "Devstral 2 (Mistral — EU sovereign)",
+            description: "EU-hosted agentic-coding flagship (Mistral AI, Paris). Multi-file edits, dependency tracking. The data-sovereignty pick: code stays in the EU — for users who cannot route to US/CN providers. Also open-weights (self-hostable for full air-gap).",
+            provider: "mistral",
+            category: EcodexModelCategory::CloudCoding,
+        },
         // ── CloudReasoning ──
         EcodexCuratedModel {
             slug: "deepseek-reasoner",
@@ -244,6 +251,7 @@ mod tests {
             Some("empirica-local")
         );
         assert_eq!(provider_for_slug("openrouter/auto"), Some("openrouter"));
+        assert_eq!(provider_for_slug("devstral-2-latest"), Some("mistral"));
         assert_eq!(provider_for_slug("not-in-curated"), None);
     }
 

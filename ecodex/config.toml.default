@@ -79,6 +79,19 @@ env_key = "MOONSHOT_API_KEY"
 env_key_instructions = "Get an API key at https://platform.moonshot.cn/console/api-keys, then export MOONSHOT_API_KEY in your shell."
 wire_api = "responses"
 
+# EU data-sovereignty route. Mistral AI is EU-domiciled (Paris); the API is
+# EU-hosted, so code never leaves the EU — the answer for users who legally or
+# contractually cannot route to US/CN providers. Devstral 2 (devstral-2-latest)
+# is the agentic-coding flagship; Codestral (codestral-latest) is the
+# code-completion tier. Both are also open-weights, so the same models can be
+# self-hosted on EU hardware (Ollama/vLLM) for full air-gap.
+[model_providers.mistral]
+name = "Mistral (EU — Paris)"
+base_url = "https://api.mistral.ai/v1"
+env_key = "MISTRAL_API_KEY"
+env_key_instructions = "Get an API key at https://console.mistral.ai/api-keys, then export MISTRAL_API_KEY in your shell."
+wire_api = "responses"
+
 [model_providers.empirica-local]
 name = "empirica-server (local LAN: Strix Halo, 128GB unified mem)"
 # Verified live 2026-05-02: 192.168.1.68 = empirica-server (via /etc/hosts).

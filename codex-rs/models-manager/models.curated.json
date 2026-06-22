@@ -129,8 +129,8 @@
       "routes": ["openrouter", "direct"],
       "jurisdiction": { "country": "FR", "eu_data_residency": true },
       "calibration_tier": "unmeasured",
-      "last_verified": "2026-06-02",
-      "evidence": "openrouter.ai/mistralai (WebFetch single-source, NOT 3-vote-verified). EU-sovereignty pick per David."
+      "last_verified": "2026-06-22",
+      "evidence": "verified: docs.mistral.ai models_overview (devstral-2512) + api.mistral.ai/v1 OpenAI-compat (2026-06-22). Direct EU route now wired via [model_providers.mistral] (devstral-2-latest). EU-sovereignty pick per David."
     },
     {
       "slug": "mistralai/devstral-small",
@@ -142,8 +142,8 @@
       "routes": ["local", "openrouter", "direct"],
       "jurisdiction": { "country": "FR", "eu_data_residency": true },
       "calibration_tier": "unmeasured",
-      "last_verified": "2026-06-02",
-      "evidence": "openrouter.ai/mistralai (WebFetch single-source, NOT 3-vote-verified). EU local-sovereignty pick."
+      "last_verified": "2026-06-22",
+      "evidence": "verified: docs.mistral.ai models_overview (codestral-2508 + devstral family) + api.mistral.ai/v1 OpenAI-compat (2026-06-22). EU local-sovereignty pick (self-host for full air-gap; direct EU cloud via [model_providers.mistral])."
     }
   ]
 }
