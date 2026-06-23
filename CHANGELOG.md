@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+- **Mistral as the EU data-sovereignty cloud route** (`c2457d0d6e`): adds Mistral (Devstral coding models) as a curated provider tagged `jurisdiction.eu_data_residency`, giving teams under GDPR / EU AI Act constraints a hosted non-US route alongside the existing OpenRouter / direct-API / local options. Wired into `config.toml.default`, `models.curated.json`, and the curated-models registry. See `docs/ecodex/integrations/providers.md`.
+- **Harness-integrity guards on the vendored hook layer** — three of empirica's integrity checks, adapted for ecodex's vendored Python hooks:
+  - **SQL schema-reference guard** (#1, `7d79941a6f`): a test that fails if the vendored hooks reference DB columns/tables absent from the schema, catching schema drift between empirica and the vendored copy before it ships.
+  - **Import-budget gate** (#3, `7d620f2a5a`): bounds the import surface of the hot-path hook scripts so a heavyweight import can't silently regress per-call latency.
+  - **Compliance crosswalk** (#4, `56aa7d4c20`): a published asset mapping ecodex's controls to EU AI Act / GDPR / ISO 42001 obligations (`docs/ecodex/positioning/compliance-crosswalk.{md,html}`).
+
+### Changed
+- **2026-06 upstream codex sync merged** (`a0208269ca`, `0befb393f3`): large forward-port of openai/codex onto ecodex's plugin layer. Notable upstream surface now carried includes per-turn and thread-level multi-agent mode, remote exec-environment connection lifecycle + snapshots, token-budget-driven compaction (with budget-expiry turn aborts), UUIDv7 context-window lineage IDs, indexed/cached web-search modes, protected-resource OAuth discovery, and a clock current-time tool. ecodex's integrations (plugin writable-roots, provider hot-swap, the `monitor` tool) were re-reconciled against the new session semantics.
+- **PR#138 sentinel rush-guard fix re-vendored** (`d31ef316b5`): re-syncs 25 drifted hook/lib/script files from empirica `develop`, landing the rush-guard recovery-verb hoist so check / postflight / `*-log` calls aren't blocked when the noetic window is still fresh.
+
+### Fixed
+- **Model picker stuck on single-effort curated models + unsent queued input** (`f6657fa948`): the TUI treated a single supported reasoning-effort as "no choice" with the wrong comparison (`== 1` rather than `<= 1`), wedging the picker for curated models that expose one effort level, and could drop queued input.
+- **Release-gate test reconciliation** (`2ee947032b`, `5ad69972ce`…`5c8e274879`): app-server integration tests fixed for the merged signatures and ecodex branding — `mcp_server_status` made robust under load via bounded test parallelism (after reverting an ineffective read-timeout bump), `executor_mcp` updated to the `ecodex` binary name, `command_exec` switched to `sh -c` (non-login shell) to avoid login-profile network-probe noise, and plugin-manifest test fixtures gained the upstream-added `statusline` / `writable_roots` / `pinned` fields.
+- **Compliance report green (11/11, score 1.0)** (`2ee947032b`): added a minimal `pyproject.toml [tool.ecodex] version` mirror so the Python-centric `release_chain` check reads a true version for the Rust workspace, excluded the positioning visual-gen scripts from lint, and refactored (rather than config-dodged) the SQL schema-reference test's complexity violation.
+
 ## [0.1.0] - 2026-06-02
 
 ### Added
