@@ -79,30 +79,6 @@
             "command": "codex-empirica-plugin run-hook UserPromptSubmit context-shift-tracker.py",
             "timeout": 5,
             "statusMessage": "Context-shift tracker"
-          },
-          {
-            "type": "command",
-            "command": "codex-empirica-plugin run-hook UserPromptSubmit loop-install-pickup.py",
-            "timeout": 5,
-            "statusMessage": "Loop install pickup"
-          },
-          {
-            "type": "command",
-            "command": "codex-empirica-plugin run-hook UserPromptSubmit loop-uninstall-pickup.py",
-            "timeout": 5,
-            "statusMessage": "Loop uninstall pickup"
-          },
-          {
-            "type": "command",
-            "command": "codex-empirica-plugin run-hook UserPromptSubmit listener-install-pickup.py",
-            "timeout": 5,
-            "statusMessage": "Listener install pickup"
-          },
-          {
-            "type": "command",
-            "command": "codex-empirica-plugin run-hook UserPromptSubmit listener-uninstall-pickup.py",
-            "timeout": 5,
-            "statusMessage": "Listener uninstall pickup"
           }
         ]
       }

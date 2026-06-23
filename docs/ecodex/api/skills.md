@@ -15,8 +15,6 @@ The empirica plugin registers a curated skill set with codex. Skills are loaded 
 | `code-docs-align` | Verify documentation, docstrings, comments, and ref-docs match current code state |
 | `dispatch-agent` | Spawn subagents with inherited Empirica context (findings, dead-ends, anti-patterns) |
 | `ewm-interview` | Interview users to discover goals, domains, tools, preferences; generate workflow-protocol.yaml |
-| `inbox-listener` | Arm event listeners (ntfy topics, etc.) with persistent monitoring |
-| `loop-cron` | Wire `/loop` into Empirica's loop registry for periodic background work visible in cockpit |
 | `render` | Render markdown with ASCII art diagrams to themed SVG via mdview |
 
 ## Format

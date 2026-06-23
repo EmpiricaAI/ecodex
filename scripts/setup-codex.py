@@ -50,6 +50,19 @@ DIR_MAP = {
     ASSETS / "agents": f"{EMP_PLUGIN}/agents",
 }
 
+# Hooks ecodex has deliberately RETIRED (pre-adoption dead-surface prune,
+# 2026-06-24): the loop/listener install+uninstall-pickup family drove Claude
+# Code's CronCreate/`/loop` + curl-listener arming, which ecodex replaces with
+# the native ntfy listener (core/src/ntfy_listener.rs) + session-monitor-arm +
+# the `empirica loop`/`listener` CLI. Excluded from BOTH re-vendor and the
+# "NEW upstream" report so they don't creep back on the next sync.
+RETIRED = {
+    "loop-install-pickup.py",
+    "loop-uninstall-pickup.py",
+    "listener-install-pickup.py",
+    "listener-uninstall-pickup.py",
+}
+
 # ── De-Claude scan ──────────────────────────────────────────────────
 # A flagged string contains any of these → legit (identifier / path / hook
 # contract / the genericized terminal fallback), never model-facing identity.
@@ -182,6 +195,8 @@ def main() -> int:
 
         # files ecodex vendors → sync if drifted
         for name in sorted(eco_files):
+            if name in RETIRED:
+                continue  # deliberately retired — never re-vendor
             if name not in emp_files:
                 continue  # ecodex-only (e.g. native agents) — leave untouched
             blob = git_show(emp, args.ref, f"{emp_reldir}/{name}")
@@ -202,9 +217,9 @@ def main() -> int:
             except Exception:
                 pass
 
-        # empirica-NEW files ecodex doesn't vendor yet
+        # empirica-NEW files ecodex doesn't vendor yet (retired ones suppressed)
         for name in sorted(emp_files - eco_files):
-            if name.startswith(".") or name.endswith((".pyc",)):
+            if name.startswith(".") or name.endswith((".pyc",)) or name in RETIRED:
                 continue
             new_upstream.append(f"{emp_reldir}/{name}")
 

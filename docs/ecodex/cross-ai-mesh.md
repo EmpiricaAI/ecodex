@@ -16,7 +16,7 @@ This makes the empirica AI mesh a genuinely cross-platform layer — not a Claud
 |---|---|---|
 | **Cortex MCP server config** | `~/.codex/config.toml` `[mcp_servers.cortex]` | Exposes `mcp__cortex__cortex_inbox_poll` / `cortex_propose` / `cortex_collab_post` / etc. to the agent. |
 | **`monitor` tool** | `codex-rs/core/src/monitor.rs` + tool handler | Holds the ntfy connection (or any line-emitting stream) and wakes the agent on each matching event. See [`monitor.md`](monitor.md). |
-| **Vendored mesh hook scripts** | `codex-rs/codex-empirica-plugin/assets/hooks_scripts/hooks/` | `listener-install-pickup.py`, `session-monitor-arm.py`, `task-completed.py`, etc. — the empirica plugin's mesh-aware lifecycle handlers. |
+| **Vendored mesh hook scripts** | `codex-rs/codex-empirica-plugin/assets/hooks_scripts/hooks/` | `session-monitor-arm.py`, `task-completed.py`, etc. — the empirica plugin's mesh-aware lifecycle handlers. |
 | **PR2 dispatch sites** | `codex-rs/core/src/...` (see roadmap) | The 7 new hook events (`TaskCompleted`, `PreCompact`, `SubagentStart`, …) so plugin handlers fire at the right lifecycle points. See [`hook-events-roadmap.md`](hook-events-roadmap.md). |
 | **Hook output translation** | `codex-rs/codex-empirica-plugin/src/hooks/` | CC-shape JSON ↔ codex-shape JSON, so the same Python scripts work in both surfaces. |
 
