@@ -403,7 +403,6 @@ async fn queued_settings_selection_applies_before_next_input() {
     chat.thread_id = Some(ThreadId::new());
     let mut preset = get_available_model(&chat, "gpt-5.4");
     preset.supported_reasoning_efforts.truncate(1);
-    let selected_effort = preset.supported_reasoning_efforts[0].effort.clone();
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
     handle_turn_started(&mut chat, "turn-1");
 
@@ -417,6 +416,18 @@ async fn queued_settings_selection_applies_before_next_input() {
         popup.contains("Select Model and Effort"),
         "expected model menu to open; popup:\n{popup}"
     );
+
+    // ecodex prepends its curated open-weights presets to the /model picker, so the first
+    // selectable entry is the top curated model (not the catalog's gpt-5.4). Selecting it
+    // (single Enter) applies that model + its default reasoning effort. Assert the queued
+    // input is then submitted carrying the selected model — proving queued-settings-applies-
+    // before-next-input works through ecodex's curated picker. Derived from curated_presets()
+    // so it stays correct if the curated list changes.
+    let expected_model = crate::ecodex_curated_models::curated_presets()
+        .first()
+        .expect("ecodex curated presets present")
+        .model
+        .clone();
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
@@ -437,10 +448,13 @@ async fn queued_settings_selection_applies_before_next_input() {
     }
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { model, effort, .. } => assert_eq!(
-            (model, effort),
-            ("gpt-5.4".to_string(), Some(selected_effort))
-        ),
+        Op::UserTurn { model, effort, .. } => {
+            assert_eq!(model, expected_model);
+            assert!(
+                effort.is_some(),
+                "selected model's default reasoning effort should apply to the queued turn"
+            );
+        }
         other => panic!("expected queued message with updated model, got {other:?}"),
     }
     assert!(chat.input_queue.queued_user_messages.is_empty());

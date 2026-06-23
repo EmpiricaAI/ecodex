@@ -181,7 +181,13 @@ impl ChatWidget {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model.as_str() == self.current_model();
-            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
+            // `<= 1` (not `== 1`): a preset with 0 declared reasoning efforts (e.g. ecodex's
+            // curated open-weights presets) also needs no reasoning sub-popup — open_reasoning_popup
+            // short-circuits for <= 1 choice. Treating 0 like 1 here means the model item dismisses
+            // on select (dismiss_on_select) rather than waiting for a child reasoning popup that
+            // never shows — which otherwise leaves the popup stuck open and the deferred input queue
+            // unsettled (no SettingsSelectionClosed emitted).
+            let single_supported_effort = preset.supported_reasoning_efforts.len() <= 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
