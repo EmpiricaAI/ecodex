@@ -1470,6 +1470,8 @@ async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
             mcp_servers: None,
             apps: None,
             hooks: None,
+            statusline: None,
+            writable_roots: Vec::new(),
         },
         interface: None,
     };
@@ -5226,6 +5228,7 @@ async fn load_plugins_populates_statusline_and_writable_roots_from_manifest() {
     let outcome = load_plugins_from_config(
         &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
         codex_home.path(),
+        /*auth_mode*/ None,
     )
     .await;
 

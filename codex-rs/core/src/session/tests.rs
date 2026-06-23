@@ -8161,7 +8161,8 @@ async fn build_initial_context_reinjects_pinned_skill_bodies() {
             plugin_id: None,
         },
     ];
-    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+    turn_context.turn_skills =
+        TurnSkillsContext::new(codex_core_skills::HostSkillsSnapshot::new(Arc::new(outcome)));
 
     let initial_context = session.build_initial_context(&turn_context).await;
 
