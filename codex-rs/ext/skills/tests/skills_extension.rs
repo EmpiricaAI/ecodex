@@ -97,6 +97,7 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
         policy: None,
         path_to_skills_md: skill_path,
         scope: SkillScope::User,
+        pinned: false,
         plugin_id: None,
     });
     let loaded_skills = Arc::new(outcome);
