@@ -1,0 +1,13 @@
+# ecodex is a Rust project — its canonical version lives in
+# codex-rs/Cargo.toml ([workspace.package].version). This file mirrors that
+# version for Python-side tooling and the Empirica compliance release-chain
+# check (which reads a top-level `version` line to verify the current version
+# is published — e.g. the v0.1.0 git tag + GitHub release).
+#
+# This is NOT a pip-installable package (no [project] table by design); it is
+# a version-mirror shim. Keep it in sync with Cargo.toml on every release
+# (scripts/release.sh should bump both). The proper long-term fix is Empirica's
+# compliance checks reading Cargo.toml version directly for Rust projects —
+# proposed upstream so this shim can retire.
+[tool.ecodex]
+version = "0.1.0"

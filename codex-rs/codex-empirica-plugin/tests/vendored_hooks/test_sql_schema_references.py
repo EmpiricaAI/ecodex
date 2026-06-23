@@ -261,6 +261,73 @@ _KNOWN_VIOLATIONS: frozenset[tuple[str, str]] = frozenset()
 # --------------------------------------------------------------------------- #
 # The test.
 # --------------------------------------------------------------------------- #
+def _classify_query(
+    conn: sqlite3.Connection,
+    relpath: str,
+    sql: str,
+    known_tables: set[str],
+) -> tuple[str, str | None]:
+    """Classify one static query against the built schema.
+
+    Returns ``(category, message)``. category is one of: ``non_dml`` /
+    ``unknown_table`` / ``validated`` (message None), or ``new`` / ``known`` /
+    ``ambiguous`` (message = the OperationalError/Warning text). Extracted from
+    the test body so neither function exceeds the cyclomatic-complexity budget.
+    """
+    keyword = _statement_keyword(sql)
+    if keyword.startswith(NON_DML_PREFIXES) or keyword == "":
+        return ("non_dml", None)
+
+    tables = _primary_tables(sql)
+    if tables and not (tables & known_tables):
+        return ("unknown_table", None)
+
+    n_params = sql.count("?")
+    try:
+        conn.execute("EXPLAIN " + sql, [None] * n_params)
+        return ("validated", None)
+    except sqlite3.OperationalError as exc:
+        message = str(exc)
+        if not _looks_like_missing_ref(message):
+            return ("ambiguous", message)
+        key = (relpath, _missing_symbol(message))
+        return ("known" if key in _KNOWN_VIOLATIONS else "new", message)
+    except sqlite3.Warning as exc:
+        return ("ambiguous", str(exc))
+
+
+def _build_audit_report(
+    n_tables: int,
+    n_queries: int,
+    counts: dict[str, int],
+    ambiguous: list[tuple[str, str, str]],
+    known_violations: list[tuple[str, str, str]],
+    new_violations: list[tuple[str, str, str]],
+) -> str:
+    """Render the always-printed coverage report (no control-flow in the test)."""
+    lines = [
+        "",
+        "=== vendored-hook SQL schema-reference audit ===",
+        f"schema tables built          : {n_tables}",
+        f"static queries extracted     : {n_queries}",
+        f"  validated via EXPLAIN      : {counts['validated']}",
+        f"  skipped (non-DML / DDL)    : {counts['non_dml']}",
+        f"  skipped (unknown table)    : {counts['unknown_table']}",
+        f"  ambiguous OperationalError : {len(ambiguous)}",
+        f"  known violations (tracked) : {len(known_violations)}",
+        f"  NEW violations             : {len(new_violations)}",
+    ]
+    if known_violations:
+        lines.append("")
+        lines.append("--- known violations (allow-listed, tracked for fix) ---")
+        lines += [f"  {loc} — {err} — {sql.strip()[:120]}" for loc, sql, err in known_violations]
+    if new_violations:
+        lines.append("")
+        lines.append("--- NEW VIOLATIONS (failing) ---")
+        lines += [f"  {loc} — {err} — {sql.strip()[:120]}" for loc, sql, err in new_violations]
+    return "\n".join(lines)
+
+
 def test_static_sql_references_exist_in_schema():
     try:
         conn = _build_schema_connection()
@@ -273,72 +340,30 @@ def test_static_sql_references_exist_in_schema():
 
     schema = _introspect_columns(conn)
     known_tables = set(schema.keys())
-
     all_queries = _collect_all_static_queries()
 
-    validated = 0
-    skipped_non_dml = 0
-    skipped_unknown_table = 0
+    counts = {"validated": 0, "non_dml": 0, "unknown_table": 0}
     new_violations: list[tuple[str, str, str]] = []    # (loc, sql, error) — fail
     known_violations: list[tuple[str, str, str]] = []  # allow-listed, tracked
     ambiguous: list[tuple[str, str, str]] = []  # other OperationalErrors
+    buckets = {"new": new_violations, "known": known_violations, "ambiguous": ambiguous}
 
     for py_file, lineno, sql in all_queries:
         relpath = py_file.relative_to(HOOKS_SCRIPTS).as_posix()
-        loc = f"{relpath}:{lineno}"
-
-        keyword = _statement_keyword(sql)
-        if keyword.startswith(NON_DML_PREFIXES) or keyword == "":
-            skipped_non_dml += 1
-            continue
-
-        tables = _primary_tables(sql)
-        if tables and not (tables & known_tables):
-            skipped_unknown_table += 1
-            continue
-
-        n_params = sql.count("?")
-        try:
-            conn.execute("EXPLAIN " + sql, [None] * n_params)
-            validated += 1
-        except sqlite3.OperationalError as exc:
-            message = str(exc)
-            if _looks_like_missing_ref(message):
-                key = (relpath, _missing_symbol(message))
-                if key in _KNOWN_VIOLATIONS:
-                    known_violations.append((loc, sql, message))
-                else:
-                    new_violations.append((loc, sql, message))
-            else:
-                ambiguous.append((loc, sql, message))
-        except sqlite3.Warning as exc:
-            ambiguous.append((loc, sql, str(exc)))
-
-    report_lines = [
-        "",
-        "=== vendored-hook SQL schema-reference audit ===",
-        f"schema tables built          : {len(known_tables)}",
-        f"static queries extracted     : {len(all_queries)}",
-        f"  validated via EXPLAIN      : {validated}",
-        f"  skipped (non-DML / DDL)    : {skipped_non_dml}",
-        f"  skipped (unknown table)    : {skipped_unknown_table}",
-        f"  ambiguous OperationalError : {len(ambiguous)}",
-        f"  known violations (tracked) : {len(known_violations)}",
-        f"  NEW violations             : {len(new_violations)}",
-    ]
-    if known_violations:
-        report_lines.append("")
-        report_lines.append("--- known violations (allow-listed, tracked for fix) ---")
-        for loc, sql, err in known_violations:
-            report_lines.append(f"  {loc} — {err} — {sql.strip()[:120]}")
-    if new_violations:
-        report_lines.append("")
-        report_lines.append("--- NEW VIOLATIONS (failing) ---")
-        for loc, sql, err in new_violations:
-            report_lines.append(f"  {loc} — {err} — {sql.strip()[:120]}")
-    print("\n".join(report_lines))
+        category, message = _classify_query(conn, relpath, sql, known_tables)
+        if category in counts:
+            counts[category] += 1
+        else:
+            # new/known/ambiguous always carry a message; `or ""` keeps the
+            # tuple typed str (classifier returns str | None for the count cases).
+            buckets[category].append((f"{relpath}:{lineno}", sql, message or ""))
 
     conn.close()
+
+    print(_build_audit_report(
+        len(known_tables), len(all_queries), counts,
+        ambiguous, known_violations, new_violations,
+    ))
 
     assert not new_violations, (
         f"{len(new_violations)} NEW static SQL quer"

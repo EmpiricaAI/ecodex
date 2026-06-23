@@ -38,6 +38,10 @@ extend-exclude = [
     # not by editing in place.
     "codex-rs/codex-empirica-plugin/assets/hooks_scripts",
 
+    # Positioning visual generators (marketing deck/SVG scripts) — tooling
+    # that emits presentation assets, not shipped product code.
+    "docs/ecodex/positioning",
+
     # Standard ruff exclusions (build artifacts, caches, etc.)
     ".bazel-out",
     "bazel-bin",
