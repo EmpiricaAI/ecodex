@@ -41,6 +41,8 @@ fn environment_descriptor_binds_every_manifest_resource() {
             mcp_servers: Some(PluginManifestMcpServers::Path(mcp_servers.clone())),
             apps: Some(apps.clone()),
             hooks: Some(PluginManifestHooks::Paths(vec![hooks.clone()])),
+            statusline: None,
+            writable_roots: Vec::new(),
         },
         interface: Some(PluginManifestInterface {
             composer_icon: Some(composer_icon.clone()),
@@ -81,6 +83,8 @@ fn environment_descriptor_binds_every_manifest_resource() {
                     "executor-1",
                     hooks,
                 )])),
+                statusline: None,
+                writable_roots: Vec::new(),
             },
             interface: Some(PluginManifestInterface {
                 composer_icon: Some(resource("executor-1", composer_icon)),
@@ -107,6 +111,8 @@ fn environment_descriptor_rejects_resources_outside_package_root() {
             mcp_servers: Some(PluginManifestMcpServers::Path(outside.clone())),
             apps: None,
             hooks: None,
+            statusline: None,
+            writable_roots: Vec::new(),
         },
         interface: None,
     };
