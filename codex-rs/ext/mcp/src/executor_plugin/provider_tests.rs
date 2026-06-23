@@ -320,6 +320,8 @@ fn resolved_plugin(
                 mcp_servers,
                 apps: None,
                 hooks: None,
+                statusline: None,
+                writable_roots: Vec::new(),
             },
             interface: None,
         },
