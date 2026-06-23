@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-23
+
 ### Added
 - **Mistral as the EU data-sovereignty cloud route** (`c2457d0d6e`): adds Mistral (Devstral coding models) as a curated provider tagged `jurisdiction.eu_data_residency`, giving teams under GDPR / EU AI Act constraints a hosted non-US route alongside the existing OpenRouter / direct-API / local options. Wired into `config.toml.default`, `models.curated.json`, and the curated-models registry. See `docs/ecodex/integrations/providers.md`.
 - **Harness-integrity guards on the vendored hook layer** — three of empirica's integrity checks, adapted for ecodex's vendored Python hooks:
@@ -75,7 +77,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/Nubaeon/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Nubaeon/ecodex/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nubaeon/ecodex/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/Nubaeon/ecodex/compare/v0.0.0...v0.0.1
 [0.0.0]: https://github.com/Nubaeon/ecodex/releases/tag/v0.0.0
