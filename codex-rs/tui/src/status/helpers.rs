@@ -5,7 +5,8 @@ use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
 use codex_protocol::account::PlanType;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
@@ -33,10 +34,20 @@ pub(crate) fn compose_model_display(
     (model_name.to_string(), details)
 }
 
-pub(crate) fn compose_agents_summary(config: &Config, paths: &[AbsolutePathBuf]) -> String {
+pub(crate) fn compose_agents_summary(config: &Config, paths: &[PathUri]) -> String {
     let mut rels: Vec<String> = Vec::new();
 
-    for p in paths {
+    for path in paths {
+        // TODO(anp): Rationalize instruction-source summaries with the TUI's broader foreign-path
+        // display strategy once other status surfaces can retain environment-native paths.
+        if path.infer_path_convention() != Some(PathConvention::native()) {
+            rels.push(path.inferred_native_path_string());
+            continue;
+        }
+        let Ok(p) = path.to_abs_path() else {
+            rels.push(path.inferred_native_path_string());
+            continue;
+        };
         let p = p.as_path();
         let file_name = p
             .file_name()
@@ -185,8 +196,6 @@ fn title_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
-    use crate::legacy_core::LOCAL_AGENTS_MD_FILENAME;
     use crate::legacy_core::config::ConfigBuilder;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
@@ -227,11 +236,14 @@ mod tests {
     async fn compose_agents_summary_includes_global_agents_path() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
-        let global_agents_path = codex_home.path().join(DEFAULT_AGENTS_MD_FILENAME);
+        let global_agents_path = codex_home.path().join("global.md");
         let config = test_config(&codex_home, &cwd).await;
 
         assert_eq!(
-            compose_agents_summary(&config, &[global_agents_path.abs()]),
+            compose_agents_summary(
+                &config,
+                &[PathUri::from_abs_path(&global_agents_path.abs())]
+            ),
             format_directory_display(&global_agents_path, /*max_width*/ None)
         );
     }
@@ -240,28 +252,50 @@ mod tests {
     async fn compose_agents_summary_names_global_agents_override() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
-        let override_path = codex_home.path().join(LOCAL_AGENTS_MD_FILENAME);
+        let override_path = codex_home.path().join("override.md");
         let config = test_config(&codex_home, &cwd).await;
 
         assert_eq!(
-            compose_agents_summary(&config, &[override_path.abs()]),
+            compose_agents_summary(&config, &[PathUri::from_abs_path(&override_path.abs())]),
             format_directory_display(&override_path, /*max_width*/ None)
         );
+    }
+
+    #[tokio::test]
+    async fn compose_agents_summary_shows_relative_native_and_full_foreign_paths() {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let cwd = TempDir::new().expect("temp cwd");
+        let config = test_config(&codex_home, &cwd).await;
+        let native_source = PathUri::from_abs_path(&config.cwd.join("AGENTS.md"));
+        let foreign_source = if cfg!(windows) {
+            PathUri::parse("file:///remote%20workspace/AGENTS.md")
+                .expect("POSIX instruction source")
+        } else {
+            PathUri::parse("file:///C:/remote%20workspace/AGENTS.md")
+                .expect("Windows instruction source")
+        };
+
+        let summary = compose_agents_summary(&config, &[native_source, foreign_source]);
+        if cfg!(windows) {
+            insta::assert_snapshot!(summary, @r"AGENTS.md, /remote workspace/AGENTS.md");
+        } else {
+            insta::assert_snapshot!(summary, @r"AGENTS.md, C:\remote workspace\AGENTS.md");
+        }
     }
 
     #[tokio::test]
     async fn compose_agents_summary_orders_global_before_project_agents() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
-        let global_agents_path = codex_home.path().join(DEFAULT_AGENTS_MD_FILENAME);
-        let project_agents_path = cwd.path().join(DEFAULT_AGENTS_MD_FILENAME);
+        let global_agents_path = codex_home.path().join("global.md");
+        let project_agents_path = cwd.path().join("project.md");
         let config = test_config(&codex_home, &cwd).await;
 
         let summary = compose_agents_summary(
             &config,
             &[
-                global_agents_path.clone().abs(),
-                project_agents_path.clone().abs(),
+                PathUri::from_abs_path(&global_agents_path.clone().abs()),
+                PathUri::from_abs_path(&project_agents_path.clone().abs()),
             ],
         );
         let mut paths = summary.split(", ");
@@ -270,7 +304,7 @@ mod tests {
             Some(format_directory_display(&global_agents_path, /*max_width*/ None).as_str())
         );
         let project_path = paths.next().expect("project agents path");
-        assert!(project_path.ends_with(DEFAULT_AGENTS_MD_FILENAME));
+        assert!(project_path.ends_with("project.md"));
         assert_eq!(paths.next(), None);
     }
 }

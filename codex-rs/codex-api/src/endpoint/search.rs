@@ -55,6 +55,7 @@ mod tests {
     use crate::provider::RetryConfig;
     use crate::search::AllowedCaller;
     use crate::search::ApproximateLocation;
+    use crate::search::ExternalWebAccess;
     use crate::search::LocationType;
     use crate::search::OpenOperation;
     use crate::search::SearchCommands;
@@ -64,7 +65,6 @@ mod tests {
     use crate::search::SearchInput;
     use crate::search::SearchQuery;
     use crate::search::SearchSettings;
-    use async_trait::async_trait;
     use codex_client::Request;
     use codex_client::RequestBody;
     use codex_client::Response;
@@ -100,7 +100,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl HttpTransport for CapturingTransport {
         async fn execute(&self, req: Request) -> Result<Response, TransportError> {
             *self.last_request.lock().expect("lock request store") = Some(req);
@@ -134,10 +133,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_posts_typed_request_and_parses_encrypted_output() {
+    async fn search_posts_typed_request_and_parses_output() {
         let transport = CapturingTransport::new(
-            serde_json::to_vec(&json!({"encrypted_output": "ciphertext"}))
-                .expect("serialize response"),
+            serde_json::to_vec(&json!({
+                "encrypted_output": "ciphertext",
+                "output": "search result",
+            }))
+            .expect("serialize response"),
         );
         let client = SearchClient::new(transport.clone(), provider(), Arc::new(DummyAuth));
 
@@ -145,10 +147,10 @@ mod tests {
             .search(
                 &SearchRequest {
                     id: "search-session".to_string(),
-                    model: Some("gpt-test".to_string()),
+                    model: "gpt-test".to_string(),
                     reasoning: None,
                     input: Some(SearchInput::Items(vec![ResponseItem::Message {
-                        id: None,
+                        id: Some("msg_search".to_string()),
                         role: "user".to_string(),
                         content: vec![
                             ContentItem::InputText {
@@ -160,6 +162,7 @@ mod tests {
                             },
                         ],
                         phase: None,
+                        metadata: None,
                     }])),
                     commands: Some(SearchCommands {
                         search_query: Some(vec![SearchQuery {
@@ -191,7 +194,7 @@ mod tests {
                             caption: Some(true),
                         }),
                         allowed_callers: Some(vec![AllowedCaller::Direct]),
-                        external_web_access: Some(true),
+                        external_web_access: Some(ExternalWebAccess::Boolean(true)),
                     }),
                     max_output_tokens: Some(2500),
                 },
@@ -203,7 +206,8 @@ mod tests {
         assert_eq!(
             response,
             SearchResponse {
-                encrypted_output: "ciphertext".to_string(),
+                encrypted_output: Some("ciphertext".to_string()),
+                output: "search result".to_string(),
             }
         );
 
@@ -225,6 +229,7 @@ mod tests {
                 "model": "gpt-test",
                 "input": [{
                     "type": "message",
+                    "id": "msg_search",
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": "find this"},

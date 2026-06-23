@@ -1,10 +1,8 @@
-//! Extension crate sketch for the `/goal` feature.
-//!
-//! This crate is intentionally not wired into the host yet. It contains the
-//! goal tool specs, extension registration shape, and the parts of runtime
-//! accounting that can be represented with today's extension API.
+//! Extension crate for the `/goal` feature.
 
 mod accounting;
+mod analytics;
+mod api;
 mod events;
 mod extension;
 mod metrics;
@@ -13,6 +11,12 @@ mod spec;
 mod steering;
 mod tool;
 
+pub use api::GoalObjectiveUpdate;
+pub use api::GoalService;
+pub use api::GoalServiceError;
+pub use api::GoalSetOutcome;
+pub use api::GoalSetRequest;
+pub use api::GoalTokenBudgetUpdate;
 pub use extension::GoalExtension;
 pub use extension::GoalExtensionConfig;
 pub use extension::install_with_backend;

@@ -16,11 +16,14 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
+use crate::tools::runtimes::prepend_zsh_fork_bin_to_path;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
+use crate::tools::sandboxing::sandbox_permissions_preserving_denied_reads;
+use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
@@ -53,16 +56,19 @@ use codex_shell_escalation::EscalationDecision;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::EscalationPolicy;
+use codex_shell_escalation::EscalationPolicyFuture;
 use codex_shell_escalation::EscalationSession;
 use codex_shell_escalation::ExecParams;
 use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::PreparedExec;
 use codex_shell_escalation::ResolvedPermissionProfile;
 use codex_shell_escalation::ShellCommandExecutor;
+use codex_shell_escalation::ShellCommandExecutorFuture;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
-use std::path::Path;
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -116,7 +122,17 @@ pub(super) async fn try_run_zsh_fork(
         return Ok(None);
     }
 
-    let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+    let (attempt_file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
+    let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
+        req.sandbox_permissions,
+        &attempt_file_system_sandbox_policy,
+    );
+    let req = &ShellRequest {
+        sandbox_permissions,
+        ..req.clone()
+    };
+    let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+    prepend_zsh_fork_bin_to_path(&mut env, shell_zsh_path);
     let command =
         build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
     let options = ExecOptions {
@@ -128,18 +144,21 @@ pub(super) async fn try_run_zsh_fork(
             command,
             options,
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions),
+            Some(&req.turn_environment.environment_id),
         )
-        .map_err(|err| ToolError::Codex(err.into()))?;
+        .map_err(ToolError::Codex)?;
     let crate::sandboxing::ExecRequest {
         command,
         cwd: sandbox_cwd,
         env: sandbox_env,
         exec_server_env_config: _,
         network: sandbox_network,
+        network_environment_id,
         expiration: _sandbox_expiration,
         capture_policy: _capture_policy,
         sandbox,
         windows_sandbox_policy_cwd: sandbox_policy_cwd,
+        windows_sandbox_workspace_roots,
         windows_sandbox_level,
         windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
         permission_profile,
@@ -147,6 +166,8 @@ pub(super) async fn try_run_zsh_fork(
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides: _windows_sandbox_filesystem_overrides,
         arg0,
+        exec_server_sandbox: _,
+        exec_server_enforce_managed_network: _,
     } = sandbox_exec_request;
     let ParsedShellCommand { script, login, .. } = extract_shell_script(&command)?;
     let effective_timeout = Duration::from_millis(
@@ -156,6 +177,14 @@ pub(super) async fn try_run_zsh_fork(
     let exec_policy = Arc::new(RwLock::new(
         ctx.session.services.exec_policy.current().as_ref().clone(),
     ));
+    // TODO(anp): Keep PathUri through the shell escalation boundary.
+    let sandbox_cwd = sandbox_cwd
+        .to_abs_path()
+        .map_err(|err| ToolError::Rejected(err.to_string()))?;
+    // TODO(anp): Keep PathUri through the shell sandbox policy boundary.
+    let sandbox_policy_cwd = sandbox_policy_cwd
+        .to_abs_path()
+        .map_err(|err| ToolError::Rejected(err.to_string()))?;
     let command_executor = CoreShellCommandExecutor {
         command,
         cwd: sandbox_cwd,
@@ -165,11 +194,13 @@ pub(super) async fn try_run_zsh_fork(
         sandbox,
         env: sandbox_env,
         network: sandbox_network,
+        network_environment_id,
         windows_sandbox_level,
         arg0,
         sandbox_policy_cwd,
-        codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
-        use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
+        windows_sandbox_workspace_roots,
+        codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
+        use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
     };
     let main_execve_wrapper_exe = ctx
         .session
@@ -205,11 +236,11 @@ pub(super) async fn try_run_zsh_fork(
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
+        environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::Shell,
         approval_policy: ctx.turn.approval_policy.value(),
         permission_profile: command_executor.permission_profile.clone(),
         file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
-        sandbox_policy_cwd: command_executor.sandbox_policy_cwd.clone(),
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
@@ -257,31 +288,43 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
     let exec_policy = Arc::new(RwLock::new(
         ctx.session.services.exec_policy.current().as_ref().clone(),
     ));
+    // TODO(anp): Keep PathUri through the zsh-fork executor boundary.
+    let cwd = exec_request
+        .cwd
+        .to_abs_path()
+        .map_err(|err| ToolError::Rejected(err.to_string()))?;
+    // TODO(anp): Keep PathUri through the zsh-fork sandbox policy boundary.
+    let sandbox_policy_cwd = exec_request
+        .windows_sandbox_policy_cwd
+        .to_abs_path()
+        .map_err(|err| ToolError::Rejected(err.to_string()))?;
     let command_executor = CoreShellCommandExecutor {
         command: exec_request.command.clone(),
-        cwd: exec_request.cwd.clone(),
+        cwd,
         permission_profile: exec_request.permission_profile.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
         network_sandbox_policy: exec_request.network_sandbox_policy,
         sandbox: exec_request.sandbox,
         env: exec_request.env.clone(),
         network: exec_request.network.clone(),
+        network_environment_id: exec_request.network_environment_id.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
         arg0: exec_request.arg0.clone(),
-        sandbox_policy_cwd: exec_request.windows_sandbox_policy_cwd.clone(),
-        codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
-        use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
+        sandbox_policy_cwd,
+        windows_sandbox_workspace_roots: exec_request.windows_sandbox_workspace_roots.clone(),
+        codex_linux_sandbox_exe: ctx.turn.config.codex_linux_sandbox_exe.clone(),
+        use_legacy_landlock: ctx.turn.config.features.use_legacy_landlock(),
     };
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
+        environment_id: req.turn_environment.environment_id.clone(),
         tool_name: GuardianCommandSource::UnifiedExec,
         approval_policy: ctx.turn.approval_policy.value(),
         permission_profile: exec_request.permission_profile.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
-        sandbox_policy_cwd: exec_request.windows_sandbox_policy_cwd.clone(),
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions: approval_sandbox_permissions(
             req.sandbox_permissions,
@@ -312,11 +355,11 @@ struct CoreShellActionProvider {
     session: Arc<crate::session::session::Session>,
     turn: Arc<crate::session::turn_context::TurnContext>,
     call_id: String,
+    environment_id: String,
     tool_name: GuardianCommandSource,
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
-    sandbox_policy_cwd: AbsolutePathBuf,
     sandbox_permissions: SandboxPermissions,
     approval_sandbox_permissions: SandboxPermissions,
     prompt_permissions: Option<AdditionalPermissionProfile>,
@@ -367,11 +410,18 @@ impl CoreShellActionProvider {
     fn shell_request_escalation_execution(
         sandbox_permissions: SandboxPermissions,
         permission_profile: &PermissionProfile,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
         additional_permissions: Option<&AdditionalPermissionProfile>,
     ) -> EscalationExecution {
         match sandbox_permissions {
             SandboxPermissions::UseDefault => EscalationExecution::TurnDefault,
-            SandboxPermissions::RequireEscalated => EscalationExecution::Unsandboxed,
+            SandboxPermissions::RequireEscalated => {
+                if unsandboxed_execution_allowed(file_system_sandbox_policy) {
+                    EscalationExecution::Unsandboxed
+                } else {
+                    EscalationExecution::TurnDefault
+                }
+            }
             SandboxPermissions::WithAdditionalPermissions => additional_permissions
                 .map(|_| {
                     // Shell request additional permissions were already normalized and
@@ -402,6 +452,7 @@ impl CoreShellActionProvider {
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
+        let environment_id = Some(self.environment_id.clone());
         let source = self.tool_name;
         let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
@@ -467,6 +518,7 @@ impl CoreShellActionProvider {
                         &turn,
                         call_id,
                         approval_id,
+                        environment_id,
                         command,
                         workdir.clone(),
                         /*reason*/ None,
@@ -578,8 +630,7 @@ impl CoreShellActionProvider {
 // execve interception.
 const ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING: bool = false;
 
-#[async_trait::async_trait]
-impl EscalationPolicy for CoreShellActionProvider {
+impl CoreShellActionProvider {
     async fn determine_action(
         &self,
         program: &AbsolutePathBuf,
@@ -599,8 +650,7 @@ impl EscalationPolicy for CoreShellActionProvider {
                 InterceptedExecPolicyContext {
                     approval_policy: self.approval_policy,
                     permission_profile: self.permission_profile.clone(),
-                    file_system_sandbox_policy: &self.file_system_sandbox_policy,
-                    sandbox_cwd: self.sandbox_policy_cwd.as_path(),
+                    windows_sandbox_level: self.turn.windows_sandbox_level,
                     sandbox_permissions: self.approval_sandbox_permissions,
                     enable_shell_wrapper_parsing:
                         ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
@@ -611,8 +661,12 @@ impl EscalationPolicy for CoreShellActionProvider {
         // fallback function.
         let decision_driven_by_policy =
             Self::decision_driven_by_policy(&evaluation.matched_rules, evaluation.decision);
-        let needs_escalation =
-            self.sandbox_permissions.requires_escalated_permissions() || decision_driven_by_policy;
+        let unsandboxed_allowed = unsandboxed_execution_allowed(&self.file_system_sandbox_policy);
+        let needs_escalation = match self.sandbox_permissions {
+            SandboxPermissions::UseDefault => unsandboxed_allowed && decision_driven_by_policy,
+            SandboxPermissions::RequireEscalated => unsandboxed_allowed,
+            SandboxPermissions::WithAdditionalPermissions => true,
+        };
 
         let decision_source = if decision_driven_by_policy {
             DecisionSource::PrefixRule
@@ -620,10 +674,12 @@ impl EscalationPolicy for CoreShellActionProvider {
             DecisionSource::UnmatchedCommandFallback
         };
         let escalation_execution = match decision_source {
-            DecisionSource::PrefixRule => EscalationExecution::Unsandboxed,
+            DecisionSource::PrefixRule if unsandboxed_allowed => EscalationExecution::Unsandboxed,
+            DecisionSource::PrefixRule => EscalationExecution::TurnDefault,
             DecisionSource::UnmatchedCommandFallback => Self::shell_request_escalation_execution(
                 self.sandbox_permissions,
                 &self.permission_profile,
+                &self.file_system_sandbox_policy,
                 self.prompt_permissions.as_ref(),
             ),
         };
@@ -641,17 +697,29 @@ impl EscalationPolicy for CoreShellActionProvider {
     }
 }
 
+impl EscalationPolicy for CoreShellActionProvider {
+    fn determine_action<'a>(
+        &'a self,
+        program: &'a AbsolutePathBuf,
+        argv: &'a [String],
+        workdir: &'a AbsolutePathBuf,
+    ) -> EscalationPolicyFuture<'a> {
+        Box::pin(CoreShellActionProvider::determine_action(
+            self, program, argv, workdir,
+        ))
+    }
+}
+
 fn evaluate_intercepted_exec_policy(
     policy: &Policy,
     program: &AbsolutePathBuf,
     argv: &[String],
-    context: InterceptedExecPolicyContext<'_>,
+    context: InterceptedExecPolicyContext,
 ) -> Evaluation {
     let InterceptedExecPolicyContext {
         approval_policy,
         permission_profile,
-        file_system_sandbox_policy,
-        sandbox_cwd,
+        windows_sandbox_level,
         sandbox_permissions,
         enable_shell_wrapper_parsing,
     } = context;
@@ -678,8 +746,7 @@ fn evaluate_intercepted_exec_policy(
             crate::exec_policy::UnmatchedCommandContext {
                 approval_policy,
                 permission_profile: &permission_profile,
-                file_system_sandbox_policy,
-                sandbox_cwd,
+                windows_sandbox_level,
                 sandbox_permissions,
                 used_complex_parsing,
                 command_origin: crate::exec_policy::ExecPolicyCommandOrigin::Generic,
@@ -697,11 +764,10 @@ fn evaluate_intercepted_exec_policy(
 }
 
 #[derive(Clone)]
-struct InterceptedExecPolicyContext<'a> {
+struct InterceptedExecPolicyContext {
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
-    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
-    sandbox_cwd: &'a Path,
+    windows_sandbox_level: WindowsSandboxLevel,
     sandbox_permissions: SandboxPermissions,
     enable_shell_wrapper_parsing: bool,
 }
@@ -750,9 +816,11 @@ struct CoreShellCommandExecutor {
     sandbox: SandboxType,
     env: HashMap<String, String>,
     network: Option<codex_network_proxy::NetworkProxy>,
+    network_environment_id: Option<String>,
     windows_sandbox_level: WindowsSandboxLevel,
     arg0: Option<String>,
     sandbox_policy_cwd: AbsolutePathBuf,
+    windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_legacy_landlock: bool,
 }
@@ -765,12 +833,40 @@ struct PrepareSandboxedExecParams<'a> {
     additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
-#[async_trait::async_trait]
 impl ShellCommandExecutor for CoreShellCommandExecutor {
-    async fn run(
+    fn run(
         &self,
         _command: Vec<String>,
         _cwd: PathBuf,
+        env_overlay: HashMap<String, String>,
+        cancel_rx: CancellationToken,
+        after_spawn: Option<Box<dyn FnOnce() + Send>>,
+    ) -> ShellCommandExecutorFuture<'_, ExecResult> {
+        Box::pin(CoreShellCommandExecutor::run(
+            self,
+            env_overlay,
+            cancel_rx,
+            after_spawn,
+        ))
+    }
+
+    fn prepare_escalated_exec<'a>(
+        &'a self,
+        program: &'a AbsolutePathBuf,
+        argv: &'a [String],
+        workdir: &'a AbsolutePathBuf,
+        env: HashMap<String, String>,
+        execution: EscalationExecution,
+    ) -> ShellCommandExecutorFuture<'a, PreparedExec> {
+        Box::pin(CoreShellCommandExecutor::prepare_escalated_exec(
+            self, program, argv, workdir, env, execution,
+        ))
+    }
+}
+
+impl CoreShellCommandExecutor {
+    async fn run(
+        &self,
         env_overlay: HashMap<String, String>,
         cancel_rx: CancellationToken,
         after_spawn: Option<Box<dyn FnOnce() + Send>>,
@@ -787,14 +883,16 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
         let result = crate::sandboxing::execute_exec_request_with_after_spawn(
             crate::sandboxing::ExecRequest {
                 command: self.command.clone(),
-                cwd: self.cwd.clone(),
+                cwd: self.cwd.clone().into(),
                 env: exec_env,
                 exec_server_env_config: None,
                 network: self.network.clone(),
+                network_environment_id: self.network_environment_id.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
                 capture_policy: ExecCapturePolicy::ShellTool,
                 sandbox: self.sandbox,
-                windows_sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
+                windows_sandbox_policy_cwd: self.sandbox_policy_cwd.clone().into(),
+                windows_sandbox_workspace_roots: self.windows_sandbox_workspace_roots.clone(),
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
                 permission_profile: self.permission_profile.clone(),
@@ -802,6 +900,8 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 network_sandbox_policy: self.network_sandbox_policy,
                 windows_sandbox_filesystem_overrides: None,
                 arg0: self.arg0.clone(),
+                exec_server_sandbox: None,
+                exec_server_enforce_managed_network: false,
             },
             /*stdout_stream*/ None,
             after_spawn,
@@ -837,7 +937,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
             EscalationExecution::Unsandboxed => PreparedExec {
                 command,
                 cwd: workdir.to_path_buf(),
-                env,
+                env: exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated),
                 arg0: Some(first_arg.clone()),
             },
             EscalationExecution::TurnDefault => {
@@ -877,9 +977,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
 
         Ok(prepared)
     }
-}
 
-impl CoreShellCommandExecutor {
     #[allow(clippy::too_many_arguments)]
     fn prepare_sandboxed_exec(
         &self,
@@ -905,10 +1003,12 @@ impl CoreShellCommandExecutor {
             self.windows_sandbox_level,
             self.network.is_some(),
         );
+        let cwd = PathUri::from_abs_path(workdir);
+        let sandbox_policy_cwd = PathUri::from_abs_path(&self.sandbox_policy_cwd);
         let command = SandboxCommand {
             program: program.clone().into(),
             args: args.to_vec(),
-            cwd: workdir.clone(),
+            cwd,
             env,
             additional_permissions,
         };
@@ -921,8 +1021,9 @@ impl CoreShellCommandExecutor {
             permissions: permission_profile,
             sandbox,
             enforce_managed_network: self.network.is_some(),
+            environment_id: self.network_environment_id.as_deref(),
             network: self.network.as_ref(),
-            sandbox_policy_cwd: &self.sandbox_policy_cwd,
+            sandbox_policy_cwd: &sandbox_policy_cwd,
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock: self.use_legacy_landlock,
             windows_sandbox_level: self.windows_sandbox_level,
@@ -931,15 +1032,27 @@ impl CoreShellCommandExecutor {
         let mut exec_request = crate::sandboxing::ExecRequest::from_sandbox_exec_request(
             exec_request,
             options,
-            self.sandbox_policy_cwd.clone(),
+            self.windows_sandbox_workspace_roots.clone(),
         );
         if let Some(network) = exec_request.network.as_ref() {
-            network.apply_to_env(&mut exec_request.env);
+            network
+                .apply_to_env_for_optional_environment(
+                    &mut exec_request.env,
+                    self.network_environment_id.as_deref(),
+                )
+                .map_err(|err| {
+                    let environment_id =
+                        self.network_environment_id.as_deref().unwrap_or("default");
+                    CodexErr::Io(io::Error::other(format!(
+                        "failed to prepare network proxy for environment `{environment_id}`: {err}"
+                    )))
+                })?;
         }
 
         Ok(PreparedExec {
             command: exec_request.command,
-            cwd: exec_request.cwd.to_path_buf(),
+            // TODO(anp): Keep PathUri through the execve-wrapper boundary.
+            cwd: exec_request.cwd.to_abs_path()?.to_path_buf(),
             env: exec_request.env,
             arg0: exec_request.arg0,
         })

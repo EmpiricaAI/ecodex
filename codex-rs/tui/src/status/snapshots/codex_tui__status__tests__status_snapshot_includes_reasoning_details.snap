@@ -1,19 +1,19 @@
 ---
 source: tui/src/status/tests.rs
-assertion_line: 270
+assertion_line: 318
 expression: sanitized
 ---
 /status
 
 ╭───────────────────────────────────────────────────────────────────────────╮
-│  ∴ ecodex (v0.0.1)  ·  turtles all the way down                           │
+│  ∴ ecodex (v0.1.0)  ·  turtles all the way down                           │
 │                                                                           │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date             │
 │ information on rate limits and credits                                    │
 │                                                                           │
 │  Model:            gpt-5.1-codex-max (reasoning high, summaries detailed) │
 │  Directory: [[workspace]]                                                 │
-│  Permissions:      Workspace (on-request)                                 │
+│  Permissions:      Workspace (Ask for approval)                           │
 │  Agents.md:        <none>                                                 │
 │                                                                           │
 │  Token usage:      1.9K total  (1K input + 900 output)                    │

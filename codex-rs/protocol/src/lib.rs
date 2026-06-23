@@ -9,6 +9,8 @@ pub use session_id::SessionId;
 pub use thread_id::ThreadId;
 pub use tool_name::ToolName;
 pub mod approvals;
+pub mod capabilities;
+mod compacted_item;
 pub mod config_types;
 pub mod dynamic_tools;
 pub mod error;

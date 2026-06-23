@@ -9,6 +9,7 @@ use crate::state::NetworkProxyState;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
@@ -221,11 +222,13 @@ impl NetworkProxyBuilder {
             http_addr,
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
+            socks5_udp_enabled: current_cfg.network.enable_socks5_udp,
             runtime_settings: Arc::new(RwLock::new(NetworkProxyRuntimeSettings::from_config(
                 &current_cfg,
-            ))),
+            )?)),
             reserved_listeners,
             policy_decider: self.policy_decider,
+            environment_proxies: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }
@@ -299,16 +302,39 @@ struct NetworkProxyRuntimeSettings {
     allow_local_binding: bool,
     allow_unix_sockets: Arc<[String]>,
     dangerously_allow_all_unix_sockets: bool,
+    mitm_ca_trust_bundle: Option<crate::certs::ManagedMitmCaTrustBundle>,
 }
 
 impl NetworkProxyRuntimeSettings {
-    fn from_config(config: &config::NetworkProxyConfig) -> Self {
-        Self {
+    fn from_config(config: &config::NetworkProxyConfig) -> Result<Self> {
+        let mitm_ca_trust_bundle = if config.network.mitm {
+            let env = crate::certs::CUSTOM_CA_ENV_KEYS
+                .into_iter()
+                .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
+                .collect();
+            Some(crate::certs::managed_ca_trust_bundle(&env)?)
+        } else {
+            None
+        };
+        Ok(Self {
             allow_local_binding: config.network.allow_local_binding,
             allow_unix_sockets: config.network.allow_unix_sockets().into(),
             dangerously_allow_all_unix_sockets: config.network.dangerously_allow_all_unix_sockets,
-        }
+            mitm_ca_trust_bundle,
+        })
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EnvironmentProxyAddrs {
+    http_addr: SocketAddr,
+    socks_addr: SocketAddr,
+}
+
+struct EnvironmentProxy {
+    addrs: EnvironmentProxyAddrs,
+    http_task: JoinHandle<Result<()>>,
+    socks_task: Option<JoinHandle<Result<()>>>,
 }
 
 #[derive(Clone)]
@@ -317,9 +343,11 @@ pub struct NetworkProxy {
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     socks_enabled: bool,
+    socks5_udp_enabled: bool,
     runtime_settings: Arc<RwLock<NetworkProxyRuntimeSettings>>,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    environment_proxies: Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
 }
 
 impl std::fmt::Debug for NetworkProxy {
@@ -477,6 +505,7 @@ fn apply_proxy_env_overrides(
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
+    mitm_ca_trust_bundle: Option<&crate::certs::ManagedMitmCaTrustBundle>,
 ) {
     let http_proxy_url = format!("http://{http_addr}");
     let socks_proxy_url = format!("socks5h://{socks_addr}");
@@ -556,6 +585,27 @@ fn apply_proxy_env_overrides(
             }
         }
     }
+
+    if let Some(mitm_ca_trust_bundle) = mitm_ca_trust_bundle {
+        let managed_path = mitm_ca_trust_bundle.path.to_string_lossy().into_owned();
+        for key in crate::certs::CUSTOM_CA_ENV_KEYS {
+            if env
+                .get(key)
+                .filter(|value| !value.is_empty())
+                .is_some_and(|value| {
+                    value != &managed_path
+                        && mitm_ca_trust_bundle.startup_env_values.get(key) != Some(value)
+                })
+            {
+                // TODO(winston): Materialize policy-checked per-child bundles for readable
+                // startup and command-scoped CA overrides. For now startup overrides are
+                // replaced with the default bundle and later command-scoped overrides are
+                // preserved, either of which can make intercepted TLS fail.
+                continue;
+            }
+            env.insert(key.to_string(), managed_path.clone());
+        }
+    }
 }
 
 impl NetworkProxy {
@@ -595,17 +645,144 @@ impl NetworkProxy {
         self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
-    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
-        let allow_local_binding = self.allow_local_binding();
-        // Enforce proxying for child processes. We intentionally override existing values so
-        // command-level environment cannot bypass the managed proxy endpoint.
+    /// Returns the generated MITM CA bundle path child sandboxes should expose to TLS clients.
+    pub fn managed_mitm_ca_trust_bundle_path(&self) -> Option<AbsolutePathBuf> {
+        self.runtime_settings()
+            .mitm_ca_trust_bundle
+            .and_then(|bundle| {
+                AbsolutePathBuf::from_absolute_path(bundle.path)
+                    .map_err(|err| warn!("managed MITM CA trust bundle path is invalid: {err}"))
+                    .ok()
+            })
+    }
+
+    fn apply_to_env_for_addrs(
+        &self,
+        env: &mut HashMap<String, String>,
+        addrs: EnvironmentProxyAddrs,
+    ) {
+        let runtime_settings = self.runtime_settings();
+        // Enforce proxying for child processes. Proxy endpoint values are always rewritten;
+        // managed MITM CA vars preserve child-scoped overrides after proxy startup.
         apply_proxy_env_overrides(
             env,
-            self.http_addr,
-            self.socks_addr,
+            addrs.http_addr,
+            addrs.socks_addr,
             self.socks_enabled,
-            allow_local_binding,
+            runtime_settings.allow_local_binding,
+            runtime_settings.mitm_ca_trust_bundle.as_ref(),
         );
+    }
+
+    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+        self.apply_to_env_for_addrs(
+            env,
+            EnvironmentProxyAddrs {
+                http_addr: self.http_addr,
+                socks_addr: self.socks_addr,
+            },
+        );
+    }
+
+    pub fn apply_to_env_for_environment(
+        &self,
+        env: &mut HashMap<String, String>,
+        environment_id: &str,
+    ) -> Result<()> {
+        let addrs = self.environment_proxy_addrs(environment_id)?;
+        self.apply_to_env_for_addrs(env, addrs);
+        Ok(())
+    }
+
+    pub fn apply_to_env_for_optional_environment(
+        &self,
+        env: &mut HashMap<String, String>,
+        environment_id: Option<&str>,
+    ) -> Result<()> {
+        match environment_id {
+            Some(environment_id) => self.apply_to_env_for_environment(env, environment_id),
+            None => {
+                self.apply_to_env(env);
+                Ok(())
+            }
+        }
+    }
+
+    fn environment_proxy_addrs(&self, environment_id: &str) -> Result<EnvironmentProxyAddrs> {
+        let mut proxies = self
+            .environment_proxies
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(proxy) = proxies.get(environment_id) {
+            return Ok(proxy.addrs);
+        }
+
+        let runtime = tokio::runtime::Handle::try_current().with_context(|| {
+            format!("failed to create network proxy for environment `{environment_id}`")
+        })?;
+        let listeners =
+            reserve_loopback_ephemeral_listeners(self.socks_enabled).with_context(|| {
+                format!("failed to reserve network proxy for environment `{environment_id}`")
+            })?;
+        let http_addr = listeners.http_addr().with_context(|| {
+            format!("failed to read HTTP proxy address for environment `{environment_id}`")
+        })?;
+        let socks_addr = listeners.socks_addr(self.socks_addr).with_context(|| {
+            format!("failed to read SOCKS proxy address for environment `{environment_id}`")
+        })?;
+        let addrs = EnvironmentProxyAddrs {
+            http_addr,
+            socks_addr,
+        };
+        let ReservedListenerSet {
+            http_listener,
+            socks_listener,
+        } = listeners;
+
+        let environment_id = environment_id.to_string();
+        let http_state = self.state.clone();
+        let http_decider = self.policy_decider.clone();
+        let http_environment_id = Some(environment_id.clone());
+        let http_task = runtime.spawn(async move {
+            http_proxy::run_http_proxy_with_std_listener(
+                http_state,
+                http_listener,
+                http_decider,
+                http_environment_id,
+            )
+            .await
+        });
+
+        let socks_task = if self.socks_enabled {
+            let socks_state = self.state.clone();
+            let socks_decider = self.policy_decider.clone();
+            let socks_environment_id = Some(environment_id.clone());
+            let socks5_udp_enabled = self.socks5_udp_enabled;
+            socks_listener.map(|listener| {
+                runtime.spawn(async move {
+                    socks5::run_socks5_with_std_listener(
+                        socks_state,
+                        listener,
+                        socks_decider,
+                        socks_environment_id,
+                        socks5_udp_enabled,
+                    )
+                    .await
+                })
+            })
+        } else {
+            None
+        };
+
+        proxies.insert(
+            environment_id,
+            EnvironmentProxy {
+                addrs,
+                http_task,
+                socks_task,
+            },
+        );
+        Ok(addrs)
     }
 
     pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
@@ -631,7 +808,7 @@ impl NetworkProxy {
             "cannot update network.enable_socks5_udp on a running proxy"
         );
 
-        let settings = NetworkProxyRuntimeSettings::from_config(&new_state.config);
+        let settings = NetworkProxyRuntimeSettings::from_config(&new_state.config)?;
         self.state.replace_config_state(new_state).await?;
         let mut guard = self
             .runtime_settings
@@ -671,10 +848,23 @@ impl NetworkProxy {
         let http_task = tokio::spawn(async move {
             match http_listener {
                 Some(listener) => {
-                    http_proxy::run_http_proxy_with_std_listener(http_state, listener, http_decider)
-                        .await
+                    http_proxy::run_http_proxy_with_std_listener(
+                        http_state,
+                        listener,
+                        http_decider,
+                        /*environment_id*/ None,
+                    )
+                    .await
                 }
-                None => http_proxy::run_http_proxy(http_state, http_addr, http_decider).await,
+                None => {
+                    http_proxy::run_http_proxy(
+                        http_state,
+                        http_addr,
+                        http_decider,
+                        /*environment_id*/ None,
+                    )
+                    .await
+                }
             }
         });
 
@@ -690,6 +880,7 @@ impl NetworkProxy {
                             socks_state,
                             listener,
                             socks_decider,
+                            /*environment_id*/ None,
                             enable_socks5_udp,
                         )
                         .await
@@ -699,6 +890,7 @@ impl NetworkProxy {
                             socks_state,
                             socks_addr,
                             socks_decider,
+                            /*environment_id*/ None,
                             enable_socks5_udp,
                         )
                         .await
@@ -712,6 +904,7 @@ impl NetworkProxy {
         Ok(NetworkProxyHandle {
             http_task: Some(http_task),
             socks_task,
+            environment_proxies: self.environment_proxies.clone(),
             completed: false,
         })
     }
@@ -720,6 +913,7 @@ impl NetworkProxy {
 pub struct NetworkProxyHandle {
     http_task: Option<JoinHandle<Result<()>>>,
     socks_task: Option<JoinHandle<Result<()>>>,
+    environment_proxies: Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
     completed: bool,
 }
 
@@ -728,6 +922,7 @@ impl NetworkProxyHandle {
         Self {
             http_task: Some(tokio::spawn(async { Ok(()) })),
             socks_task: None,
+            environment_proxies: Arc::new(Mutex::new(HashMap::new())),
             completed: true,
         }
     }
@@ -741,6 +936,7 @@ impl NetworkProxyHandle {
             None => None,
         };
         self.completed = true;
+        abort_environment_proxies(self.environment_proxies.clone()).await;
         http_result??;
         if let Some(socks_result) = socks_result {
             socks_result??;
@@ -750,6 +946,7 @@ impl NetworkProxyHandle {
 
     pub async fn shutdown(mut self) -> Result<()> {
         abort_tasks(self.http_task.take(), self.socks_task.take()).await;
+        abort_environment_proxies(self.environment_proxies.clone()).await;
         self.completed = true;
         Ok(())
     }
@@ -770,6 +967,21 @@ async fn abort_tasks(
     abort_task(socks_task).await;
 }
 
+async fn abort_environment_proxies(
+    environment_proxies: Arc<Mutex<HashMap<String, EnvironmentProxy>>>,
+) {
+    let proxies = {
+        let mut guard = environment_proxies
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.drain().map(|(_, proxy)| proxy).collect::<Vec<_>>()
+    };
+    for proxy in proxies {
+        abort_task(Some(proxy.http_task)).await;
+        abort_task(proxy.socks_task).await;
+    }
+}
+
 impl Drop for NetworkProxyHandle {
     fn drop(&mut self) {
         if self.completed {
@@ -777,8 +989,10 @@ impl Drop for NetworkProxyHandle {
         }
         let http_task = self.http_task.take();
         let socks_task = self.socks_task.take();
+        let environment_proxies = self.environment_proxies.clone();
         tokio::spawn(async move {
             abort_tasks(http_task, socks_task).await;
+            abort_environment_proxies(environment_proxies).await;
         });
     }
 }
@@ -791,6 +1005,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
+    use std::path::Path;
 
     #[tokio::test]
     async fn managed_proxy_builder_uses_loopback_ports() {
@@ -856,6 +1071,33 @@ mod tests {
             proxy.socks_addr,
             "127.0.0.1:48081".parse::<SocketAddr>().unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn apply_to_env_for_environment_uses_distinct_proxy_ports() -> Result<()> {
+        let state = Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        ));
+        let proxy = NetworkProxy::builder().state(state).build().await?;
+        let handle = proxy.run().await?;
+
+        let mut local_env = HashMap::new();
+        proxy.apply_to_env_for_environment(&mut local_env, "local")?;
+        let mut remote_env = HashMap::new();
+        proxy.apply_to_env_for_environment(&mut remote_env, "remote")?;
+
+        assert_ne!(local_env.get("HTTP_PROXY"), remote_env.get("HTTP_PROXY"));
+        assert_ne!(
+            local_env.get("HTTP_PROXY"),
+            Some(&format!("http://{}", proxy.http_addr()))
+        );
+        assert_ne!(
+            remote_env.get("HTTP_PROXY"),
+            Some(&format!("http://{}", proxy.http_addr()))
+        );
+
+        handle.shutdown().await?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -979,6 +1221,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
+            /*mitm_ca_trust_bundle*/ None,
         );
 
         assert_eq!(
@@ -1042,6 +1285,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
+            /*mitm_ca_trust_bundle*/ None,
         );
 
         for key in env.keys() {
@@ -1055,6 +1299,60 @@ mod tests {
     }
 
     #[test]
+    fn apply_proxy_env_overrides_sets_mitm_ca_trust_bundle_vars() {
+        let mut env = HashMap::new();
+        let mitm_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ca-bundle.pem");
+        let mitm_ca_trust_bundle = crate::certs::ManagedMitmCaTrustBundle {
+            path: mitm_ca_trust_bundle_path.to_path_buf(),
+            startup_env_values: HashMap::new(),
+        };
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
+            Some(&mitm_ca_trust_bundle),
+        );
+
+        for key in crate::certs::CUSTOM_CA_ENV_KEYS {
+            assert_eq!(
+                env.get(key),
+                Some(&mitm_ca_trust_bundle_path.display().to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_preserves_command_scoped_mitm_ca_override() {
+        let command_ca_bundle_path = "/tmp/command-ca.pem".to_string();
+        let mut env = HashMap::from([(
+            "REQUESTS_CA_BUNDLE".to_string(),
+            command_ca_bundle_path.clone(),
+        )]);
+        let mitm_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ca-bundle.pem");
+        let mitm_ca_trust_bundle = crate::certs::ManagedMitmCaTrustBundle {
+            path: mitm_ca_trust_bundle_path.to_path_buf(),
+            startup_env_values: HashMap::new(),
+        };
+
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
+            Some(&mitm_ca_trust_bundle),
+        );
+
+        assert_eq!(env.get("REQUESTS_CA_BUNDLE"), Some(&command_ca_bundle_path));
+        assert_eq!(
+            env.get("SSL_CERT_FILE"),
+            Some(&mitm_ca_trust_bundle_path.display().to_string())
+        );
+    }
+
+    #[test]
     fn apply_proxy_env_overrides_uses_http_for_all_proxy_without_socks() {
         let mut env = HashMap::new();
         apply_proxy_env_overrides(
@@ -1063,6 +1361,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ false,
             /*allow_local_binding*/ true,
+            /*mitm_ca_trust_bundle*/ None,
         );
 
         assert_eq!(
@@ -1081,6 +1380,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
+            /*mitm_ca_trust_bundle*/ None,
         );
 
         assert_eq!(
@@ -1129,6 +1429,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
+            /*mitm_ca_trust_bundle*/ None,
         );
 
         assert_eq!(
@@ -1151,6 +1452,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 48081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
+            /*mitm_ca_trust_bundle*/ None,
         );
 
         assert_eq!(
@@ -1174,6 +1476,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 48081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
+            /*mitm_ca_trust_bundle*/ None,
         );
 
         assert_eq!(

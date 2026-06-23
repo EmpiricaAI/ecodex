@@ -37,7 +37,9 @@ _SPEC.loader.exec_module(_BUILD_MODULE)
 PACKAGE_NATIVE_COMPONENTS = getattr(_BUILD_MODULE, "PACKAGE_NATIVE_COMPONENTS", {})
 PACKAGE_EXPANSIONS = getattr(_BUILD_MODULE, "PACKAGE_EXPANSIONS", {})
 CODEX_PLATFORM_PACKAGES = getattr(_BUILD_MODULE, "CODEX_PLATFORM_PACKAGES", {})
-CODEX_PACKAGE_COMPONENT = getattr(_BUILD_MODULE, "CODEX_PACKAGE_COMPONENT", "codex-package")
+CODEX_PACKAGE_COMPONENT = getattr(
+    _BUILD_MODULE, "CODEX_PACKAGE_COMPONENT", "codex-package"
+)
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional workflow URL to reuse for native artifacts.",
     )
     parser.add_argument(
+        "--artifacts-dir",
+        type=Path,
+        help="Directory containing previously downloaded workflow artifacts.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -159,7 +166,9 @@ def resolve_release_workflow(version: str) -> dict:
     )
     workflow = json.loads(stdout or "null")
     if not workflow:
-        raise RuntimeError(f"Unable to find rust-release workflow for version {version}.")
+        raise RuntimeError(
+            f"Unable to find rust-release workflow for version {version}."
+        )
     return workflow
 
 
@@ -386,13 +395,17 @@ def install_single_binary(
     component: BinaryComponent,
 ) -> Path:
     artifact_subdir = artifact_dir_for_target(artifacts_dir, target)
-    archive_path = binary_archive_path(artifact_subdir, component.artifact_prefix, target)
+    archive_path = binary_archive_path(
+        artifact_subdir, component.artifact_prefix, target
+    )
 
     dest_dir = vendor_dir / target / component.dest_dir
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     binary_name = (
-        f"{component.binary_basename}.exe" if "windows" in target else component.binary_basename
+        f"{component.binary_basename}.exe"
+        if "windows" in target
+        else component.binary_basename
     )
     dest = dest_dir / binary_name
     dest.unlink(missing_ok=True)
@@ -405,14 +418,18 @@ def install_single_binary(
 def binary_archive_path(artifact_dir: Path, artifact_prefix: str, target: str) -> Path:
     archive_names = [archive_name_for_target(artifact_prefix, target)]
     if artifact_dir.name == f"{target}-unsigned":
-        archive_names.append(archive_name_for_target(artifact_prefix, f"{target}-unsigned"))
+        archive_names.append(
+            archive_name_for_target(artifact_prefix, f"{target}-unsigned")
+        )
 
     for archive_name in archive_names:
         archive_path = artifact_dir / archive_name
         if archive_path.exists():
             return archive_path
 
-    raise FileNotFoundError(f"Expected artifact not found: {artifact_dir / archive_names[0]}")
+    raise FileNotFoundError(
+        f"Expected artifact not found: {artifact_dir / archive_names[0]}"
+    )
 
 
 def archive_name_for_target(artifact_prefix: str, target: str) -> str:
@@ -434,7 +451,9 @@ def extract_zstd_archive(archive_path: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     output_path = archive_path.parent / dest.name
-    subprocess.check_call(["zstd", "-f", "-d", str(archive_path), "-o", str(output_path)])
+    subprocess.check_call(
+        ["zstd", "-f", "-d", str(archive_path), "-o", str(output_path)]
+    )
     shutil.move(str(output_path), dest)
 
 
@@ -482,9 +501,9 @@ def main() -> int:
     vendor_temp_roots: list[Path] = []
     vendor_src_by_components: dict[tuple[str, ...], Path] = {}
     artifacts_temp_root: Path | None = None
+    remove_artifacts_temp_root = False
     resolved_head_sha: str | None = None
-
-    final_messages = []
+    staging_jobs: list[tuple[Path, list[str], str]] = []
 
     try:
         if native_component_sets:
@@ -492,12 +511,19 @@ def main() -> int:
                 args.release_version, args.workflow_url
             )
             print(f"Using native artifacts from {workflow_url}", flush=True)
-            artifacts_temp_root = Path(
-                tempfile.mkdtemp(prefix="npm-native-artifacts-", dir=runner_temp)
-            )
-            print(f"Caching downloaded artifacts in {artifacts_temp_root}", flush=True)
+            if args.artifacts_dir is not None:
+                artifacts_temp_root = args.artifacts_dir.resolve()
+                artifacts_temp_root.mkdir(parents=True, exist_ok=True)
+            else:
+                artifacts_temp_root = Path(
+                    tempfile.mkdtemp(prefix="npm-native-artifacts-", dir=runner_temp)
+                )
+                remove_artifacts_temp_root = True
+            print(f"Using artifact cache at {artifacts_temp_root}", flush=True)
             for components in native_component_sets:
-                vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
+                vendor_temp_root = Path(
+                    tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp)
+                )
                 vendor_temp_roots.append(vendor_temp_root)
                 print(
                     "Installing native components "
@@ -517,8 +543,12 @@ def main() -> int:
             print(f"should `git checkout {resolved_head_sha}`", flush=True)
 
         for package in packages:
-            staging_dir = Path(tempfile.mkdtemp(prefix=f"npm-stage-{package}-", dir=runner_temp))
-            pack_output = output_dir / tarball_name_for_package(package, args.release_version)
+            staging_dir = Path(
+                tempfile.mkdtemp(prefix=f"npm-stage-{package}-", dir=runner_temp)
+            )
+            pack_output = output_dir / tarball_name_for_package(
+                package, args.release_version
+            )
             print(f"Staging {package} in {staging_dir}", flush=True)
 
             cmd = [
@@ -533,26 +563,39 @@ def main() -> int:
                 str(pack_output),
             ]
 
-            vendor_src = vendor_src_by_components.get(native_components_for_package(package))
+            vendor_src = vendor_src_by_components.get(
+                native_components_for_package(package)
+            )
             if vendor_src is not None:
                 cmd.extend(["--vendor-src", str(vendor_src)])
 
-            try:
-                run_command(cmd)
-            finally:
-                if not args.keep_staging_dirs:
-                    shutil.rmtree(staging_dir, ignore_errors=True)
+            staging_jobs.append(
+                (staging_dir, cmd, f"Staged {package} at {pack_output}")
+            )
 
-            final_messages.append(f"Staged {package} at {pack_output}")
+        max_workers = min(len(staging_jobs), os.cpu_count() or 1)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(run_command, cmd): staging_dir
+                for staging_dir, cmd, _message in staging_jobs
+            }
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                finally:
+                    if not args.keep_staging_dirs:
+                        shutil.rmtree(futures[future], ignore_errors=True)
     finally:
         if not args.keep_staging_dirs:
+            for staging_dir, _cmd, _message in staging_jobs:
+                shutil.rmtree(staging_dir, ignore_errors=True)
             for vendor_temp_root in vendor_temp_roots:
                 shutil.rmtree(vendor_temp_root, ignore_errors=True)
-        if artifacts_temp_root is not None:
+        if remove_artifacts_temp_root and artifacts_temp_root is not None:
             shutil.rmtree(artifacts_temp_root, ignore_errors=True)
 
-    for msg in final_messages:
-        print(msg, flush=True)
+    for _staging_dir, _cmd, message in staging_jobs:
+        print(message, flush=True)
 
     return 0
 

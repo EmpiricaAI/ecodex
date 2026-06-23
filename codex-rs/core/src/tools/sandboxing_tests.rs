@@ -5,8 +5,14 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxType;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::HashMap;
 
 #[test]
 fn bash_permission_request_payload_omits_missing_description() {
@@ -138,7 +144,7 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
 }
 
 #[test]
-fn deny_read_blocks_explicit_escalation_but_preserves_policy_bypass() {
+fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
             pattern: "**/*.env".to_string(),
@@ -158,6 +164,28 @@ fn deny_read_blocks_explicit_escalation_but_preserves_policy_bypass() {
         SandboxOverride::NoOverride,
         "explicit escalation would drop deny-read filesystem policy, so keep the first attempt sandboxed",
     );
+    assert!(!unsandboxed_execution_allowed(&file_system_policy));
+    assert_eq!(
+        sandbox_permissions_preserving_denied_reads(
+            SandboxPermissions::RequireEscalated,
+            &file_system_policy,
+        ),
+        SandboxPermissions::UseDefault,
+    );
+    assert_eq!(
+        sandbox_permissions_preserving_denied_reads(
+            SandboxPermissions::WithAdditionalPermissions,
+            &file_system_policy,
+        ),
+        SandboxPermissions::WithAdditionalPermissions,
+    );
+    assert_eq!(
+        sandbox_permissions_preserving_denied_reads(
+            SandboxPermissions::RequireEscalated,
+            &FileSystemSandboxPolicy::default(),
+        ),
+        SandboxPermissions::RequireEscalated,
+    );
     assert_eq!(
         sandbox_override_for_first_attempt(
             SandboxPermissions::WithAdditionalPermissions,
@@ -167,7 +195,74 @@ fn deny_read_blocks_explicit_escalation_but_preserves_policy_bypass() {
             },
             &file_system_policy,
         ),
-        SandboxOverride::BypassSandboxFirstAttempt,
-        "exec-policy allow rules intentionally bypass sandbox even when deny-read entries exist",
+        SandboxOverride::NoOverride,
+        "exec-policy allow rules would drop deny-read filesystem policy, so keep the first attempt sandboxed",
     );
+}
+
+#[test]
+fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
+    let cwd: AbsolutePathBuf = std::env::current_dir()
+        .expect("current dir")
+        .try_into()
+        .expect("absolute cwd");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let exec_server_permissions = codex_protocol::models::PermissionProfile::workspace_write();
+    let permissions = exec_server_permissions
+        .clone()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
+    let manager = SandboxManager::new();
+    let attempt = SandboxAttempt {
+        sandbox: SandboxType::None,
+        sandbox_requested: true,
+        permissions: &permissions,
+        exec_server_permissions: &exec_server_permissions,
+        enforce_managed_network: true,
+        manager: &manager,
+        sandbox_cwd: &cwd_uri,
+        workspace_roots: std::slice::from_ref(&cwd),
+        codex_linux_sandbox_exe: None,
+        use_legacy_landlock: false,
+        windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
+        network_denial_cancellation_token: None,
+    };
+    let command = SandboxCommand {
+        program: "/bin/bash".into(),
+        args: vec!["-lc".to_string(), "pwd".to_string()],
+        cwd: cwd_uri.clone(),
+        env: HashMap::new(),
+        additional_permissions: None,
+    };
+    let options = crate::sandboxing::ExecOptions {
+        expiration: crate::exec::ExecExpiration::DefaultTimeout,
+        capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
+    };
+
+    let request = attempt
+        .env_for_exec_server(command, options, /*network*/ None, Some("remote"))
+        .expect("prepare remote exec request");
+
+    assert_eq!(
+        request.command,
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "pwd".to_string()
+        ]
+    );
+    assert_eq!(request.arg0, None);
+    assert_eq!(request.sandbox, SandboxType::None);
+    assert_eq!(
+        request.exec_server_sandbox,
+        Some(codex_exec_server::FileSystemSandboxContext {
+            permissions: exec_server_permissions.into(),
+            cwd: Some(cwd_uri),
+            workspace_roots: vec![PathUri::from_abs_path(&cwd)],
+            windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            use_legacy_landlock: false,
+        })
+    );
+    assert!(request.exec_server_enforce_managed_network);
 }

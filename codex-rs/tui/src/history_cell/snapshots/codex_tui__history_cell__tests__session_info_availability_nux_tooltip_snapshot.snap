@@ -1,10 +1,10 @@
 ---
 source: tui/src/history_cell/tests.rs
-assertion_line: 619
+assertion_line: 638
 expression: rendered
 ---
 ╭────────────────────────────────────────────────╮
-│ ∴ ecodex (v0.0.1)  ·  turtles all the way down │
+│ ∴ ecodex (v0.1.0)  ·  turtles all the way down │
 │                                                │
 │ model:     gpt-5   /model to change            │
 │ directory: /tmp/project                        │

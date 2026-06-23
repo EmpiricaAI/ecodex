@@ -7,6 +7,7 @@ use super::*;
 
 impl ChatWidget {
     pub(super) fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
+        self.record_visible_turn_activity();
         let ev2 = ev.clone();
         self.defer_or_handle(
             |q| q.push_exec_approval(ev),
@@ -19,6 +20,7 @@ impl ChatWidget {
         _id: String,
         ev: ApplyPatchApprovalRequestEvent,
     ) {
+        self.record_visible_turn_activity();
         let ev2 = ev.clone();
         self.defer_or_handle(
             |q| q.push_apply_patch_approval(ev),
@@ -256,6 +258,7 @@ impl ChatWidget {
         request_id: AppServerRequestId,
         params: McpServerElicitationRequestParams,
     ) {
+        self.record_visible_turn_activity();
         let request_id2 = request_id.clone();
         let params2 = params.clone();
         self.defer_or_handle(
@@ -265,6 +268,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_request_user_input(&mut self, ev: ToolRequestUserInputParams) {
+        self.record_visible_turn_activity();
         let ev2 = ev.clone();
         self.defer_or_handle(
             |q| q.push_user_input(ev),
@@ -273,6 +277,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
+        self.record_visible_turn_activity();
         let ev2 = ev.clone();
         self.defer_or_handle(
             |q| q.push_request_permissions(ev),
@@ -291,6 +296,7 @@ impl ChatWidget {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,
             id: ev.effective_approval_id(),
+            environment_id: ev.environment_id,
             command: ev.command,
             reason: ev.reason,
             available_decisions,
@@ -370,7 +376,8 @@ impl ChatWidget {
                     self.bottom_pane
                         .push_approval_request(request, &self.config.features);
                 }
-                McpServerElicitationRequest::Url { .. } => {
+                McpServerElicitationRequest::OpenAiForm { .. }
+                | McpServerElicitationRequest::Url { .. } => {
                     self.app_event_tx.resolve_elicitation(
                         thread_id,
                         params.server_name,
@@ -436,6 +443,7 @@ impl ChatWidget {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,
             call_id: ev.call_id,
+            environment_id: ev.environment_id,
             reason: ev.reason,
             permissions: ev.permissions,
         };

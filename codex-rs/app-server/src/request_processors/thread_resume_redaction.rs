@@ -1,6 +1,6 @@
 use codex_app_server_protocol::McpToolCallResult;
-use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::Turn;
 use serde_json::Value as JsonValue;
 
 // Temporary bandaid for remote clients: thread/resume can include large MCP and
@@ -14,8 +14,8 @@ pub(super) fn should_redact_thread_resume_payloads(client_name: Option<&str>) ->
     client_name.is_some_and(|client_name| CHATGPT_REMOTE_CLIENT_NAMES.contains(&client_name))
 }
 
-pub(super) fn redact_thread_resume_payloads(thread: &mut Thread) {
-    for turn in &mut thread.turns {
+pub(super) fn redact_thread_resume_payloads(turns: &mut [Turn]) {
+    for turn in turns {
         turn.items.retain_mut(|item| match item {
             ThreadItem::McpToolCall {
                 arguments,
@@ -52,11 +52,12 @@ fn redacted_mcp_tool_call_result() -> McpToolCallResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::McpToolCallAppContext;
     use codex_app_server_protocol::McpToolCallError;
     use codex_app_server_protocol::McpToolCallStatus;
     use codex_app_server_protocol::SessionSource;
+    use codex_app_server_protocol::Thread;
     use codex_app_server_protocol::ThreadStatus;
-    use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -78,6 +79,11 @@ mod tests {
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"secret":"argument"}),
+                app_context: Some(McpToolCallAppContext {
+                    connector_id: "calendar".to_string(),
+                    link_id: Some("link_calendar".to_string()),
+                    resource_uri: Some("ui://widget/lookup.html".to_string()),
+                }),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 plugin_id: Some("sample@test".to_string()),
                 result: Some(Box::new(McpToolCallResult {
@@ -100,7 +106,7 @@ mod tests {
             },
         ]);
 
-        redact_thread_resume_payloads(&mut thread);
+        redact_thread_resume_payloads(&mut thread.turns);
 
         assert_eq!(thread.turns[0].items.len(), 2);
         assert_eq!(
@@ -120,6 +126,11 @@ mod tests {
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Completed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
+                app_context: Some(McpToolCallAppContext {
+                    connector_id: "calendar".to_string(),
+                    link_id: Some("link_calendar".to_string()),
+                    resource_uri: Some("ui://widget/lookup.html".to_string()),
+                }),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
                 plugin_id: Some("sample@test".to_string()),
                 result: Some(Box::new(redacted_mcp_tool_call_result())),
@@ -137,6 +148,7 @@ mod tests {
             tool: "lookup".to_string(),
             status: McpToolCallStatus::Failed,
             arguments: serde_json::json!({"secret":"argument"}),
+            app_context: None,
             mcp_app_resource_uri: None,
             plugin_id: None,
             result: None,
@@ -146,7 +158,7 @@ mod tests {
             duration_ms: Some(8),
         }]);
 
-        redact_thread_resume_payloads(&mut thread);
+        redact_thread_resume_payloads(&mut thread.turns);
 
         assert_eq!(
             thread.turns[0].items[0],
@@ -156,6 +168,7 @@ mod tests {
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Failed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
+                app_context: None,
                 mcp_app_resource_uri: None,
                 plugin_id: None,
                 result: None,
@@ -172,11 +185,13 @@ mod tests {
             id: "thread-1".to_string(),
             session_id: "session-1".to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: "preview".to_string(),
             ephemeral: false,
             model_provider: "mock_provider".to_string(),
             created_at: 0,
             updated_at: 0,
+            recency_at: Some(0),
             status: ThreadStatus::Idle,
             path: None,
             cwd: test_path_buf("/tmp").abs(),

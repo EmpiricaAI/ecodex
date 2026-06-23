@@ -1,7 +1,8 @@
 pub use codex_api::ResponseEvent;
-use codex_config::types::Personality;
 use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ToolSpec;
 use futures::Stream;
@@ -11,14 +12,6 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-
-/// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
-pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
-
-// Centralized templates for review-related user messages
-pub const REVIEW_EXIT_SUCCESS_TMPL: &str = include_str!("../templates/review/exit_success.xml");
-pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
-    include_str!("../templates/review/exit_interrupted.xml");
 
 /// API request payload for a single model turn
 #[derive(Debug, Clone)]
@@ -35,9 +28,6 @@ pub struct Prompt {
 
     pub base_instructions: BaseInstructions,
 
-    /// Optionally specify the personality of the model.
-    pub personality: Option<Personality>,
-
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
 
@@ -52,7 +42,6 @@ impl Default for Prompt {
             tools: Vec::new(),
             parallel_tool_calls: false,
             base_instructions: BaseInstructions::default(),
-            personality: None,
             output_schema: None,
             output_schema_strict: true,
         }
@@ -60,8 +49,54 @@ impl Default for Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
-        self.input.clone()
+    pub(crate) fn get_formatted_input_for_request(
+        &self,
+        use_responses_lite: bool,
+    ) -> Vec<ResponseItem> {
+        let mut input = self.input.clone();
+        if use_responses_lite {
+            strip_image_details(&mut input);
+        }
+        input
+    }
+}
+
+fn strip_image_details(items: &mut [ResponseItem]) {
+    for item in items {
+        match item {
+            ResponseItem::Message { content, .. } => {
+                for content_item in content {
+                    if let ContentItem::InputImage { detail, .. } = content_item {
+                        *detail = None;
+                    }
+                }
+            }
+            ResponseItem::FunctionCallOutput { output, .. }
+            | ResponseItem::CustomToolCallOutput { output, .. } => {
+                if let Some(content) = output.content_items_mut() {
+                    for content_item in content {
+                        if let FunctionCallOutputContentItem::InputImage { detail, .. } =
+                            content_item
+                        {
+                            *detail = None;
+                        }
+                    }
+                }
+            }
+            ResponseItem::Reasoning { .. }
+            | ResponseItem::AgentMessage { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::FunctionCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger { .. }
+            | ResponseItem::ContextCompaction { .. }
+            | ResponseItem::Other => {}
+        }
     }
 }
 
