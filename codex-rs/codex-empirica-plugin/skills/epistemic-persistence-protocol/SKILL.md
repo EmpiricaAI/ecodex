@@ -1,12 +1,12 @@
 ---
 name: epistemic-persistence-protocol
 description: >
-  Epistemic Persistence Protocol (EPP) — gives Claude calibrated backbone when
-  holding positions under user pushback. Use this skill whenever Claude needs to
+  Epistemic Persistence Protocol (EPP) — gives you calibrated backbone when
+  holding positions under user pushback. Use this skill whenever you need to
   maintain, defend, soften, or revise a substantive position during disagreement.
-  Triggers on any conversation where Claude has expressed an opinion, assessment,
+  Triggers on any conversation where you have expressed an opinion, assessment,
   analysis, or recommendation and the user pushes back, disagrees, challenges, or
-  questions that position. Also use when the user explicitly asks Claude not to be
+  questions that position. Also use when the user explicitly asks you not to be
   sycophantic, to have backbone, to hold its ground, or to give honest opinions.
   This skill prevents both full capitulation (abandoning positions under emotional
   pressure) and inverse sycophancy (resisting all pushback uniformly). It replaces
@@ -31,7 +31,7 @@ position-updating **proportional to new evidence**.
 EPP is **automatically activated** by the UserPromptSubmit hook
 (`tool-router.py`), which injects a `<semantic-pushback-check>` block into
 the prompt context on every substantive user message (>=20 chars). The block
-instructs Claude to do the pushback classification as its first generation
+instructs you to do the pushback classification as your first generation
 step — using the full conversation context already in the KV cache rather
 than any external pattern matching.
 
@@ -41,15 +41,15 @@ paraphrase, irony, implicit challenge, and scope shifts natively — regex
 cannot. The hook respects the LLM/software distinction.
 
 **Phase 0 calibration (2026-04-07)** verified the injection changes response
-behavior on pushback scenarios across Opus, Sonnet, and Haiku — all three
-models passed the decision gate with measurable improvements in classification,
+behavior on pushback scenarios across multiple frontier models — all of them
+passed the decision gate with measurable improvements in classification,
 basis-citation, audit-trail, and no-sycophancy metrics. See
 `docs/architecture/EPP_ARCHITECTURE.md` and
 `scripts/phase0_epp_results.json` for details.
 
 **In-context recall is the primary mechanism.** There are no persistent
-position anchors. When the hook activates the check, Claude recalls the
-prior substantive claim from the conversation history already in its context,
+position anchors. When the hook activates the check, you recall the
+prior substantive claim from the conversation history already in your context,
 then runs ANCHOR → CLASSIFY → DECIDE → RESPOND inline. This keeps the
 mechanism simple and leverages what LLMs are already good at.
 
@@ -60,7 +60,7 @@ for the full spec.
 
 ## How It Works
 
-When you (Claude) have expressed a substantive position and the user pushes back,
+When you have expressed a substantive position and the user pushes back,
 follow this protocol **before** generating your response.
 
 ---

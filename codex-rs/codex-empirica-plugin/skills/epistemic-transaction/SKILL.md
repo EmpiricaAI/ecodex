@@ -369,11 +369,11 @@ artifacts link to via the `sourced_from` relation in batch operations.
   contract, security advisory) — the audit trail needs the link
 - A dead-end was learned the hard way from a community thread or
   postmortem — others can find the warning back to its origin
-- You're working in **Claude Desktop or any non-CLI surface** where most
-  artifacts originate from web pages, conversations, attachments, or
+- You're working in a **desktop/GUI client or any non-CLI surface** where
+  most artifacts originate from web pages, conversations, attachments, or
   manually-pasted text rather than code reads. In CLI mode, `git blame`
   + `finding_refs` auto-extraction often covers source provenance for
-  free; in Desktop mode, explicit `source-add` is the only way to
+  free; in a GUI surface, explicit `source-add` is the only way to
   preserve where ideas came from.
 
 **How:**
@@ -662,14 +662,15 @@ empirica postflight-submit -
 unknown resolution feed grounded calibration's completion and know vectors.
 If you POSTFLIGHT first, the evidence is invisible to calibration.
 
-### Rule 5: Subtask-Task Visibility (When Using Claude Code Tasks)
+### Rule 5: Subtask-Task Visibility (When Your Harness Exposes a Task Tool)
 
-For larger transactions, map empirica subtasks to Claude Code tasks so the
-user sees progress. Create tasks at PREFLIGHT, update as you complete:
+For larger transactions, map empirica subtasks to your harness's task tracker
+(if it exposes one) so the user sees progress. Create tasks at PREFLIGHT,
+update as you complete:
 
 ```
-empirica goals-add-subtask → Claude Code TaskCreate (mirror)
-empirica goals-complete-subtask → Claude Code TaskUpdate (mirror)
+empirica goals-add-subtask → harness task-create (mirror)
+empirica goals-complete-subtask → harness task-update (mirror)
 ```
 
 This is advisory — use your judgment on when the user benefits from

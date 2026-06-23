@@ -208,6 +208,24 @@ def main() -> int:
                 continue
             new_upstream.append(f"{emp_reldir}/{name}")
 
+    # ── skills: SCAN-ONLY (not in DIR_MAP on purpose) ──
+    # Skills are a *snapshot* layer — ecodex vendors them once and de-Claudes
+    # in place; they are NOT re-synced from empirica (no DIR_MAP entry), so a
+    # human's de-Claude edits here are durable. But they ARE the largest
+    # model-facing surface (pinned skill bodies + descriptions inject into the
+    # model's context every session), and the DIR_MAP-only scan above silently
+    # skipped them — giving false "clean" reports. Scan the local copies so any
+    # Claude-ism (regression or newly-vendored skill) surfaces here too.
+    skills_dir = PLUGIN / "skills"
+    if skills_dir.exists():
+        for md in sorted(skills_dir.rglob("*.md")):
+            try:
+                f = declaude_flags(md, md.read_text("utf-8", errors="replace"))
+                if f:
+                    all_flags[str(md.relative_to(REPO))] = f
+            except Exception:
+                pass
+
     # ── report ──
     rel = lambda p: str(p.relative_to(REPO))
     print(f"DRIFTED ({len(drifted)}):")
