@@ -411,6 +411,68 @@ mod tests {
         assert!(!reason.trim().is_empty());
     }
 
+    // ── E2E firewall guard: sentinel emission → translate → codex decision ──
+    //
+    // These encode codex's PreToolUse BLOCK contract (verified against
+    // codex-rs/hooks/src/engine/output_parser.rs + events/pre_tool_use.rs,
+    // finding a9391d3e): on an exit-0 hook, codex BLOCKS the tool call iff the
+    // translated stdout carries hookSpecificOutput.permissionDecision == "deny"
+    // WITH a non-empty permissionDecisionReason. Allow / ask / bare-allow /
+    // deny-without-reason all let the tool RUN. `codex_would_block` mirrors that
+    // predicate so these tests fail if translate ever regresses to a non-gating
+    // shape — the guard for BOTH the v0.2.0 silent break (permissionDecision
+    // dropped) AND the advisory-ask fail-open (ask passed through).
+
+    /// Mirror of codex's exit-0 PreToolUse block predicate.
+    fn codex_would_block(translated_stdout: &str) -> bool {
+        let v: Value = serde_json::from_str(translated_stdout).unwrap_or(Value::Null);
+        let hso = &v["hookSpecificOutput"];
+        let decision = hso.get("permissionDecision").and_then(Value::as_str);
+        let reason = hso
+            .get("permissionDecisionReason")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        decision == Some("deny") && !reason.trim().is_empty()
+    }
+
+    #[test]
+    fn e2e_sentinel_deny_blocks_through_translate() {
+        // The core gate (no valid CHECK) emits permissionDecision=deny. This is
+        // the exact chain the v0.2.0 regression broke (deny was dropped).
+        let sentinel = r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"No valid CHECK found. Run CHECK after investigation."}}"#;
+        assert!(
+            codex_would_block(&translate("PreToolUse", sentinel)),
+            "sentinel deny must translate to a codex-blocking shape"
+        );
+    }
+
+    #[test]
+    fn e2e_sentinel_ask_blocks_through_translate() {
+        // The advisory carry-over-INVESTIGATE nudge emits ask; codex fails ask
+        // OPEN, so translate must normalize it to a blocking deny.
+        let sentinel = r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Previous CHECK returned INVESTIGATE."}}"#;
+        assert!(
+            codex_would_block(&translate("PreToolUse", sentinel)),
+            "sentinel ask must normalize to a codex-blocking deny"
+        );
+    }
+
+    #[test]
+    fn e2e_sentinel_allow_does_not_block() {
+        let sentinel = r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"},"suppressOutput":true}"#;
+        assert!(
+            !codex_would_block(&translate("PreToolUse", sentinel)),
+            "sentinel allow must NOT block"
+        );
+    }
+
+    #[test]
+    fn e2e_legacy_block_decision_blocks_through_translate() {
+        // Older CC-flat shape (decision=block) must still reach a blocking deny.
+        let sentinel = r#"{"continue":true,"decision":"block","stopReason":"praxic before CHECK","suppressOutput":true}"#;
+        assert!(codex_would_block(&translate("PreToolUse", sentinel)));
+    }
+
     #[test]
     fn empty_input_yields_minimal_continue_true() {
         let out = translate("SessionStart", "");
