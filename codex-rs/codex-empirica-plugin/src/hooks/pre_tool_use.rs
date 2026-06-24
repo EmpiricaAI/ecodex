@@ -12,52 +12,174 @@
 use std::io::Read;
 use std::process::ExitCode;
 
+use anyhow::Result;
+
 use crate::empirica_cli;
 use crate::translate_output;
 
+/// What the firewall should do, derived from the gate's run result + whether
+/// the gate script is installed at all. Kept as a pure, testable mapping so the
+/// fail-open/fail-closed policy is verified independently of stdin/stdout I/O.
+#[derive(Debug, PartialEq, Eq)]
+enum FirewallOutcome {
+    /// The gate ran and produced a decision in stdout; forward it with this
+    /// exit code (`0` = allow, `2` = deny). codex parses the translated stdout
+    /// (allow / deny+reason).
+    Forward(u8),
+    /// The gate is present but did NOT produce a usable decision — it ran and
+    /// exited with an unexpected code (e.g. a python traceback → exit 1), or it
+    /// is installed but could not be spawned. A broken firewall must BLOCK, not
+    /// silently allow → synthesize a deny (exit 2 + non-empty stderr).
+    FailClosed,
+    /// The gate is genuinely absent (not installed). The user opted out of the
+    /// firewall; allow so an un-gated install isn't bricked.
+    FailOpenAbsent,
+}
+
+/// Pure policy: map the gate run + installed-ness to a firewall outcome.
+///
+/// codex's PreToolUse contract only ever BLOCKS on `exit 2 + non-empty stderr`
+/// or `exit 0 + stdout permissionDecision=deny+reason`; every other shape —
+/// including any unexpected exit code — FAILS OPEN. So a gate that crashes
+/// mid-run (exit ∉ {0,2}) or can't be spawned would, untranslated, let the
+/// tool through. This mapping closes that: only a genuinely absent gate
+/// fails open; a present-but-broken gate fails closed.
+fn firewall_outcome(run: &Result<empirica_cli::HookOutput>, script_exists: bool) -> FirewallOutcome {
+    match run {
+        Ok(output) => match output.exit_code {
+            0 => FirewallOutcome::Forward(0),
+            2 => FirewallOutcome::Forward(2),
+            _ => FirewallOutcome::FailClosed,
+        },
+        Err(_) => {
+            if script_exists {
+                FirewallOutcome::FailClosed
+            } else {
+                FirewallOutcome::FailOpenAbsent
+            }
+        }
+    }
+}
+
 /// Run the PreToolUse hook against the current invocation.
 ///
-/// Reads codex's hook payload from stdin, dispatches it to
-/// `sentinel-gate.py`, translates the script's CC-shape JSON output to
-/// codex's `hookSpecificOutput.permissionDecision` form, and propagates
-/// stderr + exit code unchanged.
+/// Reads codex's hook payload from stdin, dispatches it to `sentinel-gate.py`,
+/// translates the script's CC-shape JSON output to codex's
+/// `hookSpecificOutput.permissionDecision` form, and decides allow/deny.
 ///
 /// Exit code semantics (matched to codex's PreToolUse contract):
 /// - `0` → allow the tool call.
-/// - `2` → deny the tool call (fail-closed). Codex emits the script's
-///   stdout to the model as the rejection reason.
-/// - any other → treated as allow (fail-open). The plugin is the
-///   firewall; a crash inside the python script must not silently
-///   block legit tool calls. Discipline relies on explicit `2`.
+/// - `2` → deny the tool call. codex blocks on `exit 2 + non-empty stderr`.
+/// - any other code, or a spawn failure, → the firewall is the security floor,
+///   so a BROKEN gate fails CLOSED (re-emitted as `exit 2 + stderr`), not open.
+///   The one fail-open case is a genuinely ABSENT (uninstalled) gate.
 pub fn handle() -> ExitCode {
     let mut input = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {
-        eprintln!("codex-empirica-plugin pre-tool-use: failed to read stdin: {e}");
-        return ExitCode::SUCCESS;
+        // Can't read the tool payload → can't gate. The firewall is the floor:
+        // deny rather than silently allow. codex blocks on exit 2 + stderr.
+        eprintln!(
+            "ecodex firewall: could not read PreToolUse payload ({e}) — failing closed (denying this tool call)."
+        );
+        return ExitCode::from(2);
     }
 
-    match empirica_cli::run_hook_script("sentinel-gate.py", &input) {
-        Ok(output) => {
-            // ecodex T81 Tx-AE: translate CC-shape output (decision/stopReason/
-            // suppressOutput at top level) into codex-shape (permissionDecision/
-            // permissionDecisionReason inside hookSpecificOutput, suppressOutput
-            // dropped). codex's PreToolUse schema rejects suppressOutput.
+    let run = empirica_cli::run_hook_script("sentinel-gate.py", &input);
+    let script_exists = empirica_cli::hook_script_exists("sentinel-gate.py");
+
+    match firewall_outcome(&run, script_exists) {
+        FirewallOutcome::Forward(code) => {
+            // SAFETY: Forward is only produced from an Ok(run).
+            let output = run.expect("Forward outcome implies the gate ran (Ok)");
+            // ecodex T81 Tx-AE: translate CC-shape output into codex-shape
+            // (permissionDecision/permissionDecisionReason inside
+            // hookSpecificOutput, suppressOutput dropped — codex rejects it).
             print!(
                 "{}",
                 translate_output::translate("PreToolUse", &output.stdout)
             );
             eprint!("{}", output.stderr);
-            match output.exit_code {
-                0 => ExitCode::SUCCESS,
-                2 => ExitCode::from(2),
-                code => ExitCode::from((code & 0xff) as u8),
-            }
+            ExitCode::from(code)
         }
-        Err(e) => {
-            // Fail-open: matches Empirica's own sentinel-gate behavior on crash.
-            // If the plugin itself can't reach the script, do not block work.
-            eprintln!("codex-empirica-plugin pre-tool-use: subprocess failure ({e})");
+        FirewallOutcome::FailClosed => {
+            // Surface any stderr the gate emitted, then a clear fail-closed
+            // reason. codex blocks on exit 2 + non-empty stderr, so the reason
+            // line below is what reaches the model.
+            let detail = match &run {
+                Ok(o) => {
+                    eprint!("{}", o.stderr);
+                    format!("sentinel-gate ran but exited {} (crashed)", o.exit_code)
+                }
+                Err(e) => format!("sentinel-gate is installed but failed to run ({e})"),
+            };
+            eprintln!(
+                "ecodex firewall: {detail} — failing closed (denying this tool call). \
+                 Fix or remove the gate to proceed."
+            );
+            ExitCode::from(2)
+        }
+        FirewallOutcome::FailOpenAbsent => {
+            if let Err(e) = &run {
+                eprintln!(
+                    "codex-empirica-plugin pre-tool-use: sentinel-gate not installed ({e}) — allowing (firewall absent)."
+                );
+            }
             ExitCode::SUCCESS
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::empirica_cli::HookOutput;
+
+    fn ran(exit_code: i32) -> Result<HookOutput> {
+        Ok(HookOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code,
+        })
+    }
+
+    fn failed_to_run() -> Result<HookOutput> {
+        Err(anyhow::anyhow!("spawn failed"))
+    }
+
+    #[test]
+    fn exit_0_forwards_allow() {
+        assert_eq!(firewall_outcome(&ran(0), true), FirewallOutcome::Forward(0));
+    }
+
+    #[test]
+    fn exit_2_forwards_deny() {
+        assert_eq!(firewall_outcome(&ran(2), true), FirewallOutcome::Forward(2));
+    }
+
+    #[test]
+    fn unexpected_exit_code_fails_closed() {
+        // A python traceback exits 1; codex would treat any non-2 code as
+        // allow. The firewall must block instead.
+        assert_eq!(firewall_outcome(&ran(1), true), FirewallOutcome::FailClosed);
+        assert_eq!(firewall_outcome(&ran(127), true), FirewallOutcome::FailClosed);
+        assert_eq!(firewall_outcome(&ran(-1), true), FirewallOutcome::FailClosed);
+    }
+
+    #[test]
+    fn run_failure_with_gate_present_fails_closed() {
+        // Gate installed but unrunnable (spawn/IO error) → block.
+        assert_eq!(
+            firewall_outcome(&failed_to_run(), true),
+            FirewallOutcome::FailClosed
+        );
+    }
+
+    #[test]
+    fn run_failure_with_gate_absent_fails_open() {
+        // Gate genuinely not installed → don't brick the harness.
+        assert_eq!(
+            firewall_outcome(&failed_to_run(), false),
+            FirewallOutcome::FailOpenAbsent
+        );
     }
 }

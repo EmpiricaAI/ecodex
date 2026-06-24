@@ -112,6 +112,18 @@ fn resolve_hooks_dir() -> PathBuf {
     expand_tilde(CC_FALLBACK_HOOKS_DIR)
 }
 
+/// Whether the named hook script resolves to an existing file.
+///
+/// The PreToolUse firewall uses this to distinguish two failure modes that
+/// `run_hook_script` otherwise collapses into one `Err`:
+///   * script ABSENT (not installed) → fail-OPEN: the user opted out of the
+///     firewall, so don't brick the harness.
+///   * script PRESENT but unrunnable (spawn/IO failure) → fail-CLOSED: a
+///     broken firewall must never silently allow.
+pub fn hook_script_exists(script: &str) -> bool {
+    resolve_hooks_dir().join(script).is_file()
+}
+
 /// Pluck the `session_id` field out of the codex hook input JSON.
 ///
 /// Codex's hook payload schema (per
