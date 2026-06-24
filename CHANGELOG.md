@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **empirica MCP server now actually starts** (`f6525b23f2`): the plugin's `mcp_servers.json` launched `empirica mcp`, which is not a valid subcommand — so even with v0.2.1's manifest `mcpServers`-key fix, the empirica MCP server never started. The real server is a separate binary, **`empirica-mcp`**. Runtime-verified via an MCP `initialize` handshake (`serverInfo: empirica 1.27.1`, tools capability). The `mcp__empirica__*` tools are now reachable in ecodex.
+
+### Changed
+- **Curated ecodex CI** (`ddb9bb1d76`, `de8fe8b95c`): replaced openai/codex's inherited CI workflows — which tested codex's *repo invariants* (TUI↔core boundary, Bazel/Cargo clippy parity, npm staging from openai's own release runs, README ASCII house-style) and didn't even run cargo, so ecodex's own code went untested on push — with a lean CI that builds + tests the crates ecodex owns (`codex-empirica-plugin`, `codex-empirica-translator`) on the pinned 1.95.0 toolchain. Removed 6 inherited openai workflows; the new CI immediately caught + fixed an env-var-race test flake.
+
 ## [0.2.1] - 2026-06-24
 
 ### Fixed
