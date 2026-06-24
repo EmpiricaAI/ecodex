@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-24
+
 ### Fixed
 - **empirica MCP server now actually starts** (`f6525b23f2`): the plugin's `mcp_servers.json` launched `empirica mcp`, which is not a valid subcommand — so even with v0.2.1's manifest `mcpServers`-key fix, the empirica MCP server never started. The real server is a separate binary, **`empirica-mcp`**. Runtime-verified via an MCP `initialize` handshake (`serverInfo: empirica 1.27.1`, tools capability). The `mcp__empirica__*` tools are now reachable in ecodex.
 
@@ -95,7 +97,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/Nubaeon/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Nubaeon/ecodex/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Nubaeon/ecodex/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Nubaeon/ecodex/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nubaeon/ecodex/compare/v0.0.1...v0.1.0
