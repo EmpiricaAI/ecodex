@@ -48,3 +48,22 @@ jobs:
 
       - name: Build + test owned crates
         run: cargo test -p codex-empirica-plugin -p codex-empirica-translator
+
+  vendored-firewall-invariants:
+    name: vendored firewall drift-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # setup-codex.py re-vendors empirica's (genericized) hooks, so a content
+      # diff vs empirica is noisy by design. This guard instead asserts the
+      # firewall's security-critical behaviours are PRESENT in the vendored
+      # copy — catching a re-vendor/edit that silently drops one (the failure
+      # class behind the v0.2.0 fail-open + the PR#138 recovery-hoist scare).
+      # Pure file inspection; no empirica dependency, no Rust build.
+      - name: Check vendored firewall invariants
+        run: python3 scripts/check_vendored_firewall.py
