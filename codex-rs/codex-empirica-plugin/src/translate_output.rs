@@ -92,18 +92,40 @@ fn translate_pre_tool_use(cc: &Value) -> Value {
     out.insert("continue".into(), json!(pluck_continue(cc)));
     let mut hso = Map::new();
     hso.insert("hookEventName".into(), json!("PreToolUse"));
-    // CC -> codex: top-level `decision` becomes `hookSpecificOutput.permissionDecision`.
-    // CC values: "block" / "approve" — codex accepts both at PreToolUse.
-    if let Some(decision) = cc.get("decision").and_then(Value::as_str)
-        && (decision == "block" || decision == "approve")
-    {
-        hso.insert("permissionDecision".into(), json!(decision));
-    }
-    // CC's `stopReason` (the user-visible reason text) maps to codex's
-    // `permissionDecisionReason`.
-    if let Some(reason) = cc
-        .get("stopReason")
+    // Permission decision. The empirica sentinel emits the codex-native shape
+    // DIRECTLY — `hookSpecificOutput.permissionDecision` = "allow"|"deny"|"ask"
+    // — so carry that through verbatim. (This was the firewall-gating bug:
+    // translate previously read only the legacy top-level `decision`, so the
+    // sentinel's nested deny was dropped and praxic tools ran despite a block.
+    // Regression-tested below.) Fall back to the legacy CC-flat top-level
+    // `decision`, mapped to codex's allow/deny/ask vocabulary — codex's
+    // PreToolUsePermissionDecisionWire rejects "block"/"approve".
+    let permission_decision = cc
+        .get("hookSpecificOutput")
+        .and_then(|h| h.get("permissionDecision"))
         .and_then(Value::as_str)
+        .and_then(|d| matches!(d, "allow" | "deny" | "ask").then_some(d))
+        .or_else(|| {
+            cc.get("decision")
+                .and_then(Value::as_str)
+                .and_then(|d| match d {
+                    "allow" | "approve" => Some("allow"),
+                    "deny" | "block" => Some("deny"),
+                    "ask" => Some("ask"),
+                    _ => None,
+                })
+        });
+    if let Some(pd) = permission_decision {
+        hso.insert("permissionDecision".into(), json!(pd));
+    }
+    // Reason text: prefer the nested `permissionDecisionReason` (codex-native /
+    // what the sentinel emits), fall back to the legacy top-level
+    // `stopReason` / `reason`.
+    if let Some(reason) = cc
+        .get("hookSpecificOutput")
+        .and_then(|h| h.get("permissionDecisionReason"))
+        .and_then(Value::as_str)
+        .or_else(|| cc.get("stopReason").and_then(Value::as_str))
         .or_else(|| cc.get("reason").and_then(Value::as_str))
     {
         hso.insert("permissionDecisionReason".into(), json!(reason));
@@ -207,9 +229,10 @@ mod tests {
             v["hookSpecificOutput"]["hookEventName"],
             json!("PreToolUse")
         );
+        // Legacy CC "block" maps to codex's "deny" (codex rejects "block").
         assert_eq!(
             v["hookSpecificOutput"]["permissionDecision"],
-            json!("block")
+            json!("deny")
         );
         assert_eq!(
             v["hookSpecificOutput"]["permissionDecisionReason"],
@@ -228,14 +251,51 @@ mod tests {
             r#"{"continue":true,"decision":"approve","stopReason":"sentinel allowed"}"#,
         );
         let v = parse(&out);
+        // Legacy CC "approve" maps to codex's "allow" (codex rejects "approve").
         assert_eq!(
             v["hookSpecificOutput"]["permissionDecision"],
-            json!("approve")
+            json!("allow")
         );
         assert_eq!(
             v["hookSpecificOutput"]["permissionDecisionReason"],
             json!("sentinel allowed")
         );
+    }
+
+    #[test]
+    fn pre_tool_use_carries_nested_permission_decision_deny() {
+        // The empirica sentinel emits the codex-native shape directly:
+        // hookSpecificOutput.permissionDecision = "deny". This MUST survive
+        // translation or the firewall silently fails to gate — the regression
+        // this guards against.
+        let out = translate(
+            "PreToolUse",
+            r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"praxic before CHECK"}}"#,
+        );
+        let v = parse(&out);
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecision"],
+            json!("deny")
+        );
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecisionReason"],
+            json!("praxic before CHECK")
+        );
+    }
+
+    #[test]
+    fn pre_tool_use_carries_nested_permission_decision_allow_and_drops_suppress() {
+        // Sentinel allow path also emits suppressOutput, which codex rejects.
+        let out = translate(
+            "PreToolUse",
+            r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"},"suppressOutput":true}"#,
+        );
+        let v = parse(&out);
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecision"],
+            json!("allow")
+        );
+        assert!(v.get("suppressOutput").is_none());
     }
 
     #[test]
