@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **Sentinel gating restored** (`83c635e9b4`) — the headline fix. In v0.2.0 the PreToolUse firewall did **not** actually block tool calls: the plugin's hook-output translation layer (added in T81 to strip `suppressOutput`) read only the legacy top-level `decision` field, so the sentinel's `hookSpecificOutput.permissionDecision: "deny"` was silently dropped and praxic actions ran despite a deny — model-agnostic. `translate_pre_tool_use` now carries the codex-native `permissionDecision` (`allow`/`deny`/`ask`) through, maps legacy `block`/`approve` → `deny`/`allow` (codex's enum rejects `block`/`approve`), and pulls the reason from either shape. Covered by regression tests on the exact sentinel output shape, and runtime-confirmed (a praxic tool with no open transaction is denied end-to-end).
+- **empirica MCP server now loads** (`83c635e9b4`): the plugin manifest declared `mcp_servers` (snake_case) where codex's `camelCase` manifest schema expects `mcpServers`; the key silently resolved to `None`, so the `mcp__empirica__*` tools were unavailable.
+- **`tar` 0.4.45 → 0.4.46** (`a4902bca42`): upstream archive-extraction security fix; `tar` ships in the binary via the plugin archive-extraction path.
+
+### Changed
+- **De-Claude pass on the always-on skills + scanner** (`4cf4fa754d`): the pinned `epistemic-persistence-protocol` and `epistemic-transaction` skills (injected into model context every session) no longer refer to the running model as "Claude" / "Claude Desktop" / "Claude Code Tasks" — ecodex runs non-Claude models. The `setup-codex` de-Claude scanner now also covers the `skills/` directory (previously an unscanned blind spot).
+- **Retired dead Claude-Code-only loop/listener machinery** (`dbe7082801`, −1002 LOC): removed the `loop`/`listener` install+uninstall-pickup hooks (built on `CronCreate`/`/loop`, which don't exist in codex) and the `loop-cron` / `inbox-listener` skills — superseded by the native ntfy listener (`ntfy_listener.rs`) + `session-monitor-arm` + the `empirica loop` CLI. A `setup-codex` skip-list keeps them retired across syncs.
+- **Dependabot disabled** (`f9ff24a322`): the inherited openai/codex config scanned the whole upstream dependency surface; security posture for the shipped binary now relies on periodic `cargo audit`.
+
 ## [0.2.0] - 2026-06-23
 
 ### Added
