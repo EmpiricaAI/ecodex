@@ -94,17 +94,17 @@ fn translate_pre_tool_use(cc: &Value) -> Value {
     hso.insert("hookEventName".into(), json!("PreToolUse"));
     // Permission decision. The empirica sentinel emits the codex-native shape
     // DIRECTLY — `hookSpecificOutput.permissionDecision` = "allow"|"deny"|"ask"
-    // — so carry that through verbatim. (This was the firewall-gating bug:
-    // translate previously read only the legacy top-level `decision`, so the
-    // sentinel's nested deny was dropped and praxic tools ran despite a block.
+    // — so resolve that first. (This was the firewall-gating bug: translate
+    // previously read only the legacy top-level `decision`, so the sentinel's
+    // nested deny was dropped and praxic tools ran despite a block.
     // Regression-tested below.) Fall back to the legacy CC-flat top-level
-    // `decision`, mapped to codex's allow/deny/ask vocabulary — codex's
+    // `decision`, mapped to codex's allow/deny vocabulary — codex's
     // PreToolUsePermissionDecisionWire rejects "block"/"approve".
-    let permission_decision = cc
+    let raw_decision = cc
         .get("hookSpecificOutput")
         .and_then(|h| h.get("permissionDecision"))
         .and_then(Value::as_str)
-        .and_then(|d| matches!(d, "allow" | "deny" | "ask").then_some(d))
+        .filter(|d| matches!(*d, "allow" | "deny" | "ask"))
         .or_else(|| {
             cc.get("decision")
                 .and_then(Value::as_str)
@@ -115,20 +115,51 @@ fn translate_pre_tool_use(cc: &Value) -> Value {
                     _ => None,
                 })
         });
+    // FAIL-CLOSED: codex has NO PreToolUse "ask" path — it treats
+    // permissionDecision=ask as unsupported and FAILS OPEN (the tool runs).
+    // empirica emits "ask" for advisory cases (e.g. the carry-over-INVESTIGATE
+    // nudge at sentinel-gate.py:_check_prior_investigate). An advisory is only
+    // safe when a practitioner will read+heed it; in a harness that may run an
+    // arbitrary non-Claude model with no human to adjudicate, that precondition
+    // fails — and codex can't even surface the nudge (it drops additionalContext
+    // on PreToolUse). So normalize ask→deny here at the codex boundary: the
+    // context-appropriate translation of an advisory whose heed-precondition is
+    // absent is the floor, DENY. CC keeps "ask" unchanged for its interactive
+    // human-override path. Ratified with empirica-autonomy 2026-06-24
+    // (findings ab55ca46, a9391d3e; decision 18a98f41).
+    let ask_normalized = raw_decision == Some("ask");
+    let permission_decision = raw_decision.map(|d| if d == "ask" { "deny" } else { d });
     if let Some(pd) = permission_decision {
         hso.insert("permissionDecision".into(), json!(pd));
     }
     // Reason text: prefer the nested `permissionDecisionReason` (codex-native /
     // what the sentinel emits), fall back to the legacy top-level
     // `stopReason` / `reason`.
-    if let Some(reason) = cc
+    let reason = cc
         .get("hookSpecificOutput")
         .and_then(|h| h.get("permissionDecisionReason"))
         .and_then(Value::as_str)
         .or_else(|| cc.get("stopReason").and_then(Value::as_str))
         .or_else(|| cc.get("reason").and_then(Value::as_str))
-    {
-        hso.insert("permissionDecisionReason".into(), json!(reason));
+        .map(str::to_string);
+    // codex FAILS OPEN on a `deny` carrying an empty/missing reason
+    // (parse_completed requires a non-empty permissionDecisionReason, else the
+    // decision is invalid → should_block=false). Guarantee a non-empty reason
+    // whenever we emit deny — preserving the gate's own reason when present, and
+    // injecting a clear fallback otherwise (especially for normalized ask).
+    let reason = match (permission_decision, reason) {
+        (Some("deny"), Some(r)) if !r.trim().is_empty() => Some(r),
+        (Some("deny"), _) if ask_normalized => Some(
+            "ecodex: sentinel returned ASK (advisory); fail-closed to DENY — \
+             no human-adjudication path in this harness. Run CHECK with proceed \
+             before praxic actions."
+                .to_string(),
+        ),
+        (Some("deny"), _) => Some("ecodex firewall: action denied by gate.".to_string()),
+        (_, r) => r,
+    };
+    if let Some(r) = reason {
+        hso.insert("permissionDecisionReason".into(), json!(r));
     }
     if let Some(ctx) = pluck_context(cc) {
         hso.insert("additionalContext".into(), json!(ctx));
@@ -296,6 +327,88 @@ mod tests {
             json!("allow")
         );
         assert!(v.get("suppressOutput").is_none());
+    }
+
+    #[test]
+    fn pre_tool_use_normalizes_ask_to_deny_nested() {
+        // codex has no PreToolUse "ask" path — it fails ask OPEN. empirica's
+        // advisory ask (carry-over INVESTIGATE nudge) MUST become deny at the
+        // codex boundary, with the gate's own reason preserved.
+        let out = translate(
+            "PreToolUse",
+            r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Previous CHECK returned INVESTIGATE. Consider running CHECK with proceed before praxic actions."}}"#,
+        );
+        let v = parse(&out);
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecision"],
+            json!("deny"),
+            "ask must normalize to deny or codex fails it open"
+        );
+        // Original advisory reason preserved (it guides the model to re-CHECK).
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecisionReason"],
+            json!("Previous CHECK returned INVESTIGATE. Consider running CHECK with proceed before praxic actions.")
+        );
+    }
+
+    #[test]
+    fn pre_tool_use_normalizes_ask_to_deny_legacy() {
+        // Legacy CC-flat decision=ask also normalizes to deny.
+        let out = translate(
+            "PreToolUse",
+            r#"{"continue":true,"decision":"ask","reason":"need confirmation"}"#,
+        );
+        let v = parse(&out);
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecision"],
+            json!("deny")
+        );
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecisionReason"],
+            json!("need confirmation")
+        );
+    }
+
+    #[test]
+    fn pre_tool_use_ask_without_reason_gets_nonempty_deny_reason() {
+        // A deny with empty/missing reason FAILS OPEN in codex. When the gate
+        // emits ask with no reason, the normalized deny must still carry a
+        // non-empty reason so codex actually blocks.
+        let out = translate(
+            "PreToolUse",
+            r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask"}}"#,
+        );
+        let v = parse(&out);
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecision"],
+            json!("deny")
+        );
+        let reason = v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            !reason.trim().is_empty(),
+            "normalized ask→deny must carry a non-empty reason or codex fails open"
+        );
+    }
+
+    #[test]
+    fn pre_tool_use_deny_without_reason_gets_nonempty_reason() {
+        // Defense-in-depth: a bare nested deny (no reason) must not slip through
+        // as a reason-less deny (which codex would fail open).
+        let out = translate(
+            "PreToolUse",
+            r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}"#,
+        );
+        let v = parse(&out);
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecision"],
+            json!("deny")
+        );
+        let reason = v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap_or("");
+        assert!(!reason.trim().is_empty());
     }
 
     #[test]
