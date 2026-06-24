@@ -148,8 +148,15 @@ mod tests {
     /// Helper: run a closure with a clean env (the three vars we read all
     /// unset), then restore. Avoids cross-test pollution.
     fn with_clean_env<F: FnOnce()>(f: F) {
-        // SAFETY: tests are single-threaded by default in this crate; if you
-        // ever switch to nextest with parallel test threads, wrap a mutex.
+        // cargo test runs tests in PARALLEL by default, and these tests all
+        // read/write the same process-global env vars (EMPIRICA_HOOKS_DIR /
+        // PLUGIN_ROOT / HOME) — so they MUST be serialized or they race
+        // (explicit_override_wins failed in CI when a sibling cleared
+        // PLUGIN_ROOT mid-assert). A static mutex held for the closure's
+        // duration enforces one-at-a-time execution; recover from poisoning
+        // so one panicking test doesn't cascade-fail the rest.
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = [
             ("EMPIRICA_HOOKS_DIR", std::env::var_os("EMPIRICA_HOOKS_DIR")),
             ("PLUGIN_ROOT", std::env::var_os("PLUGIN_ROOT")),
