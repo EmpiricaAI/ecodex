@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-06-25
+
 ### Fixed
 - **Firewall now fails CLOSED on a broken gate.** The PreToolUse Sentinel
   firewall previously let a tool call through if the gate *ran but exited an
@@ -124,7 +126,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/Nubaeon/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/Nubaeon/ecodex/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Nubaeon/ecodex/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Nubaeon/ecodex/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Nubaeon/ecodex/compare/v0.1.0...v0.2.0
