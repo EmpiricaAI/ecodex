@@ -8,6 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **Firewall now fails CLOSED on a broken gate.** The PreToolUse Sentinel
+  firewall previously let a tool call through if the gate *ran but exited an
+  unexpected code* (e.g. a Python traceback → exit 1) or *could not be spawned*
+  — codex treats any exit code other than 2 as allow. A broken firewall now
+  re-emits as a deny (exit 2 + stderr); only a genuinely **absent** (uninstalled)
+  gate still fails open, so an un-gated install isn't bricked.
+- **Advisory `ask` no longer fails open.** codex has no PreToolUse `ask`
+  decision (it treats `ask` as unsupported and runs the tool). The empirica gate
+  emits `ask` for an advisory carry-over-INVESTIGATE nudge, which therefore
+  leaked genuinely-praxic tools through. The translate layer now normalizes
+  `ask` → `deny` at the codex boundary (the gate's reason is preserved; the
+  upstream CC gate keeps `ask` for its interactive human-override path).
+- **Reason-less deny guard.** codex fails a `deny` open when it carries no
+  reason; every translated deny is now guaranteed a non-empty reason.
+
+### Added
+- **Vendored-firewall drift-guard** (`scripts/check_vendored_firewall.py` + CI
+  job): asserts the vendored gate retains its security-critical invariants (the
+  recovery escape hatch, codex-native `permissionDecision` emission) so a future
+  re-vendor or edit can't silently drop them. Invariant-presence check, not a
+  byte-diff (the vendored hooks are intentionally genericized).
+- **End-to-end firewall guard tests**: encode codex's block contract and assert
+  the sentinel → translate → codex chain blocks for every decision that must
+  block — the regression net for both the v0.2.0 silent break and the `ask`
+  fail-open.
+
 ## [0.2.2] - 2026-06-24
 
 ### Fixed
