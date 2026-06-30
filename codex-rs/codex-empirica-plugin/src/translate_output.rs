@@ -56,12 +56,32 @@ fn pluck_context(cc: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Like `pluck_context`, but also accepts the codex-native nested shape
+/// `hookSpecificOutput.additionalContext`. `session-init.py` emits the final
+/// codex shape directly (the session_id + a ready-to-fill PREFLIGHT template
+/// under `hookSpecificOutput.additionalContext`), so the flat-only
+/// `pluck_context` silently DROPPED it — a fresh model then started with no
+/// session_id and no PREFLIGHT template and could not bootstrap into a
+/// transaction. Flat `context` still wins when present (CC-shape hooks like
+/// tool-router.py). Scoped to SessionStart on purpose: codex does NOT accept
+/// `additionalContext` on PreToolUse, so `translate_pre_tool_use` must keep
+/// using the flat-only `pluck_context`.
+fn pluck_context_or_additional(cc: &Value) -> Option<String> {
+    pluck_context(cc).or_else(|| {
+        cc.get("hookSpecificOutput")
+            .and_then(|h| h.get("additionalContext"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    })
+}
+
 fn translate_session_start(cc: &Value) -> Value {
     let mut out = Map::new();
     out.insert("continue".into(), json!(pluck_continue(cc)));
     let mut hso = Map::new();
     hso.insert("hookEventName".into(), json!("SessionStart"));
-    if let Some(ctx) = pluck_context(cc) {
+    if let Some(ctx) = pluck_context_or_additional(cc) {
         hso.insert("additionalContext".into(), json!(ctx));
     }
     out.insert("hookSpecificOutput".into(), Value::Object(hso));
@@ -127,39 +147,42 @@ fn translate_pre_tool_use(cc: &Value) -> Value {
     // absent is the floor, DENY. CC keeps "ask" unchanged for its interactive
     // human-override path. Ratified with empirica-autonomy 2026-06-24
     // (findings ab55ca46, a9391d3e; decision 18a98f41).
+    // codex's PreToolUse contract treats only `permissionDecision:deny` (with a
+    // non-empty reason) as a real decision. A bare `permissionDecision:allow`
+    // is "unsupported" — codex emits a `hook (failed)` line and FAILS OPEN
+    // (allow is valid ONLY paired with `updatedInput`, which the sentinel never
+    // emits). So the old code's `allow` passthrough spammed an error on every
+    // noetic-allowed tool call. `ask` has no codex path and fail-closes to
+    // deny. Therefore: emit permissionDecision + reason ONLY for deny; a
+    // sentinel `allow` (or nothing) becomes a clean OMIT, which codex reads as
+    // "proceed" with no error line.
     let ask_normalized = raw_decision == Some("ask");
-    let permission_decision = raw_decision.map(|d| if d == "ask" { "deny" } else { d });
-    if let Some(pd) = permission_decision {
-        hso.insert("permissionDecision".into(), json!(pd));
-    }
-    // Reason text: prefer the nested `permissionDecisionReason` (codex-native /
-    // what the sentinel emits), fall back to the legacy top-level
-    // `stopReason` / `reason`.
-    let reason = cc
-        .get("hookSpecificOutput")
-        .and_then(|h| h.get("permissionDecisionReason"))
-        .and_then(Value::as_str)
-        .or_else(|| cc.get("stopReason").and_then(Value::as_str))
-        .or_else(|| cc.get("reason").and_then(Value::as_str))
-        .map(str::to_string);
-    // codex FAILS OPEN on a `deny` carrying an empty/missing reason
-    // (parse_completed requires a non-empty permissionDecisionReason, else the
-    // decision is invalid → should_block=false). Guarantee a non-empty reason
-    // whenever we emit deny — preserving the gate's own reason when present, and
-    // injecting a clear fallback otherwise (especially for normalized ask).
-    let reason = match (permission_decision, reason) {
-        (Some("deny"), Some(r)) if !r.trim().is_empty() => Some(r),
-        (Some("deny"), _) if ask_normalized => Some(
-            "ecodex: sentinel returned ASK (advisory); fail-closed to DENY — \
-             no human-adjudication path in this harness. Run CHECK with proceed \
-             before praxic actions."
-                .to_string(),
-        ),
-        (Some("deny"), _) => Some("ecodex firewall: action denied by gate.".to_string()),
-        (_, r) => r,
-    };
-    if let Some(r) = reason {
-        hso.insert("permissionDecisionReason".into(), json!(r));
+    let emit_deny = matches!(raw_decision, Some("deny") | Some("ask"));
+    if emit_deny {
+        hso.insert("permissionDecision".into(), json!("deny"));
+        // Reason: prefer the nested codex-native `permissionDecisionReason`,
+        // fall back to legacy top-level `stopReason` / `reason`. codex FAILS
+        // OPEN on a deny carrying an empty/missing reason, so guarantee a
+        // non-empty one (the gate's own when present, else a clear fallback).
+        let reason = cc
+            .get("hookSpecificOutput")
+            .and_then(|h| h.get("permissionDecisionReason"))
+            .and_then(Value::as_str)
+            .or_else(|| cc.get("stopReason").and_then(Value::as_str))
+            .or_else(|| cc.get("reason").and_then(Value::as_str))
+            .filter(|r| !r.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                if ask_normalized {
+                    "ecodex: sentinel returned ASK (advisory); fail-closed to DENY — \
+                     no human-adjudication path in this harness. Run CHECK with proceed \
+                     before praxic actions."
+                        .to_string()
+                } else {
+                    "ecodex firewall: action denied by gate.".to_string()
+                }
+            });
+        hso.insert("permissionDecisionReason".into(), json!(reason));
     }
     if let Some(ctx) = pluck_context(cc) {
         hso.insert("additionalContext".into(), json!(ctx));
@@ -230,6 +253,25 @@ mod tests {
     }
 
     #[test]
+    fn session_start_reads_nested_additional_context() {
+        // session-init.py emits the codex-native shape DIRECTLY:
+        // hookSpecificOutput.additionalContext carrying the session_id + a
+        // ready-to-fill PREFLIGHT template. The flat-only pluck_context dropped
+        // it, so a fresh model never learned its session_id and could not
+        // bootstrap. This is the v0.2.4 onboarding-unblocker fix.
+        let out = translate(
+            "SessionStart",
+            r#"{"ok":true,"session_id":"785ec3ba","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Session ID: 785ec3ba\nRun PREFLIGHT."}}"#,
+        );
+        let v = parse(&out);
+        assert_eq!(
+            v["hookSpecificOutput"]["additionalContext"],
+            json!("Session ID: 785ec3ba\nRun PREFLIGHT."),
+            "SessionStart must surface session-init's nested additionalContext to the model"
+        );
+    }
+
+    #[test]
     fn user_prompt_submit_wraps_context_and_carries_block_decision() {
         let out = translate(
             "UserPromptSubmit",
@@ -276,20 +318,25 @@ mod tests {
     }
 
     #[test]
-    fn pre_tool_use_approve_passes_through() {
+    fn pre_tool_use_approve_omits_permission_decision() {
+        // Legacy CC "approve"/"allow" must NOT emit permissionDecision:allow —
+        // codex rejects a bare allow as "unsupported" and fails it open with a
+        // noisy `hook (failed)` line. The correct allow shape is to OMIT
+        // permissionDecision entirely so codex cleanly proceeds.
         let out = translate(
             "PreToolUse",
             r#"{"continue":true,"decision":"approve","stopReason":"sentinel allowed"}"#,
         );
         let v = parse(&out);
-        // Legacy CC "approve" maps to codex's "allow" (codex rejects "approve").
-        assert_eq!(
-            v["hookSpecificOutput"]["permissionDecision"],
-            json!("allow")
+        assert!(
+            v["hookSpecificOutput"].get("permissionDecision").is_none(),
+            "allow must omit permissionDecision (codex rejects bare allow)"
         );
-        assert_eq!(
-            v["hookSpecificOutput"]["permissionDecisionReason"],
-            json!("sentinel allowed")
+        // No reason emitted either — there is no decision to justify.
+        assert!(
+            v["hookSpecificOutput"]
+                .get("permissionDecisionReason")
+                .is_none()
         );
     }
 
@@ -315,16 +362,20 @@ mod tests {
     }
 
     #[test]
-    fn pre_tool_use_carries_nested_permission_decision_allow_and_drops_suppress() {
-        // Sentinel allow path also emits suppressOutput, which codex rejects.
+    fn pre_tool_use_nested_allow_omits_permission_decision_and_drops_suppress() {
+        // The sentinel's nested allow (noetic-allowed tools) must translate to a
+        // clean proceed: NO permissionDecision (codex rejects bare allow as
+        // "unsupported permissionDecision:allow") and NO suppressOutput (codex
+        // rejects it on PreToolUse). This is the v0.2.4 fix for the
+        // `hook (failed)` spam on every allowed tool call.
         let out = translate(
             "PreToolUse",
             r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"},"suppressOutput":true}"#,
         );
         let v = parse(&out);
-        assert_eq!(
-            v["hookSpecificOutput"]["permissionDecision"],
-            json!("allow")
+        assert!(
+            v["hookSpecificOutput"].get("permissionDecision").is_none(),
+            "nested allow must omit permissionDecision so codex does not log it as unsupported"
         );
         assert!(v.get("suppressOutput").is_none());
     }
