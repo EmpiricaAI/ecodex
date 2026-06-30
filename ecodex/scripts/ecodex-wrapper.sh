@@ -21,6 +21,21 @@ export EMPIRICA_CALIBRATION_FEEDBACK="${EMPIRICA_CALIBRATION_FEEDBACK:-true}"
 # already sets them takes precedence. Useful for development overrides
 # without editing this script.)
 
+# ─── Cortex mesh auth (opt-in; mesh installs only) ───────────────────
+# codex's cortex MCP client reads its bearer from $CORTEX_API_KEY. If
+# that's not already in the env but the user has an empirica credentials
+# file carrying a cortex key, export it here so mesh installs authenticate
+# regardless of shell rc (the 401 some sessions hit). OSS-only users are
+# unaffected: with no cortex key (and no cortex server in the default
+# config) nothing is exported and nothing changes. Reads the user's own
+# ~/.empirica/credentials.yaml — no secret is hardcoded — and fails
+# silently if python3 / pyyaml / the file are absent.
+if [[ -z "${CORTEX_API_KEY:-}" && -f "${HOME}/.empirica/credentials.yaml" ]]; then
+  _ecodex_ck="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])) or {}; print(((d.get('cortex') or {}).get('api_key') or '').strip())" "${HOME}/.empirica/credentials.yaml" 2>/dev/null || true)"
+  [[ -n "${_ecodex_ck:-}" ]] && export CORTEX_API_KEY="$_ecodex_ck"
+  unset _ecodex_ck
+fi
+
 # ─── Locate + exec the binary ────────────────────────────────────────
 # The install script patches this line to the resolved binary path.
 ECODEX_BINARY_PATH="__ECODEX_BINARY_PATH_PLACEHOLDER__"
