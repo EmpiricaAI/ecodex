@@ -1,5 +1,4 @@
 {
-  "_comment": "Codex plugin hook wiring for ecodex. Mirrors CC's ~/.claude/settings.json multi-handler-per-event fan-out: each event lists the canonical Rust-dispatched primary first, then sibling scripts via the generic run-hook subcommand. Primary handlers translate CC-shape script output to codex-shape (Tx-AE). Generic dispatcher does the same translation per event name. Missing codex events relative to CC (PreCompact / SessionEnd / SubagentStart / SubagentStop / TaskCompleted / PostToolUseFailure) are tracked under goal f0004294 PR2.",
   "hooks": {
     "PreToolUse": [
       {
