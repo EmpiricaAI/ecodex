@@ -8,6 +8,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **The firewall was dark on every fresh install.** The plugin's `hooks.json`
+  carried a top-level `_comment` doc field, but codex's `HooksFile` parser is
+  `deny_unknown_fields` — so it rejected the whole file and **no hooks ran**
+  (no Sentinel, no session init). v0.2.3 shipped with this. The field is
+  removed; every hook loads.
+- **`permissionDecision:allow` spam on every allowed tool.** codex's PreToolUse
+  contract only accepts `deny` (with a reason); a bare `allow` is "unsupported"
+  and fails open with a noisy `hook (failed)` line. The sentinel's allow path
+  emitted it on every noetic tool call. The translate layer now **omits**
+  `permissionDecision` when the gate allows, so codex proceeds cleanly.
+- **A fresh model couldn't bootstrap its own session.** `session-init` emits the
+  new session_id + a ready-to-fill PREFLIGHT template as
+  `hookSpecificOutput.additionalContext`, but the SessionStart translator read
+  only the flat Claude-Code `context` field and dropped it — so the model never
+  learned its session_id and couldn't open a transaction. The translator now
+  reads the codex-native nested shape.
+- **Practitioner identity is now carried into the sandboxed shell.** empirica
+  keys per-practitioner calibration/Brier off `EMPIRICA_INSTANCE_ID`, which the
+  plugin set for hook subprocesses only. When the model ran `empirica ...` from
+  the sandboxed shell, the exec path injected `CODEX_THREAD_ID` but not
+  `EMPIRICA_INSTANCE_ID`, so empirica resolved a `None` practitioner — breaking
+  `project_path` resolution and per-thread calibration. The exec env now mirrors
+  the codex thread id as `EMPIRICA_INSTANCE_ID` (the thread id **is** the
+  practitioner id).
+
+### Changed
+- **Cortex mesh auth is opt-in and automatic for mesh installs.** The `ecodex`
+  wrapper exports `CORTEX_API_KEY` from `~/.empirica/credentials.yaml` when
+  present, so mesh installs authenticate regardless of shell rc. OSS-only users
+  (no cortex key) are unaffected.
+- **Org migration `Nubaeon` → `EmpiricaAI`.** Repo, Homebrew tap, and
+  documentation URLs now point at the canonical `EmpiricaAI` org
+  (`brew install EmpiricaAI/tap/ecodex`, `github.com/EmpiricaAI/ecodex`). Old
+  `Nubaeon` URLs redirect.
+
 ## [0.2.3] - 2026-06-25
 
 ### Fixed
