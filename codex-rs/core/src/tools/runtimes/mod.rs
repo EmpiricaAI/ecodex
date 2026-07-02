@@ -5,6 +5,7 @@ Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
+use crate::exec_env::EMPIRICA_INSTANCE_ID_ENV_VAR;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -288,6 +289,8 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     let mut override_env = explicit_env_overrides.clone();
     if let Some(thread_id) = env.get(CODEX_THREAD_ID_ENV_VAR) {
         override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+        // ecodex: carry the practitioner_id through this shell path too.
+        override_env.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.clone());
     }
     let (override_captures, override_exports) = build_override_exports(&override_env);
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();

@@ -6,6 +6,7 @@ use codex_protocol::shell_environment;
 use std::collections::HashMap;
 
 pub use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
+pub use codex_protocol::shell_environment::EMPIRICA_INSTANCE_ID_ENV_VAR;
 
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling

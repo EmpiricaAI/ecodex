@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
+use crate::exec_env::EMPIRICA_INSTANCE_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecOptions;
@@ -1097,6 +1098,14 @@ impl UnifiedExecProcessManager {
         let mut env = local_policy_env.clone();
         env.insert(
             CODEX_THREAD_ID_ENV_VAR.to_string(),
+            context.session.thread_id.to_string(),
+        );
+        // ecodex: mirror the thread id as EMPIRICA_INSTANCE_ID (the practitioner_id)
+        // so empirica's InstanceResolver maps this practitioner thread when the
+        // model runs `empirica ...` from the sandboxed shell. The thread id is the
+        // exact key session-init writes into instance_projects/.
+        env.insert(
+            EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(),
             context.session.thread_id.to_string(),
         );
         let env = apply_unified_exec_env(env);
