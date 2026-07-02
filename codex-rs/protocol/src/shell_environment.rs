@@ -5,6 +5,14 @@ use std::collections::HashMap;
 
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 
+/// ecodex: the codex thread id is also exposed under this name so empirica's
+/// `InstanceResolver.get_instance_id()` — which reads `EMPIRICA_INSTANCE_ID`
+/// first — can map the practitioner thread when the model runs `empirica ...`
+/// from the sandboxed shell (where `env_clear()` + no TTY otherwise lose the
+/// identity). The thread id IS the practitioner_id: it keys per-thread
+/// calibration + Brier scores within a shared-artifact practice.
+pub const EMPIRICA_INSTANCE_ID_ENV_VAR: &str = "EMPIRICA_INSTANCE_ID";
+
 /// Construct a shell environment from the supplied process environment and
 /// shell-environment policy.
 pub fn create_env(
@@ -102,8 +110,13 @@ where
     }
 
     // Step 6 - Populate the thread ID environment variable when provided.
+    // Injected AFTER include_only filtering so the practitioner identity always
+    // reaches the spawned process. ecodex mirrors it as EMPIRICA_INSTANCE_ID so
+    // empirica's resolver keys per-practitioner calibration off the same id when
+    // the model shells out to `empirica ...` from the sandbox.
     if let Some(thread_id) = thread_id {
         env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        env_map.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.to_string());
     }
 
     env_map
@@ -246,5 +259,30 @@ mod non_windows_tests {
         ]);
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn thread_id_populates_both_codex_thread_and_empirica_instance_id() {
+        // The practitioner identity must reach the spawned shell even when
+        // include_only would otherwise filter everything out — Step 6 injects
+        // after the include_only retain. ecodex needs EMPIRICA_INSTANCE_ID set
+        // to the thread id so empirica's InstanceResolver keys per-practitioner
+        // calibration off it when the model shells out to `empirica ...`.
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::None,
+            ignore_default_excludes: true,
+            include_only: vec![EnvironmentVariablePattern::new_case_insensitive("NOTHING_MATCHES")],
+            ..Default::default()
+        };
+        let result = populate_env(make_vars(&[("FOO", "bar")]), &policy, Some("thread-xyz"));
+        assert_eq!(
+            result.get(CODEX_THREAD_ID_ENV_VAR),
+            Some(&"thread-xyz".to_string())
+        );
+        assert_eq!(
+            result.get(EMPIRICA_INSTANCE_ID_ENV_VAR),
+            Some(&"thread-xyz".to_string()),
+            "empirica per-practitioner resolution keys off EMPIRICA_INSTANCE_ID"
+        );
     }
 }
