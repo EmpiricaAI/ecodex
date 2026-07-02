@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-02
+
 ### Fixed
 - **The firewall was dark on every fresh install.** The plugin's `hooks.json`
   carried a top-level `_comment` doc field, but codex's `HooksFile` parser is
@@ -162,7 +164,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.0...v0.2.1
