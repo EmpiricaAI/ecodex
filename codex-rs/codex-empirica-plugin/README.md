@@ -1,6 +1,6 @@
 # codex-empirica-plugin
 
-Codex plugin that brings the [Empirica](https://github.com/Nubaeon/empirica) epistemic discipline framework — sentinel firewall, PREFLIGHT/CHECK/POSTFLIGHT transactions, calibration vectors — to codex.
+Codex plugin that brings the [Empirica](https://github.com/EmpiricaAI/empirica) epistemic discipline framework — sentinel firewall, PREFLIGHT/CHECK/POSTFLIGHT transactions, calibration vectors — to codex.
 
 ## How it works
 

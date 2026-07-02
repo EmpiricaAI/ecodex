@@ -310,14 +310,14 @@ new_body = head + new_unreleased + new_version_block + rest
 def update_links(s: str) -> str:
     s = re.sub(
         r"^\[Unreleased\]:[^\n]*$",
-        f"[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v{new}...HEAD",
+        f"[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v{new}...HEAD",
         s,
         count=1,
         flags=re.MULTILINE,
     )
     if f"[{new}]:" in s:
         return s  # already there
-    new_link = f"[{new}]: https://github.com/Nubaeon/ecodex/compare/v{old}...v{new}"
+    new_link = f"[{new}]: https://github.com/EmpiricaAI/ecodex/compare/v{old}...v{new}"
     # Insert after the [Unreleased] line.
     return re.sub(
         r"^(\[Unreleased\]:[^\n]*\n)",
@@ -428,12 +428,12 @@ if [[ "$CREATE_GH_RELEASE" -eq 1 ]]; then
   elif ! command -v gh >/dev/null 2>&1; then
     warn "gh CLI not found on PATH — install from https://cli.github.com/ to auto-create the release"
   else
-    # --repo Nubaeon/ecodex: gh defaults to the parent repo for forks
+    # --repo EmpiricaAI/ecodex: gh defaults to the parent repo for forks
     # (openai/codex), which doesn't have our tag and rejects with
     # "tag exists locally but has not been pushed to openai/codex".
     log "Creating GitHub release v${new_version}"
     run_or_dry gh release create "v${new_version}" \
-      --repo Nubaeon/ecodex \
+      --repo EmpiricaAI/ecodex \
       --title "ecodex v${new_version}" \
       --generate-notes
   fi
@@ -489,7 +489,7 @@ if [[ "$UPLOAD_ASSETS" -eq 1 ]]; then
       fi
     done
     if [[ "${#asset_args[@]}" -gt 0 ]]; then
-      run_or_dry gh release upload "v${new_version}" "${asset_args[@]}" --clobber --repo Nubaeon/ecodex
+      run_or_dry gh release upload "v${new_version}" "${asset_args[@]}" --clobber --repo EmpiricaAI/ecodex
     else
       warn "no assets to upload — skipping"
     fi
@@ -520,11 +520,11 @@ if [[ "$PUBLISH_CRATES" -eq 1 ]]; then
 fi
 
 # ─── Phase 3: homebrew Formula update ────────────────────────────────
-# Updates Formula/ecodex.rb in Nubaeon/homebrew-tap to point at the new
+# Updates Formula/ecodex.rb in EmpiricaAI/homebrew-tap to point at the new
 # release tarball. Requires the GH release to exist (sha256 is computed
 # against the tarball gh auto-generates from the tag). Clones the Tap
 # into a temp dir, edits the formula, commits + pushes.
-HOMEBREW_TAP="Nubaeon/homebrew-tap"
+HOMEBREW_TAP="EmpiricaAI/homebrew-tap"
 HOMEBREW_FORMULA="ecodex.rb"
 
 if [[ "$PUBLISH_HOMEBREW" -eq 1 ]]; then
@@ -544,7 +544,7 @@ if [[ "$PUBLISH_HOMEBREW" -eq 1 ]]; then
         || error "couldn't clone $HOMEBREW_TAP — does it exist?"
       mkdir -p "$tap_dir/Formula"
 
-      tarball_url="https://github.com/Nubaeon/ecodex/archive/refs/tags/v${new_version}.tar.gz"
+      tarball_url="https://github.com/EmpiricaAI/ecodex/archive/refs/tags/v${new_version}.tar.gz"
       log "  computing sha256 of $tarball_url"
       sha256="$(curl -fsSL "$tarball_url" | sha256sum | awk '{print $1}')" \
         || error "couldn't fetch tarball for sha256 — is the GH release published?"
@@ -552,11 +552,11 @@ if [[ "$PUBLISH_HOMEBREW" -eq 1 ]]; then
       cat >"$tap_dir/Formula/${HOMEBREW_FORMULA}" <<EOF_RUBY
 class Ecodex < Formula
   desc "Empirica's epistemic agent environment — a fork of openai/codex with measured discipline"
-  homepage "https://github.com/Nubaeon/ecodex"
+  homepage "https://github.com/EmpiricaAI/ecodex"
   url "${tarball_url}"
   sha256 "${sha256}"
   license "Apache-2.0"
-  head "https://github.com/Nubaeon/ecodex.git", branch: "build/v1-plugin"
+  head "https://github.com/EmpiricaAI/ecodex.git", branch: "build/v1-plugin"
 
   depends_on "rust" => :build
 
@@ -575,7 +575,7 @@ EOF_RUBY
       (cd "$tap_dir" && \
         git add "Formula/${HOMEBREW_FORMULA}" && \
         git commit -m "ecodex v${new_version}" && \
-        git push) || error "homebrew tap push failed — check Nubaeon/homebrew-tap permissions"
+        git push) || error "homebrew tap push failed — check EmpiricaAI/homebrew-tap permissions"
       rm -rf "$tap_dir"
       trap - EXIT INT TERM
     fi
@@ -650,7 +650,7 @@ echo ""
 echo "Phase 3 surfaces (canonical):"
 echo "  --upload-assets          gh release upload <ecodex,plugin,translator> binaries"
 echo "  --publish-crates         cargo publish own crates (translator + plugin)"
-echo "  --publish-homebrew       Update Formula in Nubaeon/homebrew-tap"
+echo "  --publish-homebrew       Update Formula in EmpiricaAI/homebrew-tap"
 echo ""
 echo "Phase 3 surfaces (experimental, non-canonical):"
 echo "  --publish-npm            npm publish @nubaeon/ecodex — kept for future, not part of canonical release flow"

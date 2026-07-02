@@ -4,7 +4,7 @@ ecodex is an agent runtime that executes code, runs shell commands, and connects
 
 ## Reporting a vulnerability
 
-**Preferred:** [Open a private security advisory](https://github.com/Nubaeon/ecodex/security/advisories/new) on this repository. GitHub's private vulnerability reporting routes directly to maintainers without making the report public.
+**Preferred:** [Open a private security advisory](https://github.com/EmpiricaAI/ecodex/security/advisories/new) on this repository. GitHub's private vulnerability reporting routes directly to maintainers without making the report public.
 
 **Alternative:** Email `security@nubaeon.com` if you can't use GitHub's flow.
 

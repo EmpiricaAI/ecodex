@@ -26,7 +26,7 @@ We rebase `main` onto `upstream/main` and merge selected hardening commits upstr
 ### Build + smoke-test
 
 ```sh
-git clone https://github.com/Nubaeon/ecodex.git
+git clone https://github.com/EmpiricaAI/ecodex.git
 cd ecodex
 ./ecodex/scripts/install.sh
 ecodex --version
@@ -102,12 +102,12 @@ cargo clippy --workspace --all-targets
 
 We use templates to keep issue triage and PR review fast:
 
-- **Bug reports** — [`/issues/new`](https://github.com/Nubaeon/ecodex/issues/new/choose) → "Bug report". Asks for `empirica diagnose-ecodex` output + the layer (L1/L2/L3) the bug lives in.
+- **Bug reports** — [`/issues/new`](https://github.com/EmpiricaAI/ecodex/issues/new/choose) → "Bug report". Asks for `empirica diagnose-ecodex` output + the layer (L1/L2/L3) the bug lives in.
 - **Feature requests** — same place → "Feature request". Layer + user story.
 - **Upstream sync tracking** — same place → "Upstream sync". Includes a checklist of ecodex divergences (T78 hot-swap, Tx-AT trust allowlist, hook output translation, etc.) that need careful merge attention.
 - **Pull requests** — `.github/pull_request_template.md` auto-fills. Includes the test-plan checklist that mirrors CI (`cargo build` / `cargo test` / `cargo clippy` on owned crates).
 
-Blank issues are disabled — pick a template. Discussions about the broader Empirica framework go to [`Nubaeon/empirica` discussions](https://github.com/Nubaeon/empirica/discussions).
+Blank issues are disabled — pick a template. Discussions about the broader Empirica framework go to [`EmpiricaAI/empirica` discussions](https://github.com/EmpiricaAI/empirica/discussions).
 
 ## CI
 
@@ -132,16 +132,16 @@ The expected flow for cutting v0.0.x:
    - Creates the GitHub release with `--generate-notes`
    - Uploads `ecodex`, `codex-empirica-plugin`, `codex-empirica-translator` binaries (linux-x86_64)
    - Publishes the two owned crates to crates.io (if `CARGO_REGISTRY_TOKEN` is set)
-   - Updates `Nubaeon/homebrew-tap/Formula/ecodex.rb` (if `HOMEBREW_TAP_TOKEN` is set)
+   - Updates `EmpiricaAI/homebrew-tap/Formula/ecodex.rb` (if `HOMEBREW_TAP_TOKEN` is set)
 
 ### Required GitHub Actions secrets
 
-Set at **Settings → Secrets and variables → Actions** on the `Nubaeon/ecodex` repo:
+Set at **Settings → Secrets and variables → Actions** on the `EmpiricaAI/ecodex` repo:
 
 | Secret | What | How to get it |
 |---|---|---|
 | `CARGO_REGISTRY_TOKEN` | crates.io API token | https://crates.io/settings/tokens → New token with `publish-new` + `publish-update` scopes |
-| `HOMEBREW_TAP_TOKEN` | GitHub PAT with push access to `Nubaeon/homebrew-tap` | https://github.com/settings/tokens → Generate new token (classic), `repo` scope, expiry as you prefer |
+| `HOMEBREW_TAP_TOKEN` | GitHub PAT with push access to `EmpiricaAI/homebrew-tap` | https://github.com/settings/tokens → Generate new token (classic), `repo` scope, expiry as you prefer |
 
 Both are optional — missing secrets cause the affected step to skip with a warning, not fail the workflow.
 
@@ -149,7 +149,7 @@ Both are optional — missing secrets cause the affected step to skip with a war
 
 ## Security disclosures
 
-Don't open public issues for security disclosures. See [`SECURITY.md`](SECURITY.md) for the disclosure path. ecodex inherits codex's threat model; ecodex-specific surfaces (the empirica plugin, the translator, install scripts) are in scope for our disclosure process. The preferred channel is [GitHub Private Security Advisories](https://github.com/Nubaeon/ecodex/security/advisories/new).
+Don't open public issues for security disclosures. See [`SECURITY.md`](SECURITY.md) for the disclosure path. ecodex inherits codex's threat model; ecodex-specific surfaces (the empirica plugin, the translator, install scripts) are in scope for our disclosure process. The preferred channel is [GitHub Private Security Advisories](https://github.com/EmpiricaAI/ecodex/security/advisories/new).
 
 ## License
 

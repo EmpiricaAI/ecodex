@@ -18,7 +18,7 @@ This is **not** a drop-in replacement for codex. It is opinionated: the discipli
 
 ## Status
 
-Alpha. **v0.1.0 shipped 2026-06-02** — see [the releases](https://github.com/Nubaeon/ecodex/releases). The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
+Alpha. **v0.1.0 shipped 2026-06-02** — see [the releases](https://github.com/EmpiricaAI/ecodex/releases). The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
 
 The repo's branches:
 
@@ -51,14 +51,14 @@ Concretely, what users notice that vanilla codex doesn't do:
 
 | Channel | Command |
 |---|---|
-| **Homebrew** (Mac/Linux) | `brew install nubaeon/tap/ecodex` |
-| **Direct binary** | Download from [Releases](https://github.com/Nubaeon/ecodex/releases/latest) |
-| **Cargo** (Rust devs, source build) | `cargo install --git https://github.com/Nubaeon/ecodex codex-cli` |
+| **Homebrew** (Mac/Linux) | `brew install EmpiricaAI/tap/ecodex` |
+| **Direct binary** | Download from [Releases](https://github.com/EmpiricaAI/ecodex/releases/latest) |
+| **Cargo** (Rust devs, source build) | `cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli` |
 | **Build from source** | `git clone … && cd ecodex && ./ecodex/scripts/install.sh` |
 
 All four paths produce the same `ecodex` binary. The Rust toolchain is required for the cargo + source-build paths; Homebrew + direct-binary work without it.
 
-The empirica CLI must also be on `PATH` — install from [`Nubaeon/empirica`](https://github.com/Nubaeon/empirica). Without it the empirica plugin shells fail-quiet and discipline goes dark.
+The empirica CLI must also be on `PATH` — install from [`EmpiricaAI/empirica`](https://github.com/EmpiricaAI/empirica). Without it the empirica plugin shells fail-quiet and discipline goes dark.
 
 See [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) for `--user` vs `--system` install, prerequisites, provider configuration, and troubleshooting.
 
@@ -112,4 +112,4 @@ The only special-case patch we maintain inside upstream code is the `ECODEX_AUTO
 
 Apache-2.0 (inherited from `openai/codex`). See [`LICENSE`](LICENSE).
 
-ecodex is built by [Empirica](https://github.com/Nubaeon/empirica). Upstream codex is built by [OpenAI](https://github.com/openai/codex).
+ecodex is built by [Empirica](https://github.com/EmpiricaAI/empirica). Upstream codex is built by [OpenAI](https://github.com/openai/codex).

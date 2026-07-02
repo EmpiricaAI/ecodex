@@ -4,7 +4,7 @@ ecodex offers four install paths. Pick the lightest-touch one that fits your set
 
 ## Prerequisites
 
-- **`empirica` CLI** on `PATH` — the empirica plugin shells out to it. Install from [`Nubaeon/empirica`](https://github.com/Nubaeon/empirica) before running ecodex; without it, the plugin's hook subprocesses fail-quiet and discipline goes dark.
+- **`empirica` CLI** on `PATH` — the empirica plugin shells out to it. Install from [`EmpiricaAI/empirica`](https://github.com/EmpiricaAI/empirica) before running ecodex; without it, the plugin's hook subprocesses fail-quiet and discipline goes dark.
 - **Linux or macOS** — Windows isn't supported yet (requires `landlock` / sandbox parity work).
 - **Rust toolchain** ([rustup.rs](https://rustup.rs/), stable 1.93+) — needed only for the cargo + source-build paths.
 
@@ -13,14 +13,14 @@ ecodex offers four install paths. Pick the lightest-touch one that fits your set
 ### Homebrew (recommended for Mac/Linux)
 
 ```sh
-brew install nubaeon/tap/ecodex
+brew install EmpiricaAI/tap/ecodex
 ```
 
-Pulls from the [`Nubaeon/homebrew-tap`](https://github.com/Nubaeon/homebrew-tap) tap. Builds from source via cargo (Rust toolchain auto-installed as a brew dep). One command, no clone.
+Pulls from the [`EmpiricaAI/homebrew-tap`](https://github.com/EmpiricaAI/homebrew-tap) tap. Builds from source via cargo (Rust toolchain auto-installed as a brew dep). One command, no clone.
 
 ### Direct binary download
 
-Grab the matching binary for your platform from the [Releases page](https://github.com/Nubaeon/ecodex/releases/latest):
+Grab the matching binary for your platform from the [Releases page](https://github.com/EmpiricaAI/ecodex/releases/latest):
 
 | Platform | Asset |
 |---|---|
@@ -34,7 +34,7 @@ Grab the matching binary for your platform from the [Releases page](https://gith
 ### Cargo (Rust devs, source build)
 
 ```sh
-cargo install --git https://github.com/Nubaeon/ecodex codex-cli
+cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli
 ```
 
 Builds the `ecodex` binary from the tip of `build/v1-plugin`. Note: this *doesn't* install the empirica plugin or seed `~/.codex/config.toml` — for the full integrated experience use Homebrew or the source-build script.
@@ -44,7 +44,7 @@ The two owned crates we publish to crates.io are also reachable directly: `cargo
 ### Source build (most control)
 
 ```sh
-git clone https://github.com/Nubaeon/ecodex.git
+git clone https://github.com/EmpiricaAI/ecodex.git
 cd ecodex
 ./ecodex/scripts/install.sh
 ```
@@ -120,7 +120,7 @@ In-flight sessions keep running on the OLD binary via inherited file descriptors
 ## Troubleshooting
 
 **`empirica: command not found` during plugin hook fires**
-The plugin needs `empirica` on `PATH`. Install from [`Nubaeon/empirica`](https://github.com/Nubaeon/empirica). The plugin fail-quiets on subprocess failures so ecodex itself still works — but discipline goes dark.
+The plugin needs `empirica` on `PATH`. Install from [`EmpiricaAI/empirica`](https://github.com/EmpiricaAI/empirica). The plugin fail-quiets on subprocess failures so ecodex itself still works — but discipline goes dark.
 
 **`Text file busy` during reinstall**
 Should not happen — the install script uses `rm`-then-`cp`. If it does, you may have an old install.sh; pull latest and retry.

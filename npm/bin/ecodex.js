@@ -29,7 +29,7 @@ const slug = platformSlug();
 if (slug === null) {
   console.error(
     `ecodex: no prebuilt binary for ${platform()}-${arch()}. ` +
-      `Build from source: https://github.com/Nubaeon/ecodex#install`
+      `Build from source: https://github.com/EmpiricaAI/ecodex#install`
   );
   process.exit(1);
 }

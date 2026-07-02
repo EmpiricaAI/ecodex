@@ -124,13 +124,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [0.0.0]
 
-Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/Nubaeon/ecodex/commits/build/v1-plugin).
+Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/Nubaeon/ecodex/compare/v0.2.3...HEAD
-[0.2.3]: https://github.com/Nubaeon/ecodex/compare/v0.2.2...v0.2.3
-[0.2.2]: https://github.com/Nubaeon/ecodex/compare/v0.2.1...v0.2.2
-[0.2.1]: https://github.com/Nubaeon/ecodex/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/Nubaeon/ecodex/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/Nubaeon/ecodex/compare/v0.0.1...v0.1.0
-[0.0.1]: https://github.com/Nubaeon/ecodex/compare/v0.0.0...v0.0.1
-[0.0.0]: https://github.com/Nubaeon/ecodex/releases/tag/v0.0.0
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.0.1...v0.1.0
+[0.0.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.0.0...v0.0.1
+[0.0.0]: https://github.com/EmpiricaAI/ecodex/releases/tag/v0.0.0

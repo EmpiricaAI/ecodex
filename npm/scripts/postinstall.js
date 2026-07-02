@@ -46,7 +46,7 @@ const slug = platformSlug();
 if (slug === null) {
   console.error(
     `ecodex postinstall: no prebuilt for ${platform()}-${arch()}. ` +
-      `Install from source: https://github.com/Nubaeon/ecodex#install`
+      `Install from source: https://github.com/EmpiricaAI/ecodex#install`
   );
   // Exit 0 — don't fail the npm install; the wrapper will print a
   // clearer error if the user tries to run ecodex.
@@ -58,7 +58,7 @@ if (slug === null) {
 // we have actual cross-compile in CI). For v0, the asset name embeds
 // the platform slug so the postinstall can pick the right one.
 const assetName = `ecodex-${slug}`;
-const url = `https://github.com/Nubaeon/ecodex/releases/download/v${version}/${assetName}`;
+const url = `https://github.com/EmpiricaAI/ecodex/releases/download/v${version}/${assetName}`;
 const destDir = resolve(packageRoot, "vendor", slug);
 const destPath = resolve(destDir, "ecodex");
 
@@ -114,7 +114,7 @@ try {
 } catch (err) {
   console.error(`ecodex postinstall: download failed — ${err.message}`);
   console.error(
-    `ecodex postinstall: install from source: https://github.com/Nubaeon/ecodex#install`
+    `ecodex postinstall: install from source: https://github.com/EmpiricaAI/ecodex#install`
   );
   // Exit 0 — don't fail npm install; the wrapper surfaces the
   // missing-binary error with actionable text when the user runs ecodex.

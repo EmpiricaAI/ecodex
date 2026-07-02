@@ -3,14 +3,14 @@
   "version": "0.0.0",
   "description": "ecodex — Empirica's epistemic agent environment, a fork of openai/codex with measured agent discipline.",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/Nubaeon/ecodex",
+  "homepage": "https://github.com/EmpiricaAI/ecodex",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Nubaeon/ecodex.git",
+    "url": "git+https://github.com/EmpiricaAI/ecodex.git",
     "directory": "npm"
   },
   "bugs": {
-    "url": "https://github.com/Nubaeon/ecodex/issues"
+    "url": "https://github.com/EmpiricaAI/ecodex/issues"
   },
   "keywords": [
     "ai",
