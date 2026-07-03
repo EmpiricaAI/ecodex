@@ -53,9 +53,16 @@ pub(crate) struct NtfyListenerConfig {
     pub user: Option<String>,
     /// Legacy basic-auth password.
     pub password: Option<String>,
-    /// This instance's `ai_id`, used as the ntfy tag filter so only events
-    /// touching this instance are delivered (`?tags=<ai_id>`).
+    /// This instance's bare `ai_id` (e.g. `ecodex-lab`). Used for wake-item
+    /// hint text; NOT for the tag filter (see `ai_id_tag`).
     pub ai_id: String,
+    /// The CANONICAL 3-form (`<org>.<tenant>.<project>`, e.g.
+    /// `empirica.david.ecodex-lab`) used as the ntfy tag filter
+    /// (`?tags=<canonical>`). Cortex tags every event with the canonical
+    /// source_claude + target_claudes (strict-canonical, no bare-basename
+    /// bridge since the 2026-06-03 rip) — a bare `?tags=<ai_id>` subscription
+    /// silently misses. Resolved from `.empirica/project.yaml` `canonical_seat`.
+    pub ai_id_tag: String,
 }
 
 /// Errors from resolving the listener configuration.
@@ -95,10 +102,17 @@ struct NtfyCredsYaml {
     password: Option<String>,
 }
 
-/// Minimal projection of `.empirica/project.yaml` for `ai_id` resolution.
+/// Minimal projection of `.empirica/project.yaml` for `ai_id` + canonical
+/// tag resolution.
 #[derive(Debug, Default, Deserialize)]
 struct ProjectFile {
     ai_id: Option<String>,
+    /// The canonical 3-form seat, e.g. `empirica.david.ecodex-lab`. This is
+    /// the authoritative ntfy tag (matches what cortex publishes).
+    canonical_seat: Option<String>,
+    /// `<org>.<tenant>` prefix, e.g. `empirica.david`. Fallback source for
+    /// composing the canonical when `canonical_seat` is absent.
+    mesh_id_prefix: Option<String>,
 }
 
 /// Default credentials path: `$HOME/.empirica/credentials.yaml`.
@@ -142,6 +156,27 @@ pub(crate) fn resolve_ai_id(project_root: &Path) -> Result<String, NtfyConfigErr
     Err(NtfyConfigError::UnresolvedAiId)
 }
 
+/// Resolve this instance's CANONICAL 3-form tag for ntfy subscription
+/// (`<org>.<tenant>.<project>`). Precedence: `.empirica/project.yaml`
+/// `canonical_seat` → compose `<mesh_id_prefix>.<ai_id>` if the prefix is
+/// present → bare `ai_id` (best-effort; will silently miss cortex's
+/// canonical-tagged events — the strict-canonical convention requires the
+/// full 3-form here).
+pub(crate) fn resolve_ai_id_tag(project_root: &Path, bare_ai_id: &str) -> String {
+    let project_yaml = project_root.join(".empirica").join("project.yaml");
+    if let Ok(text) = std::fs::read_to_string(&project_yaml)
+        && let Ok(parsed) = serde_yaml::from_str::<ProjectFile>(&text)
+    {
+        if let Some(seat) = parsed.canonical_seat.filter(|s| !s.trim().is_empty()) {
+            return seat.trim().to_string();
+        }
+        if let Some(prefix) = parsed.mesh_id_prefix.filter(|s| !s.trim().is_empty()) {
+            return format!("{}.{bare_ai_id}", prefix.trim());
+        }
+    }
+    bare_ai_id.to_string()
+}
+
 /// Load + validate the listener config from a credentials file, applying env
 /// overrides. `ai_id` is resolved separately (see [`resolve_ai_id`]) and
 /// passed in so config loading stays a pure function of its inputs.
@@ -182,6 +217,9 @@ pub(crate) fn load_config(
         topic: topic.unwrap_or_default(),
         token,
         user,
+        // Defaults to the bare ai_id; `try_start_mesh_listener` overrides this
+        // with the canonical 3-form (it has `project_root` to resolve it).
+        ai_id_tag: ai_id.clone(),
         password,
         ai_id,
     })
@@ -208,17 +246,19 @@ fn env_first(keys: &[&str]) -> Option<String> {
 }
 
 /// Build the ntfy JSON-stream subscribe URL with a tag filter scoped to this
-/// instance's `ai_id`. Shape matches the reference listener:
-/// `<url>/<topic>/json?tags=<ai_id>`. Cortex publishes events with
-/// `X-Tags: …,<source_claude>,<target_claudes…>`, so the tag filter shrinks
-/// per-event wake traffic to only events touching this instance.
+/// instance's CANONICAL 3-form: `<url>/<topic>/json?tags=<canonical>`. Cortex
+/// publishes events with `X-Tags: …,<source_claude>,<target_claudes…>` — all
+/// canonical, strict-canonical-only (no bare-basename bridge since 2026-06-03).
+/// A bare `?tags=<ai_id>` subscription silently misses every event, so the tag
+/// MUST be the canonical 3-form (`ai_id_tag`). Dots are NOT percent-encoded
+/// (`encode_query_value` treats `.` as safe) — ntfy matches the raw tag string.
 pub(crate) fn build_subscribe_url(config: &NtfyListenerConfig) -> String {
     let base = format!(
         "{}/{}/json",
         config.url.trim_end_matches('/'),
         encode_path_segment(&config.topic),
     );
-    format!("{base}?tags={}", encode_query_value(&config.ai_id))
+    format!("{base}?tags={}", encode_query_value(&config.ai_id_tag))
 }
 
 /// Resolve the ntfy auth header: Bearer token takes precedence over basic
@@ -472,13 +512,16 @@ pub(crate) async fn try_start_mesh_listener(session: Arc<Session>, project_root:
             return;
         }
     };
-    let config = match load_config(&creds_path, ai_id) {
+    let mut config = match load_config(&creds_path, ai_id) {
         Ok(config) => config,
         Err(err) => {
             debug!(target: "ntfy_listener", %err, "mesh creds incomplete; mesh listener not started");
             return;
         }
     };
+    // Override the (bare) default tag with the canonical 3-form so the ntfy
+    // `?tags=` subscription matches cortex's canonical event tags.
+    config.ai_id_tag = resolve_ai_id_tag(project_root, &config.ai_id);
     let ai_id = config.ai_id.clone();
     let handle = spawn_listener_loop(session.clone(), config);
     session.services.ntfy_listener_registry.set(handle).await;
@@ -497,6 +540,7 @@ mod tests {
             user: None,
             password: None,
             ai_id: "ecodex".to_string(),
+            ai_id_tag: "empirica.david.ecodex".to_string(),
         }
     }
 
@@ -504,7 +548,7 @@ mod tests {
     fn subscribe_url_has_tag_filter_and_json_endpoint() {
         assert_eq!(
             build_subscribe_url(&cfg()),
-            "https://ntfy.getempirica.com/orchestration-events/json?tags=ecodex"
+            "https://ntfy.getempirica.com/orchestration-events/json?tags=empirica.david.ecodex"
         );
     }
 
@@ -514,7 +558,7 @@ mod tests {
         c.url = "https://ntfy.getempirica.com/".to_string();
         assert_eq!(
             build_subscribe_url(&c),
-            "https://ntfy.getempirica.com/orchestration-events/json?tags=ecodex"
+            "https://ntfy.getempirica.com/orchestration-events/json?tags=empirica.david.ecodex"
         );
     }
 
