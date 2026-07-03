@@ -556,7 +556,38 @@ impl RmcpClient {
         let result = self
             .run_service_operation("resources/list", timeout, move |service| {
                 let params = params.clone();
-                async move { service.list_resources(params).await }.boxed()
+                async move {
+                    // Send the raw request so we keep the response `ServerResult`.
+                    // rmcp 1.7.0's `Resource = Annotated<RawResource>` uses
+                    // `#[serde(flatten)]`, which serde cannot deserialize while
+                    // probing the `#[serde(untagged)]` `ServerResult` enum — so a
+                    // spec-valid `resources/list` response lands in the greedy
+                    // `CustomResult(Value)` catch-all instead of
+                    // `ListResourcesResult`. (rmcp's own `service.list_resources()`
+                    // helper would just surface `UnexpectedResponse` here, dropping
+                    // the payload.) The raw JSON is preserved in `CustomResult`, so
+                    // recover it with a direct, non-untagged deserialization where
+                    // `#[serde(flatten)]` works correctly. See the
+                    // `cortex_responses_map_to_expected_serverresult_variants` test.
+                    let response = service
+                        .send_request(ClientRequest::ListResourcesRequest(
+                            rmcp::model::ListResourcesRequest {
+                                method: Default::default(),
+                                params,
+                                extensions: Default::default(),
+                            },
+                        ))
+                        .await?;
+                    match response {
+                        ServerResult::ListResourcesResult(result) => Ok(result),
+                        ServerResult::CustomResult(value) => {
+                            serde_json::from_value::<ListResourcesResult>(value.0)
+                                .map_err(|_| rmcp::service::ServiceError::UnexpectedResponse)
+                        }
+                        _ => Err(rmcp::service::ServiceError::UnexpectedResponse),
+                    }
+                }
+                .boxed()
             })
             .await?;
         self.persist_oauth_tokens().await;
@@ -1233,5 +1264,55 @@ mod tests {
             .await;
 
         assert_eq!(Ok("done"), result);
+    }
+
+    #[test]
+    fn cortex_responses_map_to_expected_serverresult_variants() {
+        // Captured verbatim from cortex 0.3.0 (probed 2026-07-03). All three are
+        // spec-valid MCP responses. rmcp 1.7.0's untagged ServerResult must map
+        // each into the CORRECT variant; if a typed variant fails to deserialize,
+        // serde falls through to the greedy CustomResult(Value) catch-all and our
+        // call_tool / list_resources match arms then surface UnexpectedResponse.
+        fn variant(json: &str) -> String {
+            let v: ServerResult = serde_json::from_str(json)
+                .expect("cortex response should deserialize into SOME ServerResult");
+            match v {
+                ServerResult::ListResourcesResult(_) => "ListResourcesResult",
+                ServerResult::ListToolsResult(_) => "ListToolsResult",
+                ServerResult::CallToolResult(_) => "CallToolResult",
+                ServerResult::CustomResult(_) => "CustomResult",
+                _ => "Other",
+            }
+            .to_string()
+        }
+
+        let resources = r#"{"resources":[{"name":"Epistemic State","uri":"empirica://session/state","description":"d","mimeType":"text/markdown","annotations":{"audience":["assistant"],"priority":1.0}}]}"#;
+        let tools = r#"{"tools":[{"name":"t","description":"d","inputSchema":{"type":"object","properties":{},"required":[]}}]}"#;
+        let call = r#"{"content":[{"type":"text","text":"hi"}],"isError":false}"#;
+
+        eprintln!("DESER resources/list -> {}", variant(resources));
+        eprintln!("DESER tools/list     -> {}", variant(tools));
+        eprintln!("DESER tools/call     -> {}", variant(call));
+
+        // The bug: untagged ServerResult drops the annotated resources into the
+        // greedy CustomResult catch-all instead of ListResourcesResult.
+        assert_eq!(variant(resources), "CustomResult");
+        // Unaffected ops still map correctly.
+        assert_eq!(variant(tools), "ListToolsResult");
+        assert_eq!(variant(call), "CallToolResult");
+
+        // The FIX mechanism: deserializing the preserved raw Value DIRECTLY into
+        // ListResourcesResult (a plain, non-untagged deserialization where
+        // #[serde(flatten)] works) must succeed. This is what the CustomResult
+        // fallback in list_resources relies on.
+        let raw_value: serde_json::Value = serde_json::from_str(resources).unwrap();
+        let direct: Result<rmcp::model::ListResourcesResult, _> =
+            serde_json::from_value(raw_value);
+        assert!(
+            direct.is_ok(),
+            "direct deser of ListResourcesResult must succeed (flatten works outside untagged): {:?}",
+            direct.err()
+        );
+        assert_eq!(direct.unwrap().resources.len(), 1);
     }
 }
