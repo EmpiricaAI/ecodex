@@ -36,6 +36,14 @@ pub struct PluginMcpConfigParseOutcome {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginMcpServersFile {
+    // Accept BOTH the Claude-ecosystem camelCase `mcpServers` wrapper (the
+    // rename_all default) AND the snake_case `mcp_servers` wrapper. codex's own
+    // config.toml uses the snake_case `[mcp_servers.*]` table, and empirica's
+    // plugin emits `mcp_servers.json` with a snake_case wrapper to match — so
+    // without this alias that file fell through the untagged enum to `ServerMap`
+    // and the wrapper key `mcp_servers` was misread as a *server name*, yielding
+    // a spurious `invalid transport` error for a server that has no command/url.
+    #[serde(alias = "mcp_servers")]
     mcp_servers: BTreeMap<String, JsonValue>,
 }
 

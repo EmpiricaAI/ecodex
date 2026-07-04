@@ -116,6 +116,45 @@ fn declared_placement_preserves_local_plugin_normalization() {
 }
 
 #[test]
+fn snake_case_mcp_servers_wrapper_parses_like_camel_case() {
+    // Regression: empirica's plugin ships mcp_servers.json with a snake_case
+    // `mcp_servers` wrapper (matching codex's own config.toml table name).
+    // Before the serde alias, the untagged enum fell through to ServerMap and
+    // misread the wrapper key as a server named "mcp_servers" with no
+    // command/url, producing a spurious `invalid transport` error. This mirrors
+    // the exact shape of the deployed empirica plugin file.
+    let plugin_root = plugin_root();
+    let outcome = parse_plugin_mcp_config(
+        &plugin_root,
+        r#"{
+            "mcp_servers": {
+                "empirica": {
+                    "command": "empirica-mcp",
+                    "args": [],
+                    "enabled": true,
+                    "startup_timeout_sec": 30,
+                    "tool_timeout_sec": 60
+                }
+            }
+        }"#,
+        PluginMcpServerPlacement::Declared,
+    )
+    .expect("parse plugin MCP config");
+
+    assert_eq!(outcome.errors, Vec::new());
+    let empirica = outcome
+        .servers
+        .get("empirica")
+        .expect("empirica server present, not misread as a wrapper-named server");
+    assert!(matches!(
+        empirica.transport,
+        McpServerTransportConfig::Stdio { ref command, .. } if command == "empirica-mcp"
+    ));
+    // The wrapper key must NOT leak through as a phantom server.
+    assert!(!outcome.servers.contains_key("mcp_servers"));
+}
+
+#[test]
 fn environment_placement_forces_authority_and_defaults_null_cwd() {
     let plugin_root = plugin_root();
     let outcome = parse_plugin_mcp_config(
