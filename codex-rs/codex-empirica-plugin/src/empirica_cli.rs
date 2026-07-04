@@ -72,6 +72,18 @@ pub fn run_hook_script(script: &str, input_json: &str) -> Result<HookOutput> {
         command.env("EMPIRICA_INSTANCE_ID", &codex_session_id);
     }
 
+    // Harness CWD==practice vouch (Karson's #91 contract; empirica PR #246).
+    // codex invokes plugin hook commands with cwd = the session's project dir
+    // (the practice), and there is no multiplexer launch-dir indirection — so
+    // for the codex/ecodex harness CWD is always the verified practice. This
+    // lets empirica's session-boundary hooks enable their gated filesystem
+    // fallback (CWD/git-root) and resolve the practice for a FRESH practitioner
+    // whose instance_projects/active_work cache is still empty — the case that
+    // otherwise made post-compact.py fail with "SessionStart hook (failed)".
+    // Empirica keeps the fallback OFF when this is unset (tmux/multiplexer,
+    // where cwd may be the launch dir), so no cross-project bleed.
+    command.env("EMPIRICA_CWD_RELIABLE", "true");
+
     let mut child = command
         .spawn()
         .with_context(|| format!("spawn python3 {}", script_path.display()))?;
