@@ -471,17 +471,20 @@ impl Session {
         sub_id: String,
     ) {
         if !self.input_queue.has_trigger_turn_mailbox_items().await {
+            tracing::debug!(target: "ntfy_listener", "maybe_start_turn: no trigger_turn mailbox items — not starting a turn");
             return;
         }
 
         {
             let mut active_turn = self.active_turn.lock().await;
             if active_turn.is_some() {
+                tracing::info!(target: "ntfy_listener", "maybe_start_turn: a turn is already active — wake will ride the next turn");
                 return;
             }
             *active_turn = Some(ActiveTurn::default());
         }
 
+        tracing::info!(target: "ntfy_listener", %sub_id, "maybe_start_turn: session idle + trigger items present — STARTING a wake turn");
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;

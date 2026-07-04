@@ -444,12 +444,18 @@ async fn run_stream_once(
             let Some(env) = parse_ntfy_line(&text) else {
                 continue;
             };
+            debug!(target: "ntfy_listener", event = %env.event, tags = ?env.tags, "ntfy stream line");
             if !is_wake_event(&env) {
                 continue;
             }
+            info!(target: "ntfy_listener", ntfy_id = ?env.id, tags = ?env.tags, "WAKE event received — injecting to start/queue a turn");
             let item = build_wake_item(&env, &config.ai_id);
-            if let Err(returned) = session.inject_response_items(vec![item]).await {
-                session.queue_response_items_for_next_turn(returned).await;
+            match session.inject_response_items(vec![item]).await {
+                Ok(()) => info!(target: "ntfy_listener", "inject_response_items returned Ok (maybe_start_turn should fire if idle)"),
+                Err(returned) => {
+                    info!(target: "ntfy_listener", "inject_response_items returned Err — queuing for next turn");
+                    session.queue_response_items_for_next_turn(returned).await;
+                }
             }
         }
     }
