@@ -403,10 +403,12 @@ fn build_wake_item(env: &NtfyEnvelope, ai_id: &str) -> ResponseInputItem {
          <ai-id>{ai_id}</ai-id>\n\
          <ntfy-id>{ntfy_id}</ntfy-id>\n\
          <tags>{tags}</tags>\n\
-         <message>Mesh wake (ntfy doorbell): a proposal event may be waiting for you. \
-         Poll cortex_inbox_poll(ai_id=\"{ai_id}\", status=\"accepted,changed\") for the \
-         authoritative content and react per the mailbox protocol (act on actionable, \
-         treat fyi as read-on-poll).{hint}</message>\n\
+         <message>Mesh wake (ntfy doorbell): a mesh message is waiting for you. Your FIRST \
+         action — before any orientation, PREFLIGHT summary, or asking what to work on — is to \
+         check your inbox: run `empirica mailbox poll --ai-id {ai_id} --output json` (it defaults \
+         to the accepted,changed actionable set). Then react per the mailbox protocol: act on \
+         actionable items, treat FYI as read-on-poll, and ack completed work with `empirica \
+         mailbox reply`.{hint}</message>\n\
          </task-notification>"
     );
     ResponseInputItem::Message {
@@ -695,7 +697,11 @@ mod tests {
                 let ContentItem::InputText { text } = &content[0] else {
                     panic!("expected input text");
                 };
-                assert!(text.contains("cortex_inbox_poll(ai_id=\"ecodex\""));
+                // Wake instructs the CLI receive path (empirica mailbox poll), not the
+                // MCP cortex_inbox_poll namespace call — a woken practitioner runs a shell
+                // command reliably, sidestepping the mcp__cortex namespace aggregation.
+                assert!(text.contains("empirica mailbox poll --ai-id ecodex"));
+                assert!(text.contains("FIRST")); // poll-first imperative (before orienting)
                 assert!(text.contains("evt-1"));
                 assert!(text.contains("ntfy hint: Re: onboarding"));
                 assert!(text.contains("read-on-poll"));
