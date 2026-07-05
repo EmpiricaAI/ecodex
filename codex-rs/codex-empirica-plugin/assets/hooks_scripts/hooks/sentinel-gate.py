@@ -665,6 +665,8 @@ EMPIRICA_TIER1_PREFIXES = (
     "empirica status",  # Multi-instance status overview
     "empirica tui",  # Interactive cockpit (Textual app — destructive ops are modal-confirmed)
     "empirica notify ",  # Notification primitive — loops/hooks call this in any phase
+    "empirica mailbox poll",  # Mesh inbox/outbox READ — receive-side CLI, pure read (any phase, incl. pre-transaction wake)
+    "empirica mailbox show",  # Show one proposal's body — pure read (any phase)
 )
 
 # Tier 2: State-changing commands - allowed (these ARE the epistemic workflow)
@@ -731,6 +733,8 @@ EMPIRICA_TIER2_PREFIXES = (
     "empirica profile-sync",
     "empirica profile-prune",  # Profile management - state-changing
     "empirica release",  # Release pipeline — mechanical, no PREFLIGHT needed
+    "empirica mailbox reply",  # Atomic mesh reply+complete (REFLEX collab_brief, not ECO-gated) — mesh ack discipline
+    "empirica mailbox archive",  # Archive a proposal from inbox view — soft-delete, mesh hygiene
 )
 
 
