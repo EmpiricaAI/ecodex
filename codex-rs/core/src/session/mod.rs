@@ -2890,6 +2890,34 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
+        self.record_conversation_items_impl(turn_context, items, true)
+            .await;
+    }
+
+    /// Like [`record_conversation_items`] but does NOT emit `RawResponseItem`
+    /// display events. The items still enter model history + the rollout (the
+    /// model reads them as context), but they are never rendered to the client.
+    ///
+    /// Used for hook-injected `additionalContext` — the SessionStart EWM block,
+    /// UserPromptSubmit nudges, PostToolUse context, etc. Those are directives
+    /// for the model, not output for the user; rendering them dumps a wall of
+    /// developer-role text onto the screen every session/turn. Model reads it,
+    /// screen stays clean.
+    pub(crate) async fn record_conversation_items_silent(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) {
+        self.record_conversation_items_impl(turn_context, items, false)
+            .await;
+    }
+
+    async fn record_conversation_items_impl(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        emit_display: bool,
+    ) {
         let items = self.prepare_conversation_items_for_history(turn_context, items);
         let items = items.as_ref();
         {
@@ -2900,7 +2928,9 @@ impl Session {
             );
         }
         self.persist_rollout_response_items(items).await;
-        self.send_raw_response_items(turn_context, items).await;
+        if emit_display {
+            self.send_raw_response_items(turn_context, items).await;
+        }
     }
 
     pub(crate) async fn record_inter_agent_communication(

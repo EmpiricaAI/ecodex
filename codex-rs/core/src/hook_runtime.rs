@@ -673,7 +673,11 @@ pub(crate) async fn record_additional_contexts(
         return;
     }
 
-    sess.record_conversation_items(turn_context, developer_messages.as_slice())
+    // Silent: hook additionalContext (SessionStart EWM block, UserPromptSubmit
+    // nudges, PostToolUse context) is model-directed context, not user-facing
+    // output. Record it into history + rollout so the model reads it, but don't
+    // render a wall of developer text to the screen every session/turn.
+    sess.record_conversation_items_silent(turn_context, developer_messages.as_slice())
         .await;
 }
 
