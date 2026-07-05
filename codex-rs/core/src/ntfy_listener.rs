@@ -315,6 +315,13 @@ fn encode_with(s: &str, is_safe: impl Fn(char) -> bool) -> String {
 /// while errors persist, and reset on a clean connection.
 const RECONNECT_BASE: Duration = Duration::from_secs(2);
 const RECONNECT_MAX: Duration = Duration::from_secs(60);
+/// Cap on how many inbox messages to inline into a wake item, so a large
+/// backlog can't flood the model's context. Overflow is noted with a pointer to
+/// the full `empirica mailbox poll`.
+const MAX_WAKE_MESSAGES: usize = 8;
+/// Hard ceiling on the wake-time inbox poll so a slow/hung CLI can't stall the
+/// listener loop — on timeout we fall back to the instruction-style wake.
+const INBOX_POLL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Holds the single background listener task for a session so the shutdown
 /// path can abort it. Mirrors `MonitorRegistry` (one listener per session).
@@ -389,7 +396,109 @@ fn is_wake_event(env: &NtfyEnvelope) -> bool {
 /// ntfy event is a *doorbell*: this injects a poll-trigger wake so the model
 /// fetches authoritative content via the `cortex_inbox_poll` MCP tool (Cortex
 /// owns comms). Any message body / tags ntfy carried are surfaced as a hint.
-fn build_wake_item(env: &NtfyEnvelope, ai_id: &str) -> ResponseInputItem {
+/// Parsed shape of `empirica mailbox poll --output json` (only the fields we
+/// inline into a wake item).
+#[derive(Deserialize)]
+struct MailboxPollResult {
+    #[serde(default)]
+    count: usize,
+    #[serde(default)]
+    proposals: Vec<MailboxProposal>,
+}
+
+#[derive(Deserialize)]
+struct MailboxProposal {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    source_claude: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+}
+
+/// Char-boundary-safe truncation with an ellipsis marker (byte slicing would
+/// panic on multi-byte UTF-8 mid-message).
+fn truncate_summary(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// Poll the mesh inbox via the `empirica mailbox poll` CLI at wake time and
+/// format a compact digest of the actionable messages.
+///
+/// Why the harness polls instead of instructing the model to: across GLM-5.2,
+/// Kimi-K2.6, and MiniMax-M2.7, every seed model *ignored* a "run `empirica
+/// mailbox poll` first" wake directive and oriented/greeted instead. Injecting
+/// the actual message CONTENT (not an instruction to fetch it) removes per-model
+/// instruction-obedience from the critical path.
+///
+/// Returns `None` on any failure (CLI missing, non-zero exit, unparseable
+/// output, timeout) or an empty inbox — the caller then falls back to the
+/// instruction-style wake so a wake is never silently lost.
+async fn fetch_inbox_digest(poll_ai_id: &str) -> Option<String> {
+    let run = tokio::process::Command::new("empirica")
+        .args(["mailbox", "poll", "--ai-id", poll_ai_id, "--output", "json"])
+        .output();
+    let output = tokio::time::timeout(INBOX_POLL_TIMEOUT, run)
+        .await
+        .ok()? // timed out
+        .ok()?; // failed to spawn (e.g. empirica not on PATH)
+    if !output.status.success() {
+        return None;
+    }
+    let parsed: MailboxPollResult = serde_json::from_slice(&output.stdout).ok()?;
+    if parsed.proposals.is_empty() {
+        return None;
+    }
+    let shown = parsed.proposals.len().min(MAX_WAKE_MESSAGES);
+    let mut lines = Vec::with_capacity(shown);
+    for p in parsed.proposals.iter().take(MAX_WAKE_MESSAGES) {
+        let src = p.source_claude.as_deref().unwrap_or("?");
+        let status = p.status.as_deref().unwrap_or("?");
+        let kind = p.kind.as_deref().unwrap_or("proposal");
+        let title = p.title.as_deref().unwrap_or("(no title)");
+        let summary = truncate_summary(p.summary.as_deref().unwrap_or(""), 400);
+        lines.push(format!(
+            "  [{id}] from {src} ({status}, {kind}): {title}\n      {summary}",
+            id = p.id
+        ));
+    }
+    let overflow = parsed.proposals.len().saturating_sub(shown);
+    let more = if overflow > 0 {
+        format!(
+            "\n  … and {overflow} more — run `empirica mailbox poll --ai-id {poll_ai_id} --output json` for the full set."
+        )
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "You have {count} mesh message(s) in your inbox (fetched for you at wake time):\n{body}{more}",
+        count = parsed.count.max(parsed.proposals.len()),
+        body = lines.join("\n"),
+    ))
+}
+
+/// Build the wake item injected on a doorbell event. When `inbox_digest` is
+/// present the actual messages are inlined so the model reacts to content;
+/// otherwise it falls back to instructing the model to poll (`poll_ai_id` is the
+/// canonical id the `empirica mailbox poll` command needs).
+fn build_wake_item(
+    env: &NtfyEnvelope,
+    ai_id: &str,
+    poll_ai_id: &str,
+    inbox_digest: Option<&str>,
+) -> ResponseInputItem {
     let ntfy_id = env.id.as_deref().unwrap_or("?");
     let tags = env.tags.join(",");
     let hint = match (env.title.as_deref(), env.message.as_deref()) {
@@ -397,18 +506,31 @@ fn build_wake_item(env: &NtfyEnvelope, ai_id: &str) -> ResponseInputItem {
         (_, Some(m)) if !m.is_empty() => format!(" ntfy hint: {m}"),
         _ => String::new(),
     };
+    let body = match inbox_digest {
+        Some(digest) => format!(
+            "Mesh wake (ntfy doorbell). {digest}\n\
+             React to each now — this is why you were woken, so do it before any orientation, \
+             greeting, or asking what to work on. How to react: a peer's completed work → ack via \
+             `empirica mailbox reply --parent-id <id> --commit-sha <sha>`; an actionable typed \
+             proposal → do the work then reply; a collab/FYI → integrate or answer (reply if it \
+             asks a question). Full body of any item: `empirica mailbox show <id>`.{hint}"
+        ),
+        None => format!(
+            "Mesh wake (ntfy doorbell): a mesh message is waiting for you. Your FIRST action — \
+             before any orientation, PREFLIGHT summary, or asking what to work on — is to check \
+             your inbox: run `empirica mailbox poll --ai-id {poll_ai_id} --output json` (it \
+             defaults to the accepted,changed actionable set). Then react per the mailbox \
+             protocol: act on actionable items, treat FYI as read-on-poll, and ack completed work \
+             with `empirica mailbox reply`.{hint}"
+        ),
+    };
     let text = format!(
         "<task-notification>\n\
          <source>cortex-mesh-ntfy</source>\n\
          <ai-id>{ai_id}</ai-id>\n\
          <ntfy-id>{ntfy_id}</ntfy-id>\n\
          <tags>{tags}</tags>\n\
-         <message>Mesh wake (ntfy doorbell): a mesh message is waiting for you. Your FIRST \
-         action — before any orientation, PREFLIGHT summary, or asking what to work on — is to \
-         check your inbox: run `empirica mailbox poll --ai-id {ai_id} --output json` (it defaults \
-         to the accepted,changed actionable set). Then react per the mailbox protocol: act on \
-         actionable items, treat FYI as read-on-poll, and ack completed work with `empirica \
-         mailbox reply`.{hint}</message>\n\
+         <message>{body}</message>\n\
          </task-notification>"
     );
     ResponseInputItem::Message {
@@ -451,7 +573,14 @@ async fn run_stream_once(
                 continue;
             }
             info!(target: "ntfy_listener", ntfy_id = ?env.id, tags = ?env.tags, "WAKE event received — injecting to start/queue a turn");
-            let item = build_wake_item(&env, &config.ai_id);
+            // Poll the inbox in-harness and inline the messages, so the wake
+            // carries CONTENT rather than an instruction the model may ignore.
+            let inbox_digest = fetch_inbox_digest(&config.ai_id_tag).await;
+            match inbox_digest {
+                Some(_) => info!(target: "ntfy_listener", "inbox digest fetched — wake carries message content"),
+                None => info!(target: "ntfy_listener", "inbox poll empty/unavailable — falling back to instruction wake"),
+            }
+            let item = build_wake_item(&env, &config.ai_id, &config.ai_id_tag, inbox_digest.as_deref());
             match session.inject_response_items(vec![item]).await {
                 Ok(()) => info!(target: "ntfy_listener", "inject_response_items returned Ok (maybe_start_turn should fire if idle)"),
                 Err(returned) => {
@@ -690,17 +819,19 @@ mod tests {
             title: None,
             tags: vec!["ecodex".to_string()],
         };
-        let item = build_wake_item(&env, "ecodex");
+        // No digest → fallback instruction path. poll_ai_id is the canonical id
+        // the `empirica mailbox poll` command needs.
+        let item = build_wake_item(&env, "ecodex", "empirica.david.ecodex", None);
         match item {
             ResponseInputItem::Message { role, content, .. } => {
                 assert_eq!(role, "user");
                 let ContentItem::InputText { text } = &content[0] else {
                     panic!("expected input text");
                 };
-                // Wake instructs the CLI receive path (empirica mailbox poll), not the
+                // Fallback instructs the CLI receive path (empirica mailbox poll), not the
                 // MCP cortex_inbox_poll namespace call — a woken practitioner runs a shell
                 // command reliably, sidestepping the mcp__cortex namespace aggregation.
-                assert!(text.contains("empirica mailbox poll --ai-id ecodex"));
+                assert!(text.contains("empirica mailbox poll --ai-id empirica.david.ecodex"));
                 assert!(text.contains("FIRST")); // poll-first imperative (before orienting)
                 assert!(text.contains("evt-1"));
                 assert!(text.contains("ntfy hint: Re: onboarding"));
@@ -708,5 +839,43 @@ mod tests {
             }
             other => panic!("expected Message, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn wake_item_inlines_inbox_digest_when_present() {
+        let env = NtfyEnvelope {
+            event: "message".to_string(),
+            id: Some("evt-2".to_string()),
+            message: None,
+            title: None,
+            tags: vec!["ecodex".to_string()],
+        };
+        let digest = "You have 2 mesh message(s) in your inbox (fetched for you at wake time):\n  [prop_abc] from empirica.david.empirica (accepted, collab_brief): Ship it";
+        let item = build_wake_item(&env, "ecodex", "empirica.david.ecodex", Some(digest));
+        let ResponseInputItem::Message { role, content, .. } = item else {
+            panic!("expected Message");
+        };
+        assert_eq!(role, "user");
+        let ContentItem::InputText { text } = &content[0] else {
+            panic!("expected input text");
+        };
+        // The actual messages are inlined (content, not a fetch instruction), and
+        // the reaction verbs are present.
+        assert!(text.contains("[prop_abc] from empirica.david.empirica"));
+        assert!(text.contains("You have 2 mesh message(s)"));
+        assert!(text.contains("empirica mailbox reply"));
+        assert!(text.contains("empirica mailbox show"));
+        // Content path must NOT tell the model to go poll — that's the whole point.
+        assert!(!text.contains("run `empirica mailbox poll"));
+    }
+
+    #[test]
+    fn truncate_summary_is_char_boundary_safe() {
+        // Multi-byte chars must not panic on truncation.
+        let s = "→→→→→ tail";
+        let out = truncate_summary(s, 3);
+        assert_eq!(out, "→→→…");
+        // Short strings pass through untrimmed of content, trimmed of edges.
+        assert_eq!(truncate_summary("  hi  ", 10), "hi");
     }
 }
