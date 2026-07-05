@@ -316,6 +316,17 @@ if pgrep -f "${BINARY_DEST}\|${WRAPPER_DEST}" >/dev/null 2>&1; then
   echo "  In-flight sessions keep the previous binary via inherited FD."
   echo ""
 fi
+
+# ─── Post-build disk hygiene (threshold-gated, build-safe) ───────────
+# Rust target dirs balloon across profiles (debug/release/fast-release) +
+# incremental caches. Run the cargo cache guard after each build: it's a
+# no-op unless target/ is large or disk is low, and its safety gate refuses
+# to touch target/ while any cargo/rustc is running. Non-fatal.
+GUARD="${WORKSPACE_ROOT}/scripts/cargo-cache-guard.sh"
+if [[ -x "$GUARD" ]]; then
+  "$GUARD" || echo "⚠ cargo-cache-guard returned non-zero (ignored)"
+fi
+
 echo "ecodex is the AI's calibration training environment. The empirica"
 echo "plugin is bundled by default."
 if [[ -n "$REQUIREMENTS_PATH" ]]; then
