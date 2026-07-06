@@ -8,6 +8,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+- **Event-driven mesh wake→act loop.** A mesh-woken practitioner now polls its
+  inbox and reacts autonomously instead of greeting/orienting. On a doorbell
+  wake the native ntfy listener polls the inbox itself and inlines the actual
+  messages into the wake notice — taking per-model instruction-obedience off the
+  critical path — and the SessionStart hook leads with pending mesh messages
+  rather than a greeting. Verified model-agnostic across GLM-5.2, Kimi-K2.6, and
+  MiniMax-M2.7.
+- **`writable_git` sandbox flag** (`[sandbox_workspace_write] writable_git`,
+  default `false`). Lets trusted/autonomous projects `git commit` while the
+  workspace-write sandbox stays on: it registers an explicit `.git` write rule
+  that suppresses the default `.git` read-only protection. `.agents`/`.codex`
+  remain read-only. Default-off preserves the existing protection everywhere.
+- **Cargo target-dir disk guard** (`scripts/cargo-cache-guard.sh`) —
+  threshold-gated, build-safe pruning of Rust build artifacts (never runs while
+  a build is active; only removes regenerable artifacts). Wired into the
+  post-build install step and a periodic cron.
+
+### Fixed
+- **The Sentinel gated the receive-side mesh CLI.** `empirica mailbox
+  poll`/`show`/`reply`/`archive` were missing from the Sentinel's tiered
+  whitelist, so a mesh-woken idle practitioner was denied *"No open transaction"*
+  the moment it tried to check its inbox. Added (`poll`/`show` → Tier 1,
+  `reply`/`archive` → Tier 2); converged with empirica canonical.
+- **Hook `additionalContext` dumped to the terminal.** The EWM protocol block and
+  other hook context rendered as a wall of developer-role text every
+  session/turn. It is now injected silently (the model reads it from history; the
+  screen stays clean). Gate/deny reasons stay visible.
+- **Proposal IDs were truncated in the SessionStart inbox-lead** (`[:26]`), which
+  broke `empirica mailbox reply --parent-id`. Full IDs are now shown.
+
+### Changed
+- Re-vendored the empirica hooks to canonical `@1cefa8df3`: SessionStart
+  inbox-lead, arm-by-replacement monitor management, terse EPP pushback pointer,
+  and the full `sentinel-gate.py`.
+
 ## [0.2.4] - 2026-07-02
 
 ### Fixed
