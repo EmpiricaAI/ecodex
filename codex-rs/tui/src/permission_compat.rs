@@ -33,11 +33,18 @@ pub(crate) fn legacy_compatible_permission_profile(
         && slash_tmp.is_dir()
         && file_system_policy.can_write_path_with_cwd(slash_tmp, cwd);
 
+    // Preserve writable_git across the round-trip: detect whether the source
+    // policy already permits writing the project's .git.
+    let git_writable = AbsolutePathBuf::from_absolute_path(cwd.join(".git"))
+        .ok()
+        .is_some_and(|git| file_system_policy.can_write_path_with_cwd(git.as_path(), cwd));
+
     PermissionProfile::workspace_write_with(
         &writable_roots,
         network_policy,
         !tmpdir_writable,
         !slash_tmp_writable,
+        git_writable,
     )
 }
 
