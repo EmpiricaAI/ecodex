@@ -2698,6 +2698,7 @@ allowed_approvals_reviewers = ["user"]
             NetworkSandboxPolicy::Restricted,
             /*exclude_tmpdir_env_var*/ false,
             /*exclude_slash_tmp*/ false,
+            /*writable_git*/ false,
         );
         assert!(
             requirements
@@ -2807,6 +2808,7 @@ allowed_approvals_reviewers = ["user"]
             NetworkSandboxPolicy::Restricted,
             /*exclude_tmpdir_env_var*/ false,
             /*exclude_slash_tmp*/ false,
+            /*writable_git*/ false,
         );
         assert!(
             requirements

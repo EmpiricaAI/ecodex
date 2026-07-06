@@ -120,15 +120,11 @@ def _normalize_aggregated_cortex_tool(tool_name: str, tool_input) -> str:
     resolvable op is returned unchanged (so it stays unclassified → gated).
     """
     if tool_name in ("mcp__cortex", "mcp__cortex__") and isinstance(tool_input, dict):
-        op = (
-            tool_input.get("op")
-            or tool_input.get("operation")
-            or tool_input.get("name")
-            or tool_input.get("tool")
-        )
+        op = tool_input.get("op") or tool_input.get("operation") or tool_input.get("name") or tool_input.get("tool")
         if op:
             return f"mcp__cortex__{op}"
     return tool_name
+
 
 # Empirica MCP tools — ALL are epistemic workflow, always allowed.
 # The empirica-mcp server wraps CLI commands — same trust as Tier 2.
@@ -279,6 +275,45 @@ SAFE_BASH_PREFIXES = (
     "mypy ",
     "flake8 ",
     "pylint ",
+    "vulture ",
+    "pip-audit",
+    # Text pipeline (read-only, pure stdout — no native write mode)
+    "cut ",
+    "tr ",
+    "nl ",
+    "fold ",
+    "tac ",
+    "rev ",
+    "paste ",
+    "column ",
+    "sort ",  # sort -o/--output is guarded in _has_dangerous_tool_flags
+    "uniq ",
+    # Structured data (read-only; yq -i is guarded)
+    "yq ",
+    "yq.",
+    "gron ",
+    # Binary / encoding inspection (read-only)
+    "xxd ",
+    "od ",
+    "strings ",
+    # Fast search / navigation (read-only; fd -x and ast-grep --rewrite guarded).
+    # No-ops until installed — harmless to allowlist ahead of the dep landing.
+    "fd ",
+    "fdfind ",
+    "ast-grep ",
+    "bat ",
+    "tokei ",
+    "scc ",
+    # Git read operations (additions)
+    "git rev-parse",
+    "git rev-list",
+    "git for-each-ref",
+    "git describe",
+    "git shortlog",
+    "git grep",
+    "git config --get",
+    "git config --list",
+    "git config -l",
 )
 
 # Dangerous shell operators (command injection prevention)
@@ -475,20 +510,36 @@ def _get_dynamic_thresholds(db) -> tuple:
     Falls back to static constants if dynamic computation fails or has insufficient data.
     Only the noetic phase thresholds are used for the sentinel gate (investigation → action).
     """
+    # Calibration override (practice → global) sets the BASE uncertainty gate;
+    # Brier still tightens on top. Fail-safe — no override leaves the static
+    # UNCERTAINTY_THRESHOLD untouched.
+    _cal_unc = None
+    try:
+        from empirica.core.calibration_config import override_thresholds
+        from empirica.utils.session_resolver import InstanceResolver as R
+
+        _cal_unc = override_thresholds(R.project_path()).get("ready_uncertainty")
+    except Exception:
+        _cal_unc = None
+    _cal_base = (
+        {"ready_know_threshold": KNOW_THRESHOLD, "ready_uncertainty_threshold": _cal_unc}
+        if _cal_unc is not None
+        else None
+    )
     try:
         from empirica.core.post_test.dynamic_thresholds import compute_dynamic_thresholds
         from empirica.utils.session_resolver import InstanceResolver as R
 
         # Brier thresholds are per-practice — resolve the canonical ai_id so a
         # multi-practice machine doesn't read 'claude-code' calibration for all.
-        dt_result = compute_dynamic_thresholds(ai_id=R.ai_id() or "claude-code", db=db)
+        dt_result = compute_dynamic_thresholds(ai_id=R.ai_id() or "claude-code", db=db, base_thresholds=_cal_base)
         if dt_result.get("source") == "dynamic":
             noetic = dt_result.get("noetic", {})
             if noetic.get("brier_score") is not None:
                 return (noetic["ready_know_threshold"], noetic["ready_uncertainty_threshold"])
     except Exception:
         pass
-    return (KNOW_THRESHOLD, UNCERTAINTY_THRESHOLD)
+    return (KNOW_THRESHOLD, _cal_unc if _cal_unc is not None else UNCERTAINTY_THRESHOLD)
 
 
 def _get_domain_scaled_thresholds(
@@ -665,8 +716,13 @@ EMPIRICA_TIER1_PREFIXES = (
     "empirica status",  # Multi-instance status overview
     "empirica tui",  # Interactive cockpit (Textual app — destructive ops are modal-confirmed)
     "empirica notify ",  # Notification primitive — loops/hooks call this in any phase
-    "empirica mailbox poll",  # Mesh inbox/outbox READ — receive-side CLI, pure read (any phase, incl. pre-transaction wake)
-    "empirica mailbox show",  # Show one proposal's body — pure read (any phase)
+    # Mailbox RECEIVE side (pure reads) — MUST be Tier 1 so a mesh-woken IDLE
+    # practitioner can run `empirica mailbox poll` as its FIRST action (no open
+    # transaction). Without this, the wake→poll→react last mile the mailbox CLI
+    # (#255) exists to close is denied "No open transaction". Cortex classified
+    # mailbox reads as noetic (prop_iefo2tdx); the poll/show verbs only GET.
+    "empirica mailbox poll",  # Read cortex inbox/outbox (pure read)
+    "empirica mailbox show",  # Read one proposal body (pure read)
 )
 
 # Tier 2: State-changing commands - allowed (these ARE the epistemic workflow)
@@ -686,6 +742,12 @@ EMPIRICA_TIER2_PREFIXES = (
     "empirica log-artifacts",
     "empirica resolve-artifacts",
     "empirica delete-artifacts",  # Batch artifact operations
+    # Mailbox SEND/hygiene side — state-changing but part of the mesh workflow
+    # (ack + inbox hygiene), so they flow pre-transaction like the *-log verbs.
+    # `reply` is the atomic propose+complete ack (mesh ack is noetic per
+    # prop_iefo2tdx); `archive` soft-deletes from the inbox view.
+    "empirica mailbox reply",  # Atomic propose + complete (mesh ack)
+    "empirica mailbox archive",  # Soft-delete a proposal from inbox view
     "empirica goals-create",
     "empirica goal-create",
     "empirica gc",  # Goal create + aliases
@@ -733,8 +795,11 @@ EMPIRICA_TIER2_PREFIXES = (
     "empirica profile-sync",
     "empirica profile-prune",  # Profile management - state-changing
     "empirica release",  # Release pipeline — mechanical, no PREFLIGHT needed
-    "empirica mailbox reply",  # Atomic mesh reply+complete (REFLEX collab_brief, not ECO-gated) — mesh ack discipline
-    "empirica mailbox archive",  # Archive a proposal from inbox view — soft-delete, mesh hygiene
+    # Self-heal / maintenance verbs — must NEVER be rush-blocked, or a box with a
+    # stale hook can't run the very command that fixes it (deploy-staleness deadlock).
+    "empirica setup-claude-code",
+    "empirica plugin-sync",
+    "empirica plugin-version",
 )
 
 
@@ -769,7 +834,31 @@ def is_toggle_command(command: str) -> str | None:
     """
     cmd = command.lstrip()
 
-    # Detect pause file write (python3 -c "..." writing sentinel_paused)
+    # Canonical CLI toggle verbs — the user-facing Sentinel pause/resume surface:
+    #   empirica off [...]             → pause   (per-instance, or --global)
+    #   empirica on  [...]             → unpause
+    #   empirica sentinel pause [...]  → pause
+    #   empirica sentinel resume [...] → unpause
+    # Token-exact (whitespace split) so `empirica onboarding`/`empirica offline-*`
+    # do NOT match `on`/`off`. Meta-control: a gate must never block the verb that
+    # clears it, and the toggle can ONLY pause/unpause the Sentinel (no arbitrary
+    # praxic effect), so this self-exemption is prompt-injection-safe.
+    tokens = cmd.split()
+    if len(tokens) >= 2 and tokens[0] == "empirica":
+        verb = tokens[1]
+        if verb == "off":
+            return "pause"
+        if verb == "on":
+            return "unpause"
+        if verb == "sentinel" and len(tokens) >= 3:
+            sub = tokens[2]
+            if sub == "pause":
+                return "pause"
+            if sub in ("resume", "unpause"):
+                return "unpause"
+
+    # Legacy: the pre-delegation slash command wrote the pause file via inline
+    # python3 -c "...". Kept for back-compat with un-upgraded command files.
     if "sentinel_paused" in cmd and ("write_text" in cmd or "open(" in cmd):
         return "pause"
 
@@ -825,6 +914,112 @@ def is_transition_command(command: str) -> bool:
     return False
 
 
+# Recovery + measurement verbs that must be ALWAYS-OPEN, before every gate.
+# The release-path invariant: a gate must never block the action that clears it.
+# This set = the measurement-cycle gate-releases (preflight/check/postflight),
+# the epistemic-logging remedy that gates demand ("investigate and log"), the
+# self-heal verbs (a stale-gated box must run its own fix), and the manual
+# sentinel/listener controls. Curated subset of the Tier-1/Tier-2 whitelists.
+_RECOVERY_MEASUREMENT_PREFIXES = (
+    # Measurement-cycle gate releases (+ documented short aliases).
+    "empirica preflight-submit",
+    "empirica check-submit",
+    "empirica postflight-submit",
+    "empirica preflight",
+    "empirica postflight",
+    # Epistemic logging — the "investigate and log learnings first" remedy.
+    "empirica finding-log",
+    "empirica unknown-log",
+    "empirica deadend-log",
+    "empirica mistake-log",
+    "empirica log-mistake",
+    "empirica assumption-log",
+    "empirica decision-log",
+    "empirica log-artifacts",
+    "empirica resolve-artifacts",
+    # delete-artifacts mutates the EPISTEMIC record (the set's closest brush with
+    # mutation) — kept exempt CONSCIOUSLY: record-triage, dry-run by default, not
+    # a world action (autonomy-ratified 2026-06-24).
+    "empirica delete-artifacts",
+    "empirica source-add",
+    "empirica note",
+    "empirica unknown-resolve",
+    # Goal tracking — MEASUREMENT (recording what work exists + its state), same
+    # class as *-log. Exempt so a practitioner can defer-as-goal even while gated
+    # (the reaction-protocol "log a goal to process this proposal" path).
+    "empirica goals-create",
+    "empirica goal-create",
+    "empirica goals-add-task",
+    "empirica goal-add-task",
+    "empirica goals-complete",
+    "empirica goal-complete",
+    "empirica goals-complete-task",
+    "empirica goal-complete-task",
+    "empirica goals-list",
+    "empirica goal-list",
+    # Recovery / self-heal — must run even from a stale-gated box.
+    "empirica doctor",
+    "empirica diagnose",
+    "empirica setup-claude-code",
+    "empirica plugin-sync",
+    # Sentinel / listener / loop control — manual override + liveness. NARROWED
+    # to read/control/heartbeat subverbs; loop register/install stays on the
+    # normal path (infrastructure setup, not recovery) — autonomy-ratified.
+    "empirica sentinel",
+    "empirica listener on",
+    "empirica listener off",
+    "empirica listener status",
+    "empirica listener arm",
+    "empirica loop status",
+    "empirica loop heartbeat",
+    "empirica loop schedule-next",
+    "empirica loop pause",
+    "empirica loop resume",
+    "empirica loop record-wake",
+)
+
+
+def _is_recovery_or_measurement_action(tool_name: str, tool_input: dict | None) -> bool:
+    """Release-path invariant: recovery + measurement actions are ALWAYS allowed,
+    before every gate, so no gate (present or future) can trap a practitioner by
+    blocking the very action that clears it.
+
+    Robust to command shape. The failure that motivated this: a ``cd <path>``
+    followed by a NEWLINE then an ``empirica <verb> - <<EOF`` heredoc is
+    mis-parsed as praxic by is_safe_bash_command (only the ``&&`` form parsed) —
+    so the heredoc forms of check-submit / postflight-submit fell through to the
+    authorization pipeline and the rush-guard trapped them. We normalize ONLY a
+    leading ``cd <path>\\n`` to ``cd <path> && `` (leaving heredoc-body newlines
+    intact), then reuse is_safe_bash_command's segment-safety (which correctly
+    rejects chained praxic like ``&& rm -rf`` and allows benign ``| tail``),
+    and finally require that a recovery/measurement VERB is actually present so
+    the universal exemption stays narrow.
+    """
+    # Empirica MCP tools are epistemic workflow — always allowed.
+    if tool_name.startswith(EMPIRICA_MCP_PREFIX):
+        return True
+    if tool_name != "Bash" or not tool_input:
+        return False
+    command = tool_input.get("command") or ""
+    if not command.strip():
+        return False
+    # The sentinel pause/unpause toggle is a manual recovery override.
+    if is_toggle_command(command.strip()):
+        return True
+    # Normalize a leading `cd <path>\n` → `cd <path> && ` (the one shape
+    # is_safe_bash_command mis-parses); heredoc-body newlines are untouched.
+    normalized = re.sub(r"\A(\s*cd\s+[^\n&;|]+)\n", r"\1 && ", command, count=1)
+    # Reuse battle-tested segment-safety: rejects chained praxic, allows pipes
+    # to read-only filters. A command that isn't fully safe is never exempted.
+    if not is_safe_bash_command({"command": normalized}):
+        return False
+    # Narrow to the recovery/measurement set: strip a leading `cd … &&`, then
+    # take the leading token before any heredoc / pipe.
+    after_cd = re.sub(r"\A\s*cd\s+[^\n&;|]+\s*&&\s*", "", normalized, count=1)
+    leading = after_cd.split("<<", 1)[0].split("|", 1)[0].strip()
+    return any(leading.startswith(prefix) for prefix in _RECOVERY_MEASUREMENT_PREFIXES)
+
+
 # --- AUTONOMY CALIBRATION LOOP ---
 # Tracks tool call count per transaction and nudges at adaptive thresholds.
 # The nudge is informational — Claude decides when to POSTFLIGHT based on
@@ -837,37 +1032,73 @@ _file_relevance_nudge = ""  # Module-level: set when artifacts reference an Edit
 _last_read_count = 0  # Module-level: how many times current file was read this tx
 
 
-def _find_transaction_file(empirica_dir: Path, suffix: str, session_id: str | None = None) -> Path | None:
+def _find_transaction_file(
+    empirica_dir: Path,
+    suffix: str,
+    session_id: str | None = None,
+    claude_session_id: str | None = None,
+) -> Path | None:
     """Find the active transaction file, with suffix-mismatch fallback.
 
     Primary: exact file matching the current instance suffix.
-    Fallback: when exact file doesn't exist (e.g., hook context where
-    TMUX_PANE is not inherited), scan for any active_transaction_*.json
-    matching the given session_id.
+    Fallback: when exact file doesn't exist (hook context where TMUX_PANE is not
+    inherited, OR the ephemeral tmux_N rotated across compaction), scan for any
+    active_transaction_*.json matching — preferring the DURABLE
+    claude_session_id, then the (rotating) empirica session_id.
 
-    Safe because it's scoped by session_id — no cross-instance talk.
+    Safe because the scan is scoped by a durable/session key — no cross-instance
+    talk. This is the firewall's transaction-resolution path; it must stay in
+    sync with empirica/utils/session_resolver.py:_find_transaction_file.
     See: docs/architecture/instance_isolation/KNOWN_ISSUES.md (11.21)
     """
-    # Primary: exact suffix match
+    # Primary: exact suffix match. An OPEN exact file wins immediately, and the
+    # keyless case returns it as-is. But a CLOSED exact file must NOT short-circuit
+    # when we hold a key: a stale closed transaction at the current suffix would
+    # otherwise mask a newer key-matched OPEN transaction under a rotated suffix,
+    # making this firewall deny praxic with "Epistemic loop closed" after a valid
+    # CHECK. When closed + keyed, fall through to the ranked scan below. Kept in
+    # sync with empirica/utils/session_resolver.py:_find_transaction_file.
     exact = empirica_dir / f"active_transaction{suffix}.json"
     if exact.exists():
-        return exact
-
-    # Fallback: scan for suffix-mismatched files matching this session
-    if session_id:
+        if not (claude_session_id or session_id):
+            return exact
         try:
-            for tx_file in sorted(empirica_dir.glob("active_transaction*.json")):
-                try:
-                    with open(tx_file) as f:
-                        tx_data = json.load(f)
-                    if tx_data.get("session_id") == session_id:
-                        return tx_file
-                except Exception:
-                    continue
+            with open(exact) as exact_f:
+                if json.load(exact_f).get("status") == "open":
+                    return exact
         except Exception:
-            pass
+            return exact  # unreadable → treat as authoritative, don't scan
+        # exact is CLOSED and a key is available → fall through to the scan.
 
-    return None
+    # Fallback: scan suffix-mismatched files. Rank candidates and return the best
+    # rather than the first sorted match — claude_session_id is stable across the
+    # whole CC session, so many files (one per past transaction, each
+    # POSTFLIGHT-closed) share it; returning the first would resolve a STALE
+    # CLOSED transaction and make this firewall block praxic after a valid CHECK.
+    # Rank by (cc_match, is_open, updated_at) descending. Kept in sync with
+    # empirica/utils/session_resolver.py:_find_transaction_file.
+    if not claude_session_id and not session_id:
+        return None
+    best_rank = None
+    best_file = None
+    try:
+        for tx_file in sorted(empirica_dir.glob("active_transaction*.json")):
+            try:
+                with open(tx_file) as f:
+                    tx_data = json.load(f)
+            except Exception:
+                continue
+            cc_match = bool(claude_session_id and tx_data.get("claude_session_id") == claude_session_id)
+            sess_match = bool(session_id and tx_data.get("session_id") == session_id)
+            if not (cc_match or sess_match):
+                continue
+            rank = (cc_match, tx_data.get("status") == "open", tx_data.get("updated_at") or 0.0)
+            if best_rank is None or rank > best_rank:
+                best_rank, best_file = rank, tx_file
+    except Exception:
+        return None
+
+    return best_file
 
 
 def _resolve_empirica_session_id(claude_session_id: str | None) -> str | None:
@@ -901,7 +1132,7 @@ def _locate_transaction_file(
                 with open(aw_file) as f:
                     pp = json.load(f).get("project_path")
                 if pp:
-                    tx = _find_transaction_file(Path(pp) / ".empirica", suffix, empirica_session_id)
+                    tx = _find_transaction_file(Path(pp) / ".empirica", suffix, empirica_session_id, claude_session_id)
                     if tx:
                         return tx
             except Exception:
@@ -910,12 +1141,12 @@ def _locate_transaction_file(
     # Try 2: project_resolver canonical path
     pp = get_active_project_path(claude_session_id)
     if pp:
-        tx = _find_transaction_file(Path(pp) / ".empirica", suffix, empirica_session_id)
+        tx = _find_transaction_file(Path(pp) / ".empirica", suffix, empirica_session_id, claude_session_id)
         if tx:
             return tx
 
     # Try 3: global fallback
-    return _find_transaction_file(Path.home() / ".empirica", suffix, empirica_session_id)
+    return _find_transaction_file(Path.home() / ".empirica", suffix, empirica_session_id, claude_session_id)
 
 
 def _is_empirica_mcp_tool(tool_name: str) -> bool:
@@ -1012,6 +1243,50 @@ def _atomic_write_counters(counters: dict, counters_path: Path) -> None:
             pass
 
 
+def _stamp_blocked_presence(claude_session_id: str | None, tool_input: dict | None) -> None:
+    """Mark this practitioner BLOCKED-on-question the moment AskUserQuestion fires.
+
+    A session blocked waiting for a user answer is alive but goes quiet — no
+    UserPromptSubmit fires until the user replies, so the per-turn presence
+    refresh can't keep it warm. Stamping status=blocked lets the daemon apply the
+    longer blocked-grace TTL and lets autonomy's watch-sweep distinguish
+    'blocked' from 'idle'/'working'. --session-pid (getppid()=CC, this hook's
+    parent) keeps the daemon's liveness anchor set so refresh_live_presence keeps
+    re-stamping it. The next user prompt re-stamps status=active, clearing this.
+    Detached fire-and-forget — never adds latency to, or fails, the gate.
+    """
+    if not claude_session_id:
+        return
+    pending = None
+    try:
+        questions = (tool_input or {}).get("questions") or []
+        if questions and isinstance(questions[0], dict):
+            pending = (questions[0].get("question") or questions[0].get("header") or "")[:200] or None
+    except Exception:
+        pending = None
+    try:
+        import subprocess
+
+        cmd = [
+            "empirica",
+            "practitioner",
+            "write",
+            "--session",
+            claude_session_id,
+            "--status",
+            "blocked",
+            "--session-pid",
+            str(os.getppid()),
+            "--output",
+            "json",
+        ]
+        if pending:
+            cmd += ["--pending-question", pending]
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def _try_increment_tool_count(
     claude_session_id: str | None = None, tool_name: str | None = None, tool_input: dict | None = None
 ) -> tuple:
@@ -1065,6 +1340,7 @@ def _try_increment_tool_count(
 
         if tool_name == "AskUserQuestion":
             counters["pending_user_response"] = True
+            _stamp_blocked_presence(claude_session_id, tool_input)
 
         if tool_name:
             _record_workflow_trace(counters, tool_name, tool_input, is_noetic)
@@ -1268,8 +1544,64 @@ def is_plan_file(tool_input: dict) -> bool:
     return "/.claude/plans/" in normalized
 
 
+# Per-tool flags that turn a normally-inert, safe-prefixed tool PRAXIC — it
+# runs / deletes / writes / rewrites. The tool NAME is inert (find/fd/sort/yq/
+# ast-grep all read by default), so a bare prefix match would wave these through;
+# this is the membrane-hole class. A prefix match PLUS one of these flags is gated.
+_TOOL_DANGEROUS_FLAGS: dict[str, frozenset[str]] = {
+    # deletes files / runs arbitrary commands / writes files
+    "find": frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}),
+    # fd -x/-X run a command per result (find -exec equivalent)
+    "fd": frozenset({"-x", "-X", "--exec", "--exec-batch"}),
+    "fdfind": frozenset({"-x", "-X", "--exec", "--exec-batch"}),
+    # sort -o / --output writes to a file
+    "sort": frozenset({"-o", "--output"}),
+    # yq -i edits YAML in place
+    "yq": frozenset({"-i", "--inplace", "--in-place"}),
+    # ast-grep rewrites source in place
+    "ast-grep": frozenset({"-U", "--update-all", "--rewrite"}),
+}
+
+# awk family writes via print/printf > "file" INSIDE its program (the
+# redirect-outside-quotes guard can't see it) and execs via system(...).
+_AWK_WRITE_RE = re.compile(r"(print|printf)[^;\n]*>>?\s*\"")
+_AWK_NAMES = frozenset({"awk", "gawk", "mawk", "nawk"})
+
+
+def _has_dangerous_tool_flags(cmd: str) -> bool:
+    """True if ``cmd`` is a safe-prefixed tool invoked with a mutating/exec flag
+    its prefix would otherwise wave through (the membrane-hole class).
+
+    Closes the holes where the tool NAME is inert but a flag makes it praxic:
+    find -delete/-exec, fd -x, sort -o, yq -i, ast-grep --rewrite, and awk
+    system()/print-to-file. Known residuals (rare, low-severity): ``uniq IN OUT``
+    positional output, and combined short flags like ``-iX`` — both degrade to
+    "needs CHECK" at worst if ever extended, never a silent allow elsewhere.
+    """
+    stripped = cmd.lstrip()
+    head = stripped.split(" ", 1)[0]
+    if head in _AWK_NAMES:
+        return "system(" in stripped or bool(_AWK_WRITE_RE.search(stripped))
+    flags = _TOOL_DANGEROUS_FLAGS.get(head)
+    if flags:
+        for tok in stripped.split()[1:]:
+            if tok in flags:
+                return True
+            if tok.startswith("--") and "=" in tok and tok.split("=", 1)[0] in flags:
+                return True
+    return False
+
+
 def _matches_safe_prefix(cmd: str) -> bool:
-    """Check if a command matches any SAFE_BASH_PREFIXES entry."""
+    """Check if a command matches any SAFE_BASH_PREFIXES entry.
+
+    A prefix match is necessary but NOT sufficient: a normally-inert tool made
+    mutating/exec by a flag (find -delete, awk system(), fd -x, sort -o, yq -i,
+    ast-grep --rewrite) is rejected even when its prefix matches. See
+    _has_dangerous_tool_flags — the centralized chokepoint guard.
+    """
+    if _has_dangerous_tool_flags(cmd):
+        return False
     for prefix in SAFE_BASH_PREFIXES:
         if cmd.startswith(prefix):
             return True
@@ -1405,6 +1737,47 @@ def _is_inert_shape(stripped: str) -> bool:
     return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$", stripped))
 
 
+# Benign command wrappers that prefix a real command without altering its
+# safety character (they exec the inner command, possibly with their own
+# flags/args). remote-ops recon routinely wraps ssh in `timeout` to bound SSH
+# hangs — e.g. `timeout 160 ssh -o ConnectTimeout=12 host '...'` — so the
+# ssh/scp/rsync classifier must see THROUGH the wrapper, not match only the
+# leading token, or the wrapped form falls through to the rush-guard.
+_WRAPPER_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:timeout|env|time|nice|nohup|stdbuf|ionice|setsid)"
+    r"(?:\s+(?:-\S+|\d\S*|[A-Za-z_]\w*=\S*))*\s+)+"
+)
+
+
+def _unwrap_command(command: str) -> str:
+    """Peel leading benign wrapper tokens (timeout/env/nice/...) + their option
+    args, returning the inner command verbatim. Conservative: only the known
+    wrappers above are stripped, with their unambiguous args (a flag, a numeric
+    duration like timeout's 160/160s, or a VAR=val env assignment). Never
+    raises; on any oddity returns the command unchanged.
+
+    Safety: a mis-peel can only make classification MORE restrictive — the only
+    path it reaches grants the remote relaxation iff the peeled result starts
+    with ssh/scp/rsync, and is_safe_remote_command still classifies the inner
+    ssh subcommand. Dangerous-operator/redirect checks run on the ORIGINAL
+    command, so a wrapper can never smuggle a local write past them.
+    """
+    try:
+        return _WRAPPER_PREFIX_RE.sub("", command, count=1) or command
+    except Exception:
+        return command
+
+
+def _remote_prefix(command: str) -> str | None:
+    """Return the unwrapped command if it starts with ssh/rsync/scp (seeing
+    through benign wrappers like `timeout`), else None. The returned string is
+    what should be passed to is_safe_remote_command for classification."""
+    unwrapped = _unwrap_command(command).lstrip()
+    if unwrapped.startswith(("ssh ", "rsync ", "scp ", "ssh-")):
+        return unwrapped
+    return None
+
+
 def _is_segment_safe(segment: str) -> bool:
     """Check if a single command segment (from && / || / ; chain) is safe.
 
@@ -1434,6 +1807,16 @@ def _is_segment_safe(segment: str) -> bool:
     clean = SAFE_REDIRECT_PATTERN.sub("", clean).strip()
     if not clean:
         return True
+
+    # 0. A dangerous file redirect (`> f`, `>> f`, `< f`) is a praxic side effect
+    # even when the command word is a safe prefix — `grep x > out` WRITES a file.
+    # A single command is caught by is_safe_bash_command's top-level redirect
+    # check, but a CHAIN segment reaches here via _classify_chain BEFORE that
+    # check runs — so without this, `cd /x && grep foo > /tmp/out` launders a
+    # redirect past the gate. (Safe redirects like `2>/dev/null` were already
+    # stripped from `clean` above, so anything left is a real one.)
+    if _has_dangerous_redirects(clean):
+        return False
 
     # 1. Validate every embedded $() and backtick substitution. The inner
     # command must independently be safe — we treat substitutions as
@@ -1470,8 +1853,9 @@ def _is_segment_safe(segment: str) -> bool:
         return is_safe_pipe_chain(stripped)
     if is_safe_empirica_command(stripped):
         return True
-    if stripped.startswith(("ssh ", "rsync ", "scp ", "ssh-")):
-        return is_safe_remote_command(stripped)
+    _rcmd = _remote_prefix(stripped)
+    if _rcmd is not None:
+        return is_safe_remote_command(_rcmd)
     if _matches_safe_prefix(stripped):
         return True
 
@@ -1602,8 +1986,8 @@ def is_safe_bash_command(tool_input: dict) -> bool:
     # the per-command classifier rejects. Local writes (cat > /tmp/foo)
     # stay subject to normal gating — those ARE observable.
     if _current_work_type == "remote-ops":
-        rcmd = command.lstrip()
-        if rcmd.startswith(("ssh ", "rsync ", "scp ", "ssh-")):
+        rcmd = _remote_prefix(command)
+        if rcmd is not None:
             _maybe_nudge_remote_ops(rcmd)
             return True
 
@@ -1619,9 +2003,10 @@ def is_safe_bash_command(tool_input: dict) -> bool:
     cmd = command.lstrip()
 
     # Special cases: remote, sqlite, python
-    if cmd.startswith(("ssh ", "rsync ", "scp ", "ssh-")):
-        _maybe_nudge_remote_ops(cmd)
-        return is_safe_remote_command(cmd)
+    _rcmd = _remote_prefix(cmd)
+    if _rcmd is not None:
+        _maybe_nudge_remote_ops(_rcmd)
+        return is_safe_remote_command(_rcmd)
     if cmd.startswith("sqlite3 ") and is_safe_sqlite_command(cmd):
         return True
     if cmd.startswith(("python3 -c ", "python -c ")) and is_safe_python_command(cmd):
@@ -2373,7 +2758,7 @@ def _detect_subagent(claude_session_id: str) -> bool:
         # No active_work file for this claude_session_id — likely a subagent
         # (or session-init failed / project initialized mid-session).
         #
-        # Worktree-aware signal (ecodex prop_3dih #3, David architectural flag):
+        # Worktree-aware signal (David architectural flag):
         # isolation:worktree subagents run in a LINKED git worktree where the
         # active_work lookup above fails — without this they fall through and risk
         # mis-detection as the PARENT (then get measured, polluting parent state).
@@ -2503,6 +2888,16 @@ def _check_postflight_loop_closed(
     return None
 
 
+# work_type=remote-ops is ungrounded_remote_ops by design: the Sentinel's local
+# sensors can't observe the remote box, so a CHECK window with 0 LOCAL artifacts
+# in <30s is EXPECTED, not rushed — "investigate and log locally first" is a
+# category error there. Exempt it from the rush deny entirely. Also the
+# work_type-level safety net: even if a future command shape slips the noetic
+# classifier (as timeout-wrapped ssh did), a remote-ops session can never
+# deadlock on this guard.
+RUSH_GUARD_EXEMPT_WORK_TYPES = frozenset({"remote-ops"})
+
+
 def _validate_check_record(
     cursor,
     session_id: str,
@@ -2516,7 +2911,7 @@ def _validate_check_record(
     Returns (know, uncertainty, decision, check_timestamp) on success,
     or ("deny", message) tuple on failure.
     """
-    # ── RECOVERY ESCAPE HATCH (ecodex prop_3dih #1, David-flagged) ──────────
+    # ── RECOVERY ESCAPE HATCH (David-flagged) ──────────
     # A firewall must NEVER gate its own escape hatch. Empirica's discipline /
     # recovery verbs (check/postflight-submit, *-log, note, doctor) + noetic
     # tools must ALWAYS pass — regardless of CHECK / rush / stuck state. The
@@ -2599,13 +2994,25 @@ def _validate_check_record(
         noetic_duration = check_ts - preflight_ts
         min_duration = float(os.getenv("EMPIRICA_MIN_NOETIC_DURATION", "30"))
 
-        if noetic_duration < min_duration:
+        # Fix 3: remote-ops is exempt (ungrounded by design — see
+        # RUSH_GUARD_EXEMPT_WORK_TYPES). The work_type-level safety net so a
+        # remote-ops session can never deadlock on this guard regardless of how
+        # the command was shaped.
+        if noetic_duration < min_duration and _current_work_type not in RUSH_GUARD_EXEMPT_WORK_TYPES:
+            # Fix 2: count artifacts up to NOW, not the frozen check_ts. The
+            # pre-fix window (preflight_ts, check_ts) closes the instant CHECK is
+            # recorded, so a finding logged AFTER a rushed CHECK could never
+            # count — making "log learnings first" unsatisfiable and the deny
+            # unrecoverable (the constant-Ns deadlock). Counting
+            # to now makes the guard recoverable exactly as its message promises,
+            # while still denying a genuine zero-artifact rubber-stamp CHECK.
+            now = time.time()
             cursor.execute(
                 """
                 SELECT COUNT(*) FROM project_findings
                 WHERE session_id = ? AND created_timestamp > ? AND created_timestamp < ?
             """,
-                (session_id, preflight_ts, check_ts),
+                (session_id, preflight_ts, now),
             )
             findings = cursor.fetchone()[0]
             cursor.execute(
@@ -2613,7 +3020,7 @@ def _validate_check_record(
                 SELECT COUNT(*) FROM project_unknowns
                 WHERE session_id = ? AND created_timestamp > ? AND created_timestamp < ?
             """,
-                (session_id, preflight_ts, check_ts),
+                (session_id, preflight_ts, now),
             )
             unknowns = cursor.fetchone()[0]
             if findings == 0 and unknowns == 0:
@@ -3471,6 +3878,17 @@ def main():
 
     _track_tool_usage(hook_input, tool_name, tool_input)
     _set_file_relevance_nudge(tool_name, tool_input, hook_input.get("session_id"))
+
+    # Release-path invariant (universal pre-gate): recovery + measurement actions
+    # are ALWAYS-OPEN, evaluated BEFORE every other gate. No gate — rush-guard,
+    # proportionality, stale-detection, transaction-enforcer, or any future one —
+    # may block the action that clears it (check/postflight to release the
+    # measurement gates, *-log/note to satisfy "investigate and log first",
+    # doctor/setup-claude-code to self-heal a stale box, sentinel pause/resume to
+    # override). One chokepoint → parity-by-construction, not per-gate discipline.
+    if _is_recovery_or_measurement_action(tool_name, tool_input):
+        respond("allow", "Release-path exemption: recovery/measurement action (always-open)")
+        sys.exit(0)
 
     # Tx-AG: investigation-proportionality budget enforcement. When
     # tool-router.py armed the budget on a hypothesis-bearing prompt,
