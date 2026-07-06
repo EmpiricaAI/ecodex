@@ -794,7 +794,7 @@ impl ConfigToml {
                     } else {
                         NetworkSandboxPolicy::Restricted
                     };
-                    PermissionProfile::workspace_write_with(
+                    PermissionProfile::workspace_write_with_git(
                         writable_roots,
                         network_policy,
                         *exclude_tmpdir_env_var,

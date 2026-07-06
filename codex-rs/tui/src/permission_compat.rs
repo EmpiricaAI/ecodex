@@ -39,7 +39,7 @@ pub(crate) fn legacy_compatible_permission_profile(
         .ok()
         .is_some_and(|git| file_system_policy.can_write_path_with_cwd(git.as_path(), cwd));
 
-    PermissionProfile::workspace_write_with(
+    PermissionProfile::workspace_write_with_git(
         &writable_roots,
         network_policy,
         !tmpdir_writable,

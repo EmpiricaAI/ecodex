@@ -521,7 +521,6 @@ impl PermissionProfile {
             NetworkSandboxPolicy::Restricted,
             /*exclude_tmpdir_env_var*/ false,
             /*exclude_slash_tmp*/ false,
-            /*writable_git*/ false,
         )
     }
 
@@ -535,9 +534,26 @@ impl PermissionProfile {
         network: NetworkSandboxPolicy,
         exclude_tmpdir_env_var: bool,
         exclude_slash_tmp: bool,
+    ) -> Self {
+        Self::workspace_write_with_git(
+            writable_roots,
+            network,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+            /*writable_git*/ false,
+        )
+    }
+
+    /// Like [`workspace_write_with`] but with the opt-in `writable_git` knob
+    /// (make the project's `.git` writable while keeping the sandbox on).
+    pub fn workspace_write_with_git(
+        writable_roots: &[AbsolutePathBuf],
+        network: NetworkSandboxPolicy,
+        exclude_tmpdir_env_var: bool,
+        exclude_slash_tmp: bool,
         writable_git: bool,
     ) -> Self {
-        let file_system = FileSystemSandboxPolicy::workspace_write(
+        let file_system = FileSystemSandboxPolicy::workspace_write_git(
             writable_roots,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,

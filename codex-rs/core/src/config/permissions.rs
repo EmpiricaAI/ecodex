@@ -80,7 +80,7 @@ pub(crate) fn builtin_permission_profile(
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 writable_git,
-            }) => PermissionProfile::workspace_write_with(
+            }) => PermissionProfile::workspace_write_with_git(
                 &[],
                 if *network_access {
                     NetworkSandboxPolicy::Enabled
@@ -209,7 +209,6 @@ fn extensible_builtin_parent_profile(profile_name: &str) -> Option<PermissionPro
             &[],
             /*exclude_tmpdir_env_var*/ false,
             /*exclude_slash_tmp*/ false,
-            /*writable_git*/ false,
         ),
         _ => return None,
     };

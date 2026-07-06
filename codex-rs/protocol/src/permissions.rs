@@ -571,6 +571,21 @@ impl FileSystemSandboxPolicy {
         writable_roots: &[AbsolutePathBuf],
         exclude_tmpdir_env_var: bool,
         exclude_slash_tmp: bool,
+    ) -> Self {
+        Self::workspace_write_git(
+            writable_roots,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+            /*writable_git*/ false,
+        )
+    }
+
+    /// Like [`workspace_write`] but with the opt-in `writable_git` knob (make
+    /// the project's `.git` writable while `.agents`/`.codex` stay protected).
+    pub fn workspace_write_git(
+        writable_roots: &[AbsolutePathBuf],
+        exclude_tmpdir_env_var: bool,
+        exclude_slash_tmp: bool,
         writable_git: bool,
     ) -> Self {
         let mut entries = vec![FileSystemSandboxEntry {
@@ -1339,8 +1354,6 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
                 writable_roots,
                 *exclude_tmpdir_env_var,
                 *exclude_slash_tmp,
-                // Legacy SandboxPolicy has no writable_git knob; default off.
-                /*writable_git*/ false,
             ),
         }
     }
@@ -3298,7 +3311,7 @@ mod tests {
         }
 
         // Default (off): .git/.agents/.codex all protected read-only.
-        let off = FileSystemSandboxPolicy::workspace_write(&[], false, false, /*writable_git*/ false);
+        let off = FileSystemSandboxPolicy::workspace_write_git(&[], false, false, /*writable_git*/ false);
         assert_eq!(
             access_for_project_subpath(&off, ".git"),
             Some(FileSystemAccessMode::Read),
@@ -3308,7 +3321,7 @@ mod tests {
         assert_eq!(access_for_project_subpath(&off, ".codex"), Some(FileSystemAccessMode::Read));
 
         // On: .git becomes writable; .agents/.codex STAY protected.
-        let on = FileSystemSandboxPolicy::workspace_write(&[], false, false, /*writable_git*/ true);
+        let on = FileSystemSandboxPolicy::workspace_write_git(&[], false, false, /*writable_git*/ true);
         assert_eq!(
             access_for_project_subpath(&on, ".git"),
             Some(FileSystemAccessMode::Write),

@@ -2588,6 +2588,7 @@ async fn explicit_builtin_workspace_profile_ignores_legacy_workspace_write_setti
                 network_access: true,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
+                writable_git: false,
             }),
             ..Default::default()
         },
@@ -2905,6 +2906,7 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
                 network_access: true,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: false,
+                writable_git: false,
             }),
             windows: Some(WindowsToml {
                 sandbox: Some(WindowsSandboxModeToml::Elevated),
