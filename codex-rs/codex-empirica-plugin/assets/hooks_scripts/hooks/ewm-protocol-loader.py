@@ -409,7 +409,7 @@ def _build_pending_inbox_lead() -> str:
     shown = proposals[:8]
     lines = [f"## 📬 Pending mesh messages ({total}) — handle these FIRST", ""]
     for p in shown:
-        pid = str(p.get("id") or "")[:26]
+        pid = str(p.get("id") or "")  # full ID — used verbatim in mailbox reply --parent-id, must NOT truncate
         src = p.get("source_claude") or "?"
         status = p.get("status") or "?"
         ptype = p.get("type") or "?"
