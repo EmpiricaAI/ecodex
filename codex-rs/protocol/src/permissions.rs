@@ -571,6 +571,7 @@ impl FileSystemSandboxPolicy {
         writable_roots: &[AbsolutePathBuf],
         exclude_tmpdir_env_var: bool,
         exclude_slash_tmp: bool,
+        writable_git: bool,
     ) -> Self {
         let mut entries = vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -611,6 +612,19 @@ impl FileSystemSandboxPolicy {
                 }),
         );
 
+        // Opt-in (`writable_git`, default false): make the project's `.git`
+        // writable so trusted/autonomous practitioners can `git commit` while the
+        // sandbox stays on. Registering an explicit write rule suppresses the
+        // default `.git` read-only protection below (it is applied only
+        // `if_no_explicit_rule`). `.agents` and `.codex` remain protected.
+        if writable_git {
+            entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(PathBuf::from(".git"))),
+                },
+                access: FileSystemAccessMode::Write,
+            });
+        }
         append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".git");
         append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".agents");
         append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".codex");
@@ -1325,6 +1339,8 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
                 writable_roots,
                 *exclude_tmpdir_env_var,
                 *exclude_slash_tmp,
+                // Legacy SandboxPolicy has no writable_git knob; default off.
+                /*writable_git*/ false,
             ),
         }
     }
@@ -3265,5 +3281,48 @@ mod tests {
 
         assert!(is_read_denied(&bracket_file, &policy, temp.path()));
         assert!(!is_read_denied(&other, &policy, temp.path()));
+    }
+
+    #[test]
+    fn workspace_write_writable_git_flag_toggles_dot_git_protection() {
+        fn access_for_project_subpath(
+            policy: &FileSystemSandboxPolicy,
+            subpath: &str,
+        ) -> Option<FileSystemAccessMode> {
+            policy.entries.iter().find_map(|entry| match &entry.path {
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::ProjectRoots { subpath: Some(sp) },
+                } if sp.as_path() == std::path::Path::new(subpath) => Some(entry.access),
+                _ => None,
+            })
+        }
+
+        // Default (off): .git/.agents/.codex all protected read-only.
+        let off = FileSystemSandboxPolicy::workspace_write(&[], false, false, /*writable_git*/ false);
+        assert_eq!(
+            access_for_project_subpath(&off, ".git"),
+            Some(FileSystemAccessMode::Read),
+            "writable_git=false must keep .git protected"
+        );
+        assert_eq!(access_for_project_subpath(&off, ".agents"), Some(FileSystemAccessMode::Read));
+        assert_eq!(access_for_project_subpath(&off, ".codex"), Some(FileSystemAccessMode::Read));
+
+        // On: .git becomes writable; .agents/.codex STAY protected.
+        let on = FileSystemSandboxPolicy::workspace_write(&[], false, false, /*writable_git*/ true);
+        assert_eq!(
+            access_for_project_subpath(&on, ".git"),
+            Some(FileSystemAccessMode::Write),
+            "writable_git=true must make .git writable"
+        );
+        assert_eq!(
+            access_for_project_subpath(&on, ".agents"),
+            Some(FileSystemAccessMode::Read),
+            "writable_git must NOT weaken .agents"
+        );
+        assert_eq!(
+            access_for_project_subpath(&on, ".codex"),
+            Some(FileSystemAccessMode::Read),
+            "writable_git must NOT weaken .codex"
+        );
     }
 }

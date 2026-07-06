@@ -79,6 +79,7 @@ pub(crate) fn builtin_permission_profile(
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
+                writable_git,
             }) => PermissionProfile::workspace_write_with(
                 &[],
                 if *network_access {
@@ -88,6 +89,7 @@ pub(crate) fn builtin_permission_profile(
                 },
                 *exclude_tmpdir_env_var,
                 *exclude_slash_tmp,
+                *writable_git,
             ),
             None => PermissionProfile::workspace_write(),
         }),
@@ -207,6 +209,7 @@ fn extensible_builtin_parent_profile(profile_name: &str) -> Option<PermissionPro
             &[],
             /*exclude_tmpdir_env_var*/ false,
             /*exclude_slash_tmp*/ false,
+            /*writable_git*/ false,
         ),
         _ => return None,
     };

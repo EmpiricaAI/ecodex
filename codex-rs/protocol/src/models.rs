@@ -521,6 +521,7 @@ impl PermissionProfile {
             NetworkSandboxPolicy::Restricted,
             /*exclude_tmpdir_env_var*/ false,
             /*exclude_slash_tmp*/ false,
+            /*writable_git*/ false,
         )
     }
 
@@ -534,11 +535,13 @@ impl PermissionProfile {
         network: NetworkSandboxPolicy,
         exclude_tmpdir_env_var: bool,
         exclude_slash_tmp: bool,
+        writable_git: bool,
     ) -> Self {
         let file_system = FileSystemSandboxPolicy::workspace_write(
             writable_roots,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
+            writable_git,
         );
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),

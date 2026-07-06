@@ -918,6 +918,12 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,
+    /// Opt-in: allow writes to the project's `.git` directory so autonomous
+    /// practitioners can `git commit` while the workspace-write sandbox stays
+    /// on. Default false preserves the standard protection; `.agents`/`.codex`
+    /// remain read-only regardless.
+    #[serde(default)]
+    pub writable_git: bool,
 }
 
 impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings {

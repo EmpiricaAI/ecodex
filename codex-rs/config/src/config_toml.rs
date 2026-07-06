@@ -787,6 +787,7 @@ impl ConfigToml {
                     network_access,
                     exclude_tmpdir_env_var,
                     exclude_slash_tmp,
+                    writable_git,
                 }) => {
                     let network_policy = if *network_access {
                         NetworkSandboxPolicy::Enabled
@@ -798,6 +799,7 @@ impl ConfigToml {
                         network_policy,
                         *exclude_tmpdir_env_var,
                         *exclude_slash_tmp,
+                        *writable_git,
                     )
                 }
                 None => PermissionProfile::workspace_write(),
