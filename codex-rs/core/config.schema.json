@@ -2706,6 +2706,11 @@
           "default": false,
           "type": "boolean"
         },
+        "writable_git": {
+          "default": false,
+          "description": "Opt-in: allow writes to the project's `.git` directory so autonomous practitioners can `git commit` while the workspace-write sandbox stays on. Default false preserves the standard protection; `.agents`/`.codex` remain read-only regardless.",
+          "type": "boolean"
+        },
         "writable_roots": {
           "default": [],
           "items": {
