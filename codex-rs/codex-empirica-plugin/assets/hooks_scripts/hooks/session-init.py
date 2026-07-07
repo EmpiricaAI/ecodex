@@ -24,6 +24,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from project_resolver import _find_git_root, find_project_root, get_instance_id, has_valid_db
 
 
+def _proc_create_time(pid: int) -> float | None:
+    """Process start time (epoch seconds) for ``pid``, or None if unavailable.
+
+    Captured alongside pid/ppid so cockpit liveness can guard against PID
+    reuse: after ``claude --resume`` or a crash the OS may recycle the old
+    pid number for an unrelated process, and a bare ``os.kill(pid, 0)`` would
+    read that impostor as "alive" (the source of the liveness flapping). A
+    stored start time lets the liveness check reject a recycled pid that
+    doesn't match. Best-effort — psutil may be absent in a minimal hook env,
+    or the process may already have exited.
+    """
+    try:
+        import psutil
+
+        return psutil.Process(pid).create_time()
+    except Exception:
+        return None
+
+
 def archive_stale_plans() -> list:
     """
     Archive plan files whose goals are complete.
@@ -727,6 +746,10 @@ def _write_instance_projects(project_path: str, claude_session_id: str, empirica
             # pid is this hook process (short-lived, usually dead by query time).
             "pid": os.getpid(),
             "ppid": os.getppid(),
+            # Start time of the Claude parent, so liveness can reject a recycled
+            # ppid number (the flapping guard). Re-stamped every SessionStart
+            # (incl. `--resume`), keeping the captured pid current.
+            "ppid_create_time": _proc_create_time(os.getppid()),
         }
         with open(instance_file, "w") as f:
             json.dump(instance_data, f, indent=2)
@@ -785,6 +808,7 @@ def _write_instance_projects(project_path: str, claude_session_id: str, empirica
             tty_data["timestamp"] = datetime.now().isoformat()
             tty_data["pid"] = os.getpid()
             tty_data["ppid"] = os.getppid()
+            tty_data["ppid_create_time"] = _proc_create_time(os.getppid())
 
             with open(tty_session_file, "w") as f:
                 json.dump(tty_data, f, indent=2)
@@ -1055,6 +1079,46 @@ def _bootstrap_for_existing_session(session_id: str, project_root: Path) -> bool
         return False
 
 
+def _write_practitioner_presence(claude_session_id: str, ai_id: str, empirica_session_id: str) -> None:
+    """Best-effort presence write/refresh, keyed on the durable claude_session_id.
+
+    Stamps ``session_pid`` = ``os.getppid()`` (the Claude Code parent — this hook
+    is spawned by CC). That pid is the daemon's liveness anchor: both
+    ``refresh_live_presence`` and ``list_presence``'s pid-liveness override
+    (``kill -0``) key off it to keep an alive-but-quiet session visible. Called on
+    BOTH new-session init AND resume — on ``claude --resume`` the OS gives the
+    session a fresh CC parent, so re-stamping keeps the pid current (a stale pid
+    would make the resumed session read as dead and vanish from the fleet).
+    Never fails session-init on a presence write.
+    """
+    if not claude_session_id:
+        return
+    try:
+        subprocess.run(
+            [
+                "empirica",
+                "practitioner",
+                "write",
+                "--session",
+                claude_session_id,
+                "--ai-id",
+                ai_id,
+                "--empirica-session",
+                empirica_session_id,
+                "--session-pid",
+                str(os.getppid()),
+                "--output",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
 def _handle_resume_path(claude_session_id: str, project_root: Path, ai_id: str) -> bool:
     """Handle resume path: detect existing session, update anchors, exit if found.
 
@@ -1068,6 +1132,12 @@ def _handle_resume_path(claude_session_id: str, project_root: Path, ai_id: str) 
     session_id = existing["session_id"]
     _write_instance_projects(str(project_root), claude_session_id, session_id)
     bootstrap_ok = _bootstrap_for_existing_session(session_id, project_root)
+
+    # Re-stamp presence with the RESUMED session's fresh CC-parent pid. A resume
+    # runs under a new process, so the pid captured at first launch is now dead;
+    # without this re-stamp the pid-liveness readers (part 1) kill -0 a dead pid
+    # and mark the resumed session gone, vanishing it from the fleet view.
+    _write_practitioner_presence(claude_session_id, ai_id, session_id)
 
     output = {
         "ok": True,
@@ -1405,12 +1475,39 @@ EOF
 """
 
 
+def _auto_sync_plugin():
+    """Best-effort: heal a stale installed CC plugin so hook fixes from a pip
+    upgrade reach this session. Shells out to `empirica plugin-sync` (a no-op
+    when the installed version stamp already matches the running empirica).
+
+    This is what prevents the deploy-staleness deadlock class: without it, a
+    hook fix that lands in the package on upgrade doesn't reach
+    ~/.claude/plugins/local/empirica/ until a manual setup-claude-code --force,
+    so running CC sessions keep loading the stale gate. Never blocks session
+    start — short timeout, all failures swallowed.
+    """
+    try:
+        subprocess.run(
+            ["empirica", "plugin-sync", "--quiet"],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,  # never consume the hook's JSON stdin
+            timeout=8,
+            check=False,
+        )
+    except Exception:
+        pass
+
+
 def main():
     """Main session init logic.
 
     Orchestrates: input parsing, project resolution, existing session detection
     (resume/adoption), new session creation, budget/dashboard init, and output.
     """
+    # Auto-heal a stale installed plugin (deploy-staleness gap) before the
+    # session work — so this session's hooks reflect the running empirica.
+    _auto_sync_plugin()
+
     hook_input = {}
     try:
         hook_input = json.loads(sys.stdin.read())
@@ -1460,6 +1557,10 @@ def main():
 
     if result.get("session_id"):
         _write_instance_projects(str(project_root), claude_session_id, result["session_id"])
+        # Register practitioner presence, keyed on the durable claude_session_id
+        # (survives compaction; the empirica session_id rotates per compact
+        # window). Same call re-stamps the pid on resume — see the helper.
+        _write_practitioner_presence(claude_session_id, ai_id, result["session_id"])
 
     if result.get("error"):
         _emit_session_error(result["error"], ai_id)
