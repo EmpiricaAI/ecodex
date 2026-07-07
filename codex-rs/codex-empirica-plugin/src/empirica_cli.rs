@@ -84,6 +84,17 @@ pub fn run_hook_script(script: &str, input_json: &str) -> Result<HookOutput> {
     // where cwd may be the launch dir), so no cross-project bleed.
     command.env("EMPIRICA_CWD_RELIABLE", "true");
 
+    // Harness identity for harness-aware empirica hooks (ecodex proposal to
+    // empirica, 2026-07-07). A value != "claude-code" tells empirica's hooks
+    // they are NOT under Claude Code: session-init._auto_sync_plugin() no-ops
+    // (codex bundles hooks at PLUGIN_ROOT, not the CC install path, so
+    // `empirica plugin-sync` heals a path codex never reads), and the
+    // practitioner-presence writes drop the "Claude Code parent" labeling for a
+    // harness-generic liveness anchor. Forward-compat: empirica ignores this
+    // until the harness guard lands upstream, so it is a no-op today and
+    // self-activates on the next re-vendor once empirica ships the guard.
+    command.env("EMPIRICA_HARNESS", "codex");
+
     let mut child = command
         .spawn()
         .with_context(|| format!("spawn python3 {}", script_path.display()))?;

@@ -47,19 +47,24 @@ if [[ ! -d "${SOURCE_ROOT}/hooks" ]] || [[ ! -d "${SOURCE_ROOT}/lib" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${SYSTEM_PROMPT_SRC}" ]]; then
-  echo "sync-empirica-assets: system prompt missing at ${SYSTEM_PROMPT_SRC}" >&2
-  exit 1
-fi
+# NOTE: the system prompt is intentionally NOT synced (see section 1) — the
+# ecodex vendored copy is hand-authored, not a copy of ${SYSTEM_PROMPT_SRC}.
+# We therefore do NOT require the Claude source prompt to exist.
 
 echo "→ Source:  ${SOURCE_ROOT}"
 echo "→ Target:  ${PLUGIN_ASSETS}"
 echo ""
 
-# ─── 1. System prompt (compiled into plugin binary) ──────────────────
+# ─── 1. System prompt — INTENTIONALLY NOT SYNCED ─────────────────────
+# The vendored empirica-system-prompt.md is a hand-authored ecodex-NATIVE
+# reminder (de-Claude'd in bdbbfc6625), compiled into the binary via
+# include_str! (src/agents_md.rs). The Claude lean-core source at
+# ${SYSTEM_PROMPT_SRC} is Claude-centric and ~6x longer — blindly copying it
+# would revert the de-Claude work and change the compiled binary's behavior.
+# Edit codex-rs/codex-empirica-plugin/assets/empirica-system-prompt.md
+# directly if the ecodex reminder needs updating.
 mkdir -p "${PLUGIN_ASSETS}"
-cp "${SYSTEM_PROMPT_SRC}" "${PLUGIN_ASSETS}/empirica-system-prompt.md"
-echo "✓ empirica-system-prompt.md ($(wc -l < "${PLUGIN_ASSETS}/empirica-system-prompt.md") lines)"
+echo "• empirica-system-prompt.md — preserved (ecodex-native, NOT synced from Claude source)"
 
 # ─── 2. Hook scripts + shared lib (copied into plugin install at install time) ─
 HOOKS_DEST="${PLUGIN_ASSETS}/hooks_scripts"
