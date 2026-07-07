@@ -247,8 +247,8 @@ pub fn parse_chunk(payload: &str, state: &mut ChunkState) -> Result<Vec<StreamEv
             let delta_type = delta.get("type").and_then(Value::as_str).unwrap_or("");
             match delta_type {
                 "text_delta" => {
-                    if let Some(text) = delta.get("text").and_then(Value::as_str) {
-                        if !text.is_empty() {
+                    if let Some(text) = delta.get("text").and_then(Value::as_str)
+                        && !text.is_empty() {
                             if let Some(b) = state.blocks.get_mut(index as usize) {
                                 b.text.push_str(text);
                             }
@@ -257,7 +257,6 @@ pub fn parse_chunk(payload: &str, state: &mut ChunkState) -> Result<Vec<StreamEv
                                 text: text.to_string(),
                             });
                         }
-                    }
                 }
                 "input_json_delta" => {
                     if let Some(partial) = delta.get("partial_json").and_then(Value::as_str) {
@@ -273,13 +272,12 @@ pub fn parse_chunk(payload: &str, state: &mut ChunkState) -> Result<Vec<StreamEv
                     }
                 }
                 "thinking_delta" => {
-                    if let Some(thinking) = delta.get("thinking").and_then(Value::as_str) {
-                        if !thinking.is_empty() {
+                    if let Some(thinking) = delta.get("thinking").and_then(Value::as_str)
+                        && !thinking.is_empty() {
                             events.push(StreamEvent::ReasoningDelta {
                                 text: thinking.to_string(),
                             });
                         }
-                    }
                 }
                 _ => {} // unknown delta type — ignore
             }
@@ -319,9 +317,9 @@ pub fn parse_chunk(payload: &str, state: &mut ChunkState) -> Result<Vec<StreamEv
                 response_id: state.response_id.clone(),
             });
         }
-        "ping" | "error" => {
+        "ping" | "error"
             // ping = keepalive (ignore). error = surface to caller.
-            if event_type == "error" {
+            if event_type == "error" => {
                 let message = value
                     .get("error")
                     .and_then(|e| e.get("message"))
@@ -330,7 +328,6 @@ pub fn parse_chunk(payload: &str, state: &mut ChunkState) -> Result<Vec<StreamEv
                     .to_string();
                 events.push(StreamEvent::Error { message });
             }
-        }
         _ => {} // unknown event — ignore
     }
 

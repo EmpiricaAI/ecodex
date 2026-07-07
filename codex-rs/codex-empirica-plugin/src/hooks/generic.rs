@@ -39,7 +39,10 @@ pub fn run(event_name: &str, script: &str) -> ExitCode {
 
     match empirica_cli::run_hook_script(script, &input) {
         Ok(output) => {
-            print!("{}", translate_output::translate(event_name, &output.stdout));
+            print!(
+                "{}",
+                translate_output::translate(event_name, &output.stdout)
+            );
             eprint!("{}", output.stderr);
             match output.exit_code {
                 0 => ExitCode::SUCCESS,

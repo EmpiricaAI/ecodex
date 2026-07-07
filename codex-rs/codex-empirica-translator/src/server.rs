@@ -142,9 +142,7 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
         })
         .to_string();
         let mut response = Response::from_string(body).with_status_code(200);
-        if let Ok(content_type) =
-            tiny_http::Header::from_str("Content-Type: application/json")
-        {
+        if let Ok(content_type) = tiny_http::Header::from_str("Content-Type: application/json") {
             response = response.with_header(content_type);
         }
         return request.respond(response).context("respond /healthz");
@@ -207,7 +205,9 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
                 duration_ms: started.elapsed().as_millis() as u64,
             });
             let response = Response::from_string(msg).with_status_code(400);
-            return request.respond(response).context("respond 400 unmatched model");
+            return request
+                .respond(response)
+                .context("respond 400 unmatched model");
         }
     };
 

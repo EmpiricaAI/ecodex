@@ -95,10 +95,10 @@ pub fn encode_request(req: &Request) -> Value {
 
 fn content_to_chat(content: &[Content]) -> Value {
     // If it's a single text item, emit as plain string. Else multi-part array.
-    if content.len() == 1 {
-        if let Content::Text { text } = &content[0] {
-            return json!(text);
-        }
+    if content.len() == 1
+        && let Content::Text { text } = &content[0]
+    {
+        return json!(text);
     }
     let parts: Vec<Value> = content
         .iter()
@@ -141,10 +141,10 @@ pub fn parse_chunk(data: &str, state: &mut ChunkState) -> Result<Vec<StreamEvent
     let chunk: Value = serde_json::from_str(trimmed)
         .with_context(|| format!("malformed chat completion chunk: {trimmed}"))?;
 
-    if state.response_id.is_none() {
-        if let Some(id) = chunk.get("id").and_then(Value::as_str) {
-            state.response_id = Some(id.to_string());
-        }
+    if state.response_id.is_none()
+        && let Some(id) = chunk.get("id").and_then(Value::as_str)
+    {
+        state.response_id = Some(id.to_string());
     }
 
     let mut events = Vec::new();
@@ -159,13 +159,13 @@ pub fn parse_chunk(data: &str, state: &mut ChunkState) -> Result<Vec<StreamEvent
         }
         let delta = choice.get("delta").cloned().unwrap_or(json!({}));
 
-        if let Some(text) = delta.get("content").and_then(Value::as_str) {
-            if !text.is_empty() {
-                state.text.push_str(text);
-                events.push(StreamEvent::TextDelta {
-                    text: text.to_string(),
-                });
-            }
+        if let Some(text) = delta.get("content").and_then(Value::as_str)
+            && !text.is_empty()
+        {
+            state.text.push_str(text);
+            events.push(StreamEvent::TextDelta {
+                text: text.to_string(),
+            });
         }
 
         if let Some(tcs) = delta.get("tool_calls").and_then(Value::as_array) {
@@ -187,15 +187,15 @@ pub fn parse_chunk(data: &str, state: &mut ChunkState) -> Result<Vec<StreamEvent
                     state.tool_calls.push(ToolCall::default_for_index());
                 }
                 let acc = &mut state.tool_calls[index as usize];
-                if let Some(id) = &id {
-                    if !id.is_empty() {
-                        acc.id = id.clone();
-                    }
+                if let Some(id) = &id
+                    && !id.is_empty()
+                {
+                    acc.id = id.clone();
                 }
-                if let Some(name) = &name {
-                    if !name.is_empty() {
-                        acc.name = name.clone();
-                    }
+                if let Some(name) = &name
+                    && !name.is_empty()
+                {
+                    acc.name = name.clone();
                 }
                 if let Some(args) = &args_delta {
                     acc.arguments.push_str(args);

@@ -71,8 +71,8 @@ impl UpstreamRouter {
     pub fn from_toml_file(path: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read upstreams config at {}", path.display()))?;
-        let parsed: UpstreamsConfig = toml::from_str(&raw)
-            .with_context(|| format!("parse TOML at {}", path.display()))?;
+        let parsed: UpstreamsConfig =
+            toml::from_str(&raw).with_context(|| format!("parse TOML at {}", path.display()))?;
 
         if parsed.upstream.is_empty() {
             anyhow::bail!(
@@ -112,10 +112,9 @@ impl RawUpstream {
         let protocol = UpstreamProtocol::parse(&self.protocol)
             .with_context(|| format!("upstream `{}` protocol", self.name))?;
         let api_key = match &self.api_key_env {
-            Some(var) => Some(
-                std::env::var(var)
-                    .with_context(|| format!("upstream `{}` api_key_env `{var}` is unset", self.name))?,
-            ),
+            Some(var) => Some(std::env::var(var).with_context(|| {
+                format!("upstream `{}` api_key_env `{var}` is unset", self.name)
+            })?),
             None => None,
         };
         Ok(Upstream {

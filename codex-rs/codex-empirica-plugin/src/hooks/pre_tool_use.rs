@@ -44,7 +44,10 @@ enum FirewallOutcome {
 /// mid-run (exit ∉ {0,2}) or can't be spawned would, untranslated, let the
 /// tool through. This mapping closes that: only a genuinely absent gate
 /// fails open; a present-but-broken gate fails closed.
-fn firewall_outcome(run: &Result<empirica_cli::HookOutput>, script_exists: bool) -> FirewallOutcome {
+fn firewall_outcome(
+    run: &Result<empirica_cli::HookOutput>,
+    script_exists: bool,
+) -> FirewallOutcome {
     match run {
         Ok(output) => match output.exit_code {
             0 => FirewallOutcome::Forward(0),
@@ -89,8 +92,16 @@ pub fn handle() -> ExitCode {
 
     match firewall_outcome(&run, script_exists) {
         FirewallOutcome::Forward(code) => {
-            // SAFETY: Forward is only produced from an Ok(run).
-            let output = run.expect("Forward outcome implies the gate ran (Ok)");
+            // Forward is only produced from an Ok(run). Defensively fail
+            // closed rather than panic if that invariant is ever violated —
+            // a firewall must never crash-open.
+            let Ok(output) = run else {
+                eprintln!(
+                    "ecodex firewall: Forward outcome without Ok(run) — internal invariant \
+                     violated; failing closed (denying this tool call)."
+                );
+                return ExitCode::from(2);
+            };
             // ecodex T81 Tx-AE: translate CC-shape output into codex-shape
             // (permissionDecision/permissionDecisionReason inside
             // hookSpecificOutput, suppressOutput dropped — codex rejects it).
@@ -161,8 +172,14 @@ mod tests {
         // A python traceback exits 1; codex would treat any non-2 code as
         // allow. The firewall must block instead.
         assert_eq!(firewall_outcome(&ran(1), true), FirewallOutcome::FailClosed);
-        assert_eq!(firewall_outcome(&ran(127), true), FirewallOutcome::FailClosed);
-        assert_eq!(firewall_outcome(&ran(-1), true), FirewallOutcome::FailClosed);
+        assert_eq!(
+            firewall_outcome(&ran(127), true),
+            FirewallOutcome::FailClosed
+        );
+        assert_eq!(
+            firewall_outcome(&ran(-1), true),
+            FirewallOutcome::FailClosed
+        );
     }
 
     #[test]

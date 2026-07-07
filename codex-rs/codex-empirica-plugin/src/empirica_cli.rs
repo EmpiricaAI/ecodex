@@ -191,7 +191,9 @@ mod tests {
         // duration enforces one-at-a-time execution; recover from poisoning
         // so one panicking test doesn't cascade-fail the rest.
         static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let saved = [
             ("EMPIRICA_HOOKS_DIR", std::env::var_os("EMPIRICA_HOOKS_DIR")),
             ("PLUGIN_ROOT", std::env::var_os("PLUGIN_ROOT")),

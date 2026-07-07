@@ -303,10 +303,7 @@ mod tests {
             json!("PreToolUse")
         );
         // Legacy CC "block" maps to codex's "deny" (codex rejects "block").
-        assert_eq!(
-            v["hookSpecificOutput"]["permissionDecision"],
-            json!("deny")
-        );
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], json!("deny"));
         assert_eq!(
             v["hookSpecificOutput"]["permissionDecisionReason"],
             json!("praxic without check")
@@ -351,10 +348,7 @@ mod tests {
             r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"praxic before CHECK"}}"#,
         );
         let v = parse(&out);
-        assert_eq!(
-            v["hookSpecificOutput"]["permissionDecision"],
-            json!("deny")
-        );
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], json!("deny"));
         assert_eq!(
             v["hookSpecificOutput"]["permissionDecisionReason"],
             json!("praxic before CHECK")
@@ -398,7 +392,9 @@ mod tests {
         // Original advisory reason preserved (it guides the model to re-CHECK).
         assert_eq!(
             v["hookSpecificOutput"]["permissionDecisionReason"],
-            json!("Previous CHECK returned INVESTIGATE. Consider running CHECK with proceed before praxic actions.")
+            json!(
+                "Previous CHECK returned INVESTIGATE. Consider running CHECK with proceed before praxic actions."
+            )
         );
     }
 
@@ -410,10 +406,7 @@ mod tests {
             r#"{"continue":true,"decision":"ask","reason":"need confirmation"}"#,
         );
         let v = parse(&out);
-        assert_eq!(
-            v["hookSpecificOutput"]["permissionDecision"],
-            json!("deny")
-        );
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], json!("deny"));
         assert_eq!(
             v["hookSpecificOutput"]["permissionDecisionReason"],
             json!("need confirmation")
@@ -430,10 +423,7 @@ mod tests {
             r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask"}}"#,
         );
         let v = parse(&out);
-        assert_eq!(
-            v["hookSpecificOutput"]["permissionDecision"],
-            json!("deny")
-        );
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], json!("deny"));
         let reason = v["hookSpecificOutput"]["permissionDecisionReason"]
             .as_str()
             .unwrap_or("");
@@ -452,10 +442,7 @@ mod tests {
             r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}"#,
         );
         let v = parse(&out);
-        assert_eq!(
-            v["hookSpecificOutput"]["permissionDecision"],
-            json!("deny")
-        );
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], json!("deny"));
         let reason = v["hookSpecificOutput"]["permissionDecisionReason"]
             .as_str()
             .unwrap_or("");
