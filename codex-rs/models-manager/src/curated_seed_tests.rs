@@ -27,6 +27,40 @@ fn curated_exact_slug_overrides_family_fallback() {
 }
 
 #[test]
+fn picker_curated_slugs_are_seeded_not_fallback() {
+    // Regression guard for the /model "metadata not found" + GLM-5.2 context-loss
+    // bug. These slugs appear in the TUI picker (ecodex_curated_models.rs) but
+    // were absent from the seed → fell through to fallback metadata (32K for the
+    // glm family-prefix). Each MUST resolve via Layer 1 with the correct context
+    // window and used_fallback_model_metadata=false. If a row is deleted or its
+    // context drifts, this fails — don't paper over by editing the assertion,
+    // re-verify the model's real window first.
+    let cases: &[(&str, i64)] = &[
+        // The load-bearing one: glm-5.2's real window is 1M, NOT the 32K the
+        // family-prefix table would hand it. Getting this wrong makes ecodex
+        // auto-compact ~30x too aggressively.
+        ("z-ai/glm-5.2", 1_000_000),
+        ("openrouter/auto", 200_000), // router — conservative, no fixed window
+        ("anthropic/claude-opus-4.7", 1_000_000),
+        ("openai/gpt-5.2-codex", 400_000),
+        ("x-ai/grok-code-fast-1", 256_000),
+        ("google/gemini-2.5-pro", 1_000_000),
+    ];
+    for (slug, expected_ctx) in cases {
+        let info = model_info_from_slug(slug);
+        assert!(
+            !info.used_fallback_model_metadata,
+            "{slug} must be seeded (Layer 1), not fallback — picker shows it, so the seed must carry it. Otherwise /model emits 'metadata not found'."
+        );
+        assert_eq!(
+            info.context_window,
+            Some(*expected_ctx),
+            "{slug} context_window drifted from the seeded value"
+        );
+    }
+}
+
+#[test]
 fn curated_entry_inherits_runtime_template_fields() {
     // base_instructions is NEVER in the lean seed — it must be inherited from
     // build_fallback_model_info (BASE_INSTRUCTIONS const), i.e. non-empty.

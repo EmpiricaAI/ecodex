@@ -144,6 +144,84 @@
       "calibration_tier": "unmeasured",
       "last_verified": "2026-06-22",
       "evidence": "verified: docs.mistral.ai models_overview (codestral-2508 + devstral family) + api.mistral.ai/v1 OpenAI-compat (2026-06-22). EU local-sovereignty pick (self-host for full air-gap; direct EU cloud via [model_providers.mistral])."
+    },
+    {
+      "slug": "z-ai/glm-5.2",
+      "display_name": "GLM-5.2 (Z.ai / Zhipu)",
+      "description": "Large-scale reasoning model, 1M context via IndexShare sparse attention. Long-horizon agent workflows + project-level coding. tools+thinking (high/xhigh). The load-bearing fix: without this seed entry the glm family-prefix hands GLM-5.2 a 32K window → ecodex auto-compacts ~30x too aggressively → state loss.",
+      "context_window": 1000000,
+      "supports_tools": true,
+      "reasoning": { "supported": true },
+      "routes": ["openrouter", "direct"],
+      "jurisdiction": { "country": "CN", "eu_data_residency": false },
+      "calibration_tier": "unmeasured",
+      "last_verified": "2026-07-09",
+      "evidence": "verified: openrouter.ai/z-ai/glm-5.2 (1M context, released 2026-06-16) + docs.z.ai/guides/llm/glm-5.2 + z.ai/blog/glm-5.2 (IndexShare, 1M). Predecessor GLM-5.1 was 200K; 5.2 extended to 1M."
+    },
+    {
+      "slug": "openrouter/auto",
+      "display_name": "OpenRouter — auto (best-of router)",
+      "description": "OpenRouter's auto-router: sends each request to whichever frontier model wins for the prompt. NOT a fixed model — context window is variable per-routed request. Conservative 200K default avoids over-stuffing when it routes to a smaller-window model.",
+      "context_window": 200000,
+      "supports_tools": true,
+      "reasoning": { "supported": true },
+      "routes": ["openrouter"],
+      "jurisdiction": { "country": "US", "eu_data_residency": false },
+      "calibration_tier": "unmeasured",
+      "last_verified": "2026-07-09",
+      "evidence": "verified: openrouter.ai/docs/model-route/variants (auto = best-of router, no fixed context window). context_window set conservatively; re-verify if OpenRouter publishes a floor."
+    },
+    {
+      "slug": "anthropic/claude-opus-4.7",
+      "display_name": "Claude Opus 4.7 (Anthropic via OpenRouter)",
+      "description": "Anthropic frontier Opus tier — strongest reasoning + agent calibration. 1M context. Reach Opus via OpenRouter without separate Anthropic API key/billing.",
+      "context_window": 1000000,
+      "supports_tools": true,
+      "reasoning": { "supported": true },
+      "routes": ["openrouter", "direct"],
+      "jurisdiction": { "country": "US", "eu_data_residency": false },
+      "calibration_tier": "unmeasured",
+      "last_verified": "2026-07-09",
+      "evidence": "verified: openrouter.ai/anthropic/claude-opus-4.7 (1M context). context_window per Anthropic Opus 4.7 spec."
+    },
+    {
+      "slug": "openai/gpt-5.2-codex",
+      "display_name": "GPT-5.2 Codex (OpenAI via OpenRouter)",
+      "description": "OpenAI codex-tuned tier — purpose-built for coding agents, 400K context. Reach GPT-5 family without OpenAI direct provider setup.",
+      "context_window": 400000,
+      "supports_tools": true,
+      "reasoning": { "supported": true },
+      "routes": ["openrouter", "direct"],
+      "jurisdiction": { "country": "US", "eu_data_residency": false },
+      "calibration_tier": "unmeasured",
+      "last_verified": "2026-07-09",
+      "evidence": "verified: openrouter.ai/openai/gpt-5.2-codex (400K context). context_window per picker description (David-authored)."
+    },
+    {
+      "slug": "x-ai/grok-code-fast-1",
+      "display_name": "Grok Code Fast 1 (xAI via OpenRouter)",
+      "description": "xAI fast coding tier — high throughput, 256K context, competitive on tool-use. The cheap-and-fast option when latency dominates quality.",
+      "context_window": 256000,
+      "supports_tools": true,
+      "reasoning": { "supported": true },
+      "routes": ["openrouter"],
+      "jurisdiction": { "country": "US", "eu_data_residency": false },
+      "calibration_tier": "unmeasured",
+      "last_verified": "2026-07-09",
+      "evidence": "verified: openrouter.ai/x-ai/grok-code-fast-1 (256K context). context_window per picker description (David-authored)."
+    },
+    {
+      "slug": "google/gemini-2.5-pro",
+      "display_name": "Gemini 2.5 Pro (Google via OpenRouter)",
+      "description": "Google flagship general model, 1M context. Strong on long-document analysis. Reach Gemini without separate Google Cloud setup.",
+      "context_window": 1000000,
+      "supports_tools": true,
+      "reasoning": { "supported": true },
+      "routes": ["openrouter", "direct"],
+      "jurisdiction": { "country": "US", "eu_data_residency": false },
+      "calibration_tier": "unmeasured",
+      "last_verified": "2026-07-09",
+      "evidence": "verified: openrouter.ai/google/gemini-2.5-pro (1M context). context_window per picker description (David-authored)."
     }
   ]
 }
