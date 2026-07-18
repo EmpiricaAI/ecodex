@@ -90,6 +90,36 @@ pub fn create_tools_json_for_responses_api(
     Ok(tools_json)
 }
 
+/// True when `tool` is a plain `type: "function"` (or `custom`/freeform) tool
+/// that any OpenAI-compatible server accepts. Providers that only implement
+/// `function` tools (many local llama.cpp / vLLM servers) hard-400 the whole
+/// request on OpenAI's built-in tool types, so we drop the others for them.
+///
+/// Kept `namespace` OUT of the accepted set: it is an ecodex aggregation
+/// wrapper the model reaches those tools through, and the underlying MCP
+/// surface (empirica mesh, cortex) stays reachable via the CLI invoked through
+/// the plain `exec_command` function tool.
+fn is_plain_function_tool(tool: &ToolSpec) -> bool {
+    matches!(tool, ToolSpec::Function(_) | ToolSpec::Freeform(_))
+}
+
+/// Drop tool specs whose wire `type` is not `function`/`custom` when the target
+/// provider does not support OpenAI's built-in tool types. Preserves order and
+/// is a no-op when `supports_openai_builtin_tools` is true.
+pub fn filter_tools_for_provider(
+    tools: &[ToolSpec],
+    supports_openai_builtin_tools: bool,
+) -> Vec<ToolSpec> {
+    if supports_openai_builtin_tools {
+        return tools.to_vec();
+    }
+    tools
+        .iter()
+        .filter(|tool| is_plain_function_tool(tool))
+        .cloned()
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResponsesApiWebSearchFilters {
     #[serde(skip_serializing_if = "Option::is_none")]

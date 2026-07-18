@@ -190,6 +190,9 @@ fn model_provider_from_proto(
         websocket_connect_timeout_ms: provider.websocket_connect_timeout_ms,
         requires_openai_auth: provider.requires_openai_auth,
         supports_websockets: provider.supports_websockets,
+        // Remote-config providers are cloud/OpenAI-compatible; keep the full
+        // tool set. Local providers are configured locally, not via this proto.
+        supports_openai_builtin_tools: true,
     };
     Ok((id, info))
 }

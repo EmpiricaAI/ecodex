@@ -134,6 +134,25 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the Responses API WebSocket transport.
     #[serde(default)]
     pub supports_websockets: bool,
+    /// Whether this provider's Responses endpoint accepts OpenAI's non-`function`
+    /// built-in tool types (`web_search`, `namespace`, `tool_search`,
+    /// `image_generation`, `custom`). OpenAI and OpenRouter do; many local
+    /// OpenAI-compatible servers (llama.cpp, vLLM) accept only
+    /// `type: "function"` and hard-400 the entire request on any other tool
+    /// `type` (`'type' of tool must be 'function'`). Defaults to `true` to
+    /// preserve existing behavior; set `false` for local providers so ecodex
+    /// drops the non-`function` tools before serializing the request. Namespaced
+    /// MCP tools are dropped too — the empirica mesh stays reachable via the CLI
+    /// invoked through the plain `exec_command` function tool.
+    #[serde(default = "default_supports_openai_builtin_tools")]
+    pub supports_openai_builtin_tools: bool,
+}
+
+/// Default for [`ModelProviderInfo::supports_openai_builtin_tools`]: `true`, so
+/// existing providers (and any config that omits the field) keep sending the
+/// full OpenAI tool set unchanged.
+fn default_supports_openai_builtin_tools() -> bool {
+    true
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -355,6 +374,7 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: true,
             supports_websockets: true,
+            supports_openai_builtin_tools: true,
         }
     }
 
@@ -385,6 +405,8 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            // Amazon Bedrock fronts OpenAI models — full tool set is supported.
+            supports_openai_builtin_tools: true,
         }
     }
 
@@ -516,6 +538,10 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        // Local OpenAI-compatible servers (Ollama, LM Studio, llama.cpp, vLLM)
+        // accept only `type: "function"` tools and hard-400 the request on any
+        // OpenAI built-in tool type. Default the local/oss provider to drop them.
+        supports_openai_builtin_tools: false,
     }
 }
 

@@ -3,6 +3,7 @@ use super::ResponsesApiWebSearchFilters;
 use super::ResponsesApiWebSearchUserLocation;
 use super::ToolSpec;
 use crate::AdditionalProperties;
+use crate::filter_tools_for_provider;
 use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
@@ -267,4 +268,75 @@ fn tool_search_tool_spec_serializes_expected_wire_shape() {
             },
         })
     );
+}
+
+fn sample_function_tool(name: &str) -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: name.to_string(),
+        description: "fn".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(BTreeMap::new(), None, None),
+        output_schema: None,
+    })
+}
+
+#[test]
+fn filter_tools_for_provider_is_noop_when_builtins_supported() {
+    let tools = vec![
+        sample_function_tool("exec_command"),
+        ToolSpec::WebSearch {
+            external_web_access: None,
+            index_gated_web_access: None,
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        },
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "mcp__cortex".to_string(),
+            description: "cortex".to_string(),
+            tools: Vec::new(),
+        }),
+    ];
+    // supports_openai_builtin_tools = true → unchanged.
+    assert_eq!(filter_tools_for_provider(&tools, true), tools);
+}
+
+#[test]
+fn filter_tools_for_provider_drops_non_function_types_for_local() {
+    let tools = vec![
+        sample_function_tool("exec_command"),
+        ToolSpec::WebSearch {
+            external_web_access: None,
+            index_gated_web_access: None,
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        },
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "mcp__cortex".to_string(),
+            description: "cortex".to_string(),
+            tools: Vec::new(),
+        }),
+        ToolSpec::ImageGeneration {
+            output_format: "png".to_string(),
+        },
+        ToolSpec::Freeform(FreeformTool {
+            name: "apply_patch".to_string(),
+            description: "patch".to_string(),
+            format: FreeformToolFormat {
+                r#type: "grammar".to_string(),
+                syntax: "lark".to_string(),
+                definition: "start: \"x\"".to_string(),
+            },
+        }),
+        sample_function_tool("write_stdin"),
+    ];
+    // supports_openai_builtin_tools = false → only function + freeform survive,
+    // order preserved.
+    let filtered = filter_tools_for_provider(&tools, false);
+    let names: Vec<&str> = filtered.iter().map(ToolSpec::name).collect();
+    assert_eq!(names, vec!["exec_command", "apply_patch", "write_stdin"]);
 }
