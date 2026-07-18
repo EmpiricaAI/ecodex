@@ -75,7 +75,7 @@ I discovered something
 I need to remember across sessions
 ├── Fact with confidence → Qdrant eidetic (automatic via finding-log)
 ├── Session narrative → Qdrant episodic (automatic via POSTFLIGHT)
-├── User preference → Claude auto-memory (MEMORY.md)
+├── User preference → harness memory file (AGENTS.md / memory)
 ├── Project context → .empirica/ files (persists in git)
 └── Cross-project pattern → global_learnings (via project-embed --global)
 ```

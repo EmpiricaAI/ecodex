@@ -686,6 +686,9 @@ EMPIRICA_TIER1_PREFIXES = (
     "empirica compact-analysis",  # Compact event analysis - read-only
     "empirica commit-context",  # Per-commit artifact aggregator - read-only
     "empirica practice-context",  # Roster lookup (Ambassador addressbook) - read-only
+    "empirica mesh status",  # Mesh roster/state display - read-only (prefix excludes mesh on/off/restart)
+    "empirica mesh diagnose",  # Mesh diagnostic - read-only
+    "empirica status",  # Cockpit instance overview - read-only
     "empirica lesson-list",
     "empirica lesson-search",
     "empirica lesson-recommend",
@@ -768,6 +771,7 @@ EMPIRICA_TIER2_PREFIXES = (
     "empirica create-handoff",
     "empirica resume-goal",
     "empirica unknown-resolve",
+    "empirica finding-resolve",  # Resolve/supersede a finding (#307) — analog of unknown-resolve
     "empirica issue-handoff",
     "empirica project-init",
     "empirica project-embed",
@@ -775,16 +779,12 @@ EMPIRICA_TIER2_PREFIXES = (
     "empirica load-git-checkpoint",
     "empirica memory-compact",
     "empirica resume-previous-session",
-    "empirica agent-spawn",
     "empirica investigate",
     "empirica source-add",
     "empirica assumption-log",
     "empirica decision-log",  # Noetic artifacts - assumptions/decisions
     "empirica lesson-create",
     "empirica lesson-load",
-    "empirica lesson-path",
-    "empirica lesson-replay-start",
-    "empirica lesson-replay-end",
     "empirica lesson-embed",  # Lesson lifecycle commands
     "empirica sentinel-orchestrate",
     "empirica sentinel-load-profile",  # Sentinel management
@@ -792,6 +792,9 @@ EMPIRICA_TIER2_PREFIXES = (
     "empirica goals-mark-stale",
     "empirica goals-refresh",  # Goal staleness management
     "empirica goals-prune",  # Bulk close stale/duplicate/planned goals (dry-run default)
+    "empirica goals-archive",  # Archive completed goals (dry-run default; --apply mutates) — goal-lifecycle hygiene
+    "empirica goals-reopen",  # Un-archive / reopen a goal — the inverse of archive/complete
+    "empirica goals-activate",  # planned → in_progress — goal-lifecycle workflow
     "empirica profile-sync",
     "empirica profile-prune",  # Profile management - state-changing
     "empirica release",  # Release pipeline — mechanical, no PREFLIGHT needed
@@ -815,6 +818,22 @@ def is_safe_empirica_command(command: str) -> bool:
     cmd = command.lstrip()
     if not cmd.startswith("empirica "):
         return False
+
+    # Help / version queries are inert regardless of verb — they print usage and
+    # never execute the verb's action. A non-tiered (or future) verb like
+    # `goals-archive --help` should NOT gate just because the verb mutates when
+    # actually run. Tokenized quote-aware via shlex so a literal `--help` INSIDE a
+    # quoted argument (e.g. `goals-archive --apply --reason "see --help"`) is part
+    # of a larger token and does NOT false-match — that would wave a mutating
+    # command through. On malformed quoting, skip this shortcut and fall through.
+    import shlex as _shlex
+
+    try:
+        _toks = _shlex.split(cmd)
+    except ValueError:
+        _toks = []
+    if {"--help", "-h", "--version"} & set(_toks):
+        return True
 
     # Tier 1: Read-only - always safe
     for prefix in EMPIRICA_TIER1_PREFIXES:
@@ -1732,9 +1751,13 @@ def _is_inert_shape(stripped: str) -> bool:
         stripped.startswith("[[ ") and stripped.endswith(" ]]")
     ):
         return True
-    # VAR=value assignment — the value here is the *placeholder* if it
-    # had a substitution (which was already validated), or a literal.
-    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$", stripped))
+    # VAR=value assignment. The RHS is a bare space-free value, OR a quoted
+    # literal that may contain spaces (`PAT="a b c"`, `MSG='hello world'`) — the
+    # latter false-gated before because `\S*` forbade whitespace. Any command
+    # substitution in the RHS was already extracted+validated upstream (chain path
+    # strips subs to a placeholder before this call; single-command path validates
+    # them in is_safe_bash_command), so a quoted RHS here carries only inert data.
+    return bool(re.match(r"""^[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'[^']*'|\S*)$""", stripped))
 
 
 # Benign command wrappers that prefix a real command without altering its
@@ -1853,16 +1876,35 @@ def _is_segment_safe(segment: str) -> bool:
         return is_safe_pipe_chain(stripped)
     if is_safe_empirica_command(stripped):
         return True
-    _rcmd = _remote_prefix(stripped)
-    if _rcmd is not None:
-        return is_safe_remote_command(_rcmd)
-    if _matches_safe_prefix(stripped):
+    # 5. Read-only single-command forms (remote read / sqlite read / python -c /
+    # safe-prefixed tool) — shared with is_safe_bash_command's single-command path
+    # so a segment classifies identically whether it stands alone or sits in a
+    # chain (the parity that stops `echo x && sqlite3 db "SELECT …"` false-gating).
+    if _is_readonly_command_form(stripped):
         return True
 
-    # 5. Inert shell shapes (control-flow keywords, tests, assignments,
+    # 6. Inert shell shapes (control-flow keywords, tests, assignments,
     # exit/return). All embedded commands have already been validated
     # in step 1; this only excuses the structural shell text.
     return _is_inert_shape(stripped)
+
+
+def _is_readonly_command_form(cmd: str) -> bool:
+    """Read-only single-command forms shared by the standalone and chain-segment
+    classifiers, so a command is judged identically regardless of syntactic
+    position: a remote read (ssh/scp/rsync), a sqlite read, a `python3 -c`
+    inspection, or a safe-prefixed tool (`_matches_safe_prefix`, which applies the
+    mutation-flag guard). The pipe-segment path mirrors this via `_matches_safe_prefix`.
+    Callers layer their own extras (empirica tiers, inert shapes) around this core."""
+    rcmd = _remote_prefix(cmd)
+    if rcmd is not None:
+        _maybe_nudge_remote_ops(rcmd)
+        return is_safe_remote_command(rcmd)
+    if cmd.startswith("sqlite3 ") and is_safe_sqlite_command(cmd):
+        return True
+    if cmd.startswith(("python3 -c ", "python -c ")) and is_safe_python_command(cmd):
+        return True
+    return _matches_safe_prefix(cmd)
 
 
 def _is_command_text_safe(cmd: str) -> bool:
@@ -1963,6 +2005,20 @@ def is_safe_bash_command(tool_input: dict) -> bool:
     if chain_result is not None:
         return chain_result
 
+    # SECURITY: command substitutions ($(...) / backticks) execute even INSIDE
+    # double quotes — only single quotes suppress them — so `_has_dangerous_operators`
+    # (which only scans OUTSIDE quotes) misses `echo "$(rm -rf /)"`. The chain path
+    # already extracts+validates subs per segment; the single-command / pipe paths
+    # did not. Validate every substitution's inner command here (quote-agnostic,
+    # so a single-quoted `'$(rm)'` literal is conservatively gated too) — this runs
+    # before the pipe check, so it also covers `echo "$(rm)" | cat`. Heredoc bodies
+    # are excluded (their delimiter governs expansion), matching _is_segment_safe.
+    _sub_body = command.split("<<")[0] if "<<" in command else command
+    for _inner in _extract_command_substitutions(_sub_body):
+        _inner_clean = _inner.strip()
+        if _inner_clean and not _is_command_text_safe(_inner_clean):
+            return False
+
     # Single command. A trailing pipe can smuggle an executor
     # (`empirica goals-list | sh`), so a piped command is NOT safe on the bare
     # empirica-prefix match — it goes through the pipe-chain check below.
@@ -2002,17 +2058,11 @@ def is_safe_bash_command(tool_input: dict) -> bool:
 
     cmd = command.lstrip()
 
-    # Special cases: remote, sqlite, python
-    _rcmd = _remote_prefix(cmd)
-    if _rcmd is not None:
-        _maybe_nudge_remote_ops(_rcmd)
-        return is_safe_remote_command(_rcmd)
-    if cmd.startswith("sqlite3 ") and is_safe_sqlite_command(cmd):
-        return True
-    if cmd.startswith(("python3 -c ", "python -c ")) and is_safe_python_command(cmd):
-        return True
-
-    return _matches_safe_prefix(cmd)
+    # Read-only single-command forms (remote / sqlite / python -c / safe-prefix),
+    # shared with _is_segment_safe so standalone and in-chain classify identically.
+    # Plus inert shell shapes (bare `VAR=value`, `[ test ]`, `exit N`) — parity
+    # with the chain-segment path, which already excuses those.
+    return _is_readonly_command_form(cmd) or _is_inert_shape(cmd)
 
 
 def is_safe_sqlite_command(command: str) -> bool:
@@ -2028,18 +2078,70 @@ def is_safe_sqlite_command(command: str) -> bool:
     - sqlite3 db "INSERT/UPDATE/DELETE/DROP/CREATE/ALTER ..."
     """
     import re
+    import shlex
 
-    # Extract the SQL/command part (everything after db path in quotes)
-    # Pattern: sqlite3 <db_path> "<query>" or sqlite3 <db_path> '<query>'
-    # Also handles: sqlite3 <db_path> ".tables" (dot commands)
-    match = re.search(r'sqlite3\s+\S+\s+["\'](.+?)["\']', command)
-    if not match:
-        # No quoted query found - could be interactive mode, block it
+    # Tokenize the way the shell would, so flags BEFORE the db path
+    # (-header, -separator ' | ', -json, -line, -box, -readonly …) don't fool
+    # us. The old regex assumed the db path was the first arg after `sqlite3`,
+    # so `sqlite3 -header db "SELECT…"` failed to match and got gated as praxic
+    # — a false positive on pure reads. shlex handles quotes; on malformed
+    # input (unbalanced quotes) we fall back to the conservative deny.
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens or tokens[0] != "sqlite3":
         return False
 
-    query = match.group(1).strip().upper()
+    # Walk the flags. Value-taking flags consume the next token too.
+    value_flags = {"-separator", "-nullvalue", "-newline", "-cmd", "-init", "-mode", "-column"}
+    positionals: list[str] = []
+    args = tokens[1:]
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in value_flags:
+            i += 2  # skip the flag AND its value
+            continue
+        if tok.startswith("-"):
+            i += 1  # bare flag (-header/-json/-line/-box/-csv/-readonly/…)
+            continue
+        positionals.append(tok)
+        i += 1
 
-    # Safe meta commands (dot commands)
+    # Shape is `sqlite3 [flags] <db_path> <query> [redirects…]`. The query is
+    # the arg RIGHT AFTER the db path (positionals[1]) — taking the last
+    # positional would be fooled by a trailing `2>/dev/null`. No query means an
+    # interactive REPL (which can write) → block.
+    if len(positionals) < 2:
+        return False
+    query = positionals[1].strip().upper()
+
+    # Write-keyword backstop (defense in depth): any DML/DDL anywhere in the
+    # query — including inside a writable CTE (`WITH … DELETE`) — → praxic.
+    write_kw = (
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "DROP",
+        "CREATE",
+        "ALTER",
+        "REPLACE",
+        "ATTACH",
+        "DETACH",
+        "VACUUM",
+        "REINDEX",
+        "TRUNCATE",
+    )
+    if any(re.search(r"\b" + kw + r"\b", query) for kw in write_kw):
+        return False
+
+    # File-writing / shell-escaping meta commands → praxic.
+    unsafe_meta = (".OUTPUT", ".ONCE", ".IMPORT", ".BACKUP", ".CLONE", ".RESTORE", ".SHELL", ".SYSTEM", ".EXCEL")
+    if any(query.startswith(m) for m in unsafe_meta):
+        return False
+
+    # Safe display-only meta (dot) commands.
     safe_meta = (
         ".SCHEMA",
         ".TABLES",
@@ -2051,13 +2153,14 @@ def is_safe_sqlite_command(command: str) -> bool:
         ".WIDTH",
         ".HELP",
         ".DATABASES",
+        ".FULLSCHEMA",
     )
-    for meta in safe_meta:
-        if query.startswith(meta):
-            return True
+    if any(query.startswith(meta) for meta in safe_meta):
+        return True
 
-    # Safe SQL operations (read-only)
-    safe_sql = ("SELECT", "PRAGMA", "EXPLAIN", "ANALYZE")
+    # Safe read-only SQL (WITH = CTE reads; the write backstop above already
+    # rejected writable CTEs).
+    safe_sql = ("SELECT", "WITH", "PRAGMA", "EXPLAIN", "ANALYZE")
     return any(query.startswith(sql) for sql in safe_sql)
 
 
@@ -2503,6 +2606,46 @@ def _classify_scp(command: str) -> bool:
     return not (":" in dest and not dest.startswith("/"))
 
 
+def _is_safe_pipe_segment(segment_clean: str, *, is_first: bool) -> bool:
+    """Classify one segment of a pipe chain as read-only/noetic.
+
+    A segment is safe if it's a read-only empirica command, a sqlite READ
+    (first segment only — a mid-pipe `sqlite3` receiving stdin is unusual and
+    the read-classifier keys off the query arg), a legacy SAFE_PIPE_TARGET
+    (keeps executor-ish receivers the chain rules already trusted: python3 -c,
+    xargs echo, tee /dev/stderr, base64), OR any standalone read-only tool the
+    Sentinel already trusts as a first-class command (`_matches_safe_prefix`).
+
+    Reusing `_matches_safe_prefix` is the key move: it applies
+    `_has_dangerous_tool_flags`, so a mutating/exec flag on an otherwise-inert
+    tool (`| sort -o out`, `| yq -i`, `| awk 'system()'`, `| fd -x`) is REJECTED
+    even here — closing the mid-pipe mutation hole the old raw prefix/target
+    matching left open — while bringing pipe-receiver trust to parity with the
+    ~95 read-only tools trusted standalone (the `| column`, `| nl`, `| bat`,
+    `| gron`, `| tac` over-gating this fixes).
+    """
+    # A file redirect on any segment is a praxic side effect (`| column > out`),
+    # even though the top-level classifier also guards it before we're called.
+    if _has_dangerous_redirects(segment_clean):
+        return False
+    # A mutating/exec flag on any segment is praxic regardless of position.
+    if _has_dangerous_tool_flags(segment_clean):
+        return False
+    if is_first and segment_clean.startswith("sqlite3 ") and is_safe_sqlite_command(segment_clean):
+        return True
+    if is_safe_empirica_command(segment_clean):
+        return True
+    if _matches_safe_prefix(segment_clean):
+        return True
+    # Legacy explicit pipe-receivers (executor-ish but historically trusted for
+    # JSON parsing / fan-out: python3 -c, xargs echo, tee /dev/stderr, base64).
+    # RECEIVER-ONLY — never granted to the first segment, where they'd be an
+    # arbitrary-exec SOURCE (`python3 -c '…' | cat` must stay praxic).
+    if is_first:
+        return False
+    return any(segment_clean.startswith(target) for target in SAFE_PIPE_TARGETS)
+
+
 def is_safe_pipe_chain(command: str) -> bool:
     """
     Check if a piped command chain is safe (all segments are read-only).
@@ -2510,60 +2653,26 @@ def is_safe_pipe_chain(command: str) -> bool:
     Allows: grep pattern file | head -20 | wc -l
     Allows: echo '...' | empirica preflight-submit -  (empirica CLI)
     Allows: grep "A\\|B\\|C" file | head      (quoted | inside regex)
-    Blocks: grep pattern | xargs rm, cat file | bash
+    Allows: sqlite3 db 'SELECT…' | column -t   (read-only receiver at parity)
+    Blocks: grep pattern | xargs rm, cat file | bash, anything | sort -o out
 
     Splits on `|` *outside* quoted regions — a `|` inside a quoted regex
-    alternation is data, not a shell pipe.
+    alternation is data, not a shell pipe. EVERY segment is validated by the
+    same read-only classifier used for standalone commands, so a read-only tool
+    trusted alone is trusted as a pipe receiver too (parity), and a mutating
+    flag is rejected in any position.
     """
     segments = [s.strip() for s in _split_outside_quotes(command, "|")]
-
     if not segments:
         return False
 
-    # First segment must be a safe command
-    first_cmd = segments[0]
-    first_is_safe = False
-
-    # Check sqlite3 commands first
-    if first_cmd.startswith("sqlite3 ") and is_safe_sqlite_command(first_cmd):
-        first_is_safe = True
-
-    # Check empirica CLI whitelist — Tier 1 commands (loop status, goals-list,
-    # etc.) routinely produce JSON that gets piped to jq. The trailing-segment
-    # rule below already accepts is_safe_empirica_command; matching it for the
-    # first segment removes the asymmetry that blocked cron-body shell idioms.
-    if not first_is_safe and is_safe_empirica_command(first_cmd):
-        first_is_safe = True
-
-    # Check standard safe prefixes
-    if not first_is_safe:
-        for prefix in SAFE_BASH_PREFIXES:
-            if first_cmd.startswith(prefix) or (prefix.endswith(" ") and first_cmd == prefix.rstrip()):
-                first_is_safe = True
-                break
-
-    if not first_is_safe:
-        return False
-
-    # All subsequent segments must start with safe pipe targets OR be safe empirica commands
-    for segment in segments[1:]:
-        segment = segment.strip()
-        # Strip heredoc suffix for matching (e.g., "empirica preflight-submit - << 'EOF'")
-        segment_clean = segment.split("<<")[0].strip() if "<<" in segment else segment
-        segment_safe = False
-
-        # Check empirica CLI whitelist (tiered)
-        if is_safe_empirica_command(segment_clean):
-            segment_safe = True
-
-        # Check standard safe pipe targets
-        if not segment_safe:
-            for target in SAFE_PIPE_TARGETS:
-                if segment.startswith(target):
-                    segment_safe = True
-                    break
-
-        if not segment_safe:
+    for idx, segment in enumerate(segments):
+        # Strip heredoc suffix for matching (e.g., "… << 'EOF'") — the body is
+        # validated separately by the chain/heredoc handling upstream.
+        segment_clean = segment.split("<<")[0].strip() if "<<" in segment else segment.strip()
+        if not segment_clean:
+            return False
+        if not _is_safe_pipe_segment(segment_clean, is_first=(idx == 0)):
             return False
 
     return True

@@ -7,8 +7,8 @@ description: >
   triaging each failure with the user. Triggers when the user reports
   "statusline isn't working", "agent isn't picking up tools", "translator
   silent", "is empirica wired correctly", or asks "diagnose ecodex".
-  Distinct from the upstream Claude-Code `diagnose` skill — this one
-  targets ecodex specifically.
+  Distinct from any generic `diagnose` skill — this one targets the
+  ecodex integration surface specifically.
 ---
 
 # Diagnose ecodex
@@ -127,5 +127,4 @@ When the user reports a new failure mode that isn't currently covered:
 
 - Truth-source code: `empirica/cli/command_handlers/diagnose_ecodex.py`
 - Doc: `empirica/docs/diagnose-ecodex.md`
-- Sister skill (Claude Code): the upstream `diagnose` flow
 - Sister command: `empirica doctor` for desktop / MCP install
