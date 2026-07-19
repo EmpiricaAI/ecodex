@@ -323,7 +323,7 @@ fn line_key_and_version(slug: &str) -> (String, Vec<u64>) {
             // keep it in the key so r1 and v3 stay separate lines.
             let alpha_prefix: String = parts[i]
                 .chars()
-                .take_while(|c| c.is_ascii_alphabetic())
+                .take_while(char::is_ascii_alphabetic)
                 .collect();
             // line key = all parts except the numeric version token, with the
             // alpha-prefix re-appended so siblings group but distinct lines split.

@@ -281,7 +281,7 @@ fn filter_tools_for_provider_is_noop_when_builtins_supported() {
         sample_function_tool("exec_command"),
         ToolSpec::WebSearch {
             external_web_access: None,
-            index_gated_web_access: None,
+            indexed_web_access: None,
             filters: None,
             user_location: None,
             search_context_size: None,
@@ -303,7 +303,7 @@ fn filter_tools_for_provider_drops_non_function_types_for_local() {
         sample_function_tool("exec_command"),
         ToolSpec::WebSearch {
             external_web_access: None,
-            index_gated_web_access: None,
+            indexed_web_access: None,
             filters: None,
             user_location: None,
             search_context_size: None,
@@ -314,8 +314,10 @@ fn filter_tools_for_provider_drops_non_function_types_for_local() {
             description: "cortex".to_string(),
             tools: Vec::new(),
         }),
-        ToolSpec::ImageGeneration {
-            output_format: "png".to_string(),
+        ToolSpec::ToolSearch {
+            execution: "sync".to_string(),
+            description: "search".to_string(),
+            parameters: JsonSchema::object(BTreeMap::new(), None, None),
         },
         ToolSpec::Freeform(FreeformTool {
             name: "apply_patch".to_string(),
