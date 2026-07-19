@@ -6,7 +6,8 @@ use tempfile::tempdir;
 
 const ALTERNATE_MARKETPLACE_RELATIVE_PATH: &str = ".claude-plugin/marketplace.json";
 const ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
-
+const CUR_MARKETPLACE_RELATIVE_PATH: &str = ".cursor-plugin/marketplace.json";
+const CUR_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".cursor-plugin/plugin.json";
 fn write_alternate_marketplace(repo_root: &Path, contents: &str) -> AbsolutePathBuf {
     let marketplace_path = repo_root.join(ALTERNATE_MARKETPLACE_RELATIVE_PATH);
     fs::create_dir_all(marketplace_path.parent().unwrap()).unwrap();
@@ -16,6 +17,19 @@ fn write_alternate_marketplace(repo_root: &Path, contents: &str) -> AbsolutePath
 
 fn write_alternate_plugin_manifest(plugin_root: &Path, contents: &str) {
     let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH);
+    fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+    fs::write(manifest_path, contents).unwrap();
+}
+
+fn write_cur_marketplace(repo_root: &Path, contents: &str) -> AbsolutePathBuf {
+    let marketplace_path = repo_root.join(CUR_MARKETPLACE_RELATIVE_PATH);
+    fs::create_dir_all(marketplace_path.parent().unwrap()).unwrap();
+    fs::write(&marketplace_path, contents).unwrap();
+    AbsolutePathBuf::try_from(marketplace_path).unwrap()
+}
+
+fn write_cur_plugin_manifest(plugin_root: &Path, contents: &str) {
+    let manifest_path = plugin_root.join(CUR_PLUGIN_MANIFEST_RELATIVE_PATH);
     fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
     fs::write(manifest_path, contents).unwrap();
 }
@@ -126,6 +140,37 @@ fn find_marketplace_plugin_supports_alternate_layout_and_string_local_source() {
 }
 
 #[test]
+fn find_marketplace_plugin_supports_cur_layout_and_bare_local_source() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("plugins/sample");
+    let marketplace_path = write_cur_marketplace(
+        &repo_root,
+        r#"{
+  "name": "secondary-marketplace",
+  "plugins": [{"name": "sample", "source": "plugins/sample"}]
+}"#,
+    );
+    write_cur_plugin_manifest(&plugin_root, r#"{"name":"sample"}"#);
+
+    let resolved = find_marketplace_plugin(&marketplace_path, "sample").unwrap();
+
+    assert_eq!(
+        resolved.source,
+        MarketplacePluginSource::Local {
+            path: AbsolutePathBuf::try_from(plugin_root).unwrap(),
+        }
+    );
+    assert_eq!(
+        resolved
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.name.as_str()),
+        Some("sample")
+    );
+}
+
+#[test]
 fn find_marketplace_plugin_supports_git_subdir_sources() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
@@ -176,6 +221,293 @@ fn find_marketplace_plugin_supports_git_subdir_sources() {
             interface: None,
             manifest: None,
             manifest_fallback: minimal_manifest_fallback("remote-plugin"),
+        }
+    );
+}
+
+#[test]
+fn find_marketplace_plugin_omits_interface_asset_paths_for_git_sources() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "remote-plugin",
+      "source": {
+        "source": "git-subdir",
+        "url": "openai/joey_marketplace3",
+        "path": "plugins/toolkit"
+      },
+      "interface": {
+        "displayName": "Remote Plugin",
+        "composerIcon": "./assets/icon.svg",
+        "logo": "./assets/logo.png",
+        "logoDark": "./assets/logo-dark.png",
+        "screenshots": ["./assets/shot.png"]
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let resolved = find_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "remote-plugin",
+    )
+    .unwrap();
+
+    let interface = resolved.interface.expect("fallback interface");
+    assert_eq!(interface.display_name.as_deref(), Some("Remote Plugin"));
+    assert_eq!(interface.composer_icon, None);
+    assert_eq!(interface.logo, None);
+    assert_eq!(interface.logo_dark, None);
+    assert!(interface.screenshots.is_empty());
+}
+
+#[test]
+fn find_marketplace_plugin_supports_npm_sources() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "npm-plugin",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": "^1.2.0",
+        "registry": "https://npm.example.com"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let resolved = find_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "npm-plugin",
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved,
+        ResolvedMarketplacePlugin {
+            plugin_id: PluginId::new("npm-plugin".to_string(), "codex-curated".to_string())
+                .unwrap(),
+            source: MarketplacePluginSource::Npm {
+                package: "@acme/codex-plugin".to_string(),
+                version: Some("^1.2.0".to_string()),
+                registry: Some("https://npm.example.com".to_string()),
+            },
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: None,
+            },
+            interface: None,
+            manifest: None,
+            manifest_fallback: minimal_manifest_fallback("npm-plugin"),
+        }
+    );
+}
+
+#[test]
+fn find_marketplace_plugin_skips_unsafe_npm_sources() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    let marketplace_path = write_alternate_marketplace(
+        &repo_root,
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "remote-version",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": "https://attacker.example/plugin.tgz",
+        "registry": "https://npm.example.com"
+      }
+    },
+    {
+      "name": "local-version",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": ".",
+        "registry": "https://npm.example.com"
+      }
+    },
+    {
+      "name": "plaintext-registry",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": "1.2.0",
+        "registry": "http://npm.example.com"
+      }
+    },
+    {
+      "name": "credential-registry",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": "1.2.0",
+        "registry": "https://user:password@npm.example.com"
+      }
+    },
+    {
+      "name": "dot-package",
+      "source": {
+        "source": "npm",
+        "package": ".codex-plugin",
+        "registry": "https://npm.example.com"
+      }
+    },
+    {
+      "name": "underscore-package",
+      "source": {
+        "source": "npm",
+        "package": "_codex-plugin",
+        "registry": "https://npm.example.com"
+      }
+    }
+  ]
+}"#,
+    );
+
+    assert_eq!(
+        load_marketplace(&marketplace_path).unwrap().plugins,
+        Vec::new()
+    );
+}
+
+#[test]
+fn find_marketplace_plugin_supports_npm_registry_version_selectors() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    let marketplace_path = write_alternate_marketplace(
+        &repo_root,
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "dist-tag",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": "latest"
+      }
+    },
+    {
+      "name": "comparator-range",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": ">=1.2.7 <1.3.0"
+      }
+    },
+    {
+      "name": "x-range",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": "1.2.x"
+      }
+    },
+    {
+      "name": "or-range",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": "1.2.7 || >=1.2.9 <2.0.0"
+      }
+    }
+  ]
+}"#,
+    );
+
+    assert_eq!(
+        load_marketplace(&marketplace_path)
+            .unwrap()
+            .plugins
+            .into_iter()
+            .map(|plugin| plugin.source)
+            .collect::<Vec<_>>(),
+        vec![
+            MarketplacePluginSource::Npm {
+                package: "@acme/codex-plugin".to_string(),
+                version: Some("latest".to_string()),
+                registry: None,
+            },
+            MarketplacePluginSource::Npm {
+                package: "@acme/codex-plugin".to_string(),
+                version: Some(">=1.2.7 <1.3.0".to_string()),
+                registry: None,
+            },
+            MarketplacePluginSource::Npm {
+                package: "@acme/codex-plugin".to_string(),
+                version: Some("1.2.x".to_string()),
+                registry: None,
+            },
+            MarketplacePluginSource::Npm {
+                package: "@acme/codex-plugin".to_string(),
+                version: Some("1.2.7 || >=1.2.9 <2.0.0".to_string()),
+                registry: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn find_marketplace_plugin_supports_npm_sources_without_optional_fields() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "npm-plugin",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let resolved = find_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "npm-plugin",
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved.source,
+        MarketplacePluginSource::Npm {
+            package: "@acme/codex-plugin".to_string(),
+            version: None,
+            registry: None,
         }
     );
 }
@@ -319,6 +651,7 @@ fn find_marketplace_plugin_builds_manifest_fallback_from_entry() {
                 AbsolutePathBuf::try_from(plugin_root.join("assets/icon.svg")).unwrap()
             ),
             logo: Some(AbsolutePathBuf::try_from(plugin_root.join("assets/logo.png")).unwrap()),
+            logo_dark: None,
             screenshots: vec![
                 AbsolutePathBuf::try_from(plugin_root.join("assets/shot.png")).unwrap()
             ],
@@ -634,6 +967,7 @@ fn list_marketplaces_supports_alternate_manifest_layout() {
                     brand_color: None,
                     composer_icon: None,
                     logo: None,
+                    logo_dark: None,
                     screenshots: Vec::new(),
                 }),
                 keywords: Vec::new(),
@@ -720,6 +1054,7 @@ fn list_marketplaces_supports_repo_root_local_plugin_sources() {
                         brand_color: None,
                         composer_icon: None,
                         logo: None,
+                        logo_dark: None,
                         screenshots: Vec::new(),
                     }),
                     keywords: Vec::new(),
@@ -1625,6 +1960,7 @@ fn list_marketplaces_resolves_plugin_interface_paths_to_absolute() {
                 AbsolutePathBuf::try_from(plugin_root.join("assets/icon.png")).unwrap(),
             ),
             logo: Some(AbsolutePathBuf::try_from(plugin_root.join("assets/logo.png")).unwrap()),
+            logo_dark: None,
             screenshots: vec![
                 AbsolutePathBuf::try_from(plugin_root.join("assets/shot1.png")).unwrap(),
             ],
@@ -1739,6 +2075,7 @@ fn list_marketplaces_ignores_plugin_interface_assets_without_dot_slash() {
             brand_color: None,
             composer_icon: None,
             logo: None,
+            logo_dark: None,
             screenshots: Vec::new(),
         })
     );

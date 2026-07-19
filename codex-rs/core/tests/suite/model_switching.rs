@@ -37,8 +37,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use std::path::Path;
-use std::path::PathBuf;
 use wiremock::MockServer;
 
 fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -> Op {
@@ -65,30 +63,6 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
             ..Default::default()
         },
     }
-}
-
-fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
-    fn sanitize(value: &str) -> String {
-        let mut sanitized: String = value
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                    ch
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if sanitized.is_empty() {
-            sanitized = "generated_image".to_string();
-        }
-        sanitized
-    }
-
-    codex_home
-        .join("generated_images")
-        .join(sanitize(session_id))
-        .join(format!("{}.png", sanitize(call_id)))
 }
 
 fn test_model_info(
@@ -123,7 +97,8 @@ fn test_model_info(
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
-        supports_reasoning_summaries: false,
+        include_skills_usage_instructions: false,
+        supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
@@ -153,7 +128,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
     )
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.3-codex");
+    let mut builder = test_codex().with_model("gpt-5.2");
     let test = builder.build(&server).await?;
     let next_model = "gpt-5.4";
 
@@ -218,14 +193,12 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config
+            .features
+            .enable(Feature::Personality)
+            .expect("test config should allow feature update");
+    });
     let test = builder.build(&server).await?;
     let next_model = "exp-codex-personality";
 
@@ -386,6 +359,46 @@ async fn unsupported_service_tier_is_omitted_from_http_turn() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsupported_configured_service_tier_warns_at_session_start() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let model_slug = "test-no-tier-model";
+    let model = test_model_info(
+        model_slug,
+        model_slug,
+        "no service tiers",
+        default_input_modalities(),
+    );
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.service_tier = Some(ServiceTier::Flex.request_value().to_string());
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model],
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    let warning = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::Warning(warning)
+                if warning.message.contains("will be omitted from requests")
+        )
+    })
+    .await;
+    let EventMsg::Warning(warning) = warning else {
+        unreachable!("wait_for_event matched a warning")
+    };
+    assert_eq!(
+        warning.message,
+        "Configured service tier `flex` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests."
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn default_service_tier_override_is_omitted_from_http_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -464,17 +477,21 @@ async fn null_service_tier_override_is_omitted_from_http_turn_with_catalog_defau
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<()> {
+async fn model_change_from_multimodal_to_text_strips_prior_media_content() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
-    let image_model_slug = "test-image-model";
+    let multimodal_model_slug = "test-multimodal-model";
     let text_model_slug = "test-text-only-model";
-    let image_model = test_model_info(
-        image_model_slug,
-        "Test Image Model",
-        "supports image input",
-        default_input_modalities(),
+    let multimodal_model = test_model_info(
+        multimodal_model_slug,
+        "Test Multimodal Model",
+        "supports image and audio input",
+        vec![
+            InputModality::Text,
+            InputModality::Image,
+            InputModality::Audio,
+        ],
     );
     let text_model = test_model_info(
         text_model_slug,
@@ -485,7 +502,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
     mount_models_once(
         &server,
         ModelsResponse {
-            models: vec![image_model, text_model],
+            models: vec![multimodal_model, text_model],
         },
     )
     .await;
@@ -499,14 +516,17 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
-            config.model = Some(image_model_slug.to_string());
+            config.model = Some(multimodal_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
         .await;
-    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
         .to_string();
 
     test.codex
@@ -517,12 +537,15 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
                     image_url: image_url.clone(),
                     detail: None,
                 },
+                UserInput::Audio {
+                    audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+                },
                 UserInput::Text {
                     text: "first turn".to_string(),
                     text_elements: Vec::new(),
                 },
             ],
-            image_model_slug.to_string(),
+            multimodal_model_slug.to_string(),
         ))
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -547,11 +570,19 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
         !first_request.message_input_image_urls("user").is_empty(),
         "first request should include the uploaded image"
     );
+    assert_eq!(
+        first_request.message_input_audio_urls("user"),
+        vec!["data:audio/wav;base64,YXVkaW8=".to_string()]
+    );
 
     let second_request = requests.last().expect("expected second request");
     assert!(
         second_request.message_input_image_urls("user").is_empty(),
         "second request should strip unsupported image content"
+    );
+    assert!(
+        second_request.message_input_audio_urls("user").is_empty(),
+        "second request should strip unsupported audio content"
     );
     let second_user_texts = second_request.message_input_texts("user");
     assert!(
@@ -559,6 +590,12 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             .iter()
             .any(|text| text == "image content omitted because you do not support image input"),
         "second request should include the image-omitted placeholder text"
+    );
+    assert!(
+        second_user_texts
+            .iter()
+            .any(|text| text == "audio content omitted because you do not support audio input"),
+        "second request should include the audio-omitted placeholder text"
     );
     Ok(())
 }
@@ -602,15 +639,12 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
-    let saved_path = image_generation_artifact_path(
-        test.codex_home_path(),
-        &test.session_configured.thread_id.to_string(),
-        "ig_123",
-    );
-    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
         .await;
 
     test.codex
@@ -657,15 +691,6 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
         Some("Zm9v"),
         "expected the original generated image payload to be preserved"
     );
-    assert!(
-        second_request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "second request should include the saved-path note in model-visible history"
-    );
-    let _ = std::fs::remove_file(&saved_path);
-
     Ok(())
 }
 
@@ -716,15 +741,12 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
-    let saved_path = image_generation_artifact_path(
-        test.codex_home_path(),
-        &test.session_configured.thread_id.to_string(),
-        "ig_123",
-    );
-    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
         .await;
 
     test.codex
@@ -781,15 +803,6 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             .all(|text| text != "image content omitted because you do not support image input"),
         "second request should not inject the image-omitted placeholder text"
     );
-    assert!(
-        second_request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "second request should include the saved-path note in model-visible history"
-    );
-    let _ = std::fs::remove_file(&saved_path);
-
     Ok(())
 }
 
@@ -832,15 +845,12 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
-    let saved_path = image_generation_artifact_path(
-        test.codex_home_path(),
-        &test.session_configured.thread_id.to_string(),
-        "ig_rollback",
-    );
-    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            codex_core::test_support::default_http_client_factory(),
+        )
         .await;
 
     test.codex
@@ -887,20 +897,11 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
         "rollback should remove the rolled-back image-generation user turn"
     );
     assert!(
-        !second_request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("Generated images are saved to")),
-        "rollback should remove the generated-image save note with the rolled-back turn"
-    );
-    assert!(
         second_request
             .inputs_of_type("image_generation_call")
             .is_empty(),
         "rollback should remove the generated image call with the rolled-back turn"
     );
-    let _ = std::fs::remove_file(&saved_path);
-
     Ok(())
 }
 
@@ -945,7 +946,8 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
-        supports_reasoning_summaries: false,
+        include_skills_usage_instructions: false,
+        supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
@@ -999,7 +1001,12 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
     let test = builder.build(&server).await?;
 
     let models_manager = test.thread_manager.get_models_manager();
-    let available_models = models_manager.list_models(RefreshStrategy::Online).await;
+    let available_models = models_manager
+        .list_models(
+            RefreshStrategy::Online,
+            codex_core::test_support::default_http_client_factory(),
+        )
+        .await;
     assert!(
         available_models
             .iter()

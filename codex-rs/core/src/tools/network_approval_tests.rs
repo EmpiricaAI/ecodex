@@ -250,7 +250,6 @@ fn allow_once_and_allow_for_session_both_allow_network() {
 fn only_never_policy_disables_network_approval_flow() {
     assert!(!allows_network_approval_flow(AskForApproval::Never));
     assert!(allows_network_approval_flow(AskForApproval::OnRequest));
-    assert!(allows_network_approval_flow(AskForApproval::OnFailure));
     assert!(allows_network_approval_flow(AskForApproval::UnlessTrusted));
 }
 
@@ -284,6 +283,12 @@ fn denied_blocked_request(host: &str) -> BlockedRequest {
         source: Some("decider".to_string()),
         port: Some(80),
     })
+}
+
+fn denied_blocked_request_for_execution(host: &str, execution_id: &str) -> BlockedRequest {
+    let mut blocked = denied_blocked_request(host);
+    blocked.execution_id = Some(execution_id.to_string());
+    blocked
 }
 
 async fn register_call_with_default_shell_trigger(
@@ -382,12 +387,15 @@ async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
 }
 
 #[tokio::test]
-async fn blocked_request_policy_does_not_override_user_denial_outcome() {
+async fn blocked_request_does_not_override_recorded_approval_outcome() {
     let service = NetworkApprovalService::default();
     register_call_with_default_shell_trigger(&service, "registration-1").await;
 
     service
-        .record_call_outcome("registration-1", NetworkApprovalOutcome::DeniedByUser)
+        .record_call_outcome(
+            "registration-1",
+            NetworkApprovalOutcome::DeniedByPolicy("custom approval rejection".to_string()),
+        )
         .await;
     service
         .record_blocked_request(denied_blocked_request("example.com"))
@@ -395,7 +403,32 @@ async fn blocked_request_policy_does_not_override_user_denial_outcome() {
 
     assert_eq!(
         service.take_call_outcome("registration-1").await,
-        Some(NetworkApprovalOutcome::DeniedByUser)
+        Some(NetworkApprovalOutcome::DeniedByPolicy(
+            "custom approval rejection".to_string()
+        ))
+    );
+}
+
+#[tokio::test]
+async fn specific_approval_outcome_replaces_earlier_blocked_request() {
+    let service = NetworkApprovalService::default();
+    register_call_with_default_shell_trigger(&service, "registration-1").await;
+
+    service
+        .record_blocked_request(denied_blocked_request("example.com"))
+        .await;
+    service
+        .record_call_outcome(
+            "registration-1",
+            NetworkApprovalOutcome::DeniedByPolicy("specific approval rejection".to_string()),
+        )
+        .await;
+
+    assert_eq!(
+        service.take_call_outcome("registration-1").await,
+        Some(NetworkApprovalOutcome::DeniedByPolicy(
+            "specific approval rejection".to_string()
+        ))
     );
 }
 
@@ -430,6 +463,7 @@ async fn deferred_finish_reuses_denial_result_after_first_consumer() {
         registration_id: "registration-1".to_string(),
         cancellation_token,
         finish_outcome: Arc::new(OnceCell::new()),
+        _execution_proxy: None,
     };
     service
         .record_call_outcome(
@@ -481,4 +515,28 @@ async fn record_blocked_request_ignores_ambiguous_unattributed_blocked_requests(
 
     assert_eq!(service.take_call_outcome("registration-1").await, None);
     assert_eq!(service.take_call_outcome("registration-2").await, None);
+}
+
+#[tokio::test]
+async fn attributed_blocked_request_targets_one_of_multiple_active_calls() {
+    let service = NetworkApprovalService::default();
+    let first = register_call_with_default_shell_trigger(&service, "registration-1").await;
+    let second = register_call_with_default_shell_trigger(&service, "registration-2").await;
+
+    service
+        .record_blocked_request(denied_blocked_request_for_execution(
+            "example.com",
+            "registration-2",
+        ))
+        .await;
+
+    assert!(!first.is_cancelled());
+    assert!(second.is_cancelled());
+    assert_eq!(service.take_call_outcome("registration-1").await, None);
+    assert_eq!(
+        service.take_call_outcome("registration-2").await,
+        Some(NetworkApprovalOutcome::DeniedByPolicy(
+            "Network access to \"example.com\" was blocked: domain is not on the allowlist for the current sandbox mode.".to_string()
+        ))
+    );
 }

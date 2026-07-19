@@ -14,12 +14,12 @@ use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
+use crate::events::session_end::SessionEndOutcome;
+use crate::events::session_end::SessionEndRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
 use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
-use crate::events::session_end::SessionEndOutcome;
-use crate::events::session_end::SessionEndRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
 use crate::events::task_completed::TaskCompletedOutcome;
@@ -75,17 +75,12 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
             codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::SessionEnd => "session-end",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
             codex_protocol::protocol::HookEventName::Stop => "stop",
-            // ecodex additions — kebab strings for log/trace output until
-            // dispatch sites land. See goal f0004294.
-            codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
-            codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
-            codex_protocol::protocol::HookEventName::SessionEnd => "session-end",
-            codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
-            codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
+            // ecodex additions — kebab strings for log/trace output.
             codex_protocol::protocol::HookEventName::TaskCompleted => "task-completed",
             codex_protocol::protocol::HookEventName::PostToolUseFailure => "post-tool-use-failure",
         }
@@ -271,6 +266,14 @@ impl ClaudeHooksEngine {
         crate::events::stop::preview(&self.handlers, request)
     }
 
+    pub(crate) fn preview_session_end(&self) -> Vec<HookRunSummary> {
+        crate::events::session_end::preview(&self.handlers)
+    }
+
+    pub(crate) async fn run_session_end(&self, request: SessionEndRequest) -> SessionEndOutcome {
+        crate::events::session_end::run(&self.handlers, &self.shell, request).await
+    }
+
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         let session_id = request.session_id;
         let mut outcome = crate::events::stop::run(&self.handlers, &self.shell, request).await;
@@ -308,21 +311,6 @@ impl ClaudeHooksEngine {
         request: PostToolUseFailureRequest,
     ) -> PostToolUseFailureOutcome {
         crate::events::post_tool_use_failure::run(&self.handlers, &self.shell, request).await
-    }
-
-    // ecodex addition (goal f0004294)
-    pub(crate) fn preview_session_end(
-        &self,
-        request: &SessionEndRequest,
-    ) -> Vec<HookRunSummary> {
-        crate::events::session_end::preview(&self.handlers, request)
-    }
-
-    pub(crate) async fn run_session_end(
-        &self,
-        request: SessionEndRequest,
-    ) -> SessionEndOutcome {
-        crate::events::session_end::run(&self.handlers, &self.shell, request).await
     }
 
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {

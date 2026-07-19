@@ -15,12 +15,12 @@ use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
+use crate::events::session_end::SessionEndOutcome;
+use crate::events::session_end::SessionEndRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
 use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
-use crate::events::session_end::SessionEndOutcome;
-use crate::events::session_end::SessionEndRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
 use crate::events::task_completed::TaskCompletedOutcome;
@@ -240,12 +240,9 @@ impl Hooks {
         self.engine.run_post_tool_use_failure(request).await
     }
 
-    // ecodex addition (goal f0004294)
-    pub fn preview_session_end(
-        &self,
-        request: &SessionEndRequest,
-    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
-        self.engine.preview_session_end(request)
+    // SessionEnd converged upstream — adopt its no-arg preview signature.
+    pub fn preview_session_end(&self) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_session_end()
     }
 
     pub async fn run_session_end(&self, request: SessionEndRequest) -> SessionEndOutcome {

@@ -1,3 +1,4 @@
+use crate::command_migration::migrate_plugin_commands;
 use crate::manifest::PluginManifest;
 use crate::manifest::load_plugin_manifest;
 use crate::manifest::parse_plugin_manifest;
@@ -7,16 +8,26 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
 use semver::Version;
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::cmp::Ordering;
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
 pub const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub const PLUGINS_CACHE_DIR: &str = "plugins/cache";
 pub const PLUGINS_DATA_DIR: &str = "plugins/data";
+const REMOTE_PLUGIN_INSTALL_METADATA_FILE: &str = ".codex-remote-plugin-install.json";
+const REMOTE_PLUGIN_INSTALL_METADATA_SCHEMA_VERSION: u8 = 1;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RemotePluginInstallMetadata {
+    schema_version: u8,
+    remote_plugin_id: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallResult {
@@ -27,6 +38,7 @@ pub struct PluginInstallResult {
 
 #[derive(Debug, Clone)]
 pub struct PluginStore {
+    codex_home: AbsolutePathBuf,
     root: AbsolutePathBuf,
     data_root: AbsolutePathBuf,
 }
@@ -49,12 +61,22 @@ impl PluginStore {
         let data_root =
             AbsolutePathBuf::from_absolute_path_checked(codex_home.join(PLUGINS_DATA_DIR))
                 .map_err(|err| PluginStoreError::io("failed to resolve plugin data root", err))?;
+        let codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home)
+            .map_err(|err| PluginStoreError::io("failed to resolve Codex home", err))?;
 
-        Ok(Self { root, data_root })
+        Ok(Self {
+            codex_home,
+            root,
+            data_root,
+        })
     }
 
     pub fn root(&self) -> &AbsolutePathBuf {
         &self.root
+    }
+
+    pub(crate) fn codex_home(&self) -> &AbsolutePathBuf {
+        &self.codex_home
     }
 
     pub fn plugin_base_root(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
@@ -104,6 +126,102 @@ impl PluginStore {
 
     pub fn is_installed(&self, plugin_id: &PluginId) -> bool {
         self.active_plugin_version(plugin_id).is_some()
+    }
+
+    pub fn remote_plugin_id(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<Option<String>, PluginStoreError> {
+        if !self.is_installed(plugin_id) {
+            return Ok(None);
+        }
+        let path = self.remote_plugin_install_metadata_path(plugin_id);
+        let contents = match fs::read_to_string(path.as_path()) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                return Err(PluginStoreError::io(
+                    "failed to read remote plugin install metadata",
+                    err,
+                ));
+            }
+        };
+        let metadata: RemotePluginInstallMetadata =
+            serde_json::from_str(&contents).map_err(|err| {
+                PluginStoreError::Invalid(format!(
+                    "failed to parse remote plugin install metadata: {err}"
+                ))
+            })?;
+        if metadata.schema_version != REMOTE_PLUGIN_INSTALL_METADATA_SCHEMA_VERSION {
+            return Err(PluginStoreError::Invalid(format!(
+                "unsupported remote plugin install metadata schema version: {}",
+                metadata.schema_version
+            )));
+        }
+        let remote_plugin_id = metadata.remote_plugin_id.trim();
+        if remote_plugin_id.is_empty() {
+            return Err(PluginStoreError::Invalid(
+                "invalid remote plugin install metadata: remote plugin id must not be blank"
+                    .to_string(),
+            ));
+        }
+        Ok(Some(remote_plugin_id.to_string()))
+    }
+
+    pub fn write_remote_plugin_id(
+        &self,
+        plugin_id: &PluginId,
+        remote_plugin_id: &str,
+    ) -> Result<(), PluginStoreError> {
+        if !self.is_installed(plugin_id) {
+            return Err(PluginStoreError::Invalid(format!(
+                "cannot write remote identity for uninstalled plugin `{}`",
+                plugin_id.as_key()
+            )));
+        }
+        let remote_plugin_id = remote_plugin_id.trim();
+        if remote_plugin_id.is_empty() {
+            return Err(PluginStoreError::Invalid(
+                "invalid remote plugin install metadata: remote plugin id must not be blank"
+                    .to_string(),
+            ));
+        }
+        let path = self.remote_plugin_install_metadata_path(plugin_id);
+        let parent = path.as_path().parent().ok_or_else(|| {
+            PluginStoreError::Invalid(format!(
+                "remote plugin install metadata path has no parent: {}",
+                path.display()
+            ))
+        })?;
+        let mut contents = serde_json::to_vec_pretty(&RemotePluginInstallMetadata {
+            schema_version: REMOTE_PLUGIN_INSTALL_METADATA_SCHEMA_VERSION,
+            remote_plugin_id: remote_plugin_id.to_string(),
+        })
+        .map_err(|err| {
+            PluginStoreError::Invalid(format!(
+                "failed to serialize remote plugin install metadata: {err}"
+            ))
+        })?;
+        contents.push(b'\n');
+        let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|err| {
+            PluginStoreError::io(
+                "failed to create temporary remote plugin install metadata",
+                err,
+            )
+        })?;
+        temporary.write_all(&contents).map_err(|err| {
+            PluginStoreError::io("failed to write remote plugin install metadata", err)
+        })?;
+        temporary.as_file_mut().flush().map_err(|err| {
+            PluginStoreError::io("failed to flush remote plugin install metadata", err)
+        })?;
+        temporary.persist(path.as_path()).map_err(|err| {
+            PluginStoreError::io(
+                "failed to persist remote plugin install metadata",
+                err.error,
+            )
+        })?;
+        Ok(())
     }
 
     pub fn install(
@@ -197,6 +315,7 @@ impl PluginStore {
             &plugin_version,
             manifest,
         )?;
+        self.remove_remote_plugin_install_metadata(&plugin_id)?;
 
         Ok(PluginInstallResult {
             plugin_id,
@@ -207,6 +326,26 @@ impl PluginStore {
 
     pub fn uninstall(&self, plugin_id: &PluginId) -> Result<(), PluginStoreError> {
         remove_existing_target(self.plugin_base_root(plugin_id).as_path())
+    }
+
+    fn remote_plugin_install_metadata_path(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
+        self.plugin_base_root(plugin_id)
+            .join(REMOTE_PLUGIN_INSTALL_METADATA_FILE)
+    }
+
+    fn remove_remote_plugin_install_metadata(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<(), PluginStoreError> {
+        let path = self.remote_plugin_install_metadata_path(plugin_id);
+        match fs::remove_file(path.as_path()) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(PluginStoreError::io(
+                "failed to remove remote plugin install metadata",
+                err,
+            )),
+        }
     }
 }
 
@@ -227,6 +366,17 @@ impl PluginStoreError {
     fn io(context: &'static str, source: io::Error) -> Self {
         Self::Io { context, source }
     }
+
+    pub(crate) fn sub_error_type(&self) -> Option<String> {
+        match self {
+            Self::Io { context, .. } => Some(error_context_sub_error_type(context)),
+            Self::Invalid(_) => None,
+        }
+    }
+}
+
+pub(crate) fn error_context_sub_error_type(context: &str) -> String {
+    context.to_ascii_lowercase().replace(' ', "_")
 }
 
 pub fn plugin_version_for_source(source_path: &Path) -> Result<String, PluginStoreError> {
@@ -413,6 +563,9 @@ fn replace_plugin_root_atomically(
         })?;
         fs::write(&manifest_path, contents)
             .map_err(|err| PluginStoreError::io("failed to write fallback plugin manifest", err))?;
+    }
+    if let Err(err) = migrate_plugin_commands(&staged_version_root) {
+        tracing::warn!(%err, "failed to migrate plugin commands into skills");
     }
 
     let target_version_root = target_root.join(plugin_version);

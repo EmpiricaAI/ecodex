@@ -16,18 +16,20 @@
 //! 3.  We do **not** walk past the project root.
 
 use crate::config::Config;
-use crate::context::ContextualUserFragment;
 use crate::context::UserInstructions as ContextUserInstructions;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
 use codex_extension_api::UserInstructions;
+use codex_file_system::FindUpErrorPolicy;
+use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use futures::StreamExt;
 use std::io;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -41,6 +43,11 @@ pub const LOCAL_AGENTS_MD_FILENAME: &str = "AGENTS.override.md";
 /// concatenated with the following separator.
 const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 
+// Metadata probes are cheap and the exec-server transport already bounds total in-flight calls.
+// This covers typical project hierarchies in one remote round trip without monopolizing that
+// transport when independent startup discovery runs concurrently.
+const MAX_CONCURRENT_ANCESTOR_PROBES: usize = 256;
+
 /// Loads project AGENTS.md content and combines it with host-provided user
 /// instructions.
 pub(crate) async fn load_project_instructions(
@@ -49,7 +56,7 @@ pub(crate) async fn load_project_instructions(
     environments: &TurnEnvironmentSnapshot,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
-    for turn_environment in &environments.turn_environments {
+    for turn_environment in environments.turn_environments() {
         let filesystem = turn_environment.environment.get_filesystem();
         match read_agents_md(
             config,
@@ -102,13 +109,6 @@ async fn read_agents_md(
     for p in paths {
         if remaining == 0 {
             break;
-        }
-
-        match fs.get_metadata(&p, /*sandbox*/ None).await {
-            Ok(metadata) if !metadata.is_file => continue,
-            Ok(_) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err),
         }
 
         let mut data = match fs.read_file(&p, /*sandbox*/ None).await {
@@ -177,30 +177,15 @@ async fn agents_md_paths(
             default_project_root_markers()
         }
     };
-    let mut project_root = None;
-    if !project_root_markers.is_empty() {
-        for current in dir.ancestors() {
-            for marker in &project_root_markers {
-                let marker_path = current
-                    .join(marker)
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-                let marker_exists = match fs.get_metadata(&marker_path, /*sandbox*/ None).await {
-                    Ok(_) => true,
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-                    Err(err) => return Err(err),
-                };
-                if marker_exists {
-                    project_root = Some(current.clone());
-                    break;
-                }
-            }
-            if project_root.is_some() {
-                break;
-            }
-        }
-    }
-
-    let search_dirs: Vec<PathUri> = if let Some(root) = project_root {
+    let project_root = find_nearest_ancestor_with_markers(
+        fs,
+        &dir,
+        project_root_markers,
+        FindUpErrorPolicy::Propagate,
+        /*sandbox*/ None,
+    )
+    .await?;
+    let search_dirs = if let Some(root) = project_root {
         let mut dirs = Vec::new();
         let mut cursor = dir.clone();
         loop {
@@ -219,25 +204,30 @@ async fn agents_md_paths(
         vec![dir]
     };
 
-    let mut found: Vec<PathUri> = Vec::new();
     let candidate_filenames = candidate_filenames(config);
-    for d in search_dirs {
-        for name in &candidate_filenames {
-            let candidate = d
-                .join(name)
-                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-            match fs.get_metadata(&candidate, /*sandbox*/ None).await {
-                Ok(md) if md.is_file => {
-                    found.push(candidate);
-                    break;
+    let candidate_filenames = &candidate_filenames;
+    let mut results = futures::stream::iter(search_dirs)
+        .map(|directory| async move {
+            for name in candidate_filenames {
+                let candidate = directory
+                    .join(name)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+                match fs.get_metadata(&candidate, /*sandbox*/ None).await {
+                    Ok(metadata) if metadata.is_file => return Ok(Some(candidate)),
+                    Ok(_) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err),
                 }
-                Ok(_) => {}
-                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-                Err(err) => return Err(err),
             }
+            Ok(None)
+        })
+        .buffered(MAX_CONCURRENT_ANCESTOR_PROBES);
+    let mut found = Vec::new();
+    while let Some(result) = results.next().await {
+        if let Some(candidate) = result? {
+            found.push(candidate);
         }
     }
-
     Ok(found)
 }
 
@@ -399,8 +389,7 @@ impl LoadedAgentsMd {
         output
     }
 
-    /// Returns the complete model-visible contextual user fragment.
-    pub(crate) fn render(&self) -> String {
+    pub(crate) fn contextual_user_fragment(&self) -> ContextUserInstructions {
         // One contributing project environment retains the legacy cwd wrapper. With two or more,
         // the body labels every contributing environment itself, so the outer cwd is omitted.
         let directory = if self.has_multiple_project_environments() {
@@ -413,12 +402,6 @@ impl LoadedAgentsMd {
             directory,
             text: self.text(),
         }
-        .render()
-    }
-
-    /// Returns the host-provided user instructions.
-    pub(crate) fn user_instructions(&self) -> Option<&UserInstructions> {
-        self.user_instructions.as_ref()
     }
 
     /// Returns the AGENTS.md files that supplied instruction entries.

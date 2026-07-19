@@ -1,27 +1,16 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-assertion_line: 2267
 expression: popup
 ---
   Select Model and Effort
   Access legacy models by running codex -m <model_name> or in your config.toml
 
-  9. openai/gpt-5.2-codex    OpenAI's codex-tuned tier — purpose-built for
-                             coding agents, 400K context. Reach GPT-5 family
-                             without OpenAI direct provider setup.
-  10. x-ai/grok-code-fast-1  xAI's fast coding tier — high throughput, 256K
-                             context, competitive on tool-use. The cheap-and-
-                             fast option when latency dominates quality.
-  11. google/gemini-2.5-pro  Google's flagship general model, 1M context.
-                             Strong on long-document analysis. Reach Gemini
-                             without separate Google Cloud setup.
-  12. gpt-5.5 (default)      Frontier model for complex coding, research, and
-                             real-world work.
-  13. gpt-5.4                Strong model for everyday coding.
-  14. gpt-5.4-mini           Small, fast, and cost-efficient model for simpler
-                             coding tasks.
-  15. gpt-5.3-codex          Coding-optimized model.
-› 16. gpt-5.2 (current)      Optimized for professional work and long-running
-                             agents.
+  1. gpt-5.6-sol (default)  Latest frontier agentic coding model.
+  2. gpt-5.6-terra          Balanced agentic coding model for everyday work.
+  3. gpt-5.6-luna           Fast and affordable agentic coding model.
+  4. gpt-5.5                Frontier model for complex coding, research, and
+                            real-world work.
+› 5. gpt-5.2 (current)      Optimized for professional work and long-running
+                            agents.
 
   Press enter to confirm or esc to go back

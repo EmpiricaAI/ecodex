@@ -177,14 +177,12 @@ fn save_config_resolved_fields(
     )?);
 
     let agents = lock_config.agents.get_or_insert_with(Default::default);
-    // Multi-agent v2 owns thread fanout through its feature config. Preserve
-    // the legacy agents.max_threads setting only when v2 is disabled.
-    agents.max_threads = if config.features.enabled(Feature::MultiAgentV2) {
-        None
-    } else {
-        config.agent_max_threads
-    };
+    agents.enabled = Some(config.agents_enabled);
+    agents.max_concurrent_threads_per_session = config.agent_max_threads;
     agents.max_depth = Some(config.agent_max_depth);
+    agents.default_subagent_model = config.agent_default_subagent_model.clone();
+    agents.default_subagent_reasoning_effort =
+        config.agent_default_subagent_reasoning_effort.clone();
     agents.job_max_runtime_seconds = config.agent_job_max_runtime_seconds;
     agents.interrupt_message = Some(config.agent_interrupt_message_enabled);
 
@@ -248,6 +246,9 @@ mod tests {
         config.token_budget = Some(crate::config::TokenBudgetConfig {
             reminder_threshold_tokens: Some(16_000),
             reminder_message_template: "Locked reminder: {n_remaining} tokens.".to_string(),
+            guidance_message: Some("Locked context-window guidance.".to_string()),
+            auto_compact_fallback_prompt: Some("Write notes before rollover.".to_string()),
+            auto_compact_fallback_buffer_tokens: Some(8_000),
         });
         config
             .features
@@ -255,7 +256,7 @@ mod tests {
             .expect("token_budget should be enableable in tests");
         config.rollout_budget = Some(crate::config::RolloutBudgetConfig {
             limit_tokens: 100_000,
-            reminder_interval_tokens: 10_000,
+            reminder_at_remaining_tokens: vec![50_000, 25_000, 10_000],
             sampling_token_weight: 1.0,
             prefill_token_weight: 0.25,
         });
@@ -292,7 +293,6 @@ mod tests {
                 .is_none_or(|debug| debug.config_lockfile.is_none())
         );
         assert!(lock.memories.is_some());
-
         let features = lock
             .features
             .as_ref()
@@ -327,7 +327,6 @@ mod tests {
                 min_wait_timeout_ms: Some(_),
                 max_wait_timeout_ms: Some(_),
                 default_wait_timeout_ms: Some(_),
-                usage_hint_enabled: Some(_),
                 hide_spawn_agent_metadata: Some(_),
                 ..
             })
@@ -341,6 +340,9 @@ mod tests {
                 reminder_message_template: Some(
                     "Locked reminder: {n_remaining} tokens.".to_string()
                 ),
+                guidance_message: Some("Locked context-window guidance.".to_string()),
+                auto_compact_fallback_prompt: Some("Write notes before rollover.".to_string()),
+                auto_compact_fallback_buffer_tokens: Some(8_000),
             }))
         );
 
@@ -349,7 +351,7 @@ mod tests {
             Some(FeatureToml::Config(RolloutBudgetConfigToml {
                 enabled: Some(true),
                 limit_tokens: Some(100_000),
-                reminder_interval_tokens: Some(10_000),
+                reminder_at_remaining_tokens: Some(vec![50_000, 25_000, 10_000]),
                 sampling_token_weight: Some(1.0),
                 prefill_token_weight: Some(0.25),
             }))
@@ -358,8 +360,10 @@ mod tests {
             features.current_time_reminder,
             Some(FeatureToml::Config(CurrentTimeReminderConfigToml {
                 enabled: Some(true),
-                reminder_interval_model_requests: Some(1),
+                reminder_interval_seconds: Some(1),
                 clock_source: Some(codex_features::CurrentTimeSource::System),
+                delivery_mode: Some(codex_features::CurrentTimeReminderDeliveryMode::AnyInference),
+                sleep_tool: Some(false),
             }))
         );
 

@@ -1,14 +1,16 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
-use crate::session::Codex;
+use crate::elicitation::ElicitationRegistration;
+use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
+use crate::session::session::Session;
+use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -30,6 +32,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -72,11 +75,12 @@ pub struct ThreadConfigSnapshot {
     pub reasoning_summary: Option<ReasoningSummary>,
     pub personality: Option<Personality>,
     pub collaboration_mode: CollaborationMode,
-    pub multi_agent_mode: Option<MultiAgentMode>,
     pub session_source: SessionSource,
+    pub history_mode: ThreadHistoryMode,
     pub forked_from_thread_id: Option<ThreadId>,
     pub parent_thread_id: Option<ThreadId>,
     pub thread_source: Option<ThreadSource>,
+    pub originator: String,
 }
 
 /// Explains why `CodexThread::try_start_turn_if_idle` rejected an automatic
@@ -140,7 +144,6 @@ impl ThreadConfigSnapshot {
 #[derive(Clone, Default)]
 pub struct CodexThreadSettingsOverrides {
     pub environments: Option<TurnEnvironmentSelections>,
-    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
@@ -157,16 +160,22 @@ pub struct CodexThreadSettingsOverrides {
     pub summary: Option<ReasoningSummary>,
     pub service_tier: Option<Option<String>>,
     pub collaboration_mode: Option<CollaborationMode>,
-    pub multi_agent_mode: Option<MultiAgentMode>,
     pub personality: Option<Personality>,
 }
 
 pub struct CodexThread {
-    pub(crate) codex: Codex,
+    pub(crate) session: Arc<Session>,
+    pub(crate) io: SessionIo,
     pub(crate) session_source: SessionSource,
     session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
-    out_of_band_elicitation_count: Mutex<u64>,
+    out_of_band_elicitations: Mutex<OutOfBandElicitations>,
+}
+
+#[derive(Default)]
+struct OutOfBandElicitations {
+    count: i64,
+    registration: Option<ElicitationRegistration>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -181,41 +190,42 @@ pub struct BackgroundTerminalInfo {
 /// (formerly called a conversation) in Codex.
 impl CodexThread {
     pub(crate) fn new(
-        codex: Codex,
+        session: Arc<Session>,
+        io: SessionIo,
         session_configured: SessionConfiguredEvent,
         rollout_path: Option<PathBuf>,
         session_source: SessionSource,
     ) -> Self {
         Self {
-            codex,
+            session,
+            io,
             session_source,
             session_configured,
             rollout_path,
-            out_of_band_elicitation_count: Mutex::new(0),
+            out_of_band_elicitations: Mutex::new(OutOfBandElicitations::default()),
         }
     }
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
-        self.codex.submit(op).await
+        self.io.submit(op).await
     }
 
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
     pub fn session_telemetry(&self) -> SessionTelemetry {
-        self.codex.session.services.session_telemetry.clone()
+        self.session.services.session_telemetry.clone()
     }
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
-        self.codex.shutdown_and_wait().await
+        self.io.shutdown_and_wait().await
     }
 
     /// Wait until the underlying session loop has terminated.
     pub async fn wait_until_terminated(&self) {
-        self.codex.session_loop_termination.clone().await;
+        self.io.session_loop_termination.clone().await;
     }
 
     pub(crate) async fn emit_thread_resume_lifecycle(&self) {
         for contributor in self
-            .codex
             .session
             .services
             .extensions
@@ -223,28 +233,25 @@ impl CodexThread {
         {
             contributor
                 .on_thread_resume(codex_extension_api::ThreadResumeInput {
-                    session_store: &self.codex.session.services.session_extension_data,
-                    thread_store: &self.codex.session.services.thread_extension_data,
+                    session_store: &self.session.services.session_extension_data,
+                    thread_store: &self.session.services.thread_extension_data,
                 })
                 .await;
         }
     }
 
     pub async fn emit_thread_idle_lifecycle_if_idle(&self) {
-        self.codex
-            .session
-            .emit_thread_idle_lifecycle_if_idle()
-            .await;
+        self.session.emit_thread_idle_lifecycle_if_idle().await;
     }
 
     #[doc(hidden)]
     pub async fn ensure_rollout_materialized(&self) {
-        self.codex.session.ensure_rollout_materialized().await;
+        self.session.ensure_rollout_materialized().await;
     }
 
     #[doc(hidden)]
     pub async fn flush_rollout(&self) -> std::io::Result<()> {
-        self.codex.session.flush_rollout().await
+        self.session.flush_rollout().await
     }
 
     pub async fn submit_with_trace(
@@ -252,7 +259,7 @@ impl CodexThread {
         op: Op,
         trace: Option<W3cTraceContext>,
     ) -> CodexResult<String> {
-        self.codex.submit_with_trace(op, trace).await
+        self.io.submit_with_trace(op, trace).await
     }
 
     pub async fn submit_user_input_with_client_user_message_id(
@@ -261,20 +268,19 @@ impl CodexThread {
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
     ) -> CodexResult<String> {
-        self.codex
-            .session
+        self.session
             .services
             .agent_control
-            .ensure_execution_capacity_for_op(self.session_configured.thread_id, &op)
+            .ensure_execution_capacity_for_op(self.session.thread_id(), &op)
             .await?;
-        self.codex
+        self.io
             .submit_user_input_with_client_user_message_id(op, trace, client_user_message_id)
             .await
     }
 
     /// Persist whether this thread is eligible for future memory generation.
     pub async fn set_thread_memory_mode(&self, mode: ThreadMemoryMode) -> anyhow::Result<()> {
-        self.codex.set_thread_memory_mode(mode).await
+        self.session.set_thread_memory_mode(mode).await
     }
 
     pub async fn steer_input(
@@ -285,7 +291,7 @@ impl CodexThread {
         client_user_message_id: Option<String>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
-        self.codex
+        self.session
             .steer_input(
                 input,
                 additional_context,
@@ -305,7 +311,7 @@ impl CodexThread {
         &self,
         items: Vec<ResponseItem>,
     ) -> Result<(), Vec<ResponseItem>> {
-        self.codex.session.inject_if_running(items).await
+        self.session.inject_if_running(items).await
     }
 
     /// Starts an automatic regular turn with model-visible items only when idle
@@ -325,7 +331,7 @@ impl CodexThread {
         &self,
         items: Vec<ResponseItem>,
     ) -> Result<(), TryStartTurnIfIdleError> {
-        self.codex.session.try_start_turn_if_idle(items).await
+        self.session.try_start_turn_if_idle(items).await
     }
 
     pub async fn set_app_server_client_info(
@@ -334,7 +340,7 @@ impl CodexThread {
         app_server_client_version: Option<String>,
         mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
-        self.codex
+        self.session
             .set_app_server_client_info(
                 app_server_client_name,
                 app_server_client_version,
@@ -344,8 +350,7 @@ impl CodexThread {
     }
 
     pub async fn set_openai_form_elicitation_support(&self, supported: bool) -> anyhow::Result<()> {
-        self.codex
-            .session
+        self.session
             .set_openai_form_elicitation_support(supported)
             .await
     }
@@ -356,7 +361,7 @@ impl CodexThread {
         overrides: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<ThreadConfigSnapshot> {
         let updates = self.thread_settings_update(overrides).await;
-        self.codex.session.preview_settings(&updates).await
+        self.session.preview_settings(&updates).await
     }
 
     async fn thread_settings_update(
@@ -365,7 +370,6 @@ impl CodexThread {
     ) -> SessionSettingsUpdate {
         let CodexThreadSettingsOverrides {
             environments,
-            workspace_roots,
             profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
@@ -379,14 +383,12 @@ impl CodexThread {
             summary,
             service_tier,
             collaboration_mode,
-            multi_agent_mode,
             personality,
         } = overrides;
         let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
             collaboration_mode
         } else {
-            self.codex
-                .session
+            self.session
                 .collaboration_mode()
                 .await
                 .with_updates(model, effort, /*developer_instructions*/ None)
@@ -394,7 +396,6 @@ impl CodexThread {
 
         SessionSettingsUpdate {
             environments,
-            workspace_roots,
             profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
@@ -403,7 +404,6 @@ impl CodexThread {
             active_permission_profile,
             windows_sandbox_level,
             collaboration_mode: Some(collaboration_mode),
-            multi_agent_mode,
             reasoning_summary: summary,
             service_tier,
             personality,
@@ -414,30 +414,27 @@ impl CodexThread {
 
     /// Use sparingly: this is intended to be removed soon.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
-        self.codex.submit_with_id(sub).await
+        self.io.submit_with_id(sub).await
     }
 
     pub async fn next_event(&self) -> CodexResult<Event> {
-        self.codex.next_event().await
+        self.io.next_event().await
     }
 
     pub async fn agent_status(&self) -> AgentStatus {
-        self.codex.agent_status().await
+        self.io.agent_status().await
     }
 
     pub async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
-        self.codex.session.list_background_terminals().await
+        self.session.list_background_terminals().await
     }
 
     pub async fn terminate_background_terminal(&self, process_id: i32) -> bool {
-        self.codex
-            .session
-            .terminate_background_terminal(process_id)
-            .await
+        self.session.terminate_background_terminal(process_id).await
     }
 
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
-        self.codex.agent_status.clone()
+        self.io.agent_status.clone()
     }
 
     /// Returns the complete token usage snapshot currently cached for this thread.
@@ -448,7 +445,7 @@ impl CodexThread {
     /// `total_token_usage` would drop last-turn usage and make the v2
     /// `thread/tokenUsage/updated` payload incomplete.
     pub async fn token_usage_info(&self) -> Option<TokenUsageInfo> {
-        self.codex.session.token_usage_info().await
+        self.session.token_usage_info().await
     }
 
     /// Records a user-role session-prefix message without creating a new user turn boundary.
@@ -458,10 +455,9 @@ impl CodexThread {
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: message }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
-        self.codex
-            .session
+        self.session
             .inject_no_new_turn(vec![item], /*current_turn_context*/ None)
             .await;
     }
@@ -474,18 +470,21 @@ impl CodexThread {
             ));
         }
 
-        let turn_context = self.codex.session.new_default_turn().await;
-        if self.codex.session.reference_context_item().await.is_none() {
-            self.codex
+        let turn_context = self.session.new_default_turn().await;
+        if self.session.reference_context_item().await.is_none() {
+            // This history-only API runs without run_turn, so it owns its initial step.
+            let step_context = self
                 .session
-                .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+                .capture_step_context(Arc::clone(&turn_context))
+                .await;
+            self.session
+                .record_context_updates_and_set_reference_context_item(step_context.as_ref())
                 .await;
         }
-        self.codex
-            .session
+        self.session
             .inject_no_new_turn(items, Some(turn_context.as_ref()))
             .await;
-        self.codex.session.flush_rollout().await?;
+        self.session.flush_rollout().await?;
         Ok(())
     }
 
@@ -498,12 +497,11 @@ impl CodexThread {
     }
 
     pub(crate) fn is_running(&self) -> bool {
-        !self.codex.tx_sub.is_closed()
+        !self.io.tx_sub.is_closed()
     }
 
     pub async fn guardian_trunk_rollout_path(&self) -> Option<PathBuf> {
-        self.codex
-            .session
+        self.session
             .guardian_review_session
             .trunk_rollout_path()
             .await
@@ -514,7 +512,6 @@ impl CodexThread {
         include_archived: bool,
     ) -> ThreadStoreResult<StoredThreadHistory> {
         let live_thread = self
-            .codex
             .session
             .live_thread_for_persistence("load history")
             .map_err(|err| ThreadStoreError::Internal {
@@ -529,7 +526,6 @@ impl CodexThread {
         include_history: bool,
     ) -> ThreadStoreResult<StoredThread> {
         let live_thread = self
-            .codex
             .session
             .live_thread_for_persistence("read thread")
             .map_err(|err| ThreadStoreError::Internal {
@@ -546,7 +542,6 @@ impl CodexThread {
         include_archived: bool,
     ) -> ThreadStoreResult<StoredThread> {
         let live_thread = self
-            .codex
             .session
             .live_thread_for_persistence("update thread metadata")
             .map_err(|err| ThreadStoreError::Internal {
@@ -558,7 +553,6 @@ impl CodexThread {
     /// Appends rollout items through the live thread so derived metadata stays in sync.
     pub async fn append_rollout_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
         let live_thread = self
-            .codex
             .session
             .live_thread_for_persistence("append rollout items")
             .map_err(|err| ThreadStoreError::Internal {
@@ -568,16 +562,16 @@ impl CodexThread {
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
-        self.codex.state_db()
+        self.session.state_db()
     }
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
-        self.codex.thread_config_snapshot().await
+        self.session.thread_config_snapshot().await
     }
 
     /// Returns the files that supplied the thread's loaded model instructions.
     pub async fn instruction_sources(&self) -> Vec<PathUri> {
-        self.codex.instruction_sources().await
+        self.session.instruction_sources().await
     }
 
     /// Returns loaded instruction sources rendered as legacy app-server path strings.
@@ -590,27 +584,46 @@ impl CodexThread {
     }
 
     pub async fn config(&self) -> Arc<crate::config::Config> {
-        self.codex.session.get_config().await
+        self.session.get_config().await
     }
 
     /// Resolves the MCP runtime configuration using this thread's extension data.
     pub async fn runtime_mcp_config(&self, config: &crate::config::Config) -> codex_mcp::McpConfig {
-        self.codex.session.runtime_mcp_config(config).await
+        self.session.runtime_mcp_config(config).await
+    }
+
+    /// Returns the exact MCP config, environment bindings, and manager most recently published.
+    pub async fn current_mcp_runtime(&self) -> Arc<crate::session::McpRuntimeSnapshot> {
+        let turn_context = self.session.new_default_turn().await;
+        self.session
+            .capture_step_context(turn_context)
+            .await
+            .mcp
+            .clone()
     }
 
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
-        self.codex.session.multi_agent_version()
+        self.session.multi_agent_version()
     }
 
     /// Refresh the thread's layer-backed user config state from a caller-supplied
     /// config snapshot. Thread-scoped layers and session-static settings remain
     /// unchanged.
     pub async fn refresh_runtime_config(&self, next_config: crate::config::Config) {
-        self.codex.session.refresh_runtime_config(next_config).await;
+        self.session.refresh_runtime_config(next_config).await;
     }
 
     pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
-        self.codex.thread_environment_selections().await
+        self.session.thread_environment_selections().await
+    }
+
+    /// Passively inspects the selected capability roots whose environments are ready now.
+    pub fn inspect_selected_capability_roots(&self) -> SelectedCapabilityRootsStatus {
+        self.session
+            .services
+            .turn_environments
+            .environment_manager()
+            .inspect_selected_capability_roots(&self.session.services.selected_capability_roots)
     }
 
     pub async fn read_mcp_resource(
@@ -619,8 +632,9 @@ impl CodexThread {
         uri: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let result = self
-            .codex
-            .session
+            .current_mcp_runtime()
+            .await
+            .manager_arc()
             .read_resource(server, ReadResourceRequestParams::new(uri))
             .await?;
 
@@ -634,48 +648,41 @@ impl CodexThread {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
-        self.codex
-            .session
+        self.current_mcp_runtime()
+            .await
+            .manager_arc()
             .call_tool(server, tool, arguments, meta)
             .await
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {
-        self.codex.enabled(feature)
+        self.session.enabled(feature)
     }
 
-    pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<u64> {
-        let mut guard = self.out_of_band_elicitation_count.lock().await;
-        let was_zero = *guard == 0;
-        *guard = guard.checked_add(1).ok_or_else(|| {
+    pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<i64> {
+        let mut elicitations = self.out_of_band_elicitations.lock().await;
+        let incremented = elicitations.count.checked_add(1).ok_or_else(|| {
             CodexErr::Fatal("out-of-band elicitation count overflowed".to_string())
         })?;
-
-        if was_zero {
-            self.codex
-                .session
-                .set_out_of_band_elicitation_pause_state(/*paused*/ true);
+        if elicitations.count == 0 {
+            elicitations.registration = Some(self.session.services.elicitations.register());
         }
-
-        Ok(*guard)
+        elicitations.count = incremented;
+        Ok(incremented)
     }
 
-    pub async fn decrement_out_of_band_elicitation_count(&self) -> CodexResult<u64> {
-        let mut guard = self.out_of_band_elicitation_count.lock().await;
-        if *guard == 0 {
+    pub async fn decrement_out_of_band_elicitation_count(&self) -> CodexResult<i64> {
+        let mut elicitations = self.out_of_band_elicitations.lock().await;
+        if elicitations.count == 0 {
             return Err(CodexErr::InvalidRequest(
                 "out-of-band elicitation count is already zero".to_string(),
             ));
         }
 
-        *guard -= 1;
-        let now_zero = *guard == 0;
-        if now_zero {
-            self.codex
-                .session
-                .set_out_of_band_elicitation_pause_state(/*paused*/ false);
+        elicitations.count -= 1;
+        if elicitations.count == 0 {
+            elicitations.registration = None;
         }
-
-        Ok(*guard)
+        Ok(elicitations.count)
     }
 }

@@ -10,6 +10,8 @@ use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
 use codex_file_watcher::WatchRegistration;
 use codex_protocol::ThreadId;
+#[cfg(test)]
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_rollout::state_db::StateDbHandle;
@@ -38,6 +40,11 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) include_turns: bool,
     pub(crate) initial_turns_page:
         Option<codex_app_server_protocol::ThreadResumeInitialTurnsPageParams>,
+    pub(crate) paginated_turns: Option<Vec<Turn>>,
+    pub(crate) paginated_initial_turns_page: Option<codex_app_server_protocol::TurnsPage>,
+    pub(crate) paginated_initial_turns_page_with_active_slot:
+        Option<codex_app_server_protocol::TurnsPage>,
+    pub(crate) resume_cursor_store: Option<Arc<dyn codex_thread_store::ThreadStore>>,
     pub(crate) redact_resume_payloads: bool,
 }
 
@@ -241,7 +248,7 @@ mod tests {
                     developer_instructions: None,
                 },
             },
-            multi_agent_mode: Default::default(),
+            multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
             personality: None,
         }
     }

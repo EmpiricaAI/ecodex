@@ -1,25 +1,54 @@
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_5_MODEL_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 
 const GPT_5_BEDROCK_CONTEXT_WINDOW: i64 = 272_000;
+const GPT_5_6_SOL_OPENAI_MODEL_ID: &str = "gpt-5.6-sol";
+const GPT_5_6_TERRA_OPENAI_MODEL_ID: &str = "gpt-5.6-terra";
+const GPT_5_6_LUNA_OPENAI_MODEL_ID: &str = "gpt-5.6-luna";
 const GPT_5_5_OPENAI_MODEL_ID: &str = "gpt-5.5";
 const GPT_5_4_OPENAI_MODEL_ID: &str = "gpt-5.4";
 
 pub(crate) fn static_model_catalog() -> ModelsResponse {
     with_default_only_service_tier(ModelsResponse {
         models: vec![
+            gpt_5_6_bedrock_model(
+                GPT_5_6_SOL_OPENAI_MODEL_ID,
+                AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID,
+                "GPT-5.6 Sol",
+                /*priority*/ 0,
+            ),
+            gpt_5_6_bedrock_model(
+                GPT_5_6_TERRA_OPENAI_MODEL_ID,
+                AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID,
+                "GPT-5.6 Terra",
+                /*priority*/ 1,
+            ),
+            gpt_5_6_bedrock_model(
+                GPT_5_6_LUNA_OPENAI_MODEL_ID,
+                AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
+                "GPT-5.6 Luna",
+                /*priority*/ 2,
+            ),
             gpt_5_bedrock_model(
                 GPT_5_5_OPENAI_MODEL_ID,
                 AMAZON_BEDROCK_GPT_5_5_MODEL_ID,
-                /*priority*/ 0,
+                "GPT-5.5",
+                /*priority*/ 3,
             ),
             gpt_5_bedrock_model(
                 GPT_5_4_OPENAI_MODEL_ID,
                 AMAZON_BEDROCK_GPT_5_4_MODEL_ID,
-                /*priority*/ 1,
+                "GPT-5.4",
+                /*priority*/ 4,
             ),
         ],
     })
@@ -35,12 +64,45 @@ pub(crate) fn with_default_only_service_tier(mut catalog: ModelsResponse) -> Mod
     catalog
 }
 
-fn gpt_5_bedrock_model(openai_slug: &str, bedrock_slug: &str, priority: i32) -> ModelInfo {
+fn gpt_5_bedrock_model(
+    openai_slug: &str,
+    bedrock_slug: &str,
+    display_name: &str,
+    priority: i32,
+) -> ModelInfo {
     let mut model = bundled_openai_model(openai_slug);
     model.slug = bedrock_slug.to_string();
+    model.display_name = display_name.to_string();
     model.priority = priority;
     model.context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
     model.max_context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
+    model.visibility = ModelVisibility::List;
+    model.availability_nux = None;
+    model.upgrade = None;
+    model
+}
+
+fn gpt_5_6_bedrock_model(
+    openai_slug: &str,
+    bedrock_slug: &str,
+    display_name: &str,
+    priority: i32,
+) -> ModelInfo {
+    let openai_model = bundled_openai_model(openai_slug);
+    let mut model = gpt_5_bedrock_model(
+        GPT_5_5_OPENAI_MODEL_ID,
+        bedrock_slug,
+        display_name,
+        priority,
+    );
+    model.description = openai_model.description;
+    model.default_reasoning_level = openai_model.default_reasoning_level;
+    model
+        .supported_reasoning_levels
+        .push(ReasoningEffortPreset {
+            effort: ReasoningEffort::Max,
+            description: "Maximum reasoning depth for the hardest problems".to_string(),
+        });
     model
 }
 
@@ -61,42 +123,106 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_uses_mantle_model_ids_as_slugs() {
+    fn catalog_uses_mantle_model_ids_in_priority_order() {
         let catalog = static_model_catalog();
 
-        assert_eq!(catalog.models.len(), 2);
-        assert_eq!(catalog.models[0].slug, AMAZON_BEDROCK_GPT_5_5_MODEL_ID);
-        assert_eq!(catalog.models[1].slug, AMAZON_BEDROCK_GPT_5_4_MODEL_ID);
+        assert_eq!(
+            catalog
+                .models
+                .iter()
+                .map(|model| model.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID,
+                AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID,
+                AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
+                AMAZON_BEDROCK_GPT_5_5_MODEL_ID,
+                AMAZON_BEDROCK_GPT_5_4_MODEL_ID,
+            ]
+        );
     }
 
     #[test]
     fn gpt_5_bedrock_models_use_bedrock_context_window() {
+        let catalog = static_model_catalog();
+
+        for model in catalog.models {
+            assert_eq!(
+                (model.context_window, model.max_context_window),
+                (
+                    Some(GPT_5_BEDROCK_CONTEXT_WINDOW),
+                    Some(GPT_5_BEDROCK_CONTEXT_WINDOW)
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn gpt_5_bedrock_models_do_not_include_availability_nux_or_upgrade() {
+        let catalog = static_model_catalog();
+
+        for model in catalog.models {
+            assert_eq!((model.availability_nux, model.upgrade), (None, None));
+        }
+    }
+
+    #[test]
+    fn gpt_5_bedrock_models_are_visible() {
+        let catalog = static_model_catalog();
+
+        for model in catalog.models {
+            assert_eq!(model.visibility, ModelVisibility::List);
+        }
+    }
+
+    #[test]
+    fn gpt_5_6_bedrock_models_use_variant_metadata_and_max_reasoning_effort() {
         let catalog = static_model_catalog();
         let gpt_5_5 = catalog
             .models
             .iter()
             .find(|model| model.slug == AMAZON_BEDROCK_GPT_5_5_MODEL_ID)
             .expect("Bedrock catalog should include GPT-5.5");
-        let gpt_5_4 = catalog
-            .models
-            .iter()
-            .find(|model| model.slug == AMAZON_BEDROCK_GPT_5_4_MODEL_ID)
-            .expect("Bedrock catalog should include GPT-5.4");
 
-        assert_eq!(
-            (gpt_5_5.context_window, gpt_5_5.max_context_window),
+        for (openai_slug, slug, display_name, priority) in [
             (
-                Some(GPT_5_BEDROCK_CONTEXT_WINDOW),
-                Some(GPT_5_BEDROCK_CONTEXT_WINDOW)
-            )
-        );
-        assert_eq!(
-            (gpt_5_4.context_window, gpt_5_4.max_context_window),
+                GPT_5_6_SOL_OPENAI_MODEL_ID,
+                AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID,
+                "GPT-5.6 Sol",
+                0,
+            ),
             (
-                Some(GPT_5_BEDROCK_CONTEXT_WINDOW),
-                Some(GPT_5_BEDROCK_CONTEXT_WINDOW)
-            )
-        );
+                GPT_5_6_TERRA_OPENAI_MODEL_ID,
+                AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID,
+                "GPT-5.6 Terra",
+                1,
+            ),
+            (
+                GPT_5_6_LUNA_OPENAI_MODEL_ID,
+                AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
+                "GPT-5.6 Luna",
+                2,
+            ),
+        ] {
+            let openai_model = bundled_openai_model(openai_slug);
+            let mut expected = gpt_5_5.clone();
+            expected.slug = slug.to_string();
+            expected.display_name = display_name.to_string();
+            expected.description = openai_model.description;
+            expected.default_reasoning_level = openai_model.default_reasoning_level;
+            expected.priority = priority;
+            expected
+                .supported_reasoning_levels
+                .push(ReasoningEffortPreset {
+                    effort: ReasoningEffort::Max,
+                    description: "Maximum reasoning depth for the hardest problems".to_string(),
+                });
+
+            assert_eq!(
+                catalog.models.iter().find(|model| model.slug == slug),
+                Some(&expected)
+            );
+        }
     }
 
     #[test]

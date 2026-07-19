@@ -13,19 +13,146 @@ use std::path::PathBuf;
 #[test]
 fn renders_sandbox_mode_text() {
     assert_eq!(
-        sandbox_text(SandboxMode::WorkspaceWrite, NetworkAccess::Restricted),
+        sandbox_text(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Restricted,
+            /*permission_messages*/ None,
+        ),
         "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
     );
 
     assert_eq!(
-        sandbox_text(SandboxMode::ReadOnly, NetworkAccess::Restricted),
+        sandbox_text(
+            SandboxMode::ReadOnly,
+            NetworkAccess::Restricted,
+            /*permission_messages*/ None,
+        ),
         "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
     );
 
     assert_eq!(
-        sandbox_text(SandboxMode::DangerFullAccess, NetworkAccess::Enabled),
+        sandbox_text(
+            SandboxMode::DangerFullAccess,
+            NetworkAccess::Enabled,
+            /*permission_messages*/ None,
+        ),
         "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled."
     );
+}
+
+#[test]
+fn catalog_permission_messages_select_sandbox_mode_and_render_network_access() {
+    let messages = PermissionMessages {
+        danger_full_access: Some("catalog danger".to_string()),
+        workspace_write: Some("catalog workspace {{ network_access }}".to_string()),
+        read_only: Some("catalog read only {{ network_access }}".to_string()),
+    };
+
+    for (mode, expected) in [
+        (SandboxMode::DangerFullAccess, "catalog danger"),
+        (SandboxMode::WorkspaceWrite, "catalog workspace enabled"),
+        (SandboxMode::ReadOnly, "catalog read only enabled"),
+    ] {
+        assert_eq!(
+            sandbox_text(mode, NetworkAccess::Enabled, Some(&messages)),
+            expected
+        );
+    }
+}
+
+#[test]
+fn missing_catalog_permission_message_uses_legacy_sandbox_text() {
+    let legacy = sandbox_text(
+        SandboxMode::WorkspaceWrite,
+        NetworkAccess::Restricted,
+        /*permission_messages*/ None,
+    );
+    let messages = PermissionMessages {
+        danger_full_access: None,
+        workspace_write: None,
+        read_only: Some("unused".to_string()),
+    };
+
+    assert_eq!(
+        sandbox_text(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Restricted,
+            Some(&messages),
+        ),
+        legacy
+    );
+}
+
+#[test]
+fn invalid_catalog_permission_message_is_preserved_verbatim() {
+    for workspace_write in ["{{ unterminated", "{{ unsupported }}"] {
+        let messages = PermissionMessages {
+            danger_full_access: None,
+            workspace_write: Some(workspace_write.to_string()),
+            read_only: None,
+        };
+        assert_eq!(
+            sandbox_text(
+                SandboxMode::WorkspaceWrite,
+                NetworkAccess::Restricted,
+                Some(&messages),
+            ),
+            workspace_write
+        );
+    }
+}
+
+#[test]
+fn catalog_permission_message_renders_network_access_and_preserves_other_placeholders() {
+    let source = "network={{ network_access }} compact={{network_access}} other={{ other }}";
+    let messages = PermissionMessages {
+        danger_full_access: None,
+        workspace_write: Some(source.to_string()),
+        read_only: None,
+    };
+
+    assert_eq!(
+        sandbox_text(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Restricted,
+            Some(&messages),
+        ),
+        "network=restricted compact={{network_access}} other={{ other }}"
+    );
+}
+
+#[test]
+fn empty_catalog_permission_message_preserves_non_sandbox_sections() {
+    let messages = PermissionMessages {
+        danger_full_access: None,
+        workspace_write: Some(String::new()),
+        read_only: None,
+    };
+    let writable_root =
+        AbsolutePathBuf::from_absolute_path(test_path_buf("/tmp/repo")).expect("absolute path");
+    let instructions = PermissionsInstructions::from_permissions_with_network(
+        SandboxMode::WorkspaceWrite,
+        NetworkAccess::Restricted,
+        PermissionsPromptConfig {
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            approval_messages: None,
+            permission_messages: Some(&messages),
+            exec_policy: &Policy::empty(),
+            exec_permission_approvals_enabled: false,
+            request_permissions_tool_enabled: false,
+        },
+        Some(vec![WritableRoot {
+            root: writable_root.clone(),
+            read_only_subpaths: Vec::new(),
+            protected_metadata_names: Vec::new(),
+        }]),
+    );
+    let text = instructions.body();
+
+    assert!(!text.contains("Filesystem sandboxing defines"));
+    assert!(text.contains("Approval policy is currently never"));
+    assert!(text.contains(writable_root.to_string_lossy().as_ref()));
 }
 
 #[test]
@@ -36,6 +163,8 @@ fn builds_permissions_with_network_access_override() {
         PermissionsPromptConfig {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
+            approval_messages: None,
+            permission_messages: None,
             exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: false,
             request_permissions_tool_enabled: false,
@@ -72,7 +201,11 @@ fn builds_permissions_from_profile() {
     let instructions = PermissionsInstructions::from_permission_profile(
         &permission_profile,
         AskForApproval::UnlessTrusted,
-        ApprovalsReviewer::User,
+        ApprovalPromptContext::new(
+            ApprovalsReviewer::User,
+            /*messages*/ None,
+            /*permission_messages*/ None,
+        ),
         &Policy::empty(),
         &cwd,
         /*exec_permission_approvals_enabled*/ false,
@@ -117,7 +250,11 @@ fn builds_permissions_from_profile_with_denied_reads() {
     let instructions = PermissionsInstructions::from_permission_profile(
         &permission_profile,
         AskForApproval::OnRequest,
-        ApprovalsReviewer::AutoReview,
+        ApprovalPromptContext::new(
+            ApprovalsReviewer::AutoReview,
+            /*messages*/ None,
+            /*permission_messages*/ None,
+        ),
         &Policy::empty(),
         &cwd,
         /*exec_permission_approvals_enabled*/ false,
@@ -142,6 +279,8 @@ fn includes_request_rule_instructions_for_on_request() {
         PermissionsPromptConfig {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
+            approval_messages: None,
+            permission_messages: None,
             exec_policy: &exec_policy,
             exec_permission_approvals_enabled: false,
             request_permissions_tool_enabled: false,
@@ -163,6 +302,8 @@ fn includes_request_permissions_tool_instructions_for_unless_trusted_when_enable
         PermissionsPromptConfig {
             approval_policy: AskForApproval::UnlessTrusted,
             approvals_reviewer: ApprovalsReviewer::User,
+            approval_messages: None,
+            permission_messages: None,
             exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: false,
             request_permissions_tool_enabled: true,
@@ -176,26 +317,6 @@ fn includes_request_permissions_tool_instructions_for_unless_trusted_when_enable
 }
 
 #[test]
-fn includes_request_permissions_tool_instructions_for_on_failure_when_enabled() {
-    let instructions = PermissionsInstructions::from_permissions_with_network(
-        SandboxMode::WorkspaceWrite,
-        NetworkAccess::Enabled,
-        PermissionsPromptConfig {
-            approval_policy: AskForApproval::OnFailure,
-            approvals_reviewer: ApprovalsReviewer::User,
-            exec_policy: &Policy::empty(),
-            exec_permission_approvals_enabled: false,
-            request_permissions_tool_enabled: true,
-        },
-        /*writable_roots*/ None,
-    );
-
-    let text = instructions.body();
-    assert!(text.contains("`approval_policy` is `on-failure`"));
-    assert!(text.contains("# request_permissions Tool"));
-}
-
-#[test]
 fn includes_request_permission_rule_instructions_for_on_request_when_enabled() {
     let instructions = PermissionsInstructions::from_permissions_with_network(
         SandboxMode::WorkspaceWrite,
@@ -203,6 +324,8 @@ fn includes_request_permission_rule_instructions_for_on_request_when_enabled() {
         PermissionsPromptConfig {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
+            approval_messages: None,
+            permission_messages: None,
             exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: true,
             request_permissions_tool_enabled: false,
@@ -223,6 +346,8 @@ fn includes_request_permissions_tool_instructions_for_on_request_when_tool_is_en
         PermissionsPromptConfig {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
+            approval_messages: None,
+            permission_messages: None,
             exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: false,
             request_permissions_tool_enabled: true,
@@ -243,6 +368,8 @@ fn on_request_includes_tool_guidance_alongside_inline_permission_guidance_when_b
         PermissionsPromptConfig {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
+            approval_messages: None,
+            permission_messages: None,
             exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: true,
             request_permissions_tool_enabled: true,
@@ -256,99 +383,116 @@ fn on_request_includes_tool_guidance_alongside_inline_permission_guidance_when_b
 }
 
 #[test]
-fn auto_review_approvals_append_auto_review_specific_guidance() {
+fn catalog_approval_messages_select_reviewer_variant() {
+    let messages = ApprovalMessages {
+        on_request: Some("user catalog approvals".to_string()),
+        on_request_auto_review: Some("auto-review catalog approvals".to_string()),
+    };
+
+    for (reviewer, expected) in [
+        (ApprovalsReviewer::User, "user catalog approvals"),
+        (
+            ApprovalsReviewer::AutoReview,
+            "auto-review catalog approvals",
+        ),
+    ] {
+        assert_eq!(
+            approval_text(
+                AskForApproval::OnRequest,
+                reviewer,
+                Some(&messages),
+                &Policy::empty(),
+                /*exec_permission_approvals_enabled*/ true,
+                /*request_permissions_tool_enabled*/ true,
+            ),
+            expected
+        );
+    }
+}
+
+#[test]
+fn empty_catalog_approval_message_suppresses_legacy_approval_section() {
+    let messages = ApprovalMessages {
+        on_request: Some(String::new()),
+        on_request_auto_review: None,
+    };
     let mut exec_policy = Policy::empty();
     exec_policy
         .add_prefix_rule(&["git".to_string(), "pull".to_string()], Decision::Allow)
         .expect("add rule");
-    let text = approval_text(
-        AskForApproval::OnRequest,
-        ApprovalsReviewer::AutoReview,
-        &exec_policy,
-        /*exec_permission_approvals_enabled*/ false,
-        /*request_permissions_tool_enabled*/ false,
-    );
+    let writable_root =
+        AbsolutePathBuf::from_absolute_path(test_path_buf("/tmp/repo")).expect("absolute path");
 
-    assert!(text.contains("`approvals_reviewer` is `auto_review`"));
-    assert!(text.contains("materially safer alternative"));
-    assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
-    assert!(text.contains(
-        "When the sandbox is likely to block a command needed for the task, request escalation up front"
-    ));
-    assert!(text.contains(
-        "When unsure, prefer requesting escalation unnecessarily over failing to request it when needed"
-    ));
-    assert!(
-        text.contains(
-            "Request escalation for commands that need write access outside writable roots"
-        )
+    let instructions = PermissionsInstructions::from_permissions_with_network(
+        SandboxMode::WorkspaceWrite,
+        NetworkAccess::Restricted,
+        PermissionsPromptConfig {
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::User,
+            approval_messages: Some(&messages),
+            permission_messages: None,
+            exec_policy: &exec_policy,
+            exec_permission_approvals_enabled: true,
+            request_permissions_tool_enabled: true,
+        },
+        Some(vec![WritableRoot {
+            root: writable_root.clone(),
+            read_only_subpaths: Vec::new(),
+            protected_metadata_names: Vec::new(),
+        }]),
     );
-    assert!(text.contains(
-        "Request escalation for git operations that may write lock files, such as updating the index or refs"
-    ));
-    assert!(!text.contains("Request escalation for GUI commands"));
-    assert!(!text.contains("Use escalation when it is the direct or most reliable way"));
-    assert!(!text.contains("Do not spend extra turns running likely-to-fail sandbox probes first"));
-    assert!(text.contains("Do not include a `prefix_rule` parameter."));
-    assert!(text.contains(
-        "Request escalation for commands that may need network access, including HTTP calls, package registries, internal services, data-service APIs, remote queries, data fetches, or live probes"
-    ));
-    assert!(text.contains(
-        "Request escalation for commands that may need remote authentication, cluster, cloud, or database access"
-    ));
-    assert!(text.contains(
-        "Request escalation for commands that may need process, cache, or other environment access outside the sandbox"
-    ));
-    assert!(
-        text.contains(
-            "including DNS, connection, authentication, retry, or service endpoint errors"
-        )
-    );
-    assert!(text.contains(
-        "Request escalation before potentially destructive actions, such as `rm` or `git reset`"
-    ));
-    assert!(text.contains(
-        "If a command may be hanging on sandbox-blocked access, stop after a short timeout and rerun with `require_escalated`"
-    ));
-    assert!(!text.contains("Be judicious with escalating"));
-    assert!(text.contains("Approved command prefixes"));
-    assert!(text.contains(r#"["git", "pull"]"#));
-    assert!(!text.contains("prefix_rule guidance"));
+    let text = instructions.body();
+
+    assert!(text.contains("`sandbox_mode` is `workspace-write`"));
+    assert!(text.contains("Network access is restricted."));
+    assert!(text.contains(writable_root.to_string_lossy().as_ref()));
+    assert!(!text.contains("How to request escalation"));
+    assert!(!text.contains("request_permissions Tool"));
+    assert!(!text.contains("Approved command prefixes"));
 }
 
 #[test]
-fn normal_on_request_keeps_user_approval_wording() {
-    let text = approval_text(
+fn missing_catalog_key_and_non_on_request_policy_use_legacy_approval_text() {
+    let messages = ApprovalMessages {
+        on_request: None,
+        on_request_auto_review: Some("unused catalog approvals".to_string()),
+    };
+
+    let on_request = approval_text(
         AskForApproval::OnRequest,
         ApprovalsReviewer::User,
+        Some(&messages),
+        &Policy::empty(),
+        /*exec_permission_approvals_enabled*/ false,
+        /*request_permissions_tool_enabled*/ false,
+    );
+    let never = approval_text(
+        AskForApproval::Never,
+        ApprovalsReviewer::User,
+        Some(&messages),
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
     );
 
-    assert!(text.contains("approved by the user"));
-    assert!(text.contains("Be judicious with escalating"));
-    assert!(!text.contains(
-        "When the sandbox is likely to block a command needed for the task, request escalation up front"
-    ));
+    assert!(on_request.contains("How to request escalation"));
+    assert_eq!(never, APPROVAL_POLICY_NEVER);
 }
 
 #[test]
-fn auto_review_on_request_with_inline_permission_requests_keeps_suffix() {
+fn auto_review_approvals_append_auto_review_specific_guidance() {
     let text = approval_text(
         AskForApproval::OnRequest,
         ApprovalsReviewer::AutoReview,
+        /*approval_messages*/ None,
         &Policy::empty(),
-        /*exec_permission_approvals_enabled*/ true,
+        /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
     );
 
-    assert!(text.contains("with_additional_permissions"));
     assert!(text.contains("`approvals_reviewer` is `auto_review`"));
+    assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
     assert!(text.contains("materially safer alternative"));
-    assert!(!text.contains(
-        "When the sandbox is likely to block a command needed for the task, request escalation up front"
-    ));
 }
 
 #[test]
@@ -356,6 +500,7 @@ fn auto_review_approvals_omit_auto_review_specific_guidance_when_approval_is_nev
     let text = approval_text(
         AskForApproval::Never,
         ApprovalsReviewer::AutoReview,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
@@ -408,6 +553,7 @@ fn granular_policy_lists_prompted_and_rejected_categories_separately() {
             mcp_elicitations: false,
         }),
         ApprovalsReviewer::User,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ false,
@@ -445,6 +591,7 @@ fn granular_policy_includes_command_permission_instructions_when_sandbox_approva
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ false,
@@ -477,6 +624,7 @@ fn granular_policy_omits_shell_permission_instructions_when_inline_requests_are_
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
@@ -509,6 +657,7 @@ fn granular_policy_includes_request_permissions_tool_only_when_that_prompt_can_s
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ true,
@@ -524,6 +673,7 @@ fn granular_policy_includes_request_permissions_tool_only_when_that_prompt_can_s
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ true,
@@ -542,6 +692,7 @@ fn granular_policy_lists_request_permissions_category_without_tool_section_when_
             mcp_elicitations: false,
         }),
         ApprovalsReviewer::User,
+        /*approval_messages*/ None,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ false,

@@ -17,8 +17,9 @@ pub use engine::HookListEntry;
 pub use events::common::SubagentHookContext;
 /// Hook event names as they appear in hooks JSON and config files.
 ///
-/// The first 10 are codex-stock; the last 3 (SessionEnd / TaskCompleted /
-/// PostToolUseFailure) are ecodex divergences upstream lacks.
+/// The first 11 (incl. SessionEnd) are codex-stock; the last 2 (TaskCompleted /
+/// PostToolUseFailure) are ecodex divergences upstream lacks. Upstream added its
+/// own SessionEnd in the 2026-07 sync, converging with ours.
 pub const HOOK_EVENT_NAMES: [&str; 13] = [
     "PreToolUse",
     "PermissionRequest",
@@ -26,12 +27,12 @@ pub const HOOK_EVENT_NAMES: [&str; 13] = [
     "PreCompact",
     "PostCompact",
     "SessionStart",
+    "SessionEnd",
     "UserPromptSubmit",
     "SubagentStart",
     "SubagentStop",
     "Stop",
-    // ecodex additions (upstream lacks these 3):
-    "SessionEnd",
+    // ecodex additions (upstream lacks these 2; SessionEnd converged upstream):
     "TaskCompleted",
     "PostToolUseFailure",
 ];
@@ -40,14 +41,15 @@ pub const HOOK_EVENT_NAMES: [&str; 13] = [
 ///
 /// Other events can appear in hooks JSON, but Codex ignores their matcher
 /// fields because those events do not dispatch against a tool, compaction
-/// trigger, or session-start source.
-pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 9] = [
+/// trigger, session-start source, or session-end reason.
+pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 10] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
     "PreCompact",
     "PostCompact",
     "SessionStart",
+    "SessionEnd",
     "SubagentStart",
     "SubagentStop",
     // ecodex addition — matches on tool_name like its success twin PostToolUse.
@@ -65,6 +67,8 @@ pub use events::post_tool_use::PostToolUseOutcome;
 pub use events::post_tool_use::PostToolUseRequest;
 pub use events::pre_tool_use::PreToolUseOutcome;
 pub use events::pre_tool_use::PreToolUseRequest;
+pub use events::session_end::SessionEndOutcome;
+pub use events::session_end::SessionEndRequest;
 pub use events::session_start::SessionStartOutcome;
 pub use events::session_start::SessionStartRequest;
 pub use events::session_start::SessionStartSource;
@@ -72,13 +76,11 @@ pub use events::session_start::StartHookTarget;
 pub use events::stop::StopHookTarget;
 pub use events::stop::StopOutcome;
 pub use events::stop::StopRequest;
-// ecodex additions — only the 3 events upstream lacks. PreCompact/PostCompact/
-// SubagentStart/SubagentStop converged with upstream (re-exported above via
-// events::compact / events::session_start / events::stop).
+// ecodex additions — only the 2 events upstream lacks. SessionEnd (plus
+// PreCompact/PostCompact/SubagentStart/SubagentStop) converged with upstream
+// (re-exported above via events::session_end / compact / session_start / stop).
 pub use events::post_tool_use_failure::PostToolUseFailureOutcome;
 pub use events::post_tool_use_failure::PostToolUseFailureRequest;
-pub use events::session_end::SessionEndOutcome;
-pub use events::session_end::SessionEndRequest;
 pub use events::task_completed::TaskCompletedOutcome;
 pub use events::task_completed::TaskCompletedRequest;
 pub use events::user_prompt_submit::UserPromptSubmitOutcome;
@@ -107,6 +109,7 @@ pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
         HookEventName::PreCompact => "pre_compact",
         HookEventName::PostCompact => "post_compact",
         HookEventName::SessionStart => "session_start",
+        HookEventName::SessionEnd => "session_end",
         HookEventName::UserPromptSubmit => "user_prompt_submit",
         HookEventName::SubagentStart => "subagent_start",
         HookEventName::SubagentStop => "subagent_stop",

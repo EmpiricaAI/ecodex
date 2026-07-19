@@ -87,6 +87,9 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::RawResponseItemCompleted(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::RawResponseCompleted(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::AgentMessageDelta(notification) => {
             Some(notification.thread_id.as_str())
         }
@@ -121,6 +124,9 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::ContextCompacted(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::ModelRerouted(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::ModelVerification(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::ModelSafetyBufferingUpdated(notification) => {
             Some(notification.thread_id.as_str())
         }
         ServerNotification::TurnModerationMetadata(notification) => {
@@ -163,6 +169,8 @@ pub(super) fn server_notification_thread_target(
         | ServerNotification::AccountUpdated(_)
         | ServerNotification::AccountRateLimitsUpdated(_)
         | ServerNotification::AppListUpdated(_)
+        | ServerNotification::EnvironmentConnected(_)
+        | ServerNotification::EnvironmentDisconnected(_)
         | ServerNotification::RemoteControlStatusChanged(_)
         | ServerNotification::ExternalAgentConfigImportProgress(_)
         | ServerNotification::ExternalAgentConfigImportCompleted(_)
@@ -282,6 +290,7 @@ mod tests {
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             });
 
         let target = server_notification_thread_target(&notification);
@@ -297,6 +306,7 @@ mod tests {
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             });
 
         let target = server_notification_thread_target(&notification);

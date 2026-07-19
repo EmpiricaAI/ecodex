@@ -230,6 +230,7 @@ pub(crate) fn to_preset(entry: &EcodexCuratedModel) -> ModelPreset {
         availability_nux: None as Option<ModelAvailabilityNux>,
         supported_in_api: true,
         input_modalities: vec![InputModality::Text],
+        multi_agent_version: None,
     }
 }
 

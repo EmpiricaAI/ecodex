@@ -877,10 +877,10 @@ mod tests {
         let OutgoingEnvelope::Broadcast { message } = envelope else {
             panic!("expected broadcast notification");
         };
-        let OutgoingMessage::AppServerNotification(ServerNotification::ThreadStatusChanged(
-            notification,
-        )) = message
-        else {
+        let OutgoingMessage::AppServerNotification(envelope) = message else {
+            panic!("expected thread/status/changed notification");
+        };
+        let ServerNotification::ThreadStatusChanged(notification) = envelope.notification else {
             panic!("expected thread/status/changed notification");
         };
         notification
@@ -889,11 +889,13 @@ mod tests {
     fn test_thread(thread_id: &str, source: codex_app_server_protocol::SessionSource) -> Thread {
         Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
             preview: String::new(),
             ephemeral: false,
+            history_mode: Default::default(),
             model_provider: "mock-provider".to_string(),
             created_at: 0,
             updated_at: 0,
@@ -905,6 +907,7 @@ mod tests {
             agent_nickname: None,
             agent_role: None,
             source,
+            can_accept_direct_input: None,
             thread_source: None,
             git_info: None,
             name: None,

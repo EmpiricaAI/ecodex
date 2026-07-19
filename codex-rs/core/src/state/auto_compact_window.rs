@@ -8,6 +8,17 @@ pub(crate) struct AutoCompactWindowIds {
     pub(crate) window_id: Uuid,
 }
 
+impl AutoCompactWindowIds {
+    pub(crate) fn new_initial() -> Self {
+        let window_id = Uuid::now_v7();
+        Self {
+            first_window_id: window_id,
+            previous_window_id: None,
+            window_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AutoCompactWindowSnapshot {
     pub(crate) prefill_input_tokens: Option<i64>,
@@ -31,21 +42,18 @@ pub(super) struct AutoCompactWindow {
     /// resume/recompute baselines when available.
     prefill_input_tokens: Option<AutoCompactWindowPrefill>,
     token_budget_reminder_delivered: bool,
+    auto_compact_fallback_delivered: bool,
 }
 
 impl AutoCompactWindow {
-    pub(super) fn new() -> Self {
-        let window_id = Uuid::now_v7();
+    pub(super) fn new_with_ids(ids: AutoCompactWindowIds) -> Self {
         Self {
             window_number: 0,
-            ids: AutoCompactWindowIds {
-                first_window_id: window_id,
-                previous_window_id: None,
-                window_id,
-            },
+            ids,
             new_context_window_requested: false,
             prefill_input_tokens: None,
             token_budget_reminder_delivered: false,
+            auto_compact_fallback_delivered: false,
         }
     }
 
@@ -72,11 +80,16 @@ impl AutoCompactWindow {
         self.ids.window_id = Uuid::now_v7();
         self.new_context_window_requested = false;
         self.token_budget_reminder_delivered = false;
+        self.auto_compact_fallback_delivered = false;
         (self.window_number, self.ids)
     }
 
     pub(super) fn claim_token_budget_reminder(&mut self) -> bool {
         !std::mem::replace(&mut self.token_budget_reminder_delivered, true)
+    }
+
+    pub(super) fn claim_auto_compact_fallback(&mut self) -> bool {
+        !std::mem::replace(&mut self.auto_compact_fallback_delivered, true)
     }
 
     pub(super) fn request_new_context_window(&mut self) {
@@ -135,7 +148,7 @@ mod tests {
 
     #[test]
     fn tracks_prefill_and_window_boundaries() {
-        let mut window = AutoCompactWindow::new();
+        let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial());
 
         assert_eq!(window.window_number(), 0);
         let initial_window_id = window.ids().window_id;
@@ -163,6 +176,8 @@ mod tests {
         assert_eq!(window.ids().window_id, restored_window_id);
         assert!(window.claim_token_budget_reminder());
         assert!(!window.claim_token_budget_reminder());
+        assert!(window.claim_auto_compact_fallback());
+        assert!(!window.claim_auto_compact_fallback());
         window.request_new_context_window();
         assert!(window.take_new_context_window_request());
         assert!(!window.take_new_context_window_request());
@@ -177,6 +192,7 @@ mod tests {
         assert_ne!(ids.window_id, restored_window_id);
         assert!(!window.take_new_context_window_request());
         assert!(window.claim_token_budget_reminder());
+        assert!(window.claim_auto_compact_fallback());
 
         assert_eq!(
             window.snapshot(),

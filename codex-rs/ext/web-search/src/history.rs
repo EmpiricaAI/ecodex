@@ -36,7 +36,7 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
         ResponseItem::AgentMessage {
             author,
             content,
-            metadata,
+            internal_chat_message_metadata_passthrough: metadata,
             ..
         } => {
             if let Some(text) = plaintext_agent_message_content(content) {
@@ -47,7 +47,7 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
                         text: format!("Agent message from {author}:\n{text}"),
                     }],
                     phase: None,
-                    metadata: metadata.clone(),
+                    internal_chat_message_metadata_passthrough: metadata.clone(),
                 });
             }
         }
@@ -56,7 +56,7 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
             role,
             content,
             phase,
-            metadata,
+            internal_chat_message_metadata_passthrough: metadata,
         } if role == USER_ROLE
             && matches!(parse_turn_item(item), Some(TurnItem::UserMessage(_))) =>
         {
@@ -71,7 +71,7 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
                     role: role.clone(),
                     content,
                     phase: phase.clone(),
-                    metadata: metadata.clone(),
+                    internal_chat_message_metadata_passthrough: metadata.clone(),
                 });
             }
         }
@@ -82,6 +82,7 @@ fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
 #[cfg(test)]
 mod tests {
     use codex_api::SearchInput;
+    use codex_protocol::ResponseItemId;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
@@ -104,16 +105,19 @@ mod tests {
                 }
             }],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         }
     }
 
     #[test]
     fn keeps_current_user_and_previous_visible_turn() {
         let mut previous_user = message(USER_ROLE, "previous user");
-        previous_user.set_id(Some("msg_previous_user".to_string()));
+        previous_user.set_id(Some(ResponseItemId::with_suffix("msg", "previous_user")));
         let mut previous_assistant = message(ASSISTANT_ROLE, "previous assistant");
-        previous_assistant.set_id(Some("msg_previous_assistant".to_string()));
+        previous_assistant.set_id(Some(ResponseItemId::with_suffix(
+            "msg",
+            "previous_assistant",
+        )));
         let items = vec![
             message("system", "system"),
             message(USER_ROLE, "old user"),
@@ -125,7 +129,7 @@ mod tests {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
-                metadata: None,
+                internal_chat_message_metadata_passthrough: None,
             },
             previous_assistant,
             message("developer", "developer"),
@@ -158,7 +162,7 @@ mod tests {
                 },
             ],
             phase: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         };
         let items = vec![
             previous_user,
