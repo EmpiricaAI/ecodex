@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [Unreleased]
 
 ### Added
+- **Upstream codex sync 2026-07** (`bed0c5e74c`): 674-commit forward-port of
+  openai/codex onto ecodex's plugin layer. Notable new upstream surface now
+  carried: the `SessionEnd` hook event, `cloud` / `exec-server` /
+  `remote-control` subcommands, `features` flag inspection, paginated
+  thread-history legacy views, audio output for dynamic tools + code mode, the
+  `use_responses_lite` request path, and UUIDv7/InputAudio protocol additions.
+  All ecodex integrations re-reconciled against the new session semantics (the C
+  tool-fix, T78 `ArcSwap<ModelClient>` hot-swap, pinned skills, native
+  ntfy/monitor, curated L3 model registry, `writable_git`). The merge's biggest
+  hazard — ecodex and upstream *independently* adding `SessionEnd` — was
+  de-duplicated across the hook engine/schema/registry (upstream's form kept;
+  ecodex-only `TaskCompleted` + `PostToolUseFailure` preserved).
 - **Event-driven mesh wake→act loop.** A mesh-woken practitioner now polls its
   inbox and reacts autonomously instead of greeting/orienting. On a doorbell
   wake the native ntfy listener polls the inbox itself and inlines the actual
@@ -27,6 +39,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   post-build install step and a periodic cron.
 
 ### Fixed
+- **Local / llama.cpp providers rejected every turn** with `'type' of tool must
+  be 'function'` (Task C). ecodex sent its OpenAI-builtin tool schemas
+  (`web_search`, `namespace`/mcp, `tool_search`) to providers that only accept
+  plain function tools, so a fresh local model couldn't complete a single turn.
+  Added `ModelProviderInfo.supports_openai_builtin_tools` (default `true`; `false`
+  for OSS/llama.cpp providers) and `filter_tools_for_provider`, which drops the
+  non-function `ToolSpec` variants for those providers before serialization.
+  Function + freeform tools pass through untouched; order preserved. Verified
+  end-to-end against the local lab (the rejection error cleared). (`b15060be30`)
 - **The Sentinel gated the receive-side mesh CLI.** `empirica mailbox
   poll`/`show`/`reply`/`archive` were missing from the Sentinel's tiered
   whitelist, so a mesh-woken idle practitioner was denied *"No open transaction"*
@@ -40,6 +61,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   broke `empirica mailbox reply --parent-id`. Full IDs are now shown.
 
 ### Changed
+- **Re-vendored the empirica hooks to 1.12.28** (`31aa4731f4`, via
+  `f0d96db758` for 1.12.27). `session-init.py` now carries empirica's
+  split-brain project-persistence fix (PR#357): explicit `--project-id` pinning
+  at session create, headless-gated `active_work.json` read, trajectory_path
+  healers that tolerate both `<root>` and `<root>/.empirica` forms, and a loud
+  `split_brain_corrected` signal instead of a silent heal. A de-Claude pass
+  genericized the model-facing hook/skill prose flagged by `setup-codex.py`.
 - Re-vendored the empirica hooks to canonical `@1cefa8df3`: SessionStart
   inbox-lead, arm-by-replacement monitor management, terse EPP pushback pointer,
   and the full `sentinel-gate.py`.
