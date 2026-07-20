@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-07-20
+
 ### Added
 - **Upstream codex sync 2026-07** (`bed0c5e74c`): 674-commit forward-port of
   openai/codex onto ecodex's plugin layer. Notable new upstream surface now
@@ -228,7 +230,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.1...v0.2.2
