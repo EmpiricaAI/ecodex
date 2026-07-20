@@ -39,14 +39,19 @@ enabled = true
 # requests sent directly to their base_url will fail at runtime with an
 # unknown-endpoint error.
 #
-# The fix is `codex-empirica-translator` (planned goal bca167a1, scaffold
-# in codex-rs/codex-empirica-translator/). When that ships:
-#   1. ecodex auto-spawns translator on localhost:18080
-#   2. base_urls below get rewritten to http://localhost:18080/v1
-#   3. translator forwards to the real provider with chat-completions
-#      wire format and converts the SSE stream back
-# Until then: built-in `oss` (Ollama) is the only provider that works
-# out-of-box (Ollama implements Responses API natively).
+# The fix is `codex-empirica-translator` — SHIPPED in v0.2.5 (published on
+# crates.io). It bridges codex Responses <-> provider chat/anthropic via a
+# provider-neutral CIF. It is NOT auto-spawned yet, so to use a chat provider:
+#   1. Start it:  `ecodex-translator`  (scripts/ecodex-translator.sh — sources
+#      provider keys from ~/.empirica/credentials.yaml, binds 127.0.0.1:18080).
+#      Background it with:  nohup ecodex-translator >~/.codex/translator.log 2>&1 &
+#   2. Point the provider's `base_url` at the translator, NOT the real API:
+#        base_url = "http://localhost:18080/v1"
+#   3. Add the provider's route to ~/.codex/translator-upstreams.toml
+#      (model_match glob -> real base_url + protocol {chat|anthropic} + api_key_env).
+# Local providers that speak Responses natively (Ollama :11434, llama.cpp on the
+# Strix) do NOT need the translator. See the [model_providers.mistral] block below
+# for a working, verified example (Devstral, 256K ctx).
 
 model = "deepseek-chat"
 model_provider = "deepseek"
@@ -86,10 +91,15 @@ wire_api = "responses"
 # code-completion tier. Both are also open-weights, so the same models can be
 # self-hosted on EU hardware (Ollama/vLLM) for full air-gap.
 [model_providers.mistral]
-name = "Mistral (EU — Paris)"
-base_url = "https://api.mistral.ai/v1"
-env_key = "MISTRAL_API_KEY"
-env_key_instructions = "Get an API key at https://console.mistral.ai/api-keys, then export MISTRAL_API_KEY in your shell."
+name = "Mistral (EU — Paris) via translator :18080"
+# base_url points at the TRANSLATOR, not api.mistral.ai — codex is Responses-only.
+# Setup: (1) put the key in ~/.empirica/credentials.yaml under `mistral.api_key`;
+# (2) add a route to ~/.codex/translator-upstreams.toml (model_match "devstral-*"
+#     -> base_url https://api.mistral.ai/v1, protocol "chat", api_key_env
+#     "MISTRAL_API_KEY"); (3) start it: `ecodex-translator`.
+# Then set model = "devstral-latest" (256K ctx). NB: "devstral-2-latest" is NOT a
+# valid Mistral id — use devstral-latest / devstral-2512 / devstral-medium-latest.
+base_url = "http://localhost:18080/v1"
 wire_api = "responses"
 
 [model_providers.empirica-local]
