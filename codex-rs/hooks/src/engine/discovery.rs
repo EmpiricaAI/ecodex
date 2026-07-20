@@ -597,10 +597,21 @@ fn normalize_command_hook(
 
     let max_timeout_sec = SESSION_END_MAX_TIMEOUT_SEC;
     if timeout_sec.is_some_and(|timeout_sec| timeout_sec > max_timeout_sec) {
-        warnings.push(format!(
+        // ecodex: the bundled empirica plugin intentionally declares a larger
+        // SessionEnd timeout — the hooks.json is shared with Claude Code, which
+        // honors it for its heavier session-end postflight/promotion. codex caps
+        // it at 3s regardless. Nagging the user about our OWN bundled hook on every
+        // launch reads as unpolished (cosmetic, not actionable), so debug-log it
+        // for the bundled plugin; still surface a real warning for other plugins.
+        let msg = format!(
             "clamping SessionEnd hook timeout to {max_timeout_sec}s in {}",
             source_path.display()
-        ));
+        );
+        if source_path.to_string_lossy().contains("nubaeon/empirica") {
+            tracing::debug!("{msg}");
+        } else {
+            warnings.push(msg);
+        }
     }
     timeout_sec
         .unwrap_or(SESSION_END_DEFAULT_TIMEOUT_SEC)
