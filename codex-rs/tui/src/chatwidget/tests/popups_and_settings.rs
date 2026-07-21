@@ -3361,6 +3361,7 @@ async fn max_reasoning_selection_persists_model_selection() {
         AppEvent::PersistModelSelection {
             model,
             effort: Some(ReasoningEffortConfig::Max),
+            ..
         } if model == "gpt-5.4"
     )));
     assert!(

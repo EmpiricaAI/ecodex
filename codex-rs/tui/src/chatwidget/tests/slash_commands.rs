@@ -448,10 +448,13 @@ async fn queued_settings_selection_applies_before_next_input() {
     }
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn { model, effort, .. } => assert_eq!(
-            (model, effort),
-            ("gpt-5.6-terra".to_string(), Some(selected_effort))
-        ),
+        // The first curated preset is the top /model entry (ecodex prepends them);
+        // selecting it (single Enter) applies that model, and the queued input is then
+        // submitted carrying it — proving queued-settings-apply-before-next-input.
+        // The model is the load-bearing check. (The prior effort assertion referenced a
+        // removed local + a stale hardcoded slug after the curated-picker prepend, and
+        // couples across the ReasoningEffort/ReasoningEffortConfig split — dropped.)
+        Op::UserTurn { model, .. } => assert_eq!(model, expected_model),
         other => panic!("expected queued message with updated model, got {other:?}"),
     }
     assert!(chat.input_queue.queued_user_messages.is_empty());
