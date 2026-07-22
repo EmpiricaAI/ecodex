@@ -253,12 +253,14 @@ async fn submission_includes_configured_active_permission_profile() {
                         value: FileSystemSpecialPath::Root,
                     },
                     access: FileSystemAccessMode::Read,
+                    missing_path_behavior: None,
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
                         pattern: "/home/user/project/secrets/**".to_string(),
                     },
                     access: FileSystemAccessMode::Deny,
+                    missing_path_behavior: None,
                 },
             ],
             glob_scan_max_depth: None,
@@ -690,11 +692,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: None,
-            path_to_skills_md: repo_skill_path,
+            path: repo_skill_path,
             scope: crate::test_support::skill_scope_repo(),
-            pinned: false,
-            plugin_id: None,
+            enabled: true,
         },
         SkillMetadata {
             name: "figma".to_string(),
@@ -702,11 +702,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: None,
-            path_to_skills_md: user_skill_path.clone(),
+            path: user_skill_path.clone(),
             scope: crate::test_support::skill_scope_user(),
-            pinned: false,
-            plugin_id: None,
+            enabled: true,
         },
     ]));
 

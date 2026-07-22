@@ -165,6 +165,8 @@ where
     pub last_known_cursor_pos: Position,
     /// Count of visible history rows rendered above the viewport in inline mode.
     visible_history_rows: u16,
+    #[cfg(test)]
+    screen_size_override: Option<Size>,
 }
 
 impl<B> Drop for Terminal<B>
@@ -242,6 +244,8 @@ where
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
             visible_history_rows: 0,
+            #[cfg(test)]
+            screen_size_override: None,
         }
     }
 
@@ -251,7 +255,10 @@ where
         screen_size: Size,
         cursor_pos: Position,
     ) -> Self {
-        Self::with_screen_size_and_cursor_position(backend, screen_size, cursor_pos)
+        let mut terminal =
+            Self::with_screen_size_and_cursor_position(backend, screen_size, cursor_pos);
+        terminal.screen_size_override = Some(screen_size);
+        terminal
     }
 
     /// Get a Frame object which provides a consistent view into the terminal state for rendering.
@@ -501,22 +508,6 @@ where
         self.previous_buffer_mut().reset();
     }
 
-    /// Clear terminal scrollback (if supported) and force a full redraw.
-    pub fn clear_scrollback(&mut self) -> io::Result<()> {
-        if self.viewport_area.is_empty() {
-            return Ok(());
-        }
-        let home = Position { x: 0, y: 0 };
-        // Use an explicit cursor-home around scrollback purge for terminals that
-        // are sensitive to inline viewport cursor placement (e.g. Terminal.app).
-        self.set_cursor_position(home)?;
-        queue!(self.backend, Clear(crossterm::terminal::ClearType::Purge))?;
-        self.set_cursor_position(home)?;
-        std::io::Write::flush(&mut self.backend)?;
-        self.previous_buffer_mut().reset();
-        Ok(())
-    }
-
     /// Clear the entire visible screen (not just the viewport) and force a full redraw.
     pub fn clear_visible_screen(&mut self) -> io::Result<()> {
         let home = Position { x: 0, y: 0 };
@@ -551,10 +542,6 @@ where
         Ok(())
     }
 
-    pub fn visible_history_rows(&self) -> u16 {
-        self.visible_history_rows
-    }
-
     pub(crate) fn note_history_rows_inserted(&mut self, inserted_rows: u16) {
         self.visible_history_rows = self
             .visible_history_rows
@@ -570,6 +557,10 @@ where
 
     /// Queries the real size of the backend.
     pub fn size(&self) -> io::Result<Size> {
+        #[cfg(test)]
+        if let Some(size) = self.screen_size_override {
+            return Ok(size);
+        }
         self.backend.size()
     }
 }

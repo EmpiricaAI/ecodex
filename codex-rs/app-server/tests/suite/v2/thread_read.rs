@@ -826,6 +826,24 @@ async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_pa
     let ThreadReadResponse { thread, .. } = serde_json::from_value(result)?;
 
     assert_eq!(turn_user_texts(&thread.turns), vec!["history from store"]);
+    let [ThreadItem::UserMessage { content, .. }] = thread.turns[0].items.as_slice() else {
+        panic!("expected one user message item");
+    };
+    assert_eq!(
+        content,
+        &vec![
+            UserInput::Text {
+                text: "history from store".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Audio {
+                url: "https://example.com/recording.mp3".to_string(),
+            },
+            UserInput::LocalAudio {
+                path: "recording.wav".into(),
+            },
+        ]
+    );
 
     client.shutdown().await?;
     Ok(())
@@ -1220,18 +1238,16 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
 }
 
 #[tokio::test]
-async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
+async fn paginated_thread_name_set_is_reflected_in_read_list_and_metadata_resume() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let preview = "Saved user message";
-    let conversation_id = create_fake_rollout_with_text_elements(
+    let conversation_id = create_fake_paginated_rollout(
         codex_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
-        preview,
-        vec![],
+        "Saved user message",
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
@@ -1244,7 +1260,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Set a user-facing thread title.
-    let new_name = "My renamed thread";
+    let new_name = "Saved user message";
     let set_id = mcp
         .send_thread_set_name_request(ThreadSetNameParams {
             thread_id: conversation_id.clone(),
@@ -1283,6 +1299,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
     assert_eq!(thread.id, conversation_id);
     assert_eq!(thread.name.as_deref(), Some(new_name));
+    assert_eq!(thread.history_mode, ThreadHistoryMode::Paginated);
     let thread_json = read_result
         .get("thread")
         .and_then(Value::as_object)
@@ -1309,7 +1326,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
             source_kinds: None,
             archived: None,
             cwd: None,
-            use_state_db_only: false,
+            use_state_db_only: true,
             search_term: None,
             parent_thread_id: None,
             ancestor_thread_id: None,
@@ -1350,6 +1367,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: conversation_id.clone(),
+            exclude_turns: true,
             ..Default::default()
         })
         .await?;
@@ -2276,6 +2294,8 @@ fn store_history_items() -> Vec<RolloutItem> {
             message: "history from store".to_string(),
             images: None,
             local_images: Vec::new(),
+            audio: Some(vec!["https://example.com/recording.mp3".to_string()]),
+            local_audio: vec!["recording.wav".into()],
             text_elements: Vec::new(),
             ..Default::default()
         },

@@ -1,4 +1,6 @@
-pub use connection_manager::McpConnectionManager;
+pub use binding::McpBinding;
+pub use binding::PreparedMcpCall;
+pub use connection_manager::McpConnectionSet;
 pub use connection_manager::tool_is_model_visible;
 pub use elicitation::ElicitationLifecycle;
 pub use elicitation::ElicitationRequestRouter;
@@ -15,6 +17,9 @@ pub use runtime::McpRuntimeContext;
 pub use runtime::SandboxState;
 pub use tool_catalog_cache::McpToolCatalogCache;
 pub use tools::ToolInfo;
+
+/// Backward-compatible name for the MCP connection set.
+pub type McpConnectionManager = McpConnectionSet;
 
 /// Backward-compatible name for the shared Codex Apps tools runtime.
 pub type CodexAppsToolsCache = codex_connectors::ConnectorRuntimeManager<ToolInfo>;
@@ -82,6 +87,8 @@ pub use mcp::mcp_permission_prompt_is_auto_approved;
 pub use mcp::qualified_mcp_tool_name_prefix;
 
 pub(crate) mod auth_elicitation;
+mod binding;
+pub(crate) mod binding_clients;
 mod catalog;
 pub(crate) mod codex_apps;
 pub(crate) mod connection_manager;

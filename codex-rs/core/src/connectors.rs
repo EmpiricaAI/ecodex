@@ -5,7 +5,6 @@ use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::Instant;
 
-use async_channel::unbounded;
 pub use codex_connectors::AppBranding;
 pub use codex_connectors::AppInfo;
 pub use codex_connectors::AppMetadata;
@@ -34,7 +33,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
-use codex_mcp::McpConnectionManager;
+use codex_mcp::McpConnectionSet;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
@@ -235,20 +234,17 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     let runtime_context =
         McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
 
-    let (tx_event, rx_event) = unbounded();
-    drop(rx_event);
-
     let cancel_token = CancellationToken::new();
     let codex_apps_auth_manager =
         codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
             .then(|| Arc::clone(&auth_manager));
-    let mcp_connection_manager = McpConnectionManager::new(
+    let mcp_connection_manager = McpConnectionSet::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
         &config.permissions.approval_policy,
         INITIAL_SUBMIT_ID.to_owned(),
-        tx_event,
+        /*tx_event*/ None,
         cancel_token.clone(),
         PermissionProfile::default(),
         // Connector discovery is threadless. Use an actually configured env if

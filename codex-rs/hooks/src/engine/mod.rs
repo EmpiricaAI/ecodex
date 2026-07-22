@@ -26,6 +26,7 @@ use crate::events::task_completed::TaskCompletedOutcome;
 use crate::events::task_completed::TaskCompletedRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
+use crate::output_spill::AdditionalContextLimit;
 use crate::output_spill::HookOutputSpiller;
 use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
@@ -51,6 +52,7 @@ pub(crate) struct ConfiguredHandler {
     pub command: String,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
+    pub additional_context_limit: AdditionalContextLimit,
     pub source_path: AbsolutePathBuf,
     pub source: HookSource,
     pub display_order: i64,
@@ -96,6 +98,7 @@ pub struct HookListEntry {
     pub command: Option<String>,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
+    pub additional_context_limit: Option<usize>,
     pub source_path: AbsolutePathBuf,
     pub source: HookSource,
     pub plugin_id: Option<String>,
@@ -181,23 +184,19 @@ impl ClaudeHooksEngine {
         request: SessionStartRequest,
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
-        let session_id = request.session_id;
-        let mut outcome =
-            crate::events::session_start::run(&self.handlers, &self.shell, request, turn_id).await;
-        outcome.additional_contexts = self
-            .maybe_spill_texts(session_id, outcome.additional_contexts)
-            .await;
-        outcome
+        crate::events::session_start::run(
+            &self.handlers,
+            &self.shell,
+            &self.output_spiller,
+            request,
+            turn_id,
+        )
+        .await
     }
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
-        let session_id = request.session_id;
-        let mut outcome =
-            crate::events::pre_tool_use::run(&self.handlers, &self.shell, request).await;
-        outcome.additional_contexts = self
-            .maybe_spill_texts(session_id, outcome.additional_contexts)
-            .await;
-        outcome
+        crate::events::pre_tool_use::run(&self.handlers, &self.shell, &self.output_spiller, request)
+            .await
     }
 
     pub(crate) async fn run_permission_request(
@@ -212,11 +211,13 @@ impl ClaudeHooksEngine {
         request: PostToolUseRequest,
     ) -> PostToolUseOutcome {
         let session_id = request.session_id;
-        let mut outcome =
-            crate::events::post_tool_use::run(&self.handlers, &self.shell, request).await;
-        outcome.additional_contexts = self
-            .maybe_spill_texts(session_id, outcome.additional_contexts)
-            .await;
+        let mut outcome = crate::events::post_tool_use::run(
+            &self.handlers,
+            &self.shell,
+            &self.output_spiller,
+            request,
+        )
+        .await;
         outcome.feedback_message = self
             .maybe_spill_text(session_id, outcome.feedback_message)
             .await;
@@ -253,13 +254,13 @@ impl ClaudeHooksEngine {
         &self,
         request: UserPromptSubmitRequest,
     ) -> UserPromptSubmitOutcome {
-        let session_id = request.session_id;
-        let mut outcome =
-            crate::events::user_prompt_submit::run(&self.handlers, &self.shell, request).await;
-        outcome.additional_contexts = self
-            .maybe_spill_texts(session_id, outcome.additional_contexts)
-            .await;
-        outcome
+        crate::events::user_prompt_submit::run(
+            &self.handlers,
+            &self.shell,
+            &self.output_spiller,
+            request,
+        )
+        .await
     }
 
     pub(crate) fn preview_stop(&self, request: &StopRequest) -> Vec<HookRunSummary> {
@@ -311,12 +312,6 @@ impl ClaudeHooksEngine {
         request: PostToolUseFailureRequest,
     ) -> PostToolUseFailureOutcome {
         crate::events::post_tool_use_failure::run(&self.handlers, &self.shell, request).await
-    }
-
-    async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {
-        self.output_spiller
-            .maybe_spill_texts(session_id, texts)
-            .await
     }
 
     async fn maybe_spill_text(&self, session_id: ThreadId, text: Option<String>) -> Option<String> {

@@ -6,6 +6,9 @@ mod list_threads;
 mod live_writer;
 mod model_context;
 mod read_thread;
+// This lands before the reader PRs that consume the shared lineage resolver.
+#[allow(dead_code)]
+mod rollout_lineage;
 mod search_threads;
 mod thread_history;
 mod thread_history_materialization;
@@ -31,6 +34,7 @@ use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::DeleteThreadParams;
+use crate::DeleteThreadsParams;
 use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListThreadsParams;
@@ -397,6 +401,10 @@ impl ThreadStore for LocalThreadStore {
 
     fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move { delete_thread::delete_thread(self, params).await })
+    }
+
+    fn delete_threads(&self, params: DeleteThreadsParams) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move { delete_thread::delete_threads(self, params).await })
     }
 }
 

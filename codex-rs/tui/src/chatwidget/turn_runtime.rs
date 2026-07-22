@@ -16,6 +16,16 @@ fn is_safety_access_block_message(message: &str) -> bool {
 }
 
 impl ChatWidget {
+    fn clear_guardian_review_status(&mut self) {
+        self.status_state.pending_guardian_review_status.clear();
+        if self.status_state.current_status.is_guardian_review() {
+            let header = self
+                .mcp_startup_status_header()
+                .unwrap_or_else(|| String::from("Working"));
+            self.set_status_header(header);
+        }
+    }
+
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
@@ -177,6 +187,7 @@ impl ChatWidget {
         self.status_state.pending_status_indicator_restore = false;
         self.input_queue.user_turn_pending_start = false;
         self.clear_active_hook_cell();
+        self.clear_guardian_review_status();
         self.turn_lifecycle.finish();
         self.clear_safety_buffering();
         self.update_task_running_state();
@@ -322,6 +333,7 @@ impl ChatWidget {
         self.clear_active_hook_cell();
         // Reset running state and clear streaming buffers.
         self.input_queue.user_turn_pending_start = false;
+        self.clear_guardian_review_status();
         self.turn_lifecycle.finish();
         self.update_task_running_state();
         self.running_commands.clear();
@@ -354,7 +366,7 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
-    pub(super) fn on_error(&mut self, message: String) {
+    fn on_error(&mut self, message: String) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.flush_answer_stream_with_separator();
         self.finalize_turn();
@@ -367,6 +379,14 @@ impl ChatWidget {
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
+    }
+
+    pub(crate) fn handle_turn_start_rejection(&mut self, message: String) -> bool {
+        if !self.input_queue.user_turn_pending_start {
+            return false;
+        }
+        self.on_error(message);
+        true
     }
 
     pub(super) fn on_cyber_policy_error(&mut self) {

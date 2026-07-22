@@ -46,6 +46,7 @@ use crate::unified_exec::ProcessStore;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
+use crate::unified_exec::WriteStdinInteractionEvent;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::emit_failed_exec_end_for_unified_exec;
@@ -62,7 +63,9 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_sandboxing::SandboxCommand;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
@@ -351,7 +354,7 @@ fn terminate_process_on_network_denial(
     process: Arc<UnifiedExecProcess>,
     session: std::sync::Weak<crate::session::session::Session>,
     deferred: DeferredNetworkApproval,
-) {
+) -> tokio::task::JoinHandle<()> {
     let network_cancelled = deferred.cancellation_token();
     let process_exited = process.cancellation_token();
     tokio::spawn(async move {
@@ -367,7 +370,7 @@ fn terminate_process_on_network_denial(
         let session = session.upgrade();
         let message = network_denial_message_for_session(session.as_ref(), Some(deferred)).await;
         process.fail_and_terminate(message);
-    });
+    })
 }
 
 impl UnifiedExecProcessManager {
@@ -427,13 +430,13 @@ impl UnifiedExecProcessManager {
                 return Err(err);
             }
         };
-        if let Some(deferred) = deferred_network_approval.as_ref() {
+        let network_denial_monitor = deferred_network_approval.as_ref().map(|deferred| {
             terminate_process_on_network_denial(
                 Arc::clone(&process),
                 Arc::downgrade(&context.session),
                 deferred.clone(),
-            );
-        }
+            )
+        });
 
         let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
         let event_ctx = ToolEventCtx::new(
@@ -467,6 +470,7 @@ impl UnifiedExecProcessManager {
                 request.process_id,
                 request.tty,
                 deferred_network_approval.clone(),
+                network_denial_monitor,
                 Arc::clone(&transcript),
                 Arc::clone(&initial_exec_command_active),
             )
@@ -827,6 +831,23 @@ impl UnifiedExecProcessManager {
             hook_command: Some(hook_command),
         };
 
+        let should_emit_interaction = !request.input.is_empty() || response.process_id.is_some();
+        if should_emit_interaction
+            && let Some(WriteStdinInteractionEvent { session, turn }) = request.interaction_event
+        {
+            let interaction = TerminalInteractionEvent {
+                call_id: response.event_call_id.clone(),
+                process_id: response
+                    .process_id
+                    .unwrap_or(request.process_id)
+                    .to_string(),
+                stdin: request.input.to_string(),
+            };
+            session
+                .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
+                .await;
+        }
+
         Ok(response)
     }
 
@@ -912,6 +933,7 @@ impl UnifiedExecProcessManager {
         process_id: i32,
         tty: bool,
         network_approval: Option<DeferredNetworkApproval>,
+        network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
         initial_exec_command_active: Arc<AtomicBool>,
     ) {
@@ -950,6 +972,7 @@ impl UnifiedExecProcessManager {
             process_id,
             transcript,
             started_at,
+            network_denial_monitor,
         );
     }
 
@@ -1005,92 +1028,6 @@ impl UnifiedExecProcessManager {
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let inherited_fds = spawn_lifecycle.inherited_fds();
 
-        #[cfg(target_os = "windows")]
-        if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
-            // TODO(anp): Keep PathUri through the Windows sandbox launch boundary.
-            let native_cwd =
-                request
-                    .cwd
-                    .to_abs_path()
-                    .map_err(|_| UnifiedExecError::ForeignPath {
-                        path: request.cwd.clone(),
-                    })?;
-            let codex_home = crate::config::find_codex_home().map_err(|err| {
-                UnifiedExecError::create_process(format!(
-                    "windows sandbox: failed to resolve codex_home: {err}"
-                ))
-            })?;
-            let additional_deny_write_paths = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .map(|overrides| overrides.additional_deny_write_paths.clone())
-                .unwrap_or_default();
-            let additional_deny_read_paths = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .map(|overrides| overrides.additional_deny_read_paths.clone())
-                .unwrap_or_default();
-            let elevated_read_roots_override = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .and_then(|overrides| overrides.read_roots_override.clone());
-            let elevated_read_roots_include_platform_defaults = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .is_some_and(|overrides| overrides.read_roots_include_platform_defaults);
-            let elevated_write_roots_override = request
-                .windows_sandbox_filesystem_overrides
-                .as_ref()
-                .and_then(|overrides| overrides.write_roots_override.clone());
-            let spawned = match request.windows_sandbox_level {
-                codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
-                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated_for_permission_profile(
-                        &request.permission_profile,
-                        request.windows_sandbox_workspace_roots.as_slice(),
-                        codex_home.as_ref(),
-                        request.command.clone(),
-                        native_cwd.as_path(),
-                        request.env.clone(),
-                        request.network.is_some(),
-                        None,
-                        elevated_read_roots_override.as_deref(),
-                        elevated_read_roots_include_platform_defaults,
-                        elevated_write_roots_override.as_deref(),
-                        &additional_deny_read_paths,
-                        &additional_deny_write_paths,
-                        tty,
-                        tty,
-                        request.windows_sandbox_private_desktop,
-                    )
-                    .await
-                }
-                codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken
-                | codex_protocol::config_types::WindowsSandboxLevel::Disabled => {
-                    codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
-                        &request.permission_profile,
-                        request.windows_sandbox_workspace_roots.as_slice(),
-                        codex_home.as_ref(),
-                        request.command.clone(),
-                        native_cwd.as_path(),
-                        request.env.clone(),
-                        None,
-                        &additional_deny_read_paths,
-                        &additional_deny_write_paths,
-                        tty,
-                        tty,
-                        request.windows_sandbox_private_desktop,
-                    )
-                    .await
-                }
-            };
-            spawn_lifecycle.after_spawn();
-            return UnifiedExecProcess::from_spawned(
-                spawned.map_err(|err| UnifiedExecError::create_process(err.to_string()))?,
-                request.sandbox,
-                spawn_lifecycle,
-            )
-            .await;
-        }
         if environment.is_remote() {
             if !inherited_fds.is_empty() {
                 return Err(UnifiedExecError::create_process(
@@ -1115,35 +1052,69 @@ impl UnifiedExecProcessManager {
                 path: request.cwd.clone(),
             })?;
 
-        let (program, args) = request
-            .command
-            .split_first()
-            .ok_or(UnifiedExecError::MissingCommandLine)?;
-        let spawn_result = if tty {
-            codex_utils_pty::pty::spawn_process_with_inherited_fds(
-                program,
-                args,
-                native_cwd.as_path(),
-                &request.env,
-                &request.arg0,
-                codex_utils_pty::TerminalSize::default(),
-                &inherited_fds,
-            )
-            .await
-        } else {
-            codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
-                program,
-                args,
-                native_cwd.as_path(),
-                &request.env,
-                &request.arg0,
-                &inherited_fds,
-            )
-            .await
+        if request.command.is_empty() {
+            return Err(UnifiedExecError::MissingCommandLine);
+        }
+        let network_proxy_restricting_sid = {
+            #[cfg(target_os = "windows")]
+            {
+                if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
+                    request
+                        .network
+                        .as_ref()
+                        .map(|network| {
+                            network
+                                .network_proxy_restricting_sid(
+                                    request.network_environment_id.as_deref(),
+                                )
+                                .ok_or_else(|| {
+                                    UnifiedExecError::create_process(
+                                        "managed Windows proxy route is missing its restricting SID"
+                                            .to_string(),
+                                    )
+                                })
+                        })
+                        .transpose()?
+                } else {
+                    None
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                None::<String>
+            }
         };
+        let windows_sandbox = if request.sandbox
+            == codex_sandboxing::SandboxType::WindowsRestrictedToken
+        {
+            Some(codex_sandboxing::WindowsSandboxSpawnRequest {
+                permission_profile: &request.permission_profile,
+                workspace_roots: &request.windows_sandbox_workspace_roots,
+                windows_sandbox_level: request.windows_sandbox_level,
+                proxy_enforced: request.network.is_some(),
+                network_proxy_restricting_sid: network_proxy_restricting_sid.as_deref(),
+                proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+                filesystem_overrides: request.windows_sandbox_filesystem_overrides.as_ref(),
+                use_private_desktop: request.windows_sandbox_private_desktop,
+            })
+        } else {
+            None
+        };
+        let spawn_result = codex_sandboxing::spawn_process(codex_sandboxing::SpawnRequest {
+            command: &request.command,
+            cwd: native_cwd.as_path(),
+            env: &request.env,
+            arg0: &request.arg0,
+            sandbox: request.sandbox,
+            windows_sandbox,
+            tty,
+            stdin_open: tty,
+            inherited_fds: &inherited_fds,
+        })
+        .await;
+        spawn_lifecycle.after_spawn();
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        spawn_lifecycle.after_spawn();
         UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle).await
     }
 
@@ -1391,17 +1362,34 @@ impl UnifiedExecProcessManager {
             .iter()
             .map(|(id, entry)| (*id, entry.last_used, entry.process.has_exited()))
             .collect();
+        let mut found_locked_exited_process = false;
 
         while let Some(process_id) = Self::process_id_to_prune_from_meta(&meta) {
-            // Do not prune processes being held by write_stdin.
-            if let Some(interaction_lock) = store
+            let candidate_process = store
                 .processes
                 .get(&process_id)
-                .map(|entry| entry.process.interaction_lock())
+                .map(|entry| Arc::clone(&entry.process));
+            let candidate_has_exited = candidate_process
+                .as_ref()
+                .is_some_and(|process| process.has_exited());
+            if found_locked_exited_process && !candidate_has_exited {
+                // The store may temporarily exceed its soft cap while an exited
+                // process is publishing its terminal event. Do not evict a live
+                // process just because that exited process is briefly locked.
+                return None;
+            }
+
+            // Do not prune processes while write_stdin or terminal event
+            // publication holds their interaction lock.
+            if let Some(interaction_lock) = candidate_process
+                .as_ref()
+                .map(|process| process.interaction_lock())
                 && let Ok(_interaction_guard) = interaction_lock.try_lock_owned()
             {
                 return store.remove(process_id);
             }
+            found_locked_exited_process |= candidate_has_exited
+                || candidate_process.is_some_and(|process| process.has_exited());
             meta.retain(|(id, _, _)| *id != process_id);
         }
 

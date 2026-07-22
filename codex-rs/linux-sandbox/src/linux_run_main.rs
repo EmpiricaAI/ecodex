@@ -27,7 +27,11 @@ use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::FileSystemAccessMode;
+use codex_protocol::protocol::FileSystemPath;
+use codex_protocol::protocol::FileSystemSandboxEntry;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
+use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 
@@ -163,7 +167,7 @@ pub fn run_main() -> ! {
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_legacy_landlock);
     let EffectivePermissions {
         permission_profile,
-        file_system_sandbox_policy,
+        mut file_system_sandbox_policy,
         network_sandbox_policy,
     } = resolve_permission_profile(permission_profile).unwrap_or_else(|err| panic!("{err}"));
     ensure_legacy_landlock_mode_supports_policy(
@@ -214,14 +218,17 @@ pub fn run_main() -> ! {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
-        let proxy_route_spec =
-            if allow_network_for_proxy {
-                Some(prepare_host_proxy_route_spec().unwrap_or_else(|err| {
-                    panic!("failed to prepare host proxy routing bridge: {err}")
-                }))
-            } else {
-                None
-            };
+        let proxy_route_spec = if allow_network_for_proxy {
+            let (proxy_route_spec, socket_dir) = prepare_host_proxy_route_spec()
+                .unwrap_or_else(|err| panic!("failed to prepare host proxy routing bridge: {err}"));
+            file_system_sandbox_policy = file_system_sandbox_policy.with_additional_readable_roots(
+                &sandbox_policy_cwd,
+                std::slice::from_ref(&socket_dir),
+            );
+            Some(proxy_route_spec)
+        } else {
+            None
+        };
         let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
@@ -328,13 +335,8 @@ fn run_bwrap_with_proc_fallback(
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
 
     if mount_proc
-        && !preflight_proc_mount_support(
-            sandbox_policy_cwd,
-            command_cwd,
-            file_system_sandbox_policy,
-            network_mode,
-        )
-        .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
+        && !preflight_proc_mount_support(network_mode)
+            .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
     {
         // Keep the retry silent so sandbox-internal diagnostics do not leak into the
         // child process stderr stream.
@@ -441,34 +443,29 @@ fn current_process_argv0() -> String {
     }
 }
 
-fn preflight_proc_mount_support(
-    sandbox_policy_cwd: &Path,
-    command_cwd: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_mode: BwrapNetworkMode,
-) -> CodexResult<bool> {
-    let preflight_argv = build_preflight_bwrap_argv(
-        sandbox_policy_cwd,
-        command_cwd,
-        file_system_sandbox_policy,
-        network_mode,
-    )?;
+fn preflight_proc_mount_support(network_mode: BwrapNetworkMode) -> CodexResult<bool> {
+    let preflight_argv = build_preflight_bwrap_argv(network_mode)?;
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     Ok(!is_proc_mount_failure(stderr.as_str()))
 }
 
 fn build_preflight_bwrap_argv(
-    sandbox_policy_cwd: &Path,
-    command_cwd: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
 ) -> CodexResult<crate::bwrap::BwrapArgs> {
+    let file_system_sandbox_policy =
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
+        }]);
     let preflight_command = vec![resolve_true_command()];
     build_bwrap_argv(
         preflight_command,
-        file_system_sandbox_policy,
-        sandbox_policy_cwd,
-        command_cwd,
+        &file_system_sandbox_policy,
+        Path::new("/"),
+        Path::new("/"),
         BwrapOptions {
             mount_proc: true,
             network_mode,

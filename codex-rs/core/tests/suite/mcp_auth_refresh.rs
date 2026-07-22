@@ -14,7 +14,7 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::CodexAppsToolsCache;
 use codex_mcp::EffectiveMcpServer;
 use codex_mcp::ElicitationRequestRouter;
-use codex_mcp::McpConnectionManager;
+use codex_mcp::McpConnectionSet;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::McpToolCatalogCache;
 use codex_mcp::ToolPluginProvenance;
@@ -83,16 +83,14 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         EffectiveMcpServer::configured(hosted_plugin_runtime_config),
     )]);
-    let (tx_event, rx_event) = async_channel::unbounded();
-    drop(rx_event);
     let approval_policy = Constrained::allow_any(AskForApproval::Never);
-    let manager = McpConnectionManager::new(
+    let manager = McpConnectionSet::new(
         &mcp_servers,
         OAuthCredentialsStoreMode::default(),
         AuthKeyringBackendKind::default(),
         &approval_policy,
         "test".to_string(),
-        tx_event,
+        /*tx_event*/ None,
         CancellationToken::new(),
         PermissionProfile::default(),
         McpRuntimeContext::new(

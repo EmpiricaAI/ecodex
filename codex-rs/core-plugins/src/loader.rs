@@ -26,8 +26,6 @@ use codex_config::types::PluginMcpServerConfig;
 use codex_connectors::parse_plugin_app_config;
 use codex_connectors::parse_plugin_app_config_value;
 use codex_core_skills::PluginSkillSnapshots;
-use codex_core_skills::SkillMetadata;
-use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::resolve_disabled_skill_paths;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_core_skills::loader::SkillRoot;
@@ -48,6 +46,8 @@ use codex_plugin::app_connector_ids_from_declarations;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
+use codex_skills::SkillConfigRules;
+use codex_skills::SkillMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
 use serde_json::Value as JsonValue;
@@ -1580,8 +1580,16 @@ fn clone_git_plugin_source(
             /*cwd*/ None,
         )?;
     }
-    if let Some(target) = sha.or(ref_name) {
-        run_git(&["checkout", target], Some(destination))?;
+    if let Some(sha) = sha {
+        run_git(&["checkout", sha], Some(destination))?;
+        let checked_out_sha = run_git_output(&["rev-parse", "HEAD"], Some(destination))?;
+        if !checked_out_sha.eq_ignore_ascii_case(sha) {
+            return Err(format!(
+                "checked out Git SHA {checked_out_sha} does not match requested SHA {sha}"
+            ));
+        }
+    } else if let Some(ref_name) = ref_name {
+        run_git(&["checkout", ref_name], Some(destination))?;
     } else if sparse_checkout_path.is_some() {
         run_git(&["checkout"], Some(destination))?;
     }
@@ -1589,6 +1597,10 @@ fn clone_git_plugin_source(
 }
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
+    run_git_output(args, cwd).map(drop)
+}
+
+fn run_git_output(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     let mut command = Command::new("git");
     command.args(args);
     command.env("GIT_TERMINAL_PROMPT", "0");
@@ -1600,7 +1612,7 @@ fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
         .output()
         .map_err(|err| format!("failed to run git {}: {err}", args.join(" ")))?;
     if output.status.success() {
-        return Ok(());
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
     }
 
     Err(format!(

@@ -8,8 +8,6 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
-use crate::guardian::guardian_rejection_message;
-use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian_with_reviewer;
@@ -36,7 +34,7 @@ use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
-use codex_mcp::McpConnectionManager;
+use codex_mcp::McpConnectionSet;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::SandboxState;
 use codex_mcp::auth_elicitation_completed_result;
@@ -629,7 +627,7 @@ async fn execute_mcp_tool_call(
 async fn maybe_request_codex_apps_auth_elicitation(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     call_id: &str,
     server: &str,
     metadata: Option<&McpToolApprovalMetadata>,
@@ -700,7 +698,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
 async fn refresh_codex_apps_after_connector_auth(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
 ) {
     let mcp_tools_result = manager.hard_refresh_codex_apps_tools_cache().await;
 
@@ -721,7 +719,7 @@ async fn refresh_codex_apps_after_connector_auth(
 
 async fn augment_mcp_tool_request_meta_with_sandbox_state(
     step_context: &StepContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     server: &str,
     mut meta: Option<serde_json::Value>,
 ) -> anyhow::Result<Option<serde_json::Value>> {
@@ -789,7 +787,7 @@ fn sandbox_cwd_for_mcp_server(step_context: &StepContext, environment_id: &str) 
 async fn maybe_mark_thread_memory_mode_polluted(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     server: &str,
 ) {
     if !turn_context.config.memories.disable_on_external_context {
@@ -973,7 +971,7 @@ struct McpAppUsageMetadata {
 async fn maybe_track_codex_app_used(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     server: &str,
     tool_name: &str,
 ) {
@@ -1292,7 +1290,7 @@ async fn maybe_request_mcp_tool_approval(
             /*retry_reason*/ None,
         )
         .await;
-        let decision = mcp_tool_approval_decision_from_guardian(sess, &review_id, decision).await;
+        let decision = mcp_tool_approval_decision_from_guardian(decision);
         apply_mcp_tool_approval_decision(
             sess,
             turn_context,
@@ -1464,21 +1462,17 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
     }
 }
 
-async fn mcp_tool_approval_decision_from_guardian(
-    sess: &Session,
-    review_id: &str,
-    decision: ReviewDecision,
-) -> McpToolApprovalDecision {
+fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpToolApprovalDecision {
     match decision {
         ReviewDecision::Approved
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
         ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
-        ReviewDecision::Denied => McpToolApprovalDecision::Decline {
-            message: Some(guardian_rejection_message(sess, review_id).await),
+        ReviewDecision::Denied { rejection } => McpToolApprovalDecision::Decline {
+            message: Some(rejection),
         },
         ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
-            message: Some(guardian_timeout_message()),
+            message: Some(crate::guardian::guardian_timeout_message()),
         },
         ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
     }
@@ -1487,7 +1481,7 @@ async fn mcp_tool_approval_decision_from_guardian(
 pub(crate) async fn lookup_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
@@ -1603,7 +1597,7 @@ fn get_mcp_app_resource_uri(
 }
 
 async fn lookup_mcp_app_usage_metadata(
-    manager: &McpConnectionManager,
+    manager: &McpConnectionSet,
     server: &str,
     tool_name: &str,
 ) -> Option<McpAppUsageMetadata> {

@@ -8,6 +8,7 @@ use super::*;
 use crate::app_server_session::source_agent_path;
 use crate::app_server_session::thread_blocks_direct_input;
 use codex_config::types::ResumeCwdMode;
+use std::collections::HashSet;
 
 #[derive(Clone, Copy)]
 pub(super) enum ThreadAttachPresentation {
@@ -15,9 +16,17 @@ pub(super) enum ThreadAttachPresentation {
     PromptEdit,
 }
 
+/// Reports whether a loaded-thread backfill completed and which descendants already had their
+/// liveness metadata refreshed, allowing the picker to skip duplicate `thread/read` requests.
+#[derive(Default)]
+pub(super) struct LoadedSubagentBackfill {
+    pub(super) completed: bool,
+    pub(super) refreshed_thread_ids: HashSet<ThreadId>,
+}
+
 impl App {
     pub(super) async fn open_agent_picker(&mut self, app_server: &mut AppServerSession) {
-        self.backfill_loaded_subagent_threads(app_server).await;
+        let backfill = self.backfill_loaded_subagent_threads(app_server).await;
         // V2 subagents are identified by canonical paths observed from activity events or loaded
         // thread metadata. A buffered active turn is positive liveness evidence; a completed
         // snapshot is terminal evidence. An empty store does not clear a successful spawn hint.
@@ -46,7 +55,7 @@ impl App {
                 } else if has_terminal_snapshot {
                     self.agent_navigation.mark_stopped(thread_id);
                 }
-            } else {
+            } else if !backfill.refreshed_thread_ids.contains(&thread_id) {
                 self.refresh_agent_picker_thread_liveness(app_server, thread_id)
                     .await;
             }
@@ -92,6 +101,7 @@ impl App {
         for thread_id in thread_ids {
             if path_backed_thread_ids.contains(&thread_id)
                 || self.side_threads.contains_key(&thread_id)
+                || backfill.refreshed_thread_ids.contains(&thread_id)
             {
                 continue;
             }
@@ -408,9 +418,13 @@ impl App {
             return Ok(());
         }
 
-        if !self
-            .refresh_agent_picker_thread_liveness(app_server, thread_id)
-            .await
+        // A tracked side thread stays loaded until it is explicitly discarded and already has a
+        // replay channel, so another liveness read cannot add anything before selection.
+        if !(self.side_threads.contains_key(&thread_id)
+            && self.thread_event_channels.contains_key(&thread_id)
+            || self
+                .refresh_agent_picker_thread_liveness(app_server, thread_id)
+                .await)
         {
             self.chat_widget
                 .add_error_message(format!("Agent thread {thread_id} is no longer available."));
@@ -590,6 +604,7 @@ impl App {
         app_server: &mut AppServerSession,
         session_start_source: Option<ThreadStartSource>,
         initial_user_message: Option<crate::chatwidget::UserMessage>,
+        new_thread_name: Option<String>,
     ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
@@ -623,11 +638,24 @@ impl App {
             .start_thread_with_session_start_source(&config, session_start_source)
             .await
         {
-            Ok(started) => {
+            Ok(mut started) => {
+                let name_error = if let Some(name) = new_thread_name {
+                    match app_server
+                        .thread_set_name(started.session.thread_id, name.clone())
+                        .await
+                    {
+                        Ok(()) => {
+                            started.session.thread_name = Some(name);
+                            None
+                        }
+                        Err(err) => Some(format!("Failed to name the new session: {err}")),
+                    }
+                } else {
+                    None
+                };
                 if let Err(err) = self
                     .replace_chat_widget_with_app_server_thread(
                         tui,
-                        app_server,
                         started,
                         ThreadAttachPresentation::SessionLineage,
                         initial_user_message,
@@ -637,16 +665,22 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to attach to fresh app-server thread: {err}"
                     ));
-                } else if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = Vec::new();
-                    if let Some(usage_line) = summary.usage_line {
-                        lines.push(usage_line.into());
+                } else {
+                    if let Some(err) = name_error {
+                        self.chat_widget.add_error_message(err);
                     }
-                    if let Some(command) = summary.resume_hint {
-                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                        lines.push(spans.into());
+                    if let Some(summary) = summary {
+                        let mut lines: Vec<Line<'static>> = Vec::new();
+                        if let Some(usage_line) = summary.usage_line {
+                            lines.push(usage_line.into());
+                        }
+                        if let Some(command) = summary.resume_hint {
+                            let spans =
+                                vec!["To continue this session, run ".into(), command.cyan()];
+                            lines.push(spans.into());
+                        }
+                        self.chat_widget.add_plain_history_lines(lines);
                     }
-                    self.chat_widget.add_plain_history_lines(lines);
                 }
             }
             Err(err) => {
@@ -662,7 +696,6 @@ impl App {
     pub(super) async fn replace_chat_widget_with_app_server_thread(
         &mut self,
         tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
         started: AppServerStartedThread,
         presentation: ThreadAttachPresentation,
         initial_user_message: Option<crate::chatwidget::UserMessage>,
@@ -686,16 +719,15 @@ impl App {
             presentation,
         )
         .await?;
-        self.backfill_loaded_subagent_threads(app_server).await;
         Ok(())
     }
 
     /// Fetches all loaded threads from the app server and registers descendants of the primary
     /// thread in the navigation cache and chat widget metadata.
     ///
-    /// Called after `replace_chat_widget_with_app_server_thread` during resume, fork, and new
-    /// thread creation so that the `/agent` picker and keyboard navigation are pre-populated even
-    /// if the TUI did not witness the original spawn events.
+    /// Called when opening the `/agent` picker and after resuming a thread so that the picker and
+    /// keyboard navigation are pre-populated even if the TUI did not witness the original spawn
+    /// events. Fresh and forked threads cannot have pre-existing descendants.
     ///
     /// The loaded-thread list is fetched in full (no pagination) and the spawn tree is walked
     /// by `find_loaded_subagent_threads_for_primary`. Each discovered subagent is registered via
@@ -704,9 +736,9 @@ impl App {
     pub(super) async fn backfill_loaded_subagent_threads(
         &mut self,
         app_server: &mut AppServerSession,
-    ) -> bool {
+    ) -> LoadedSubagentBackfill {
         let Some(primary_thread_id) = self.primary_thread_id else {
-            return false;
+            return LoadedSubagentBackfill::default();
         };
 
         let loaded_thread_ids = match app_server
@@ -719,7 +751,7 @@ impl App {
             Ok(response) => response.data,
             Err(err) => {
                 tracing::warn!(%err, "failed to list loaded threads for subagent backfill");
-                return false;
+                return LoadedSubagentBackfill::default();
             }
         };
 
@@ -747,8 +779,14 @@ impl App {
             }
         }
 
+        let mut refreshed_thread_ids = HashSet::new();
         for thread in find_loaded_subagent_threads_for_primary(threads, primary_thread_id) {
             let agent_path = thread.agent_path;
+            let has_live_channel = self
+                .thread_event_channels
+                .get(&thread.thread_id)
+                .is_some_and(|channel| channel.attachment() == ThreadEventAttachment::Live);
+            let is_closed = !has_live_channel && thread.is_closed;
             if thread.blocks_direct_input {
                 self.agent_navigation.mark_parent_owned(thread.thread_id);
             }
@@ -756,14 +794,28 @@ impl App {
                 thread.thread_id,
                 thread.agent_nickname,
                 thread.agent_role,
-                /*is_closed*/ false,
+                is_closed,
             );
             self.agent_navigation
                 .set_agent_path(thread.thread_id, agent_path);
+            // A live channel can have an empty store after a successful spawn. Only apply server
+            // status for channels that would otherwise need another liveness read.
+            if !has_live_channel {
+                if thread.is_running {
+                    self.agent_navigation.mark_running(thread.thread_id);
+                } else {
+                    self.agent_navigation
+                        .set_running(thread.thread_id, /*is_running*/ false);
+                }
+                refreshed_thread_ids.insert(thread.thread_id);
+            }
         }
         self.sync_active_agent_label();
 
-        !had_read_error
+        LoadedSubagentBackfill {
+            completed: !had_read_error,
+            refreshed_thread_ids,
+        }
     }
 
     /// Returns the adjacent thread id for keyboard navigation, backfilling from the server if the
@@ -792,7 +844,11 @@ impl App {
             return None;
         }
 
-        if self.backfill_loaded_subagent_threads(app_server).await {
+        if self
+            .backfill_loaded_subagent_threads(app_server)
+            .await
+            .completed
+        {
             self.last_subagent_backfill_attempt = Some(primary_thread_id);
         }
         self.agent_navigation
@@ -928,7 +984,6 @@ impl App {
                 match self
                     .replace_chat_widget_with_app_server_thread(
                         tui,
-                        app_server,
                         resumed,
                         ThreadAttachPresentation::SessionLineage,
                         /*initial_user_message*/ None,
@@ -936,6 +991,7 @@ impl App {
                     .await
                 {
                     Ok(()) => {
+                        self.backfill_loaded_subagent_threads(app_server).await;
                         if let Some(summary) = summary {
                             let mut lines: Vec<Line<'static>> = Vec::new();
                             if let Some(usage_line) = summary.usage_line {
