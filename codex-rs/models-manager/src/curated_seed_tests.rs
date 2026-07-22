@@ -145,7 +145,7 @@ fn collapse_keeps_latest_per_line_and_splits_distinct_lines() {
         "deepseek/deepseek-v3.2",
     ]
     .iter()
-    .map(|s| s.to_string())
+    .map(std::string::ToString::to_string)
     .collect();
 
     let out = collapse_to_latest_per_line(&slugs);
@@ -168,7 +168,7 @@ fn collapse_keeps_unversioned_slugs_as_own_lines() {
     use crate::curated_seed::collapse_to_latest_per_line;
     let slugs: Vec<String> = ["qwen/qwen3-coder", "moonshotai/kimi-k2"]
         .iter()
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
     let out = collapse_to_latest_per_line(&slugs);
     assert_eq!(out.len(), 2, "distinct unversioned slugs both kept: {out:?}");

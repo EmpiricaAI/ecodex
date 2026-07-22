@@ -1547,6 +1547,7 @@ fn empirica_plugin_hooks_are_auto_trusted_without_config_state() {
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()
@@ -1609,6 +1610,7 @@ fn unlisted_plugin_hooks_remain_untrusted_without_config_state() {
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,
+                    additional_context_limit: None,
                 }],
             }],
             ..Default::default()
