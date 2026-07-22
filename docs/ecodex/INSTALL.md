@@ -34,10 +34,10 @@ Grab the matching tarball for your platform from the [Releases page](https://git
 |---|---|
 | macOS Apple Silicon | `ecodex-aarch64-apple-darwin.tar.gz` |
 | macOS Intel (x86_64) | `ecodex-x86_64-apple-darwin.tar.gz` |
-| Linux x86_64 | `ecodex-x86_64-unknown-linux-musl.tar.gz` |
-| Linux aarch64 | `ecodex-aarch64-unknown-linux-musl.tar.gz` |
+| Linux x86_64 | `ecodex-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux aarch64 | `ecodex-aarch64-unknown-linux-gnu.tar.gz` |
 
-Each tarball contains all three binaries (`ecodex`, `codex-empirica-plugin`, `codex-empirica-translator`) plus a `.sha256` sidecar for verification. Extract and drop them in `~/.local/bin/` or `/usr/local/bin/` — all three need to be on `PATH` (the plugin runs per hook event; the translator only for non-Responses-API providers). The Linux binaries are static musl builds (no glibc version dependency).
+Each tarball contains all three binaries (`ecodex`, `codex-empirica-plugin`, `codex-empirica-translator`) plus a `.sha256` sidecar for verification. Extract and drop them in `~/.local/bin/` or `/usr/local/bin/` — all three need to be on `PATH` (the plugin runs per hook event; the translator only for non-Responses-API providers). The Linux binaries are built on Ubuntu 22.04 (glibc 2.35), covering most current distributions.
 
 ### Cargo (Rust devs, source build)
 

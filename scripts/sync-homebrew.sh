@@ -30,8 +30,8 @@ done
 declare -A TARGETS=(
   [AARCH64_APPLE_DARWIN]="aarch64-apple-darwin"
   [X86_64_APPLE_DARWIN]="x86_64-apple-darwin"
-  [AARCH64_UNKNOWN_LINUX_MUSL]="aarch64-unknown-linux-musl"
-  [X86_64_UNKNOWN_LINUX_MUSL]="x86_64-unknown-linux-musl"
+  [AARCH64_UNKNOWN_LINUX_GNU]="aarch64-unknown-linux-gnu"
+  [X86_64_UNKNOWN_LINUX_GNU]="x86_64-unknown-linux-gnu"
 )
 
 fetch_sha() {

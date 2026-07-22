@@ -25,12 +25,12 @@ class Ecodex < Formula
 
   on_linux do
     on_arm do
-      url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-aarch64-unknown-linux-musl.tar.gz"
-      sha256 "__SHA256_AARCH64_UNKNOWN_LINUX_MUSL__"
+      url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "__SHA256_AARCH64_UNKNOWN_LINUX_GNU__"
     end
     on_intel do
-      url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-x86_64-unknown-linux-musl.tar.gz"
-      sha256 "__SHA256_X86_64_UNKNOWN_LINUX_MUSL__"
+      url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "__SHA256_X86_64_UNKNOWN_LINUX_GNU__"
     end
   end
 

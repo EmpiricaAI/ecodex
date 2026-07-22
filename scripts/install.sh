@@ -37,7 +37,7 @@ done
 os="$(uname -s)"
 arch="$(uname -m)"
 case "$os" in
-  Linux)  os_part="unknown-linux-musl" ;;
+  Linux)  os_part="unknown-linux-gnu" ;;
   Darwin) os_part="apple-darwin" ;;
   *) err "unsupported OS: $os (Linux and macOS only; on Windows use WSL)" ;;
 esac

@@ -45,9 +45,9 @@ jobs:
             runner: macos-14         # Apple Silicon, standard hosted
           - target: x86_64-apple-darwin
             runner: macos-13         # Intel, standard hosted
-          - target: x86_64-unknown-linux-musl
-            runner: ubuntu-22.04     # older glibc host; musl output is static/portable
-          - target: aarch64-unknown-linux-musl
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04     # older glibc (2.35) host = broad forward-compat
+          - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm # native ARM hosted runner (GA)
     steps:
       - name: Checkout ${{ inputs.tag || github.ref_name }}
@@ -55,13 +55,6 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref_name }}
           persist-credentials: false
-
-      - name: Install Linux musl prerequisites
-        if: contains(matrix.target, 'linux-musl')
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
 
       - name: Install pinned Rust toolchain + target
         working-directory: codex-rs
