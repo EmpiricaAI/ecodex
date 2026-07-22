@@ -8,6 +8,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+- **gpt-5.6 model family** via a 146-commit upstream re-sync
+  (`bed0c5e74c..upstream/main`). Our prior merge base predated gpt-5.6, so users
+  selecting it hit "asking for a newer upstream binary"; ecodex now carries the
+  `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` / `gpt-5.6-pro` registry
+  entries plus the protocol/model-info currency they depend on. 12 conflicts
+  resolved preserving the ecodex L3 surface: `pinned` skills ported into the new
+  upstream `codex-skills` crate (upstream extracted `SkillMetadata` out of
+  `core-skills`), `writable_git` adapted to the new `FileSystemSandboxEntry`
+  constructor, and the T78 `ArcSwap<ModelClient>` hot-swap realigned to the
+  updated `ModelClient::new` signature.
+- **Prebuilt-binary install pipeline** — non-devs can now install without a Rust
+  toolchain or a 10–25 min compile:
+  - `.github/workflows/release.yml` cross-builds stripped binaries for macOS
+    (arm64/x64) and Linux (arm64/x64, static musl) on every `v*.*.*` tag and
+    attaches per-target `.tar.gz` + `.sha256` to the release.
+  - `scripts/install.sh` — `curl … | bash` one-liner that detects your platform,
+    downloads the matching tarball, verifies its checksum, and installs to
+    `~/.local/bin`.
+  - The Homebrew formula now **downloads the prebuilt binary** instead of
+    `cargo install` (`packaging/homebrew/ecodex.rb` + `scripts/sync-homebrew.sh`
+    to fill per-target checksums from a release).
+
+### Changed
+- **Install docs are now prebuilt-first + honest** (README + `docs/ecodex/INSTALL.md`).
+  The install script and Homebrew are marked "no compile"; the stale
+  Linux-x86_64-only "Direct binary" table is corrected to the full macOS+Linux
+  arm64/x64 matrix. The cargo + source-build paths are clearly labelled as the
+  developer (compiles) paths.
+
+### Fixed
+- Silenced 3 cosmetic startup warnings (bundled-empirica `SessionEnd` timeout
+  clamp now debug-logs; TUI update-check + Homebrew-cask URLs point at
+  `EmpiricaAI/ecodex`, killing the false "update available" banner).
+
 ## [0.2.5] - 2026-07-20
 
 ### Added
