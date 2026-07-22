@@ -3362,7 +3362,7 @@ mod tests {
             policy.entries.iter().find_map(|entry| match &entry.path {
                 FileSystemPath::Special {
                     value: FileSystemSpecialPath::ProjectRoots { subpath: Some(sp) },
-                } if sp.as_path() == std::path::Path::new(subpath) => Some(entry.access),
+                } if std::path::Path::new(sp) == std::path::Path::new(subpath) => Some(entry.access),
                 _ => None,
             })
         }
