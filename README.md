@@ -49,14 +49,15 @@ Concretely, what users notice that vanilla codex doesn't do:
 
 ## Install
 
-| Channel | Command |
-|---|---|
-| **Homebrew** (Mac/Linux) | `brew install EmpiricaAI/tap/ecodex` |
-| **Direct binary** | Download from [Releases](https://github.com/EmpiricaAI/ecodex/releases/latest) |
-| **Cargo** (Rust devs, source build) | `cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli` |
-| **Build from source** | `git clone … && cd ecodex && ./ecodex/scripts/install.sh` |
+| Channel | Command | Compiles? |
+|---|---|---|
+| **Install script** (Mac/Linux) | `curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh \| bash` | No — prebuilt |
+| **Homebrew** (Mac/Linux) | `brew install EmpiricaAI/tap/ecodex` | No — prebuilt |
+| **Direct binary** | Download `ecodex-<target>.tar.gz` from [Releases](https://github.com/EmpiricaAI/ecodex/releases/latest) | No — prebuilt |
+| **Cargo** (Rust devs) | `cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli` | Yes (source) |
+| **Build from source** | `git clone … && cd ecodex && ./ecodex/scripts/install.sh` | Yes (source) |
 
-All four paths produce the same `ecodex` binary. The Rust toolchain is required for the cargo + source-build paths; Homebrew + direct-binary work without it.
+The first three paths download prebuilt, stripped binaries for macOS (arm64/x64) and Linux (arm64/x64) — **no Rust toolchain, no compile**. Non-devs should use the install script or Homebrew. The cargo + source-build paths compile the workspace (10–25 min) and are for developers.
 
 The empirica CLI must also be on `PATH` — install from [`EmpiricaAI/empirica`](https://github.com/EmpiricaAI/empirica). Without it the empirica plugin shells fail-quiet and discipline goes dark.
 

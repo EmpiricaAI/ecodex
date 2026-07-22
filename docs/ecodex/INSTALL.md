@@ -1,35 +1,43 @@
 # Installing ecodex
 
-ecodex offers four install paths. Pick the lightest-touch one that fits your setup.
+ecodex offers five install paths. The first three download **prebuilt, stripped binaries** (macOS arm64/x64, Linux arm64/x64) — no Rust toolchain, no compile. Non-developers should use the install script or Homebrew. The cargo + source-build paths compile the workspace (10–25 min) and are for developers.
 
 ## Prerequisites
 
 - **`empirica` CLI** on `PATH` — the empirica plugin shells out to it. Install from [`EmpiricaAI/empirica`](https://github.com/EmpiricaAI/empirica) before running ecodex; without it, the plugin's hook subprocesses fail-quiet and discipline goes dark.
 - **Linux or macOS** — Windows isn't supported yet (requires `landlock` / sandbox parity work).
-- **Rust toolchain** ([rustup.rs](https://rustup.rs/), stable 1.93+) — needed only for the cargo + source-build paths.
+- **Rust toolchain** ([rustup.rs](https://rustup.rs/), stable 1.95+) — needed **only** for the cargo + source-build paths. The install script, Homebrew, and direct-binary paths need no toolchain.
 
 ## Install paths
 
-### Homebrew (recommended for Mac/Linux)
+### Install script (recommended for non-devs, Mac/Linux)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh | bash
+```
+
+Detects your OS + CPU, downloads the matching prebuilt tarball from Releases, verifies its SHA-256, and installs the three binaries into `~/.local/bin` (override with `ECODEX_INSTALL_DIR` or `--prefix DIR`; pin a version with `ECODEX_VERSION=v0.2.6`). No clone, no toolchain, no compile.
+
+### Homebrew (Mac/Linux)
 
 ```sh
 brew install EmpiricaAI/tap/ecodex
 ```
 
-Pulls from the [`EmpiricaAI/homebrew-tap`](https://github.com/EmpiricaAI/homebrew-tap) tap. Builds from source via cargo (Rust toolchain auto-installed as a brew dep). One command, no clone.
+Pulls from the [`EmpiricaAI/homebrew-tap`](https://github.com/EmpiricaAI/homebrew-tap) tap and installs the **prebuilt binary** for your platform (no toolchain, no compile). One command, no clone.
 
 ### Direct binary download
 
-Grab the matching binary for your platform from the [Releases page](https://github.com/EmpiricaAI/ecodex/releases/latest):
+Grab the matching tarball for your platform from the [Releases page](https://github.com/EmpiricaAI/ecodex/releases/latest):
 
 | Platform | Asset |
 |---|---|
-| Linux x86_64 | `ecodex-linux-x86_64` |
-| macOS Intel (x86_64) | `ecodex-macos-x86_64` |
-| macOS Apple Silicon | `ecodex-macos-aarch64` |
-| Linux aarch64 | not yet (cross-compile pending — track in goal `c20d412f`) |
+| macOS Apple Silicon | `ecodex-aarch64-apple-darwin.tar.gz` |
+| macOS Intel (x86_64) | `ecodex-x86_64-apple-darwin.tar.gz` |
+| Linux x86_64 | `ecodex-x86_64-unknown-linux-musl.tar.gz` |
+| Linux aarch64 | `ecodex-aarch64-unknown-linux-musl.tar.gz` |
 
-`chmod +x` it and drop in `~/.local/bin/` or `/usr/local/bin/`. The empirica plugin binary (`codex-empirica-plugin-<platform>`) is uploaded alongside; both need to be on `PATH` (or you can vendor the plugin under `~/.codex/plugins/`). The translator binary (`codex-empirica-translator-<platform>`) is also uploaded; only needed if you're routing through non-Responses-API providers.
+Each tarball contains all three binaries (`ecodex`, `codex-empirica-plugin`, `codex-empirica-translator`) plus a `.sha256` sidecar for verification. Extract and drop them in `~/.local/bin/` or `/usr/local/bin/` — all three need to be on `PATH` (the plugin runs per hook event; the translator only for non-Responses-API providers). The Linux binaries are static musl builds (no glibc version dependency).
 
 ### Cargo (Rust devs, source build)
 
