@@ -220,6 +220,7 @@ fn model_provider_to_proto(
         websocket_connect_timeout_ms,
         requires_openai_auth,
         supports_websockets,
+        supports_openai_builtin_tools: _,
     } = provider;
 
     proto::ModelProvider {
@@ -539,6 +540,7 @@ mod tests {
             websocket_connect_timeout_ms: Some(10_000),
             requires_openai_auth: false,
             supports_websockets: true,
+            supports_openai_builtin_tools: true,
             aws: None,
         }
     }

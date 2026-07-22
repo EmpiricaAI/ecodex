@@ -60,6 +60,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
         supports_websockets: false,
+        supports_openai_builtin_tools: true,
     };
 
     let codex_home = match TempDir::new() {
