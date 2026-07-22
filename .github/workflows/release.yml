@@ -36,7 +36,7 @@ jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 120   # cold-cache release build of the full workspace (v8/aws-lc) is slow on 2-core runners
     strategy:
       fail-fast: false
       matrix:
@@ -44,7 +44,7 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-14         # Apple Silicon, standard hosted
           - target: x86_64-apple-darwin
-            runner: macos-13         # Intel, standard hosted
+            runner: macos-14         # cross-compile x86_64 on Apple Silicon (macos-13 Intel runners are scarce/deprecated)
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04     # older glibc (2.35) host = broad forward-compat
           - target: aarch64-unknown-linux-gnu
