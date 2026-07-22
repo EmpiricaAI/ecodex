@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-22
+
 ### Added
 - **gpt-5.6 model family** via a 146-commit upstream re-sync
   (`bed0c5e74c..upstream/main`). Our prior merge base predated gpt-5.6, so users
@@ -22,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - **Prebuilt-binary install pipeline** — non-devs can now install without a Rust
   toolchain or a 10–25 min compile:
   - `.github/workflows/release.yml` cross-builds stripped binaries for macOS
-    (arm64/x64) and Linux (arm64/x64, static musl) on every `v*.*.*` tag and
+    (arm64/x64) and Linux (arm64/x64, glibc) on every `v*.*.*` tag and
     attaches per-target `.tar.gz` + `.sha256` to the release.
   - `scripts/install.sh` — `curl … | bash` one-liner that detects your platform,
     downloads the matching tarball, verifies its checksum, and installs to
@@ -265,7 +267,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.2...v0.2.3
