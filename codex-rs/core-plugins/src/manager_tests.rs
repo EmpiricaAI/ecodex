@@ -5993,6 +5993,8 @@ async fn load_plugins_populates_statusline_and_writable_roots_from_manifest() {
         effective_roots[1].root.as_path(),
         Path::new("/var/lib/sample-b")
     );
+}
+
 #[test]
 fn refresh_non_curated_plugin_cache_continues_after_plugin_error() {
     let tmp = tempfile::tempdir().unwrap();
