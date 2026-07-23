@@ -52,7 +52,8 @@ for token in "${!TARGETS[@]}"; do
 done
 rm -f "${OUT}.bak"
 
-if grep -q '__SHA256_\|__VERSION__' "$OUT"; then
+# Match only real unfilled tokens (__SHA256_<UPPER>), not the doc comment's __SHA256_*.
+if grep -v '^#' "$OUT" | grep -q '__SHA256_[A-Z]\|__VERSION__'; then
   echo "ERROR: unfilled placeholders remain in ${OUT}" >&2
   exit 1
 fi
