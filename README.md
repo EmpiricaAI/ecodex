@@ -94,6 +94,7 @@ For the full vocabulary + how the pieces compose, see [`docs/ecodex/system-overv
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — three-layer contribution model, dev workflow, conventions
 - [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) — install modes, providers, troubleshooting
+- [`docs/ecodex/MISTRAL_SOVEREIGN.md`](docs/ecodex/MISTRAL_SOVEREIGN.md) — wiring EU-sovereign Mistral models (Devstral/Codestral) for data residency + cost savings
 - [`docs/ecodex/system-overview.md`](docs/ecodex/system-overview.md) — three-layer architecture, runtime composition, file layout
 - [`docs/ecodex/architecture.md`](docs/ecodex/architecture.md) — T3 decision record (distribution model, fork posture, integration strategy)
 - [`docs/ecodex/inspection.md`](docs/ecodex/inspection.md) — T2 inspection of codex-rs (hook system, plugin marketplace, thread-scoped goals)
