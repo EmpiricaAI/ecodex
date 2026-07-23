@@ -1143,6 +1143,7 @@ impl App {
                         crate::config_update::build_model_selection_edits(
                             model.as_str(),
                             Some(default_effort),
+                            crate::ecodex_curated_models::provider_for_model(model.as_str()),
                         ),
                     )
                     .await
@@ -1675,16 +1676,15 @@ impl App {
                 effort,
                 model_provider,
             } => {
-                // ecodex T78: the provider-swap persist flows through the
-                // thread_settings/OverrideTurnContext → config path; this
-                // model+effort persist event currently always carries
-                // model_provider=None. Acknowledge the field explicitly.
-                let _ = &model_provider;
+                // ecodex: persist model + effort + routed provider together so
+                // the picker's cross-provider choice (e.g. gpt-5.x → openai)
+                // survives a restart. model_provider=None leaves it untouched.
                 match crate::config_update::write_config_batch(
                     app_server.request_handle(),
                     crate::config_update::build_model_selection_edits(
                         model.as_str(),
                         effort.as_ref(),
+                        model_provider.as_deref(),
                     ),
                 )
                 .await

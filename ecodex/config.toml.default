@@ -172,3 +172,16 @@ base_url = "https://openrouter.ai/api/v1"
 env_key = "OPENROUTER_API_KEY"
 env_key_instructions = "Get an API key at https://openrouter.ai/keys, then export OPENROUTER_API_KEY in your shell or add to ~/.codex/.env."
 wire_api = "responses"
+
+# ─── Frontier direct: OpenAI (GPT-5.x) ───────────────────────────────
+# ecodex leads with open-weights but does NOT lock out frontier models.
+# The GPT-5.x presets in `/model` (gpt-5.6-sol/terra/luna, gpt-5.5, gpt-5.4)
+# route here — selecting one auto-switches model_provider to `openai`. Native
+# Responses API, so no translator needed. Requires an OpenAI API key with
+# access to those models.
+[model_providers.openai]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+env_key_instructions = "Get an API key at https://platform.openai.com/api-keys, then export OPENAI_API_KEY in your shell or add to ~/.codex/.env."
+wire_api = "responses"

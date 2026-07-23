@@ -264,8 +264,12 @@ impl ChatWidget {
                 tx.send(AppEvent::PersistModelSelection {
                     model: model_for_action.clone(),
                     effort: effort_for_action.clone(),
-                    // ecodex T78: preserve provider on persist (None = keep current).
-                    model_provider: None,
+                    // ecodex: persist the routed provider so the picker's
+                    // cross-provider choice survives restart (None = keep current).
+                    model_provider: crate::ecodex_curated_models::provider_for_model(
+                        &model_for_action,
+                    )
+                    .map(str::to_string),
                 });
             }
             if let Some(warning) = warning.clone() {
@@ -366,7 +370,9 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model.clone(),
                 effort: effort.clone(),
-                model_provider: None,
+                // ecodex: persist the routed provider (None = keep current).
+                model_provider: crate::ecodex_curated_models::provider_for_model(&model)
+                    .map(str::to_string),
             });
             if let Some(warning) = warning.clone() {
                 tx.send(AppEvent::InsertHistoryCell(Box::new(

@@ -61,6 +61,7 @@ fn trusted_project_edit(project_path: &Path) -> ConfigEdit {
 pub(crate) fn build_model_selection_edits(
     model: &str,
     effort: Option<impl ToString>,
+    model_provider: Option<&str>,
 ) -> Vec<ConfigEdit> {
     let effort_edit = effort.map_or_else(
         || clear_config_value("model_reasoning_effort"),
@@ -71,10 +72,20 @@ pub(crate) fn build_model_selection_edits(
             )
         },
     );
-    vec![
+    let mut edits = vec![
         replace_config_value("model", serde_json::json!(model)),
         effort_edit,
-    ]
+    ];
+    // ecodex: persist the routed provider so the picker's choice survives a
+    // restart (else a persisted model=gpt-5.x with a stale model_provider
+    // 404s on next launch). None = leave model_provider untouched.
+    if let Some(provider) = model_provider {
+        edits.push(replace_config_value(
+            "model_provider",
+            serde_json::json!(provider),
+        ));
+    }
+    edits
 }
 
 pub(crate) fn build_service_tier_selection_edits(service_tier: Option<&str>) -> Vec<ConfigEdit> {

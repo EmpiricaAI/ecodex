@@ -210,6 +210,38 @@ pub(crate) fn provider_for_slug(slug: &str) -> Option<&'static str> {
         .map(|m| m.provider)
 }
 
+/// Resolve the `model_providers.<id>` a selected model must route to, so the
+/// picker switches PROVIDER — not just the model name. Curated entries carry an
+/// explicit provider; bare OpenAI-family ids (gpt-5.6-sol/terra/luna, gpt-5.5,
+/// gpt-5.4, any `gpt-*` / `chatgpt-*` / `o1|o3|o4*` without a router prefix)
+/// route to the built-in `openai` provider — otherwise selecting one leaves the
+/// active custom provider (e.g. deepseek) in place and the request 404s.
+/// `None` means "keep the current provider" (model isn't provider-specific).
+pub(crate) fn provider_for_model(model: &str) -> Option<&'static str> {
+    if let Some(provider) = provider_for_slug(model) {
+        return Some(provider);
+    }
+    if is_openai_direct_model(model) {
+        return Some("openai");
+    }
+    None
+}
+
+/// Bare OpenAI-family model ids that must hit `api.openai.com` directly.
+/// Router slugs like "openai/gpt-5.2-codex" contain '/' and are resolved by
+/// `provider_for_slug` (→ openrouter), so anything with a '/' is excluded here.
+fn is_openai_direct_model(model: &str) -> bool {
+    let m = model.trim();
+    if m.contains('/') {
+        return false;
+    }
+    m.starts_with("gpt-")
+        || m.starts_with("chatgpt-")
+        || m.starts_with("o1")
+        || m.starts_with("o3")
+        || m.starts_with("o4")
+}
+
 /// Convert a curated entry to a `ModelPreset` so it can merge into the
 /// picker alongside the upstream registry models.
 pub(crate) fn to_preset(entry: &EcodexCuratedModel) -> ModelPreset {
@@ -254,6 +286,26 @@ mod tests {
         assert_eq!(provider_for_slug("openrouter/auto"), Some("openrouter"));
         assert_eq!(provider_for_slug("devstral-latest"), Some("mistral"));
         assert_eq!(provider_for_slug("not-in-curated"), None);
+    }
+
+    #[test]
+    fn provider_for_model_routes_openai_family_and_curated() {
+        // bare OpenAI-family upstream presets -> openai direct (the gpt-5.6 fix)
+        assert_eq!(provider_for_model("gpt-5.6-sol"), Some("openai"));
+        assert_eq!(provider_for_model("gpt-5.6-terra"), Some("openai"));
+        assert_eq!(provider_for_model("gpt-5.6-luna"), Some("openai"));
+        assert_eq!(provider_for_model("gpt-5.5"), Some("openai"));
+        assert_eq!(provider_for_model("gpt-5.4"), Some("openai"));
+        // curated entries keep their explicit provider
+        assert_eq!(provider_for_model("kimi-for-coding"), Some("kimi"));
+        assert_eq!(provider_for_model("devstral-latest"), Some("mistral"));
+        // router-prefixed OpenAI slug routes to the router, NOT openai-direct
+        assert_eq!(
+            provider_for_model("openai/gpt-5.2-codex"),
+            Some("openrouter")
+        );
+        // non-openai, non-curated -> keep current provider
+        assert_eq!(provider_for_model("deepseek-chat"), None);
     }
 
     #[test]

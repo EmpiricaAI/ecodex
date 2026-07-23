@@ -28,9 +28,15 @@ impl App {
         model: String,
     ) -> Option<ThreadSettingsUpdateParams> {
         let thread_id = self.active_thread_id?;
+        // ecodex: resolve the provider the selected model routes to so core
+        // hot-swaps the ModelClient (T78 path). Without this the picker changes
+        // only the model name and gpt-5.x 404s against the active custom provider.
+        let model_provider =
+            crate::ecodex_curated_models::provider_for_model(&model).map(str::to_string);
         Some(ThreadSettingsUpdateParams {
             thread_id: thread_id.to_string(),
             model: Some(model),
+            model_provider,
             collaboration_mode: Some(self.chat_widget.effective_collaboration_mode()),
             ..ThreadSettingsUpdateParams::default()
         })
