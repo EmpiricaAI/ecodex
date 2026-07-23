@@ -143,7 +143,6 @@ fn snake_case_mcp_servers_wrapper_parses_like_camel_case() {
                 }
             }
         }"#,
-        PluginMcpServerPlacement::Declared,
     )
     .expect("parse plugin MCP config");
 
