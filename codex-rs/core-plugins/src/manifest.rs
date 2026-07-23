@@ -1228,6 +1228,8 @@ mod tests {
                     hooks: Some(PluginManifestHooks::Paths(vec![
                         plugin_root.join("hooks.json").expect("hooks URI"),
                     ])),
+                    statusline: None,
+                    writable_roots: Vec::new(),
                 },
                 interface: Some(PluginManifestInterface {
                     display_name: Some("Demo Plugin".to_string()),
