@@ -583,6 +583,8 @@ fn load_plugin_writable_roots_returns_empty_when_field_unset() {
     let (_tmp, plugin_root) = plugin_root();
     write_manifest(&plugin_root, r#"{ "name": "demo-plugin" }"#);
     assert!(load_writable_roots(&plugin_root).is_empty());
+}
+
 #[test]
 fn materialize_git_source_rejects_sha_that_resolves_to_hostile_default_branch() {
     let codex_home = tempfile::tempdir().expect("create codex home");
