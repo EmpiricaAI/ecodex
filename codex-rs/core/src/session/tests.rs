@@ -8849,7 +8849,7 @@ async fn build_initial_context_reinjects_pinned_skill_bodies() {
     turn_context.turn_skills =
         TurnSkillsContext::new(codex_core_skills::HostSkillsSnapshot::new(Arc::new(outcome)));
 
-    let initial_context = build_initial_context(&session, &turn_context).await;
+    let initial_context = build_initial_context(&session, &Arc::new(turn_context)).await;
 
     // Look for a user-role message containing the pinned skill body marker.
     let mut found_framework = false;
