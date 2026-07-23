@@ -502,6 +502,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
                 }),
                 path_to_skills_md: first_skill_path,
                 scope: SkillScope::User,
+                pinned: false,
                 plugin_id: None,
             },
             SkillMetadata {
@@ -513,6 +514,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
                 policy: None,
                 path_to_skills_md: second_skill_path,
                 scope: SkillScope::User,
+                pinned: false,
                 plugin_id: None,
             },
         ]

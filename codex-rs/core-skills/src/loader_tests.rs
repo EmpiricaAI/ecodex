@@ -592,6 +592,7 @@ fn expected_user_skill(path: &Path, name: &str, description: &str) -> SkillMetad
         policy: None,
         path_to_skills_md: normalized(path),
         scope: SkillScope::User,
+        pinned: false,
         plugin_id: None,
     }
 }
