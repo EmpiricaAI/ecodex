@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.145.0] - 2026-07-24
+
+### Changed
+- **Version scheme now tracks the upstream codex base version.** ecodex jumps
+  from `0.2.7` to `0.145.0` — the [openai/codex](https://github.com/openai/codex)
+  release this build is derived from. This is *not* a leap in ecodex features;
+  it aligns the version ecodex reports as its client version so OpenAI's backend
+  (which gates models on the Codex client version) accepts it. Going forward,
+  releases are `0.145.x` (ecodex patches on this base), then the new base
+  (`0.146.x`, …) on each upstream re-sync. `ecodex --version` now reports
+  `0.145.0`.
+
+### Fixed
+- **gpt-5.6 (and gpt-5.5 / gpt-5.4) now work on the OpenAI-direct path.** The
+  ChatGPT-Codex backend was rejecting requests with `400 "requires a newer
+  version of Codex"` because ecodex reported its fork version (`0.2.x`) as the
+  client version — below OpenAI's per-model gate. The version-scheme change
+  above makes ecodex report the codex base version, which clears the gate;
+  live-verified over ChatGPT-subscription auth. Fixes #9.
+- **Homebrew / install plumbing** (thanks **@FrancisFerrero**, #11):
+  `sync-homebrew.sh` now runs on stock macOS bash 3.2 (was broken by a bash-4
+  `declare -A`); `release.sh --publish-homebrew` generates the prebuilt formula
+  via `sync-homebrew.sh` instead of a divergent source-build formula that
+  dropped the plugin + translator binaries; and `install.sh`'s dependency
+  preflight no longer short-circuits the `curl`/`tar`/`uname` checks on Linux.
+
+### Dependencies
+- Bump `gix` 0.81.0 → 0.83.0 (#10).
+
 ## [0.2.7] - 2026-07-24
 
 ### Fixed
@@ -303,7 +332,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.145.0...HEAD
+[0.145.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.7...v0.145.0
 [0.2.7]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.4...v0.2.5
