@@ -8,7 +8,7 @@ The plugin registers Empirica's MCP server with codex, exposing all `mcp__empiri
 
 ```json
 {
-  "mcp_servers": "./mcp_servers.json"
+  "mcpServers": "./mcp_servers.json"
 }
 ```
 
@@ -18,8 +18,8 @@ The plugin registers Empirica's MCP server with codex, exposing all `mcp__empiri
 {
   "mcp_servers": {
     "empirica": {
-      "command": "empirica",
-      "args": ["mcp"],
+      "command": "empirica-mcp",
+      "args": [],
       "enabled": true,
       "startup_timeout_sec": 30,
       "tool_timeout_sec": 60
@@ -28,7 +28,7 @@ The plugin registers Empirica's MCP server with codex, exposing all `mcp__empiri
 }
 ```
 
-The schema is codex's `McpServerConfig` (`codex-rs/config/src/mcp_types.rs:118`). Stdio transport with `command`/`args`. Codex spawns the subprocess on session start, communicates via MCP's stdio JSON-RPC protocol, and registers all advertised tools under the `mcp__empirica__*` namespace.
+The schema is codex's `McpServerConfig` (`codex-rs/config/src/mcp_types.rs:157`). Stdio transport with `command`/`args`. Codex spawns the subprocess on session start, communicates via MCP's stdio JSON-RPC protocol, and registers all advertised tools under the `mcp__empirica__*` namespace.
 
 ## Tools exposed
 
@@ -63,22 +63,20 @@ ecodex mcp list                      # confirm 'empirica' is in the registered s
 ecodex --tool-list | grep empirica   # confirm tools are registered
 ```
 
-## TODO during live integration
+## Launcher binary
 
-The exact subcommand for launching empirica's MCP server (`empirica mcp` vs `empirica mcp serve` vs a separate `empirica-mcp` binary) needs runtime verification. The current entry assumes `empirica mcp` based on the convention used by other empirica subcommands; if wrong, override with the correct command:
+Empirica's MCP server is launched by the dedicated `empirica-mcp` binary (no arguments) — not a subcommand of the `empirica` CLI. This is what the vendored `mcp_servers.json` ships:
 
 ```json
 {
   "mcp_servers": {
     "empirica": {
-      "command": "<actual-launcher-binary>",
-      "args": ["<actual-args>"]
+      "command": "empirica-mcp",
+      "args": []
     }
   }
 }
 ```
-
-This will be confirmed during the live integration smoke test transaction.
 
 ## Configuration
 

@@ -18,7 +18,7 @@ This is **not** a drop-in replacement for codex. It is opinionated: the discipli
 
 ## Status
 
-Alpha. **v0.2.5 shipped 2026-07-20** (first public release v0.1.0 was 2026-06-02) — see [the releases](https://github.com/EmpiricaAI/ecodex/releases). The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
+Alpha. **v0.2.6 shipped 2026-07-22** (first public release v0.1.0 was 2026-06-02) — see [the releases](https://github.com/EmpiricaAI/ecodex/releases). The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
 
 The repo's branches:
 

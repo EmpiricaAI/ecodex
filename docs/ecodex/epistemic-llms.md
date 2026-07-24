@@ -22,7 +22,7 @@ A model that scores 90 on coding benchmarks but capitulates under pressure or ha
 
 ## The curated picker
 
-Models in ecodex's curated picker (`/model` → arrow keys) are chosen to span this property surface. Eleven entries across four categories:
+Models in ecodex's curated picker (`/model` → arrow keys) are chosen to span this property surface. Twelve entries across four categories:
 
 ### Cloud — coding-strong
 
@@ -48,6 +48,17 @@ Frontier Anthropic tier. Sonnet 4.6 is daily-driver speed; Opus 4.7 is the reaso
 - Will surface "I'm not sure" instead of fabricating. Sometimes over-disclaims, but that's a much smaller cost than the alternative.
 - The Anti-Agreement Protocol is least necessary here — these models don't reflexively mirror.
 
+#### `devstral-latest` (Devstral 2, Mistral — EU sovereign)
+
+256K context, EU-hosted agentic-coding flagship (Mistral AI, Paris). Routes via the local translator (chat protocol). The data-sovereignty pick — code stays in the EU — and also open-weights (self-hostable for full air-gap). See [`MISTRAL_SOVEREIGN.md`](MISTRAL_SOVEREIGN.md).
+
+**Strengths:** Genuinely capable multi-step agentic coding (multi-file edits, dependency tracking), verified end-to-end in ecodex. 256K window holds the full deep empirica frame plus a substantial working context. Materially cheaper per token than frontier flagships. The answer for teams that legally/contractually cannot route to US/CN providers.
+
+**Behavioral notes:**
+- The EU-sovereign default: `jurisdiction = FR`, `eu_data_residency = true` in the curated registry.
+- Use `devstral-latest` (or the pinned snapshot `devstral-2512`) — there is **no** `devstral-2-latest` id on the Mistral API.
+- A **paid** Mistral key is strongly recommended; the free tier throttles mid-stream under agentic load.
+
 ### Cloud — reasoning-strong
 
 #### `deepseek-reasoner` (DeepSeek R1 / V3)
@@ -60,17 +71,6 @@ Frontier Anthropic tier. Sonnet 4.6 is daily-driver speed; Opus 4.7 is the reaso
 - Reasoning depth is real; tool use is competent but less practiced than agent-tuned models.
 - Calibration is moderate — uncertainty self-assessment is less reliable than Anthropic-tier. PREFLIGHT vectors sometimes inflate `know` when grounded observations suggest otherwise.
 - Good fit for offline analysis, code review, architecture exploration. Less ideal for tight agent loops.
-
-#### `openai/gpt-5.2-codex` (via OpenRouter)
-
-400K context, codex-tuned by OpenAI. Reach GPT-5 family without OpenAI-direct setup.
-
-**Strengths:** Purpose-built for coding agents. Tool use is well-practiced. Long context.
-
-**Behavioral notes:**
-- Slightly more "confident" than calibrated — tends to assert without flagging uncertainty.
-- Strong on raw coding; good on tool use; less attuned to the discipline conversation than Anthropic models.
-- Pairs well with stricter Sentinel settings (lower auto-proceed threshold) for users who want belt-and-suspenders.
 
 ### Local — open-weights
 
@@ -118,6 +118,18 @@ OpenRouter's auto-routing — sends each request to whichever frontier model win
 **Behavioral notes:**
 - Behavior is the union of whichever model handles your request. Calibration will vary turn-to-turn.
 - Use when you don't have a strong preference and want OpenRouter's routing to pick.
+
+#### `openai/gpt-5.2-codex` (via OpenRouter)
+
+400K context, codex-tuned by OpenAI. Reach the GPT-5 family without OpenAI-direct setup — the request goes through OpenRouter's single-key gateway.
+
+**Strengths:** Purpose-built for coding agents. Tool use is well-practiced. Long context.
+
+**Behavioral notes:**
+- Slightly more "confident" than calibrated — tends to assert without flagging uncertainty.
+- Strong on raw coding; good on tool use; less attuned to the discipline conversation than Anthropic models.
+- Pairs well with stricter Sentinel settings (lower auto-proceed threshold) for users who want belt-and-suspenders.
+- Router-prefixed slug (`openai/…`) routes to `openrouter`, NOT the `openai` direct provider — that's why it lives here rather than under a direct-OpenAI heading.
 
 #### `x-ai/grok-code-fast-1` (via OpenRouter)
 

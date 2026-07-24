@@ -16,6 +16,8 @@ The empirica plugin registers a curated skill set with codex. Skills are loaded 
 | `dispatch-agent` | Spawn subagents with inherited Empirica context (findings, dead-ends, anti-patterns) |
 | `ewm-interview` | Interview users to discover goals, domains, tools, preferences; generate workflow-protocol.yaml |
 | `render` | Render markdown with ASCII art diagrams to themed SVG via mdview |
+| `diagnose` | Walk ecodex's integration health (plugin install, hooks, sentinel, statusline, translator, providers) via the deterministic `empirica diagnose --frontend ecodex` checker, then triage each failure |
+| `onboard` | ecodex first-run onboarding + diagnostics orchestrator — composes `empirica diagnose`, `empirica onboard`, and `empirica setup-claude-code`, filling gaps (model-server probe, mode selection, per-project practice setup) |
 
 ## Format
 
@@ -25,13 +27,21 @@ Each skill is a directory under `skills/` containing a `SKILL.md` file with YAML
 ---
 name: <skill-id>
 description: "<when to use this skill — the trigger conditions>"
-version: <semver>
+pinned: <bool>            # optional; default false
+metadata:
+  short-description: "<one-line summary>"   # optional
 ---
 
 # Skill Title
 
 <skill body — instructions, examples, references>
 ```
+
+The loader (`codex-rs/core-skills/src/loader.rs`) parses `name`, `description`, `metadata.short-description`, and `pinned`:
+
+- **`pinned: true`** — re-injects the skill's content on every model call, including after a context compaction, rather than exposing it as a lazily-loaded callable. Used by `empirica-constitution` and `epistemic-transaction` so their governance is always resident. Default is `false`.
+
+A `version:` field is **not** consumed by the loader — including one is harmless but ignored.
 
 This format is identical to Claude Code's skill format and to codex's bundled samples (`codex-rs/skills/src/assets/samples/skill-creator/SKILL.md` etc.). No translation required between hosts.
 
@@ -73,4 +83,4 @@ If the Empirica plugin grows new skills upstream, sync them in the next iteratio
 
 - `scripts/sync-skills.sh` to automate the mirror (with diff against upstream + warning if upstream is ahead)
 - Skill-specific tests (validate frontmatter, validate `description` is a strong trigger string)
-- Per-skill metadata extension if codex's plugin system gains additional fields beyond name/description/version
+- Per-skill metadata extension if codex's plugin system gains additional frontmatter fields beyond the currently-parsed name/description/metadata.short-description/pinned

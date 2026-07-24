@@ -73,22 +73,61 @@ Other events (Stop, SessionStart, etc.) follow the same envelope minus the per-e
 
 ## Fail-open vs fail-closed semantics
 
-The plugin distinguishes two failure modes:
+Failure handling is **not uniform across events** — it splits along a security
+boundary. The `pre-tool-use` **firewall** is a security floor and fails
+**CLOSED**; the informational (non-firewall) handlers fail **open**.
 
-| Failure | Plugin response | Why |
+### PreToolUse firewall — fails CLOSED (security floor)
+
+`src/hooks/pre_tool_use.rs` treats the gate as a firewall that must never
+silently allow when it is broken. The policy is a pure mapping
+(`firewall_outcome`, lines 47-65) over the gate run result plus whether the
+gate script is installed:
+
+| Gate state | Firewall response | Why |
 |---|---|---|
-| **Infrastructure** — script file missing, python3 won't spawn, stdin IO error | Fail open: log to stderr, exit 0 | Plugin's own brokenness shouldn't strand the user. Matches Empirica sentinel-gate's own fail-open posture. |
-| **Script-emitted block** — script exits 2 with stderr, OR script stdout JSON says deny | Propagate: exit 2 + stderr verbatim, OR exit 0 + JSON | This is a deliberate block decision; it must reach codex. |
+| Ran, exit `0` | Forward → allow (exit 0) | Gate approved the call. |
+| Ran, exit `2` | Forward → deny (exit 2 + stderr) | Gate blocked the call. |
+| Present but **unrunnable** (spawn/IO error) or crashed (exit ∉ {0,2}, e.g. python traceback → exit 1) | **Fail CLOSED** → deny (synthesized exit 2 + stderr) | A broken firewall must block, not silently allow. |
+| stdin payload unreadable | **Fail CLOSED** → deny (exit 2) | Can't read the payload → can't gate → deny. |
+| Genuinely **absent** (uninstalled, `FailOpenAbsent`) | Fail open → allow (exit 0) | The user opted out of the firewall; don't brick an un-gated install. |
 
-Implementation: `src/empirica_cli.rs::run_hook_script` returns `Err` for infrastructure failures (script-file pre-check, spawn errors). Hook handlers translate `Err` → `ExitCode::SUCCESS`. Script-returned exit codes propagate via `Ok(HookOutput { exit_code, .. })`.
+The key distinction (lines 57-62, 115-138): only a genuinely **absent** gate
+fails open. A gate that is **present but broken** fails closed. codex's raw
+PreToolUse contract only ever blocks on `exit 2 + non-empty stderr`, so the
+firewall synthesizes that shape to close the gap.
+
+### Informational handlers — fail open
+
+The non-firewall handlers (`post-tool-use`, `session-start`,
+`user-prompt-submit`, `stop`) are informational: `src/empirica_cli.rs::run_hook_script`
+returns `Err` for infrastructure failures (script-file pre-check, spawn errors),
+and these handlers translate `Err` → `ExitCode::SUCCESS` (fail open) so the
+plugin's own brokenness doesn't strand the user. A **script-emitted** block
+(script exits 2 with stderr, or stdout JSON says deny) is a deliberate decision
+and propagates verbatim via `Ok(HookOutput { exit_code, .. })`.
 
 ## Configuration
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `EMPIRICA_HOOKS_DIR` | `~/.claude/plugins/local/empirica/hooks` | Directory containing the Empirica Python hook scripts to subprocess to |
+| Variable | Purpose |
+|---|---|
+| `EMPIRICA_HOOKS_DIR` | Manual **override** for the directory containing the Empirica Python hook scripts to subprocess to (dev / debugging / non-standard layouts). |
 
-The default points at the existing CC empirica install. Future ecodex distribution will bundle hooks under the codex plugin install path and update this default accordingly.
+`EMPIRICA_HOOKS_DIR` is an override, not the default. `resolve_hooks_dir()`
+(`src/empirica_cli.rs:128-136`) resolves the scripts directory in **three
+tiers**, highest priority first:
+
+1. **`$EMPIRICA_HOOKS_DIR`** — if set, used verbatim (tilde-expanded). Manual
+   override for dev / debugging / non-standard layouts.
+2. **`$PLUGIN_ROOT/hooks_scripts/hooks`** — the **normal runtime path**. codex
+   sets `PLUGIN_ROOT` when invoking plugin hook commands, so the plugin runs
+   the copy of the scripts bundled inside its own install.
+3. **`~/.claude/plugins/local/empirica/hooks`** — last-resort fallback for
+   coexisting CC-empirica installs / dev-mode runs of the bare binary when
+   neither of the above is set.
+
+So under a normal codex plugin install, tier 2 (the `PLUGIN_ROOT`-relative
+bundled path) is what's used; the CC path is only a fallback.
 
 ## Per-hook status
 
@@ -96,10 +135,16 @@ The default points at the existing CC empirica install. Future ecodex distributi
 |---|---|---|---|
 | `pre-tool-use` | `hooks::pre_tool_use::handle` | `sentinel-gate.py` | ✅ live |
 | `stop` | `hooks::stop::handle` | `transaction-enforcer.py` | ✅ live |
-| `post-tool-use` | (stub) | (planned: `tool-failure.py`) | stub |
-| `session-start` | (stub) | (planned: `session-init.py`) | stub |
-| `user-prompt-submit` | (stub) | (planned: `tool-router.py`) | stub |
-| `permission-request` | (stub) | (codex-specific; design TBD) | stub |
+| `post-tool-use` | `hooks::post_tool_use::handle` | `tool-failure.py` | ✅ live |
+| `session-start` | `hooks::session_start::handle` | `session-init.py` | ✅ live |
+| `user-prompt-submit` | `hooks::user_prompt_submit::handle` | `tool-router.py` | ✅ live |
+| `permission-request` | (no-op) | (codex-specific; design TBD) | stub |
+
+All five event handlers are wired as canonical handlers in `src/main.rs`
+(the `match event.as_str()` dispatch): `pre-tool-use`, `post-tool-use`,
+`session-start`, `user-prompt-submit`, and `stop` each dispatch to their
+handler module. Only `permission-request` is a genuine no-op stub —
+`src/main.rs` returns `ExitCode::SUCCESS` for it directly (design TBD).
 
 ## Smoke test results (2026-05-02)
 
