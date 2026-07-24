@@ -27,11 +27,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-declare -A TARGETS=(
-  [AARCH64_APPLE_DARWIN]="aarch64-apple-darwin"
-  [X86_64_APPLE_DARWIN]="x86_64-apple-darwin"
-  [AARCH64_UNKNOWN_LINUX_GNU]="aarch64-unknown-linux-gnu"
-  [X86_64_UNKNOWN_LINUX_GNU]="x86_64-unknown-linux-gnu"
+# Indexed array (not associative) so this runs on macOS's stock bash 3.2 —
+# `declare -A` requires bash 4+. The __SHA256_<TOKEN>__ placeholder token is
+# derived from each target: uppercase, with '-' mapped to '_'.
+TARGETS=(
+  aarch64-apple-darwin
+  x86_64-apple-darwin
+  aarch64-unknown-linux-gnu
+  x86_64-unknown-linux-gnu
 )
 
 fetch_sha() {
@@ -43,8 +46,8 @@ fetch_sha() {
 
 cp "$TEMPLATE" "$OUT"
 sed -i.bak "s/__VERSION__/${VERSION}/g" "$OUT"
-for token in "${!TARGETS[@]}"; do
-  target="${TARGETS[$token]}"
+for target in "${TARGETS[@]}"; do
+  token="$(printf '%s' "$target" | tr 'a-z-' 'A-Z_')"
   echo "fetching sha256 for ${target}…" >&2
   sha="$(fetch_sha "$target")" || { echo "missing sha256 for ${target} — is the release built?" >&2; exit 1; }
   [ -n "$sha" ] || { echo "empty sha256 for ${target}" >&2; exit 1; }

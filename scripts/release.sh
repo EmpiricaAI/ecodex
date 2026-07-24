@@ -542,35 +542,18 @@ if [[ "$PUBLISH_HOMEBREW" -eq 1 ]]; then
       trap 'rm -rf "$tap_dir"' EXIT INT TERM
       git clone --depth 1 "https://github.com/${HOMEBREW_TAP}.git" "$tap_dir" \
         || error "couldn't clone $HOMEBREW_TAP — does it exist?"
-      mkdir -p "$tap_dir/Formula"
-
-      tarball_url="https://github.com/EmpiricaAI/ecodex/archive/refs/tags/v${new_version}.tar.gz"
-      log "  computing sha256 of $tarball_url"
-      sha256="$(curl -fsSL "$tarball_url" | sha256sum | awk '{print $1}')" \
-        || error "couldn't fetch tarball for sha256 — is the GH release published?"
-
-      cat >"$tap_dir/Formula/${HOMEBREW_FORMULA}" <<EOF_RUBY
-class Ecodex < Formula
-  desc "Empirica's epistemic agent environment — a fork of openai/codex with measured discipline"
-  homepage "https://github.com/EmpiricaAI/ecodex"
-  url "${tarball_url}"
-  sha256 "${sha256}"
-  license "Apache-2.0"
-  head "https://github.com/EmpiricaAI/ecodex.git", branch: "build/v1-plugin"
-
-  depends_on "rust" => :build
-
-  def install
-    cd "codex-rs" do
-      system "cargo", "install", *std_cargo_args(path: "cli")
-    end
-  end
-
-  test do
-    assert_match "ecodex", shell_output("#{bin}/ecodex --version")
-  end
-end
-EOF_RUBY
+      # Generate the formula from the SINGLE authoritative source
+      # (packaging/homebrew/ecodex.rb — a PREBUILT-BINARY formula) via
+      # sync-homebrew.sh, which fills the per-platform SHA-256s from the
+      # release's ecodex-<target>.tar.gz.sha256 assets and installs all three
+      # binaries (ecodex + codex-empirica-plugin + codex-empirica-translator).
+      # Requires the prebuilt binaries to be uploaded first (release.yml /
+      # --upload-assets); the sync script fails loudly if an asset is missing.
+      # NOTE: previously this wrote a divergent source-build formula inline,
+      # which clobbered the prebuilt tap formula and dropped the plugin +
+      # translator binaries — see scripts/sync-homebrew.sh for the canonical form.
+      "${SCRIPT_DIR}/sync-homebrew.sh" "${new_version}" --tap "$tap_dir" \
+        || error "sync-homebrew failed — are the v${new_version} release binaries uploaded?"
 
       (cd "$tap_dir" && \
         git add "Formula/${HOMEBREW_FORMULA}" && \
