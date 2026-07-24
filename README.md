@@ -18,7 +18,7 @@ This is **not** a drop-in replacement for codex. It is opinionated: the discipli
 
 ## Status
 
-Alpha. **v0.2.6 shipped 2026-07-22** (first public release v0.1.0 was 2026-06-02) — see [the releases](https://github.com/EmpiricaAI/ecodex/releases). The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
+Alpha. **v0.145.0 shipped 2026-07-24** — see [the releases](https://github.com/EmpiricaAI/ecodex/releases). The version now tracks the upstream [openai/codex](https://github.com/openai/codex) base this build is derived from — hence the jump from `0.2.x`. This keeps the client version ecodex reports compatible with OpenAI's per-model version gates (so frontier models like gpt-5.6 work over ChatGPT-subscription auth); ecodex patches increment as `0.145.x`, then move to the new base on each upstream re-sync. (First public release v0.1.0 was 2026-06-02.) The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
 
 The repo's branches:
 
