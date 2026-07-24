@@ -153,6 +153,17 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     // before creating any threads/the Tokio runtime.
     load_dotenv();
 
+    // ecodex: default the strict-mode empirica env vars (the "E layer" of the
+    // discipline-strengthening story — the value-prop over stock codex). These
+    // were historically exported only by the source-build wrapper, so prebuilt
+    // (curl/brew), `cargo install`, and manual-binary users silently ran with
+    // strict mode OFF. Setting them here — single-threaded, pre-runtime, after
+    // load_dotenv so a real env var or .env entry still wins — makes strict
+    // mode default-ON on EVERY install path. Single source of truth, no
+    // install-time wrapper fragility. Consumed by the vendored empirica python
+    // hooks (sentinel-gate.py).
+    apply_ecodex_strict_defaults();
+
     let (path_entry_guard, updated_path_env_var) = prepare_path_env_var_with_aliases(
         InstallContext::current(),
         std::env::var_os("PATH"),
@@ -166,6 +177,41 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
         }
     }
     path_entry_guard
+}
+
+/// Default the strict-mode empirica env vars to `"true"` when they are not
+/// already set. Called once, single-threaded, before the Tokio runtime — the
+/// same invariant that makes the `PATH` `set_var` above safe.
+///
+/// `${VAR:-true}` semantics: an explicit value in the real environment or a
+/// loaded `.env` is preserved (dev/override), we only fill the gap. This is the
+/// ecodex-native replacement for the source-build wrapper's `export` lines, so
+/// strict mode is on regardless of install path (curl / brew / cargo / manual).
+///
+/// These are all NON-blocking calibration-loop defaults — they tighten the
+/// discipline (bootstrap-before-praxic, re-CHECK after compaction, CHECK expiry)
+/// but never block a tool call in normal operation. Deliberately NOT included:
+/// `EMPIRICA_SENTINEL_FAIL_CLOSED` — the sentinel's crash-handling stays
+/// fail-open, so a rare gate exception lets the action through rather than
+/// stopping the user's work (the gate is reliable; its try/except is
+/// defence-in-depth for unknown-unknowns, not a known failure). Set it manually
+/// for hardened deployments that prefer a noisy block.
+fn apply_ecodex_strict_defaults() {
+    const STRICT_DEFAULTS: &[&str] = &[
+        "EMPIRICA_SENTINEL_REQUIRE_BOOTSTRAP",
+        "EMPIRICA_SENTINEL_COMPACT_INVALIDATION",
+        "EMPIRICA_SENTINEL_CHECK_EXPIRY",
+        "EMPIRICA_CALIBRATION_FEEDBACK",
+    ];
+    for key in STRICT_DEFAULTS {
+        if std::env::var_os(key).is_none() {
+            // Safe: single-threaded at this point (pre-runtime), same as the
+            // PATH set_var above.
+            unsafe {
+                std::env::set_var(key, "true");
+            }
+        }
+    }
 }
 
 fn prepare_path_env_var_with_aliases(
