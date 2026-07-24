@@ -29,9 +29,12 @@ done
 err()  { printf 'ecodex-install: %s\n' "$*" >&2; exit 1; }
 info() { printf 'ecodex-install: %s\n' "$*"; }
 
-for tool in curl tar shasum uname; do
-  command -v "$tool" >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 || err "missing required tool: $tool"
+for tool in curl tar uname; do
+  command -v "$tool" >/dev/null 2>&1 || err "missing required tool: $tool"
 done
+# Checksum verification needs either shasum (macOS) or sha256sum (Linux).
+command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 \
+  || err "missing checksum tool: need shasum or sha256sum"
 
 # --- detect platform → release target triple -------------------------------
 os="$(uname -s)"
