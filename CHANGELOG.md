@@ -8,6 +8,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-07-24
+
+### Fixed
+- **gpt-5.6 (and all bare frontier OpenAI) models returned a 404 when selected
+  from `/model`.** The picker changed only the model name, never
+  `model_provider`, so an OpenAI-family preset selected while a custom provider
+  (deepseek by default) was active was sent to the wrong endpoint. The provider
+  now resolves on selection (`provider_for_model()`) and switches alongside the
+  model — in-session hot-swap plus persisted — routing bare `gpt-5.x` / `o*` ids
+  to the built-in `openai` provider. This wires the last mile of the existing
+  T78 hot-swap pipeline (`provider_for_slug` was dead code).
+
+### Added
+- **Strict-mode discipline defaults now apply on every install path.** The
+  `EMPIRICA_SENTINEL_*` calibration-loop defaults (bootstrap-before-praxic,
+  compact-invalidation, 30-minute CHECK expiry, calibration feedback) were
+  previously exported only by the source-build wrapper, so `curl`/Homebrew/
+  `cargo install`/manual-binary users silently ran with strict mode OFF — the
+  value-prop over stock codex absent on the paths people actually use. The
+  `ecodex` binary now defaults them at startup (`arg0`, `${VAR:-true}` so a real
+  env var or `.env` still wins). Non-blocking by design; the sentinel's
+  crash-handling stays fail-open so a rare gate glitch never blocks work.
+- **`[model_providers.openai]`** in the bundled default config — frontier models
+  are a first-class `/model` option (open-weights stays the lead, not a lock-out).
+
+### Documentation
+- **Trajectory-wide docs/code alignment audit.** Rewrote `providers.md` around
+  the translator (upstream removed `wire_api="chat"`; chat providers route via
+  `:18080`); corrected `api/hooks.md` (live-hook status table + two-layer
+  fail-closed firewall semantics + `EMPIRICA_HOOKS_DIR` resolution); refreshed
+  `hook-events-roadmap.md` (11 upstream + 2 divergent events; `Feature::PluginHooks`
+  removed); fixed `api/mcp.md` (`mcpServers`, `empirica-mcp`), `api/skills.md`
+  (`diagnose`/`onboard` skills + the `pinned` field), `discipline-strengthening.md`
+  (`requirements.toml`, arg0 mechanism, 30-min expiry), `epistemic-llms.md`
+  (12 curated entries), and the README version stamp.
+
 ## [0.2.6] - 2026-07-22
 
 ### Added
@@ -267,7 +303,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.3...v0.2.4
