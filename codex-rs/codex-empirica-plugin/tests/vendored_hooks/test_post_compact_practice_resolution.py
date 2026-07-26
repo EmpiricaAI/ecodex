@@ -36,7 +36,9 @@ def _load_post_compact():
     sys.path.insert(0, str(_HOOKS))
     try:
         sys.modules.pop("post_compact_hook", None)
-        spec = importlib.util.spec_from_file_location("post_compact_hook", _HOOKS / "post-compact.py")
+        spec = importlib.util.spec_from_file_location(
+            "post_compact_hook", _HOOKS / "post-compact.py"
+        )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod

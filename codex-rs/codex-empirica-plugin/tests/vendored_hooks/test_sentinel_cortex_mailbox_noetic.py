@@ -48,9 +48,15 @@ def test_praxic_cortex_tools_stay_out_of_noetic():
 def test_bare_namespace_normalizes_to_full_op():
     norm = sg._normalize_aggregated_cortex_tool
     assert norm("mcp__cortex", {"op": "cortex_inbox_poll"}) == "mcp__cortex__cortex_inbox_poll"
-    assert norm("mcp__cortex", {"operation": "cortex_get_proposal"}) == "mcp__cortex__cortex_get_proposal"
+    assert (
+        norm("mcp__cortex", {"operation": "cortex_get_proposal"})
+        == "mcp__cortex__cortex_get_proposal"
+    )
     assert norm("mcp__cortex", {"name": "cortex_outbox_poll"}) == "mcp__cortex__cortex_outbox_poll"
-    assert norm("mcp__cortex__", {"tool": "cortex_archive_proposal"}) == "mcp__cortex__cortex_archive_proposal"
+    assert (
+        norm("mcp__cortex__", {"tool": "cortex_archive_proposal"})
+        == "mcp__cortex__cortex_archive_proposal"
+    )
 
 
 def test_pass_through_full_names_unknown_and_non_cortex():
