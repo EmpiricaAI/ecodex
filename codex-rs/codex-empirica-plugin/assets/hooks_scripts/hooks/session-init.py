@@ -1509,60 +1509,17 @@ def _maybe_auto_install_canonical_loops(project_root: Path) -> int:
     Returns the count of canonical loops queued (0 if any gate failed).
     """
     try:
+        from empirica.core.cockpit.canonical_loops import maybe_queue_canonical_install
         from empirica.utils.session_resolver import get_instance_id
 
         instance_id = get_instance_id()
         if not instance_id:
             return 0  # gate 1: no instance_id (headless / unknown)
-
-        empirica_dir = project_root / ".empirica"
-        if not empirica_dir.is_dir():
-            return 0  # gate 2: project hasn't been empirica-initialized
-
-        from pathlib import Path as _Path
-
-        stamp = (
-            _Path.home() / ".empirica" / f"canonical_loops_installed_{instance_id.replace(':', '_').replace('/', '-')}"
-        )
-        if stamp.exists():
-            return 0  # gate 4: already auto-installed for this instance
-
-        from empirica.core.cockpit.loop_registry import LoopRegistry
-
-        registry = LoopRegistry(instance_id)
-        existing = registry.list_loops()
-        if existing:
-            # Some loops already registered manually — write stamp so we
-            # don't auto-install on top of user intent next time.
-            stamp.parent.mkdir(parents=True, exist_ok=True)
-            stamp.write_text("skipped: registry already had entries\n")
-            return 0  # gate 3: not fresh
-
-        # All gates pass — queue install-pending for each canonical loop.
-        from empirica.core.cockpit.canonical_loops import CANONICAL_LOOPS
-        from empirica.core.cockpit.loop_install_request import write_pending
-
-        installed = 0
-        for entry in CANONICAL_LOOPS:
-            try:
-                write_pending(
-                    instance_id=instance_id,
-                    name=entry["name"],
-                    interval=entry.get("interval", "15m"),
-                    description=entry.get("description", ""),
-                    base_interval=entry.get("base_interval"),
-                    max_interval=entry.get("max_interval"),
-                    requested_by="session-init",
-                    body_skill=entry.get("body_skill"),
-                )
-                installed += 1
-            except Exception:
-                pass
-
-        if installed:
-            stamp.parent.mkdir(parents=True, exist_ok=True)
-            stamp.write_text(f"installed {installed} canonical loop(s) at session-init\n")
-        return installed
+        # Single source of truth — practice-keyed, opt_in_only-aware,
+        # scheduler_kind-passing. session-init's old inline copy lacked the
+        # opt_in_only carve-out + scheduler_kind (it queued cortex-mailbox-poll
+        # on every new session); delegating fixes that drift permanently.
+        return maybe_queue_canonical_install(instance_id, project_root, requested_by="session-init")
     except Exception:
         return 0
 
