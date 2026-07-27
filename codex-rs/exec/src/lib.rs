@@ -419,6 +419,19 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         None // No model specified, will use the default.
     };
 
+    // If an OpenAI-family model was chosen explicitly (`-m`) but no provider was
+    // given, route it to the built-in `openai` provider so a stale/mismatched
+    // persisted `model_provider` default (e.g. a chat translator) can't silently
+    // mis-route the request. Parity with the interactive `/model` picker.
+    let model_provider = if model.is_some() && model_provider.is_none() {
+        model
+            .as_deref()
+            .and_then(codex_model_provider_info::openai_direct_provider)
+            .map(str::to_string)
+    } else {
+        model_provider
+    };
+
     let overrides = ConfigOverrides {
         model,
         review_model: None,

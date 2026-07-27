@@ -480,6 +480,29 @@ pub fn built_in_model_providers(
     .collect()
 }
 
+/// Resolve the built-in `openai` provider for a bare OpenAI-family model id
+/// (`gpt-*` / `chatgpt-*` / `o1|o3|o4*` without a router `/` prefix). Returns
+/// `None` for router slugs and non-OpenAI models. Lets an explicitly-chosen
+/// OpenAI model route to the direct `openai` provider even when the persisted
+/// default `model_provider` points elsewhere (e.g. a chat translator) — giving
+/// the headless `exec` path parity with the interactive `/model` picker's
+/// provider switch.
+pub fn openai_direct_provider(model: &str) -> Option<&'static str> {
+    let m = model.trim();
+    if m.contains('/') {
+        return None;
+    }
+    if m.starts_with("gpt-")
+        || m.starts_with("chatgpt-")
+        || m.starts_with("o1")
+        || m.starts_with("o3")
+        || m.starts_with("o4")
+    {
+        return Some(OPENAI_PROVIDER_ID);
+    }
+    None
+}
+
 /// Merge configured providers into the built-in provider catalog.
 ///
 /// Configured providers extend the built-in set. Built-in providers are not

@@ -231,15 +231,7 @@ pub(crate) fn provider_for_model(model: &str) -> Option<&'static str> {
 /// Router slugs like "openai/gpt-5.2-codex" contain '/' and are resolved by
 /// `provider_for_slug` (→ openrouter), so anything with a '/' is excluded here.
 fn is_openai_direct_model(model: &str) -> bool {
-    let m = model.trim();
-    if m.contains('/') {
-        return false;
-    }
-    m.starts_with("gpt-")
-        || m.starts_with("chatgpt-")
-        || m.starts_with("o1")
-        || m.starts_with("o3")
-        || m.starts_with("o4")
+    codex_model_provider_info::openai_direct_provider(model).is_some()
 }
 
 /// Convert a curated entry to a `ModelPreset` so it can merge into the
