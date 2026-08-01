@@ -735,6 +735,15 @@ EMPIRICA_TIER1_PREFIXES = (
     # mailbox reads as noetic (prop_iefo2tdx); the poll/show verbs only GET.
     "empirica mailbox poll",  # Read cortex inbox/outbox (pure read)
     "empirica mailbox show",  # Read one proposal body (pure read)
+    # Unified breadcrumb query (findings/unknowns/deadends/mistakes/issues/…).
+    # Pure read — `query_commands.py` contains no INSERT/UPDATE/commit/write.
+    # Resolved from the four verbs left gated when the suffix rule landed; the
+    # other three earned their gate: `scan` writes three files (its "read-only"
+    # help means it does not mutate the SERVICES it inspects, not the DB),
+    # `vision` has a `vision log` subcommand, and `module` is slated to gain
+    # fetch/provision. Checked rather than inferred from the help text — `scan`
+    # is exactly the verb that reads as safe and is not.
+    "empirica query",
 )
 
 # Tier 2: State-changing commands - allowed (these ARE the epistemic workflow)
@@ -849,8 +858,77 @@ def is_safe_empirica_command(command: str) -> bool:
         if cmd.startswith(prefix):
             return True
 
+    # Tier 1b: Read-only by NAMING CONVENTION.
+    #
+    # The explicit list above cannot keep up. Measured 2026-07-27: the CLI exposes
+    # 279 verbs and 41 read-only ones were absent from both tiers — so they were
+    # DENIED pre-CHECK, including the whole `engagement-*` family (a peer practice
+    # hit exactly that), `session-show`, `sources-map` and `projects-list`. Reading
+    # is noetic; denying a read teaches the practitioner to rubber-stamp a CHECK to
+    # get at information, which corrupts the gate's meaning far more than it
+    # protects anything.
+    #
+    # Matching the SUFFIX rather than extending the list is what actually fixes the
+    # maintenance problem: a new verb named to the existing convention is classified
+    # correctly for free. A mutating verb would have to be actively MISNAMED to slip
+    # through, and `is_read_shaped_empirica_verb` is pinned by tests asserting the
+    # known-mutating verbs stay out.
+    #
+    # Deliberately NOT inverting to a denylist: defaulting-open on an unknown verb
+    # is a posture change to a security-adjacent gate, and this achieves the same
+    # ergonomics without it.
+    if is_read_shaped_empirica_verb(cmd):
+        return True
+
     # Tier 2: State-changing - allowed (these enable the workflow)
     return any(cmd.startswith(prefix) for prefix in EMPIRICA_TIER2_PREFIXES)
+
+
+# Verb suffixes that denote a pure read in empirica's CLI naming convention.
+# Each was verified against the live verb list and the parsers' own help text —
+# not assumed from the name alone.
+EMPIRICA_READ_SUFFIXES = (
+    "-list",
+    "-show",
+    "-search",
+    "-status",
+    "-stats",
+    "-report",
+    "-map",
+    "-walk",
+    "-diff",
+    "-history",
+    "-explain",
+    "-context",
+    "-top",
+    "-related",
+    "-get",
+    "-verify",
+    "-signatures",
+)
+
+# Verbs that LOOK read-shaped but mutate. Empty today — the convention holds
+# across all 279 verbs — but the hook exists so a future misnamed verb has an
+# obvious place to go, and the accompanying test asserts these stay gated.
+# `sources-check` is the near-miss worth remembering: it writes review stamps,
+# and is safe here only because `-check` is deliberately NOT a read suffix.
+EMPIRICA_READ_SHAPED_BUT_MUTATING = ()
+
+
+def is_read_shaped_empirica_verb(cmd: str) -> bool:
+    """Is this an empirica subcommand whose NAME marks it a pure read?
+
+    Matches the verb token only — flags cannot make a read verb mutating, and a
+    mutating verb cannot be laundered by appending a read-shaped word later in the
+    command line.
+    """
+    parts = cmd.split()
+    if len(parts) < 2 or parts[0] != "empirica":
+        return False
+    verb = parts[1]
+    if verb in EMPIRICA_READ_SHAPED_BUT_MUTATING:
+        return False
+    return verb.endswith(EMPIRICA_READ_SUFFIXES)
 
 
 def is_toggle_command(command: str) -> str | None:
@@ -1041,11 +1119,37 @@ def _is_recovery_or_measurement_action(tool_name: str, tool_input: dict | None) 
     # to read-only filters. A command that isn't fully safe is never exempted.
     if not is_safe_bash_command({"command": normalized}):
         return False
-    # Narrow to the recovery/measurement set: strip a leading `cd … &&`, then
-    # take the leading token before any heredoc / pipe.
+    # Narrow to the recovery/measurement set: strip a leading `cd … &&`, then look
+    # for a recovery verb in ANY pipeline segment, not only the first.
+    #
+    # This used to test the leading token alone, so `cat <<'JSON' | empirica
+    # log-artifacts -` saw `cat`, missed the exemption, and fell through to the rush
+    # guard. That is the shape an AI naturally reaches for when piping JSON to a
+    # verb, and it wedged a seat (philipp/empirica-imagegen): log-artifacts, the
+    # *-log verbs and check-submit all failed identically, so every escape hatch the
+    # practitioner reached for used the same losing shape. A gate that denies the
+    # verb which would clear it is unrecoverable from inside the seat.
+    #
+    # Safety is unchanged: `is_safe_bash_command` above has already rejected anything
+    # with a praxic segment, so by here every segment is read-only or a known-safe
+    # filter. Widening the search cannot admit a mutating command; it only stops the
+    # exemption from depending on where in the pipeline the verb happens to sit.
+    #
+    # This is the position-invariance rule the read-only classifier already follows
+    # across its three entry points (single command / chain segment / pipe segment),
+    # applied to the recovery exemption — each divergence has been an over-gating bug.
+    # Order matters here, and getting it wrong was the first attempt at this fix:
+    # split the PIPELINE first, then strip a heredoc marker from each segment. The
+    # reported shape puts `<<` before `|` (`cat <<'J' | empirica log-artifacts -`),
+    # so splitting on `<<` first discards the very segment carrying the verb.
+    #
+    # Only the first line is examined: a pipeline lives on one line, while the
+    # heredoc BODY follows on subsequent lines and may legitimately contain `|`
+    # inside JSON. Taking the whole string would split on those.
     after_cd = re.sub(r"\A\s*cd\s+[^\n&;|]+\s*&&\s*", "", normalized, count=1)
-    leading = after_cd.split("<<", 1)[0].split("|", 1)[0].strip()
-    return any(leading.startswith(prefix) for prefix in _RECOVERY_MEASUREMENT_PREFIXES)
+    first_line = after_cd.split("\n", 1)[0]
+    segments = [seg.split("<<", 1)[0].strip() for seg in first_line.split("|")]
+    return any(seg.startswith(prefix) for seg in segments if seg for prefix in _RECOVERY_MEASUREMENT_PREFIXES)
 
 
 # --- AUTONOMY CALIBRATION LOOP ---
@@ -3016,6 +3120,41 @@ def _check_postflight_loop_closed(
 RUSH_GUARD_EXEMPT_WORK_TYPES = frozenset({"remote-ops"})
 
 
+def _has_grounded_claims(cursor, session_id, current_transaction_id) -> bool:
+    """True when PREFLIGHT declared at least one claim grounded by `read` or `ran`.
+
+    The GROUNDED-AT-OPEN path. Hooks are standalone (no package import), so this
+    queries `transaction_claims` directly on the cursor already in hand — the same
+    way the rush guard reads project_findings/project_unknowns.
+
+    Only `read` and `ran` certify. `retrieved` and `assumed` deliberately do not:
+    our own prior artifacts are testimony rather than observation, and `assumed`
+    is by definition the absence of grounding. That asymmetry is what stops this
+    from becoming a new rubber stamp — you cannot certify by declaring confidence,
+    only by naming something you actually read or ran.
+
+    Fail-CLOSED: any error returns False, so a missing table or a query problem
+    means "not certified" and the normal CHECK path applies. A gate that fails
+    open is worse than one that occasionally asks for a CHECK you did not need.
+    """
+    try:
+        if current_transaction_id:
+            cursor.execute(
+                "SELECT COUNT(*) FROM transaction_claims "
+                "WHERE session_id = ? AND transaction_id = ? AND grounding IN ('read','ran')",
+                (session_id, current_transaction_id),
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) FROM transaction_claims WHERE session_id = ? AND grounding IN ('read','ran')",
+                (session_id,),
+            )
+        row = cursor.fetchone()
+        return bool(row and row[0])
+    except Exception:
+        return False
+
+
 def _validate_check_record(
     cursor,
     session_id: str,
@@ -3094,8 +3233,36 @@ def _validate_check_record(
         if tool_name == "Bash" and is_safe_empirica_command(tool_input.get("command", "")):
             return None
 
-        # Praxic tools: deny (need CHECK first)
-        return ("deny", "No valid CHECK found. Run CHECK after investigation to gate the noetic→praxic transition.")
+        # GROUNDED AT OPEN — claims declared at PREFLIGHT certify the transaction.
+        #
+        # Noetic work is ungated, so grounding routinely happens BEFORE the window
+        # opens: read the files, then PREFLIGHT. That order is correct and common,
+        # and until now it had no way to be stated — the practitioner either
+        # submitted an empty CHECK (ceremony) or skipped it and got denied here.
+        # 47% of one practice's 728 CHECKs arrived within 30s of their PREFLIGHT,
+        # which is what that pressure looks like in the data.
+        #
+        # A claim grounded by `read` or `ran` is a specific, checkable statement
+        # that cannot be produced by asserting confidence — so this accepts real
+        # certification while still refusing an all-`assumed` declaration.
+        if _has_grounded_claims(cursor, session_id, current_transaction_id):
+            return None
+
+        # Praxic tools: deny — but name BOTH legitimate paths. The old message
+        # said only "Run CHECK", which is why skipping read as omission: the one
+        # moment the practitioner is definitely reading, we told them the
+        # ceremony was the only way through.
+        return (
+            "deny",
+            "No CHECK, and no grounded claims declared at PREFLIGHT — nothing yet records "
+            "what this work rests on.\n"
+            "  → If you still need to investigate: do that, then submit CHECK.\n"
+            "  → If you were ALREADY grounded before opening (you read the files first — "
+            "the normal order), re-run PREFLIGHT with `claims`: 2-3 load-bearing claims, "
+            "each with grounding read|ran|retrieved|assumed. One grounded by read or ran "
+            "certifies the transaction and praxic proceeds — no CHECK needed.\n"
+            "  Skipping CHECK when genuinely grounded is the CORRECT path, not a shortcut.",
+        )
 
     know, uncertainty, reflex_data, check_timestamp = check_row
 
@@ -3142,7 +3309,26 @@ def _validate_check_record(
             )
             unknowns = cursor.fetchone()[0]
             if findings == 0 and unknowns == 0:
-                return ("deny", f"Rushed assessment ({noetic_duration:.0f}s). Investigate and log learnings first.")
+                # The message must report the WHOLE predicate. It used to read
+                # "Rushed assessment (11s). Investigate and log learnings first."
+                # — naming only the elapsed time while the deny actually requires
+                # BOTH a short gap AND zero artifacts. A practitioner reading it
+                # learns "wait longer", which is the one remedy that does not
+                # work: waiting 30s with nothing logged still denies, and logging
+                # one finding at 5s already passes.
+                #
+                # Same family as the artifact-breadth nudge whose predicate could
+                # not be satisfied: a signal whose stated remedy is not the one it
+                # wants. Here the remedy exists and was simply not named.
+                return (
+                    "deny",
+                    f"CHECK submitted {noetic_duration:.0f}s after PREFLIGHT with no findings or unknowns "
+                    "logged in between — nothing records what the investigation found.\n"
+                    "  → Log what you learned (finding-log / unknown-log), then re-submit CHECK. "
+                    "ONE artifact satisfies this; more time alone does not.\n"
+                    "  → Or, if you were already grounded before PREFLIGHT, skip CHECK entirely and "
+                    "go straight to praxic — that is a legitimate path, not a shortcut.",
+                )
     except (TypeError, ValueError):
         pass
 
