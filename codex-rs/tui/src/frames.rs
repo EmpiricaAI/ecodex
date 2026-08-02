@@ -59,10 +59,32 @@ pub(crate) const FRAMES_SLUG: [&str; 36] = frames_for!("slug");
 // regenerate the 36 frames after tweaking the geometry constants.
 pub(crate) const FRAMES_EMPIRICA: [&str; 36] = frames_for!("empirica");
 
+// ecodex: calm STATIC Empirica "E" mark for the first-launch welcome screen.
+// A single-frame variant renders without motion (AsciiAnimation::current_frame
+// returns frame[0] when there is one frame), so the opening screen is a simple
+// static mark rather than an animation. The animated variants (koru-spiral +
+// upstream) remain available via Ctrl+.
+pub(crate) const FRAMES_EMPIRICA_STATIC: [&str; 1] = [
+    r#"
+        ██████████████████
+        ██████████████████
+        █████
+        █████
+        █████████████
+        █████████████
+        █████
+        █████
+        ██████████████████
+        ██████████████████
+"#,
+];
+
 // First entry is the default variant rendered on the welcome screen. ecodex
-// puts the Empirica koru-spiral first so the opening screen matches its
-// marketing positioning. Ctrl+. still cycles to the upstream variants.
+// shows the calm static Empirica mark by default (David: the first-launch intro
+// should be a simple static mark, not an animation). Ctrl+. still cycles to the
+// animated variants, including the Empirica koru-spiral and the upstream ones.
 pub(crate) const ALL_VARIANTS: &[&[&str]] = &[
+    &FRAMES_EMPIRICA_STATIC,
     &FRAMES_EMPIRICA,
     &FRAMES_DEFAULT,
     &FRAMES_CODEX,
