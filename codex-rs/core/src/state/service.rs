@@ -25,7 +25,6 @@ use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use codex_analytics::AnalyticsEventsClient;
 use codex_core_plugins::PluginsManager;
-use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
@@ -96,13 +95,6 @@ pub(crate) struct SessionServices {
     /// through `Services::swap_model_client`.
     pub(crate) model_client: ArcSwap<ModelClient>,
     pub(crate) code_mode_service: CodeModeService,
-    /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
-    /// the same manager through child-thread spawn paths without reconstructing it.
-    // ecodex sync note: superseded by `turn_environments.environment_manager()` (upstream's
-    // ThreadEnvironments path); the field is retained but unread. Remove in a follow-up once
-    // construction sites are reconciled.
-    #[allow(dead_code)]
-    pub(crate) environment_manager: Arc<EnvironmentManager>,
     /// ecodex addition: per-session registry of armed Monitor watchers
     /// (background subprocess + regex pattern that injects wake events
     /// via `Session::inject_response_items` on match). Cleared on

@@ -5661,7 +5661,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
             &config.features,
         ),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         // ecodex addition: tests don't arm any monitors, but the field must
         // be present to satisfy the struct initializer.
         monitor_registry: Arc::new(crate::monitor::MonitorRegistry::new()),
@@ -7850,7 +7849,6 @@ where
             Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
             &config.features,
         ),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         // ecodex addition: tests don't arm any monitors, but the field must
         // be present to satisfy the struct initializer.
         monitor_registry: Arc::new(crate::monitor::MonitorRegistry::new()),

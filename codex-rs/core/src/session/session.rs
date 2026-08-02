@@ -1205,7 +1205,6 @@ impl Session {
                     Arc::clone(&code_mode_session_provider),
                     &config.features,
                 ),
-                environment_manager,
                 // ecodex addition: empty registry; agent populates via the
                 // `monitor` tool. `Session::shutdown` aborts all entries.
                 monitor_registry: Arc::new(crate::monitor::MonitorRegistry::new()),
