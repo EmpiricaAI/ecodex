@@ -1089,7 +1089,10 @@ fn config_check(config: &Config) -> DoctorCheck {
     ));
     details.push(format!("model provider: {}", config.model_provider_id));
     details.push(format!("log dir: {}", config.log_dir.display()));
-    details.push(format!("sqlite home: {}", config.sqlite_home.display()));
+    details.push(format!(
+        "sqlite home: {}",
+        config.sqlite_config().home().display()
+    ));
     details.push(format!("mcp servers: {}", config.mcp_servers.get().len()));
     feature_flag_details(config, &mut details);
     config_toml_details(config, &mut details);
@@ -2163,11 +2166,18 @@ async fn state_check(config: &Config) -> DoctorCheck {
     let mut details = Vec::new();
     path_readiness(&mut details, "CODEX_HOME", &config.codex_home);
     path_readiness(&mut details, "log dir", &config.log_dir);
-    path_readiness(&mut details, "sqlite home", &config.sqlite_home);
+    path_readiness(&mut details, "sqlite home", config.sqlite_config().home());
     let mut integrity_failures = Vec::new();
-    for db in codex_state::runtime_db_paths(&config.sqlite_home) {
+    for db in config.sqlite_config().runtime_db_paths() {
         path_readiness(&mut details, db.label, &db.path);
-        sqlite_integrity_detail(&mut details, &mut integrity_failures, db.label, &db.path).await;
+        sqlite_integrity_detail(
+            config.sqlite_config(),
+            &mut details,
+            &mut integrity_failures,
+            db.label,
+            &db.path,
+        )
+        .await;
     }
     rollout_stats_details(&mut details, &config.codex_home);
     standalone_release_cache_details(&mut details);
@@ -2192,6 +2202,7 @@ async fn state_check(config: &Config) -> DoctorCheck {
 }
 
 async fn sqlite_integrity_detail(
+    sqlite: &codex_state::SqliteConfig,
     details: &mut Vec<String>,
     integrity_failures: &mut Vec<String>,
     label: &str,
@@ -2202,7 +2213,7 @@ async fn sqlite_integrity_detail(
         return;
     }
 
-    match codex_state::sqlite_integrity_check(path).await {
+    match codex_state::sqlite_integrity_check(sqlite, path).await {
         Ok(rows) if rows.iter().all(|row| row == "ok") => {
             details.push(format!("{label} integrity: ok"));
         }

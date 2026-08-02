@@ -65,11 +65,6 @@ pub(crate) fn select_handlers_for_matcher_inputs(
             }
             HookEventName::UserPromptSubmit
             | HookEventName::Stop
-            | HookEventName::PreCompact
-            | HookEventName::PostCompact
-            | HookEventName::SessionEnd
-            | HookEventName::SubagentStart
-            | HookEventName::SubagentStop
             | HookEventName::TaskCompleted => true,
         })
         .cloned()

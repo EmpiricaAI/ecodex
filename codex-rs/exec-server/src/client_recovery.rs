@@ -539,6 +539,19 @@ impl ExecServerClient {
                     return;
                 };
                 match event {
+                    RpcClientEvent::Request(request) => {
+                        let error = crate::rpc::method_not_found(format!(
+                            "exec-server client does not implement `{}` yet",
+                            request.method
+                        ));
+                        if rpc_client.respond_error(request.id, error).await.is_err() {
+                            inner.request_recovery(
+                                rpc_client,
+                                disconnected_message(/*reason*/ None),
+                            );
+                            return;
+                        }
+                    }
                     RpcClientEvent::Notification(notification) => {
                         if let Err(error) = handle_server_notification(&inner, notification).await {
                             rpc_client.close_transport().await;
@@ -584,12 +597,12 @@ fn is_retryable_registry_error(error: &ExecServerError) -> bool {
         error,
         ExecServerError::EnvironmentRegistryHttp { status, code, .. }
             if status.is_server_error()
-                || *status == reqwest::StatusCode::REQUEST_TIMEOUT
-                || *status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || *status == http::StatusCode::REQUEST_TIMEOUT
+                || *status == http::StatusCode::TOO_MANY_REQUESTS
                 // TODO: Replace this coarse retry with an explicit registry/presence
                 // recovery FSM so `environment_offline` is retried only while the
                 // executor is expected to reconnect.
-                || (*status == reqwest::StatusCode::CONFLICT
+                || (*status == http::StatusCode::CONFLICT
                     && code.as_deref() == Some("environment_offline"))
     )
 }

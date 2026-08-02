@@ -22,6 +22,7 @@ pub struct SkillMetadata {
     /// need to remain ambient context across compactions.
     pub pinned: bool,
     pub plugin_id: Option<String>,
+    pub remote_plugin_id: Option<String>,
 }
 
 impl SkillMetadata {

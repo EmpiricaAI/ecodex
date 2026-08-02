@@ -18,6 +18,7 @@ use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::user_count;
 use crate::app_event::HistoryBatchEntryResponse;
+use codex_utils_absolute_path::test_support::PathExt;
 
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::create_initial_user_message;
@@ -2249,7 +2250,7 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
         let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
-        app.config.sqlite_home = codex_home.path().to_path_buf();
+        app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
         // Seed the previous setting so this test exercises the thread-mode update path.
         app.config.memories.generate_memories = true;
 
@@ -2267,7 +2268,7 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
         .await;
 
         let state_db = codex_state::StateRuntime::init(
-            codex_home.path().to_path_buf(),
+            codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
             app.config.model_provider_id.clone(),
         )
         .await
@@ -2289,7 +2290,7 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
         let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
-        app.config.sqlite_home = codex_home.path().to_path_buf();
+        app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
 
         let memory_root = codex_home.path().join("memories");
         let extensions_root = memory_root.join("extensions");
@@ -3444,6 +3445,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 parent_thread_id: None,
                 preview: "agent thread".to_string(),
                 ephemeral: false,
+                is_pinned: false,
                 history_mode: Default::default(),
                 model_provider: "agent-provider".to_string(),
                 created_at: 1,
@@ -3540,6 +3542,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 parent_thread_id: None,
                 preview: "agent thread".to_string(),
                 ephemeral: false,
+                is_pinned: false,
                 history_mode: Default::default(),
                 model_provider: "agent-provider".to_string(),
                 created_at: 1,
@@ -3603,6 +3606,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         parent_thread_id: None,
         preview: "read thread".to_string(),
         ephemeral: false,
+        is_pinned: false,
         history_mode: Default::default(),
         model_provider: "read-provider".to_string(),
         created_at: 1,
@@ -3789,7 +3793,7 @@ async fn side_fork_config_inherits_parent_thread_runtime_settings() {
 }
 
 #[tokio::test]
-async fn side_start_block_message_tracks_open_side_conversation() {
+async fn side_start_block_message_allows_replacing_open_side_conversation() {
     let mut app = make_test_app().await;
     assert_eq!(
         app.side_start_block_message(),
@@ -3804,10 +3808,14 @@ async fn side_start_block_message_tracks_open_side_conversation() {
     app.side_threads
         .insert(side_thread_id, SideThreadState::new(parent_thread_id));
 
+    app.active_thread_id = Some(parent_thread_id);
+    assert_eq!(app.side_start_block_message(), None);
+
+    app.active_thread_id = Some(side_thread_id);
     assert_eq!(
         app.side_start_block_message(),
         Some(
-            "A side conversation is already open. Press Ctrl+C to return before starting another."
+            "A side conversation is already open. Press ctrl + c to return before starting another."
         )
     );
 
@@ -4269,6 +4277,16 @@ async fn side_discard_selection_keeps_current_side_thread() {
     assert_eq!(
         app.side_thread_to_discard_after_switch(parent_thread_id),
         Some(side_thread_id)
+    );
+
+    app.active_thread_id = Some(parent_thread_id);
+    assert_eq!(
+        app.side_thread_to_discard_after_switch(ThreadId::new()),
+        Some(side_thread_id)
+    );
+    assert_eq!(
+        app.side_thread_to_discard_after_switch(side_thread_id),
+        None
     );
 }
 
@@ -5182,6 +5200,42 @@ async fn required_stream_reflow_during_capped_initial_replay_uses_transcript_tai
     app.finish_initial_history_replay_buffer(&mut tui);
     assert!(app.initial_history_replay_buffer.is_none());
     assert!(app.transcript_reflow.has_pending_reflow());
+    Ok(())
+}
+
+#[tokio::test]
+async fn directive_only_completion_removes_streamed_directive() -> Result<()> {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(20);
+    app.begin_initial_history_replay_buffer();
+    app.transcript_cells = vec![
+        plain_line_cell("before directive"),
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from(r#"::git-stage{cwd="/tmp"}"#)],
+            /*is_first_line*/ true,
+        )),
+    ];
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.handle_consolidate_agent_message(
+        &mut tui,
+        String::new(),
+        PathBuf::from("/tmp"),
+        /*inline_visualization_context*/ None,
+        ConsolidationScrollbackReflow::Required,
+        /*deferred_history_cell*/ None,
+    )?;
+
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+    assert_snapshot!(
+        "directive_only_completion_removes_streamed_directive",
+        rendered
+            .lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     Ok(())
 }
 
@@ -6886,6 +6940,7 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
         app.enqueue_primary_thread_session(started.session, started.turns)
             .await
             .expect("primary thread should be registered");
+        app.backtrack.primed = true;
         let op = AppCommand::interrupt();
 
         let handled = Box::pin(app.try_submit_active_thread_op_via_app_server(
@@ -6897,6 +6952,7 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
         .expect("interrupt submission should not fail");
 
         assert_eq!(handled, true);
+        assert!(!app.backtrack.primed);
     })
     .await;
 }

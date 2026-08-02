@@ -23,6 +23,7 @@ fn test_skill_metadata(skill_doc_path: AbsolutePathBuf) -> SkillMetadata {
         scope: codex_protocol::protocol::SkillScope::User,
         pinned: false,
         plugin_id: None,
+        remote_plugin_id: None,
     }
 }
 

@@ -846,12 +846,7 @@ fn hook_event_label(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
-        // ecodex hook event additions (goal f0004294)
-        HookEventName::PreCompact => "PreCompact",
-        HookEventName::PostCompact => "PostCompact",
-        HookEventName::SessionEnd => "SessionEnd",
-        HookEventName::SubagentStart => "SubagentStart",
-        HookEventName::SubagentStop => "SubagentStop",
+        // ecodex hook event additions (goal f0004294; shared events are upstream-native above)
         HookEventName::TaskCompleted => "TaskCompleted",
         HookEventName::PostToolUseFailure => "PostToolUseFailure",
     }

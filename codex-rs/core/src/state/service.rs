@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -15,13 +16,11 @@ use crate::environment_selection::ThreadEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
-use crate::session::McpRuntimeSnapshot;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
-use anyhow::Result;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use codex_analytics::AnalyticsEventsClient;
@@ -32,10 +31,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
-use codex_mcp::McpConfig;
-use codex_mcp::McpConnectionSet;
 use codex_mcp::McpRuntime;
-use codex_mcp::McpRuntimeContext;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -43,19 +39,12 @@ use codex_rollout::state_db::StateDbHandle;
 use codex_rollout_trace::ThreadTraceContext;
 use codex_thread_store::LiveThread;
 use codex_thread_store::ThreadStore;
-use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
     /// The single owner of live MCP connections for this thread.
     pub(crate) mcp_runtime: Arc<McpRuntime>,
-    /// The latest atomically published MCP config and connection snapshot.
-    pub(crate) mcp_runtime_snapshot: ArcSwapOption<McpRuntimeSnapshot>,
-    /// Serializes environment-driven runtime rebuilds.
-    pub(crate) mcp_projection_lock: Mutex<()>,
-    pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     pub(crate) elicitations: ElicitationService,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -109,6 +98,10 @@ pub(crate) struct SessionServices {
     pub(crate) code_mode_service: CodeModeService,
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.
+    // ecodex sync note: superseded by `turn_environments.environment_manager()` (upstream's
+    // ThreadEnvironments path); the field is retained but unread. Remove in a follow-up once
+    // construction sites are reconciled.
+    #[allow(dead_code)]
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     /// ecodex addition: per-session registry of armed Monitor watchers
     /// (background subprocess + regex pattern that injects wake events
@@ -123,53 +116,4 @@ pub(crate) struct SessionServices {
     pub(crate) ntfy_listener_registry: Arc<crate::ntfy_listener::NtfyListenerRegistry>,
     pub(crate) tool_search_handler_cache: ToolSearchHandlerCache,
     pub(crate) turn_environments: Arc<ThreadEnvironments>,
-}
-
-impl SessionServices {
-    /// Publishes the initial connections before validating required servers so startup-time
-    /// elicitation can resolve through the thread runtime while validation waits.
-    pub(crate) async fn install_mcp_runtime(
-        &self,
-        config: Arc<McpConfig>,
-        plugins_available: bool,
-        runtime_context: McpRuntimeContext,
-        ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
-        connections: McpConnectionSet,
-    ) -> Result<()> {
-        let runtime = self.publish_mcp_runtime(
-            config,
-            plugins_available,
-            runtime_context,
-            ready_selected_capability_roots,
-            connections,
-        );
-        runtime.manager().validate_required_servers().await
-    }
-
-    pub(crate) fn publish_mcp_runtime(
-        &self,
-        config: Arc<McpConfig>,
-        plugins_available: bool,
-        runtime_context: McpRuntimeContext,
-        ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
-        connections: McpConnectionSet,
-    ) -> Arc<McpRuntimeSnapshot> {
-        let connections = self.mcp_runtime.replace(connections);
-        let runtime = Arc::new(McpRuntimeSnapshot::new(
-            config,
-            plugins_available,
-            connections,
-            runtime_context,
-            ready_selected_capability_roots,
-        ));
-        self.mcp_runtime_snapshot.store(Some(Arc::clone(&runtime)));
-        runtime
-    }
-
-    pub(crate) fn latest_mcp_runtime(&self) -> Arc<McpRuntimeSnapshot> {
-        let Some(runtime) = self.mcp_runtime_snapshot.load_full() else {
-            unreachable!("MCP runtime must be installed before handling requests");
-        };
-        runtime
-    }
 }

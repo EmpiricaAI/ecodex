@@ -748,12 +748,7 @@ fn event_label(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
-        // ecodex hook event additions (goal f0004294)
-        HookEventName::PreCompact => "PreCompact",
-        HookEventName::PostCompact => "PostCompact",
-        HookEventName::SessionEnd => "SessionEnd",
-        HookEventName::SubagentStart => "SubagentStart",
-        HookEventName::SubagentStop => "SubagentStop",
+        // ecodex hook event additions (goal f0004294; shared events are upstream-native above)
         HookEventName::TaskCompleted => "TaskCompleted",
         HookEventName::PostToolUseFailure => "PostToolUseFailure",
     }
@@ -772,13 +767,8 @@ fn event_description(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "When a subagent is created",
         HookEventName::SubagentStop => "Right before a subagent ends its turn",
         HookEventName::Stop => "Right before Codex ends its turn",
-        // ecodex hook event additions (goal f0004294 — schema present;
-        // dispatch sites still pending in upstream codex source)
-        HookEventName::PreCompact => "Before codex compacts the conversation",
-        HookEventName::PostCompact => "After conversation compaction completes",
-        HookEventName::SessionEnd => "When a codex session ends",
-        HookEventName::SubagentStart => "When a subagent is spawned",
-        HookEventName::SubagentStop => "When a subagent completes its work",
+        // ecodex hook event additions (goal f0004294; shared events use upstream's
+        // descriptions above)
         HookEventName::TaskCompleted => "When the agent declares task completion",
         HookEventName::PostToolUseFailure => "When a tool invocation fails",
     }

@@ -469,9 +469,10 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
             path: host_root.abs(),
             scope: SkillScope::User,
             file_system,
-            plugin_id: None,
+            plugin_identity: None,
             plugin_namespace: None,
             plugin_root: None,
+            discovery_mode: codex_utils_plugins::SkillDiscoveryMode::Recursive,
         }],
         /*plugin_skill_snapshots*/ None,
         Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
@@ -504,6 +505,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
                 scope: SkillScope::User,
                 pinned: false,
                 plugin_id: None,
+                remote_plugin_id: None,
             },
             SkillMetadata {
                 name: "linked:second".to_string(),
@@ -516,6 +518,7 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
                 scope: SkillScope::User,
                 pinned: false,
                 plugin_id: None,
+                remote_plugin_id: None,
             },
         ]
     );

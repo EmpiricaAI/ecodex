@@ -385,6 +385,19 @@
       },
       "type": "object"
     },
+    "CodeModeHostConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "disable_in_process_fallback": {
+          "description": "Fail instead of running embedded V8 when the standalone host is unavailable.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -462,7 +475,7 @@
               "type": "boolean"
             },
             "code_mode_host": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_CodeModeHostConfigToml"
             },
             "code_mode_only": {
               "type": "boolean"
@@ -495,6 +508,9 @@
               "type": "boolean"
             },
             "deferred_executor": {
+              "type": "boolean"
+            },
+            "deferred_tool_world_state": {
               "type": "boolean"
             },
             "elevated_windows_sandbox": {
@@ -539,6 +555,9 @@
             "guardian_approval": {
               "type": "boolean"
             },
+            "guardianv2": {
+              "type": "boolean"
+            },
             "hooks": {
               "type": "boolean"
             },
@@ -566,6 +585,9 @@
             "local_thread_store_compression": {
               "type": "boolean"
             },
+            "mcp_2026_07_28": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -588,7 +610,7 @@
               "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
             },
             "non_prefixed_mcp_tool_names": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_NonPrefixedMcpToolNamesConfigToml"
             },
             "personality": {
               "type": "boolean"
@@ -974,6 +996,16 @@
         }
       ]
     },
+    "FeatureToml_for_CodeModeHostConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/CodeModeHostConfigToml"
+        }
+      ]
+    },
     "FeatureToml_for_CurrentTimeReminderConfigToml": {
       "anyOf": [
         {
@@ -1001,6 +1033,16 @@
         },
         {
           "$ref": "#/definitions/NetworkProxyConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_NonPrefixedMcpToolNamesConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/NonPrefixedMcpToolNamesConfigToml"
         }
       ]
     },
@@ -1733,6 +1775,16 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "supports_openai_builtin_tools": {
+          "default": true,
+          "description": "Whether this provider's Responses endpoint accepts OpenAI's non-`function` built-in tool types (`web_search`, `namespace`, `tool_search`, `image_generation`, `custom`). OpenAI and OpenRouter do; many local OpenAI-compatible servers (llama.cpp, vLLM) accept only `type: \"function\"` and hard-400 the entire request on any other tool `type` (`'type' of tool must be 'function'`). Defaults to `true` to preserve existing behavior; set `false` for local providers so ecodex drops the non-`function` tools before serializing the request. Namespaced MCP tools are dropped too — the empirica mesh stays reachable via the CLI invoked through the plain `exec_command` function tool.",
+          "type": "boolean"
+        },
+        "supports_standalone_web_search": {
+          "default": false,
+          "description": "Whether this provider supports the standalone web-search endpoint.",
+          "type": "boolean"
+        },
         "supports_websockets": {
           "default": false,
           "description": "Whether this provider supports the Responses API WebSocket transport.",
@@ -1816,6 +1868,10 @@
         },
         "usage_hint_text": {
           "type": "string"
+        },
+        "wait_agent_enabled": {
+          "description": "Expose the multi-agent v2 `wait_agent` tool.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2071,6 +2127,22 @@
       "type": "string"
     },
     "NetworkUnixSocketPermissionsToml": {
+      "type": "object"
+    },
+    "NonPrefixedMcpToolNamesConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "server_names": {
+          "description": "MCP servers whose tools should omit the legacy `mcp__` namespace prefix.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
       "type": "object"
     },
     "Notice": {
@@ -3111,6 +3183,9 @@
         "experimental_request_user_input": {
           "$ref": "#/definitions/ExperimentalRequestUserInput"
         },
+        "update_plan": {
+          "$ref": "#/definitions/UpdatePlanToolConfig"
+        },
         "web_search": {
           "allOf": [
             {
@@ -3207,6 +3282,7 @@
               "toggle_fast_mode": null,
               "toggle_raw_output": null,
               "toggle_shortcuts": null,
+              "toggle_side_conversation": null,
               "toggle_vim_mode": null
             },
             "list": {
@@ -3785,6 +3861,14 @@
           ],
           "description": "Toggle the composer shortcut overlay."
         },
+        "toggle_side_conversation": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Switch between a side conversation and its parent without closing either."
+        },
         "toggle_vim_mode": {
           "allOf": [
             {
@@ -3886,6 +3970,7 @@
             "toggle_fast_mode": null,
             "toggle_raw_output": null,
             "toggle_shortcuts": null,
+            "toggle_side_conversation": null,
             "toggle_vim_mode": null
           }
         },
@@ -4602,6 +4687,16 @@
       },
       "type": "object"
     },
+    "UpdatePlanToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "UriBasedFileOpener": {
       "oneOf": [
         {
@@ -4940,7 +5035,7 @@
           "type": "boolean"
         },
         "code_mode_host": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_CodeModeHostConfigToml"
         },
         "code_mode_only": {
           "type": "boolean"
@@ -4973,6 +5068,9 @@
           "type": "boolean"
         },
         "deferred_executor": {
+          "type": "boolean"
+        },
+        "deferred_tool_world_state": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -5017,6 +5115,9 @@
         "guardian_approval": {
           "type": "boolean"
         },
+        "guardianv2": {
+          "type": "boolean"
+        },
         "hooks": {
           "type": "boolean"
         },
@@ -5044,6 +5145,9 @@
         "local_thread_store_compression": {
           "type": "boolean"
         },
+        "mcp_2026_07_28": {
+          "type": "boolean"
+        },
         "memories": {
           "type": "boolean"
         },
@@ -5066,7 +5170,7 @@
           "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
         },
         "non_prefixed_mcp_tool_names": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_NonPrefixedMcpToolNamesConfigToml"
         },
         "personality": {
           "type": "boolean"
