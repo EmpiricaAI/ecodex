@@ -387,6 +387,7 @@ pub struct ConfigRequirements {
     pub allow_appshots: Option<bool>,
     pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirements>,
+    pub browser_use: Option<BrowserUseRequirements>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
     pub hooks: Option<ManagedHooksRequirements>,
@@ -434,6 +435,13 @@ pub struct FeedbackRequirements {
 #[ts(export_to = "v2/")]
 pub struct ComputerUseRequirements {
     pub allow_locked_computer_use: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct BrowserUseRequirements {
+    pub disable_auto_review: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -741,8 +749,8 @@ pub struct ExternalAgentConfigImportParams {
     /// Optional identifier for the product that initiated the import.
     #[ts(optional = nullable)]
     pub source: Option<String>,
-    /// Opaque provider identifier supplied by the caller for analytics attribution. This does not
-    /// select the migration source.
+    /// Opaque provider identifier supplied by the caller for analytics attribution and import
+    /// history display. This does not select the migration source.
     #[ts(optional = nullable)]
     pub provider_id: Option<String>,
     /// Migration-source selector used to produce the migration items. Pass the same value to
@@ -793,8 +801,26 @@ pub struct ExternalAgentConfigImportTypeResult {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportHistoryRecordParams {
+    /// Opaque provider identifier for the externally completed import.
+    pub provider_id: String,
+    /// Completed results grouped by imported item type.
+    pub item_type_results: Vec<ExternalAgentConfigImportTypeResult>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportHistoryRecordResponse {
+    pub import_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportHistory {
     pub import_id: String,
+    pub provider_id: Option<String>,
     pub completed_at_ms: i64,
     pub successes: Vec<ExternalAgentConfigImportItemTypeSuccess>,
     pub failures: Vec<ExternalAgentConfigImportItemTypeFailure>,
@@ -864,7 +890,9 @@ pub struct ConfigBatchWriteParams {
     pub file_path: Option<String>,
     #[ts(optional = nullable)]
     pub expected_version: Option<String>,
-    /// When true, hot-reload the updated user config into all loaded threads after writing.
+    /// When true, hot-reload updated runtime settings into loaded threads after writing.
+    /// Session-static model, reasoning-effort, Plan-mode reasoning-effort, service-tier, and
+    /// personality defaults are not reloaded.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reload_user_config: bool,
 }

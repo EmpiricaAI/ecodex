@@ -100,6 +100,7 @@ impl MonitorRegistry {
     }
 
     /// Number of currently armed monitors (introspection / metrics).
+    #[allow(dead_code)]
     pub async fn len(&self) -> usize {
         self.inner.lock().await.len()
     }

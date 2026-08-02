@@ -823,6 +823,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadMetadataUpdateParams {
                     thread_id: thread_id.to_string(),
+                    is_pinned: None,
                     git_info: Some(ThreadMetadataGitInfoUpdateParams {
                         sha: None,
                         branch: Some(Some(branch)),
@@ -1275,7 +1276,7 @@ impl AppServerSession {
         self.client.request_handle()
     }
 
-    fn next_request_id(&mut self) -> RequestId {
+    pub(crate) fn next_request_id(&mut self) -> RequestId {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
         RequestId::Integer(request_id)
@@ -2683,6 +2684,7 @@ mod tests {
                 parent_thread_id: None,
                 preview: "hello".to_string(),
                 ephemeral: false,
+                is_pinned: false,
                 history_mode: Default::default(),
                 model_provider: "openai".to_string(),
                 created_at: 1,

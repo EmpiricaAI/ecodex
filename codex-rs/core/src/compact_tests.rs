@@ -20,12 +20,7 @@ async fn process_compacted_history_with_test_session(
         crate::session::step_context::StepContext::for_test(Arc::clone(&turn_context));
     let world_state = Arc::new(session.build_world_state_for_step(&step_context).await);
     let initial_context = session
-        .build_initial_context_with_world_state_and_mcp(
-            &turn_context,
-            world_state.as_ref(),
-            step_context.mcp.as_ref(),
-            &step_context.extension_data,
-        )
+        .build_initial_context_with_world_state(&turn_context, world_state.as_ref())
         .await;
     let initial_context_injection = InitialContextInjection::BeforeLastUserMessage {
         world_state,
@@ -286,6 +281,7 @@ fn should_use_remote_compact_task_for_azure_provider() {
         requires_openai_auth: false,
         supports_websockets: false,
         supports_openai_builtin_tools: true,
+        supports_standalone_web_search: false,
     };
 
     assert!(should_use_remote_compact_task(&provider));

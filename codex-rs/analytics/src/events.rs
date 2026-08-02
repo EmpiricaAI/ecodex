@@ -139,6 +139,7 @@ pub(crate) struct SkillInvocationEventParams {
     pub(crate) product_client_id: Option<String>,
     pub(crate) skill_scope: Option<String>,
     pub(crate) plugin_id: Option<String>,
+    pub(crate) remote_plugin_id: Option<String>,
     pub(crate) repo_url: Option<String>,
     pub(crate) thread_id: Option<String>,
     pub(crate) turn_id: Option<String>,
@@ -649,6 +650,8 @@ pub(crate) enum WebSearchActionKind {
 pub(crate) struct CodexCommandExecutionEventParams {
     #[serde(flatten)]
     pub(crate) base: CodexToolItemEventBase,
+    pub(crate) plugin_id: Option<String>,
+    pub(crate) script_path: Option<String>,
     pub(crate) command_execution_source: CommandExecutionSource,
     pub(crate) exit_code: Option<i32>,
     pub(crate) command_total_action_count: u64,
@@ -914,6 +917,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) total_tokens: Option<i64>,
     pub(crate) before_first_sampling_ms: u64,
     pub(crate) sampling_ms: u64,
+    pub(crate) compaction_ms: u64,
     pub(crate) between_sampling_overhead_ms: u64,
     pub(crate) tool_blocking_ms: u64,
     pub(crate) after_last_sampling_ms: u64,
@@ -1262,12 +1266,7 @@ fn analytics_hook_event_name(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
-        // ecodex hook event additions (goal f0004294)
-        HookEventName::PreCompact => "PreCompact",
-        HookEventName::PostCompact => "PostCompact",
-        HookEventName::SessionEnd => "SessionEnd",
-        HookEventName::SubagentStart => "SubagentStart",
-        HookEventName::SubagentStop => "SubagentStop",
+        // ecodex hook event additions (goal f0004294; shared events are upstream-native above)
         HookEventName::TaskCompleted => "TaskCompleted",
         HookEventName::PostToolUseFailure => "PostToolUseFailure",
     }

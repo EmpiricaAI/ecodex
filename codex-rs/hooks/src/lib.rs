@@ -114,8 +114,7 @@ pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "subagent_start",
         HookEventName::SubagentStop => "subagent_stop",
         HookEventName::Stop => "stop",
-        // ecodex additions:
-        HookEventName::SessionEnd => "session_end",
+        // ecodex additions (SessionEnd is now upstream-native, above):
         HookEventName::TaskCompleted => "task_completed",
         HookEventName::PostToolUseFailure => "post_tool_use_failure",
     }

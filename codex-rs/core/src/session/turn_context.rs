@@ -1,6 +1,8 @@
 use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
+use codex_core_plugins::PluginCommandAttribution;
+use codex_core_plugins::TrustedPluginRoots;
 use codex_core_skills::HostSkillsSnapshot;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
@@ -171,6 +173,16 @@ impl TurnContext {
                 developer_instructions: self.collaboration_mode_developer_instructions.clone(),
             },
         }
+    }
+
+    pub(crate) fn plugin_attribution_for_command(
+        &self,
+        command: &[String],
+        cwd: &AbsolutePathBuf,
+    ) -> Option<PluginCommandAttribution> {
+        self.extension_data
+            .get::<TrustedPluginRoots>()?
+            .resolve_attribution(command, cwd)
     }
 
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
@@ -348,6 +360,7 @@ impl TurnContext {
                 .config
                 .permissions
                 .windows_sandbox_private_desktop,
+            windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: self.config.features.use_legacy_landlock(),
         }
     }
@@ -389,7 +402,7 @@ impl TurnContext {
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode()),
             multi_agent_version: Some(self.multi_agent_version),
-            multi_agent_mode: super::multi_agents::effective_multi_agent_mode(self),
+            multi_agent_mode: None,
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort.clone(),
             summary: ReasoningSummaryConfig::Auto,
@@ -604,6 +617,7 @@ impl Session {
             let previous_provider_name = state.session_configuration.provider.name.clone();
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
+                    let mcp_inputs_changed = state.session_configuration.mcp_inputs_differ(&next);
                     let previous_permission_profile =
                         state.session_configuration.permission_profile();
                     let next_permission_profile = next.permission_profile();
@@ -642,9 +656,13 @@ impl Session {
                             .turn_environments
                             .update_selections(next.environment_selections());
                     }
+                    if mcp_inputs_changed {
+                        self.mark_mcp_runtime_dirty();
+                    }
                     state.session_configuration = next.clone();
                     Ok((
                         next,
+                        mcp_inputs_changed,
                         permission_profile_changed,
                         provider_swap,
                         previous_config,
@@ -657,6 +675,7 @@ impl Session {
 
         let (
             session_configuration,
+            mcp_inputs_changed,
             permission_profile_changed,
             provider_swap,
             previous_config,
@@ -683,12 +702,14 @@ impl Session {
             self.swap_model_client_to_provider(plan).await;
         }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
+        if mcp_inputs_changed {
+            self.schedule_mcp_prewarm();
+        }
 
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
         }
-
         Ok(self
             .new_turn_from_configuration(
                 sub_id,
@@ -747,14 +768,6 @@ impl Session {
             .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
-        {
-            let mcp_runtime = self.services.latest_mcp_runtime();
-            let mcp_connection_manager = mcp_runtime.manager();
-            mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
-            mcp_connection_manager
-                .set_permission_profile(session_configuration.permission_profile());
-        }
-
         let model_info = self
             .services
             .models_manager
@@ -782,6 +795,10 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&plugins_input)
             .await;
+        let trusted_plugin_roots = TrustedPluginRoots::from_plugin_load_outcome(
+            &plugin_outcome,
+            per_turn_config.codex_home.as_path(),
+        );
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let plugin_skill_snapshots = self
             .services
@@ -825,6 +842,7 @@ impl Session {
             sub_id,
             skills_snapshot,
         );
+        turn_context.extension_data.insert(trusted_plugin_roots);
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {

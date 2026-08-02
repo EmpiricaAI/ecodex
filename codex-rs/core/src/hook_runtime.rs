@@ -8,15 +8,10 @@ use codex_analytics::build_track_events_context;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
-use codex_hooks::PostCompactRequest;
 use codex_hooks::PostToolUseFailureOutcome;
 use codex_hooks::PostToolUseFailureRequest;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
-use codex_hooks::PreCompactOutcome;
-use codex_hooks::PreCompactRequest;
-use codex_hooks::SessionEndOutcome;
-use codex_hooks::SessionEndRequest;
 use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
@@ -309,6 +304,7 @@ pub(crate) async fn run_post_tool_use_hooks(
 /// Sibling to `run_post_tool_use_hooks` — same shape minus the success-only
 /// `tool_response`, plus `error_message` + `duration_ms` for plugin handlers
 /// consuming failures as calibration signals.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_post_tool_use_failure_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -322,6 +318,7 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
     let request = PostToolUseFailureRequest {
         session_id: sess.thread_id,
         turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
@@ -792,12 +789,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
-        // ecodex hook event additions (goal f0004294)
-        HookEventName::PreCompact => "PreCompact",
-        HookEventName::PostCompact => "PostCompact",
-        HookEventName::SessionEnd => "SessionEnd",
-        HookEventName::SubagentStart => "SubagentStart",
-        HookEventName::SubagentStop => "SubagentStop",
+        // ecodex hook event additions (goal f0004294; shared events are upstream-native above)
         HookEventName::TaskCompleted => "TaskCompleted",
         HookEventName::PostToolUseFailure => "PostToolUseFailure",
     };

@@ -150,6 +150,9 @@ pub struct ModelProviderInfo {
     /// invoked through the plain `exec_command` function tool.
     #[serde(default = "default_supports_openai_builtin_tools")]
     pub supports_openai_builtin_tools: bool,
+    /// Whether this provider supports the standalone web-search endpoint.
+    #[serde(default)]
+    pub supports_standalone_web_search: bool,
 }
 
 /// Default for [`ModelProviderInfo::supports_openai_builtin_tools`]: `true`, so
@@ -380,6 +383,7 @@ impl ModelProviderInfo {
             requires_openai_auth: true,
             supports_websockets: true,
             supports_openai_builtin_tools: true,
+            supports_standalone_web_search: true,
         }
     }
 
@@ -415,6 +419,7 @@ impl ModelProviderInfo {
             supports_websockets: false,
             // Amazon Bedrock fronts OpenAI models — full tool set is supported.
             supports_openai_builtin_tools: true,
+            supports_standalone_web_search: false,
         }
     }
 
@@ -518,6 +523,13 @@ pub fn merge_configured_model_providers(
             let auth_override = provider.auth.take();
             let aws_override = provider.aws.take();
             let http_headers_override = provider.http_headers.take();
+            // ecodex: `supports_openai_builtin_tools` has a serde default of `true` but a
+            // derived `Default` of `false`, so a bedrock provider deserialized from a config
+            // that omits it will not equal `ModelProviderInfo::default()`. It is not a
+            // bedrock-tunable field, so normalize it to the derived default before the
+            // "only base_url/auth/http_headers/aws may change" check to avoid a false reject.
+            provider.supports_openai_builtin_tools =
+                ModelProviderInfo::default().supports_openai_builtin_tools;
             if provider != ModelProviderInfo::default() {
                 return Err(format!(
                     "model_providers.{AMAZON_BEDROCK_PROVIDER_ID} only supports changing \
@@ -589,6 +601,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         // accept only `type: "function"` tools and hard-400 the request on any
         // OpenAI built-in tool type. Default the local/oss provider to drop them.
         supports_openai_builtin_tools: false,
+        supports_standalone_web_search: false,
     }
 }
 

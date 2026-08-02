@@ -254,6 +254,8 @@ pub struct PluginShareSaveParams {
 pub struct PluginShareSaveResponse {
     pub remote_plugin_id: String,
     pub share_url: String,
+    #[serde(default)]
+    pub can_publish_to_workspace: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -449,6 +451,10 @@ pub struct SkillInterface {
     pub icon_small: Option<AbsolutePathBuf>,
     #[ts(optional)]
     pub icon_large: Option<AbsolutePathBuf>,
+    /// Remote small icon URL from the plugin catalog.
+    pub icon_small_url: Option<String>,
+    /// Remote large icon URL from the plugin catalog.
+    pub icon_large_url: Option<String>,
     #[ts(optional)]
     pub brand_color: Option<String>,
     #[ts(optional)]
@@ -658,6 +664,8 @@ pub struct PluginShareContext {
     pub creator_account_user_id: Option<String>,
     pub creator_name: Option<String>,
     pub share_principals: Option<Vec<PluginSharePrincipal>>,
+    #[serde(default)]
+    pub can_publish_to_workspace: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -908,6 +916,8 @@ impl From<CoreSkillInterface> for SkillInterface {
             default_prompt: value.default_prompt,
             icon_small: value.icon_small,
             icon_large: value.icon_large,
+            icon_small_url: None,
+            icon_large_url: None,
         }
     }
 }

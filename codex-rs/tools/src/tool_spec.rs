@@ -9,6 +9,8 @@ use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLo
 use codex_protocol::config_types::WebSearchUserLocationType;
 use serde::Serialize;
 use serde_json::Value;
+use serde_json::value::RawValue;
+use std::sync::Arc;
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
@@ -115,6 +117,13 @@ pub fn filter_tools_for_provider(
         .filter(|tool| is_plain_function_tool(tool))
         .cloned()
         .collect()
+}
+
+/// Returns raw JSON that can be embedded directly in a Responses API request.
+pub fn create_tools_raw_json_for_responses_api(
+    tools: &[ToolSpec],
+) -> Result<Arc<RawValue>, serde_json::Error> {
+    serde_json::value::to_raw_value(tools).map(Arc::from)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

@@ -7,6 +7,7 @@ use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_analytics::AnalyticsEventsClient;
+use codex_app_server_protocol::BrowserUseRequirements;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ComputerUseRequirements;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -50,6 +51,7 @@ use std::path::PathBuf;
 
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "auth_elicitation",
+    "mcp_2026_07_28",
     "memories",
     "mentions_v2",
     "remote_control",
@@ -135,9 +137,26 @@ impl ConfigRequestProcessor {
         &self,
         params: ConfigBatchWriteParams,
     ) -> Result<ClientResponsePayload, JSONRPCErrorError> {
-        self.handle_config_mutation_result(self.batch_write_inner(params).await)
-            .await
-            .map(ClientResponsePayload::ConfigBatchWrite)
+        let session_defaults_only = !params.edits.is_empty()
+            && params.edits.iter().all(|edit| {
+                matches!(
+                    edit.key_path.as_str(),
+                    "model"
+                        | "model_reasoning_effort"
+                        | "plan_mode_reasoning_effort"
+                        | "service_tier"
+                        | "personality"
+                )
+            });
+        let reload_user_config = params.reload_user_config;
+        let response = self.batch_write_inner(params).await?;
+        if !session_defaults_only {
+            self.handle_config_mutation().await;
+            if reload_user_config {
+                self.reload_user_config().await;
+            }
+        }
+        Ok(ClientResponsePayload::ConfigBatchWrite(response))
     }
 
     pub(crate) async fn experimental_feature_enablement_set(
@@ -148,6 +167,9 @@ impl ConfigRequestProcessor {
         let response = self
             .handle_config_mutation_result(self.set_experimental_feature_enablement(params).await)
             .await?;
+        if !response.enablement.is_empty() {
+            self.reload_user_config().await;
+        }
         self.outgoing
             .send_response_as(
                 request_id,
@@ -218,7 +240,6 @@ impl ConfigRequestProcessor {
         &self,
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
-        let reload_user_config = params.reload_user_config;
         let pending_changes = codex_core_plugins::toggles::collect_plugin_enabled_candidates(
             params
                 .edits
@@ -231,9 +252,6 @@ impl ConfigRequestProcessor {
             .await
             .map_err(map_error)?;
         self.emit_plugin_toggle_events(pending_changes).await;
-        if reload_user_config {
-            self.reload_user_config().await;
-        }
         Ok(response)
     }
 
@@ -269,14 +287,13 @@ impl ConfigRequestProcessor {
             .map_err(|_| internal_error("failed to update feature enablement"))?;
 
         self.load_latest_config(/*fallback_cwd*/ None).await?;
-        self.reload_user_config().await;
 
         Ok(ExperimentalFeatureEnablementSetResponse { enablement })
     }
 
     async fn reload_user_config(&self) {
-        let next_config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
+        match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(_) => {}
             Err(err) => {
                 tracing::warn!(
                     "failed to rebuild user config for runtime refresh: {}",
@@ -290,7 +307,19 @@ impl ConfigRequestProcessor {
             let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
                 continue;
             };
-            thread.refresh_runtime_config(next_config.clone()).await;
+            let current_config = thread.config().await;
+            let next_config = match self
+                .config_manager
+                .load_latest_config_for_thread(current_config.as_ref())
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    tracing::warn!(%thread_id, %err, "failed to reload thread configuration");
+                    continue;
+                }
+            };
+            thread.refresh_runtime_config(next_config).await;
         }
     }
 
@@ -375,6 +404,9 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         computer_use: requirements
             .computer_use
             .map(map_computer_use_requirements_to_api),
+        browser_use: requirements
+            .browser_use
+            .map(map_browser_use_requirements_to_api),
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
@@ -407,6 +439,14 @@ fn map_computer_use_requirements_to_api(
 ) -> ComputerUseRequirements {
     ComputerUseRequirements {
         allow_locked_computer_use: computer_use.allow_locked_computer_use,
+    }
+}
+
+fn map_browser_use_requirements_to_api(
+    browser_use: codex_config::BrowserUseRequirementsToml,
+) -> BrowserUseRequirements {
+    BrowserUseRequirements {
+        disable_auto_review: browser_use.disable_auto_review,
     }
 }
 

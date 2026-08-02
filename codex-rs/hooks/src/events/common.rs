@@ -124,7 +124,6 @@ pub(crate) fn matcher_pattern_for_event(
         | HookEventName::PostCompact => matcher,
         HookEventName::UserPromptSubmit
         | HookEventName::Stop
-        | HookEventName::SessionEnd
         | HookEventName::TaskCompleted => None,
     }
 }

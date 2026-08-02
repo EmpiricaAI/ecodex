@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::test_support::PathExt;
 use std::fs;
 use std::fs::FileTimes;
 #[cfg(unix)]
@@ -392,7 +393,7 @@ async fn resume_materializes_compressed_rollout_path() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let config = RolloutConfig {
         codex_home: home.path().to_path_buf(),
-        sqlite_home: home.path().to_path_buf(),
+        sqlite: codex_state::SqliteConfig::new_for_testing(home.path().abs()),
         cwd: home.path().to_path_buf(),
         model_provider_id: "test-provider".to_string(),
         generate_memories: true,
@@ -403,6 +404,8 @@ async fn resume_materializes_compressed_rollout_path() -> anyhow::Result<()> {
     write_rollout(&rollout_path, thread_id, "hello before resume")?;
     compress_now(&rollout_path)?;
     let compressed_path = compressed_rollout_path(&rollout_path);
+    set_old_mtime(compressed_path.as_path())?;
+    let compressed_modified = fs::metadata(compressed_path.as_path())?.modified()?;
 
     let InitialHistory::Resumed(history) =
         RolloutRecorder::get_rollout_history(compressed_path.as_path()).await?
@@ -420,6 +423,7 @@ async fn resume_materializes_compressed_rollout_path() -> anyhow::Result<()> {
     assert_eq!(recorder.rollout_path(), rollout_path.as_path());
     assert!(rollout_path.exists());
     assert!(!compressed_path.exists());
+    assert!(fs::metadata(rollout_path.as_path())?.modified()? > compressed_modified);
     recorder
         .record_canonical_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
             UserMessageEvent {

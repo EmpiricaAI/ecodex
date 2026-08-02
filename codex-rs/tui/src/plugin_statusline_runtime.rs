@@ -291,7 +291,7 @@ fn resolve_empirica_session_id_for_current_shell() -> Option<String> {
     let mut best: Option<(std::time::SystemTime, String)> = None;
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.extension().is_some_and(|e| e == "json") {
+        if path.extension().is_none_or(|e| e != "json") {
             continue;
         }
         let Ok(content) = std::fs::read_to_string(&path) else {
