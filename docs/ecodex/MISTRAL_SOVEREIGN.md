@@ -11,7 +11,11 @@ can't offer together:
 - **Cost.** Mistral's coding models (Devstral, Codestral) are materially cheaper
   per token than frontier flagships, while Devstral is a genuinely capable
   agentic-coding model — verified end-to-end in ecodex (autonomous multi-step
-  work, tool use, the full deep empirica frame).
+  work, tool use, the full deep empirica frame). In practice **Devstral is our
+  workhorse — the best non-OpenAI model we've run in ecodex-lab**, second only to
+  the OpenAI frontier family. Current flagship: **Devstral 2** (`devstral-2512`,
+  alias `devstral-medium-latest`, 123B, 256K context); the 24B **Devstral Small 2**
+  (`devstral-small-2512`) is the cheap/self-hostable sibling.
 
 Bonus: the same models are **open-weights**, so once you're set up on the hosted
 API you can later self-host them on EU hardware (Ollama / vLLM) for a full
@@ -44,10 +48,19 @@ llama.cpp server — do **not** need the translator.)
 
 ### 1. Get a Mistral API key
 
-From the [Mistral console](https://console.mistral.ai/). A **paid** subscription
-is strongly recommended for real work — the free tier throttles mid-stream under
-agentic load (recurring stream disconnects); a paid key clears it (clean ~14s
-turns in testing).
+From the [Mistral console](https://console.mistral.ai/) — this is **La Plateforme**,
+Mistral's pay-as-you-go developer API. Two things to be clear about:
+
+- **It's an API key, not a subscription.** A **Le Chat** consumer subscription
+  (Pro / Team) does *not* grant API access, and there is **no OAuth / "sign in
+  with your subscription" path** into ecodex the way ChatGPT has. With Mistral you
+  are always on the metered API-key path — billing is per-token, and rate limits
+  rise with cumulative spend across tiers.
+- **Fund the account for real work.** The free/experiment tier throttles
+  mid-stream under agentic load (recurring stream disconnects); a funded key
+  clears it (clean ~14s turns in testing). Mind Devstral's relatively low
+  requests-per-second ceiling under agentic bursts — see the cross-model
+  [`model-notes.md`](integrations/model-notes.md).
 
 ### 2. Store the key (never inline it)
 

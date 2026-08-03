@@ -195,7 +195,7 @@
       "jurisdiction": { "country": "FR", "eu_data_residency": true },
       "calibration_tier": "unmeasured",
       "last_verified": "2026-06-22",
-      "evidence": "verified: docs.mistral.ai models_overview (devstral-2512) + api.mistral.ai/v1 OpenAI-compat (2026-06-22). Direct EU route now wired via [model_providers.mistral] (devstral-2-latest). EU-sovereignty pick per David."
+      "evidence": "verified: docs.mistral.ai models_overview (devstral-2512) + api.mistral.ai/v1 OpenAI-compat (2026-06-22). EU route wired via [model_providers.mistral] through the codex-empirica-translator to api.mistral.ai (devstral-latest). EU-sovereignty pick per David."
     },
     {
       "slug": "mistralai/devstral-small",

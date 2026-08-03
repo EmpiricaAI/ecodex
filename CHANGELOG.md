@@ -55,6 +55,17 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
   pinned versions. The sole live `cargo-audit` advisory (`quinn-proto`) is not in
   the built dependency graph.
 
+### Documentation
+- New [`docs/ecodex/integrations/model-notes.md`](docs/ecodex/integrations/model-notes.md)
+  — cross-model wiring/verdict notes (the deciding axis is auth: OAuth-subscription
+  vs API-key; OpenAI subs work via OAuth, Mistral is API-key-only). Records our
+  Devstral reliance (best non-OpenAI model in ecodex-lab) and the OpenRouter
+  caching caveat (unreliable/expensive → prefer provider-direct).
+- Refreshed `MISTRAL_SOVEREIGN.md` (Le Chat subs ≠ API access; current Devstral 2
+  / Small 2 slugs). Drift fixes: fake `devstral-2-latest` → `devstral-latest`
+  (config default + curated registry), broken `empirica mcp` → `empirica-mcp`
+  ref, stale `ECODEX_VERSION` install example → `v0.146.0`.
+
 ## [0.145.0] - 2026-07-24
 
 ### Changed
@@ -379,7 +390,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.145.0...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.146.0...HEAD
+[0.146.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.145.0...v0.146.0
 [0.145.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.7...v0.145.0
 [0.2.7]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.5...v0.2.6

@@ -86,7 +86,7 @@ wire_api = "responses"
 
 # EU data-sovereignty route. Mistral AI is EU-domiciled (Paris); the API is
 # EU-hosted, so code never leaves the EU — the answer for users who legally or
-# contractually cannot route to US/CN providers. Devstral 2 (devstral-2-latest)
+# contractually cannot route to US/CN providers. Devstral 2 (devstral-latest)
 # is the agentic-coding flagship; Codestral (codestral-latest) is the
 # code-completion tier. Both are also open-weights, so the same models can be
 # self-hosted on EU hardware (Ollama/vLLM) for full air-gap.

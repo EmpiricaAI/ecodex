@@ -51,7 +51,7 @@ The exact tool set depends on the empirica MCP server build, but typically inclu
 | `mcp__empirica__submit_preflight_assessment` | Open a transaction |
 | `mcp__empirica__submit_check_assessment` | Gate noetic→praxic |
 | `mcp__empirica__submit_postflight_assessment` | Close a transaction |
-| ...plus many more | Full reference: `empirica mcp --help` |
+| ...plus many more | Full reference: `empirica-mcp` (the MCP server binary) |
 
 These mirror the `empirica` CLI subcommands and provide an MCP-protocol-friendly interface to the same functionality. Codex agents that prefer structured tool calls over CLI invocations will naturally reach for these.
 
