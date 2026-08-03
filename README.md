@@ -18,11 +18,11 @@ This is **not** a drop-in replacement for codex. It is opinionated: the discipli
 
 ## Status
 
-Alpha. **v0.145.0 shipped 2026-07-24** — see [the releases](https://github.com/EmpiricaAI/ecodex/releases). The version now tracks the upstream [openai/codex](https://github.com/openai/codex) base this build is derived from — hence the jump from `0.2.x`. This keeps the client version ecodex reports compatible with OpenAI's per-model version gates (so frontier models like gpt-5.6 work over ChatGPT-subscription auth); ecodex patches increment as `0.145.x`, then move to the new base on each upstream re-sync. (First public release v0.1.0 was 2026-06-02.) The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
+Alpha. **`main` tracks upstream codex 0.146** (synced 2026-08-02; last tagged release [v0.145.0](https://github.com/EmpiricaAI/ecodex/releases), 2026-07-24). The version tracks the upstream [openai/codex](https://github.com/openai/codex) base this build is derived from — hence the jump from `0.2.x`. Upstream is alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on top of the pinned `0.146.0-alpha.10.1` base. Tracking the base keeps the client version ecodex reports compatible with OpenAI's per-model version gates (so frontier models like gpt-5.6 work over ChatGPT-subscription auth); ecodex patches increment as `0.146.x`, then move to the new base on each upstream re-sync. (First public release v0.1.0 was 2026-06-02.) The release pipeline (gated build/test/clippy, GH release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
 
 The repo's branches:
 
-- `main` (default) — the canonical ecodex branch: all active work — the empirica plugin, the protocol translator, curated open-weights provider defaults + L3 model registry, the native ntfy mesh listener, the koru-spiral welcome screen, and discipline wiring. Upstream `openai/codex` is tracked via the `upstream` remote and synced in periodically (see `docs/ecodex/` + the upstream-sync issue template).
+- `main` (default) — the canonical ecodex branch: all active work — the empirica plugin, the protocol translator, curated open-weights provider defaults + L3 model registry, the native ntfy mesh listener, the static Empirica welcome screen (the koru-spiral animation is still there on `Ctrl+.`), and discipline wiring. Upstream `openai/codex` is tracked via the `upstream` remote and synced in periodically (see `docs/ecodex/` + the upstream-sync issue template).
 
 Public-facing pieces (CI workflows, contributor templates, expanded docs) land incrementally as we approach a broader launch. The CLI itself is daily-driven by the ecodex team.
 
@@ -92,6 +92,7 @@ For the full vocabulary + how the pieces compose, see [`docs/ecodex/system-overv
 
 ## Documentation
 
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — **start here** — the top-level map: fork boundary, the three moving parts, the harness/enforcement layer, the de-Claude pipeline, known tensions
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — three-layer contribution model, dev workflow, conventions
 - [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) — install modes, providers, troubleshooting
 - [`docs/ecodex/MISTRAL_SOVEREIGN.md`](docs/ecodex/MISTRAL_SOVEREIGN.md) — wiring EU-sovereign Mistral models (Devstral/Codestral) for data residency + cost savings

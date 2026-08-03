@@ -8,6 +8,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.146.0] - 2026-08-02
+
+Upstream base sync `0.145` → `0.146` (127 upstream commits). Upstream codex is
+alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
+`0.146.0-alpha.10.1` base.
+
+### Added
+- **Root [`ARCHITECTURE.md`](ARCHITECTURE.md)** — a top-level architecture map
+  (fork boundary, the three moving parts, the harness/enforcement layer, the
+  de-Claude pipeline, known tensions), in the shape of Empirica's.
+
+### Changed
+- **First-launch welcome is now a static Empirica mark** by default instead of an
+  animation; the koru-spiral (and upstream variants) remain available on `Ctrl+.`.
+- **Re-vendored the Empirica plugin to 1.13.0.** Notable: `sentinel-gate` gains a
+  read-only-by-naming-convention rule that stops the firewall over-gating read
+  verbs (41/279 CLI verbs were being denied pre-CHECK), plus additional
+  credential redaction (Authorization headers, `token <hex>`, `user:token@host`
+  git URLs).
+
+### Fixed
+- **Dead-end noise.** The `tool-failure` hook now filters operational noise
+  (timeouts, SIGTERM/SIGKILL, connection-refused, DNS) and success-markers before
+  recording a dead-end, and redacts credentials — previously any tool failure
+  ≥20 chars became a permanent "avoid re-trying" dead-end. Fix re-vendored from
+  Empirica (the vendored copy needed the re-vendor; a package upgrade doesn't
+  reach it).
+- **Amazon Bedrock config.** `supports_openai_builtin_tools` had a serde default
+  of `true` but a derived `Default` of `false`, so a bedrock provider from a
+  config that omitted it failed the "only `base_url`/`auth`/`http_headers`/`aws`
+  may change" validation. Normalized before the check.
+- **`exec` provider routing.** OpenAI-family models (`gpt-*`/`chatgpt-*`/`o1|o3|o4`)
+  passed with headless `-m` now route to the `openai` provider even when the
+  persisted default points elsewhere — parity with the interactive `/model`
+  switch (so gpt-5.6 works over ChatGPT-subscription auth in `exec`).
+
+### Removed
+- Dead `SessionServices.environment_manager` field (write-only; superseded by
+  `turn_environments.environment_manager()` upstream).
+
+### Dependencies
+- Dependabot triage (55 alerts): the shipped Rust binary has ~0 actionable live
+  vulnerabilities — 41 npm/pip alerts are docs/tooling deps (not in the binary),
+  and the Rust dependabot alerts are not corroborated by `cargo-audit` for the
+  pinned versions. The sole live `cargo-audit` advisory (`quinn-proto`) is not in
+  the built dependency graph.
+
 ## [0.145.0] - 2026-07-24
 
 ### Changed
