@@ -26,16 +26,39 @@ not a preference.
 |---|---|---|---|---|
 | **gpt-5.6 family** (OpenAI) | **OAuth** — ChatGPT subscription (device auth) | ✅ yes | `openai` provider, `requires_openai_auth=true`. Version tracks the codex base so per-model gates pass | **Best.** The reference bar; everything else is measured against it |
 | **Devstral 2 / Devstral** (Mistral) | **API key only** (La Plateforme) | ❌ no OAuth path | Via the translator (`base_url=http://localhost:18080/v1`), `env_key=MISTRAL_API_KEY`. See [`MISTRAL_SOVEREIGN.md`](../MISTRAL_SOVEREIGN.md) | **Our workhorse — best after the OpenAI models in ecodex-lab.** Strong agentic, multi-file coding; EU-sovereign |
-| **GLM-5.2** (Zhipu) | API key (provider-direct) or OpenRouter | provider-dependent | provider-direct key preferred over OpenRouter | Promising |
-| **Kimi K-3** (Moonshot) | API key (provider-direct) or OpenRouter | provider-dependent | provider-direct key preferred | Promising |
-| **Deepseek-v4-flash** (DeepSeek) | API key (provider-direct) or OpenRouter | provider-dependent | provider-direct key preferred | Promising |
-| **Minimax-M3** (MiniMax) | API key (provider-direct) or OpenRouter | provider-dependent | provider-direct key preferred | Promising |
+| **GLM-5.2** (Zhipu / Z.ai) | API key | **Plan-priced key** — GLM Coding Plan (from ~$10/mo) is billed as a subscription but still hands you an API key. No OAuth | `env_key`, base_url `https://api.z.ai/api/paas/v4` | Promising |
+| **Kimi K-3** (Moonshot) | API key | No — metered pay-as-you-go only for third-party clients | `env_key`, base_url `https://api.moonshot.ai/v1` | Promising (1M ctx, open-weight) |
+| **Deepseek-v4-flash** (DeepSeek) | API key | No — metered only; no plan, no OAuth | `env_key`, base_url `https://api.deepseek.com` | Promising (1M ctx) |
+| **Minimax-M3** (MiniMax) | API key | **Plan-priced key** — Coding Plan (`sk-cp-…`, quota-based) or metered (`sk-api-…`). No OAuth | `env_key`, base_url `https://api.minimax.io/v1` | Promising (1M ctx) |
 
-> The four "promising" models above have all run in ecodex-lab and produced
-> useful work. They sit below Devstral for us today; as we accumulate grounded
-> per-model calibration the verdicts will sharpen. (Auth specifics — whether each
-> offers an OAuth/subscription login into ecodex vs API-key-only — are still being
-> confirmed per provider; treat the "Sub usable?" column as provisional.)
+> The four "promising" models have all run in ecodex-lab and produced useful work;
+> they sit below Devstral for us today and the verdicts will sharpen as we
+> accumulate grounded per-model calibration. **Auth reality (verified 2026-08):**
+> none offers a ChatGPT-style OAuth "sign in with your subscription" that a generic
+> OpenAI-compatible client can consume — all four are API-key (Bearer). The two
+> "subscription" options (Z.ai's GLM Coding Plan, MiniMax's Coding Plan) are
+> **plan-priced API keys**, so ecodex wiring is identical to a metered key, just
+> billed as a plan. Practical upshot of the OAuth rule: **only OpenAI's
+> ChatGPT-subscription actually rides in via OAuth today**; everything else is a key.
+
+### Provider quick-reference (slug · context · caching · links)
+
+| Provider | Model slug | Context | Open-weight? | Native prompt caching | API console | Pricing / plan |
+|---|---|---|---|---|---|---|
+| **Zhipu / Z.ai** | `glm-5.2` | ⚠️ unverified (GLM-4.6 = 200K) | ⚠️ unverified | Yes (cached-input pricing) | [z.ai/model-api](https://z.ai/model-api) | [docs.z.ai pricing](https://docs.z.ai/guides/overview/pricing) |
+| **Moonshot / Kimi** | `kimi-k3` | 1,048,576 (1M) | Yes (Modified MIT) | Yes (automatic context caching) | [platform.moonshot.ai](https://platform.moonshot.ai) | [Kimi pricing](https://platform.moonshot.ai/docs/pricing/chat) |
+| **DeepSeek** | `deepseek-v4-flash` | 1M (384K max out) | ⚠️ unverified (V3 was MIT) | Yes (disk-based auto context caching) | [platform.deepseek.com](https://platform.deepseek.com) | [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing) |
+| **MiniMax** | `MiniMax-M3` | 1,000,000 (1M) | ⚠️ unverified (M2 was MIT) | ⚠️ not documented | [platform.minimax.io](https://platform.minimax.io) | [MiniMax token/plan](https://platform.minimax.io/docs/token-plan/quickstart) |
+
+Note the DeepSeek slug shift: the `deepseek-chat` / `deepseek-reasoner` aliases were
+retired (~July 2026); current explicit slugs are `deepseek-v4-flash` / `deepseek-v4-pro`.
+Every provider above offers **native prompt caching on its own API** (MiniMax
+unconfirmed) — which is precisely why **provider-direct beats OpenRouter** for these:
+you get a documented cache contract instead of OpenRouter's opaque one.
+
+> **Unverified — do not treat as fact without re-checking:** GLM-5.2 context window;
+> open-weight status of `glm-5.2` / `deepseek-v4-flash` / `MiniMax-M3` (predecessors
+> were MIT, these flagships unconfirmed); MiniMax native caching.
 
 ## The OpenRouter caching caveat
 
