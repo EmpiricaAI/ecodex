@@ -54,6 +54,10 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
   and the Rust dependabot alerts are not corroborated by `cargo-audit` for the
   pinned versions. The sole live `cargo-audit` advisory (`quinn-proto`) is not in
   the built dependency graph.
+- Merged Dependabot **#14** (`quinn-proto` 0.11.14 → 0.11.16, clears the phantom
+  `RUSTSEC-2026-0185` advisory from `Cargo.lock`) and **#15**
+  (`datamodel-code-generator` dev-dep in `/sdk/python`). Post-merge `cargo-audit`
+  reports **0 vulnerabilities**.
 
 ### Documentation
 - New [`docs/ecodex/integrations/model-notes.md`](docs/ecodex/integrations/model-notes.md)
