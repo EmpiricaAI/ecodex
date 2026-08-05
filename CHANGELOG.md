@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **`install.sh` broken pipe under `set -o pipefail`.** Version-resolution
+  (`curl ... | grep -m1 ... | sed ...`) broke the documented one-liner
+  installer for every fresh user, not just version-drift recovery — `grep -m1`
+  closes its end of the pipe as soon as it matches, while curl is often still
+  writing, and curl's resulting "Failure writing output" exit propagated
+  through `pipefail`/`set -e` to kill the script. Fixed by capturing curl's
+  output into a variable first.
+
+### Added
+- **`scripts/release.sh --verify-install`** — an opt-in release-gate step
+  that runs `install.sh` against a scratch prefix pointed at the just-cut
+  release and checks the installed binary reports the right version. Catches
+  the bug above (and future ones) before it reaches a user's machine.
+
 ## [0.146.0] - 2026-08-02
 
 Upstream base sync `0.145` → `0.146` (127 upstream commits). Upstream codex is
