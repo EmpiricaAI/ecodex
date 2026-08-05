@@ -635,7 +635,16 @@ fn normalize_command_hook(
             "clamping SessionEnd hook timeout to {max_timeout_sec}s in {}",
             source_path.display()
         );
-        if source_path.to_string_lossy().contains("nubaeon/empirica") {
+        let is_bundled_empirica_hook = source_path
+            .file_name()
+            .is_some_and(|name| name == "hooks.json")
+            && source_path
+                .components()
+                .zip(source_path.components().skip(1))
+                .any(|(publisher, plugin)| {
+                    publisher.as_os_str() == "nubaeon" && plugin.as_os_str() == "empirica"
+                });
+        if is_bundled_empirica_hook {
             tracing::debug!("{msg}");
         } else {
             warnings.push(msg);
@@ -1107,6 +1116,31 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn session_end_suppresses_clamp_warning_for_bundled_empirica_hook() {
+        // ecodex: the bundled empirica plugin's hooks.json declares a SessionEnd
+        // timeout > SESSION_END_MAX_TIMEOUT_SEC on purpose (shared with Claude
+        // Code, which honors it). The per-launch clamp warning is real for other
+        // plugins but pure noise for our own bundled hook -- confirm the clamp
+        // still applies (3s) while the warning is suppressed for this specific
+        // path shape (path-component match, not substring -- so it's correct
+        // regardless of platform path separator).
+        let source_path =
+            test_path_buf("/home/test/.codex/plugins/cache/nubaeon/empirica/0.1.0/hooks.json")
+                .abs();
+        let mut warnings = Vec::new();
+
+        let timeout_sec = super::normalize_command_hook(
+            HookEventName::SessionEnd,
+            Some(30),
+            &source_path,
+            &mut warnings,
+        );
+
+        assert_eq!(timeout_sec, 3);
+        assert_eq!(warnings, Vec::<String>::new());
     }
 
     #[test]
