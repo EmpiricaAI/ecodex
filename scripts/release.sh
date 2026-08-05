@@ -506,19 +506,27 @@ fi
 PUBLISH_ORDER=("codex-empirica-translator" "codex-empirica-plugin")
 
 if [[ "$PUBLISH_CRATES" -eq 1 ]]; then
-  if [[ -z "${CARGO_REGISTRY_TOKEN:-}" && "$DRY_RUN" -eq 0 ]]; then
-    warn "CARGO_REGISTRY_TOKEN not set — get one at https://crates.io/me + export, or skip --publish-crates"
-  else
-    for crate in "${PUBLISH_ORDER[@]}"; do
-      log "[publish-crates] cargo publish -p ${crate}"
-      if [[ "$DRY_RUN" -eq 1 ]]; then
-        printf '  [dry-run] cargo publish -p %s\n' "$crate" >&2
-      else
-        (cd "${ECODEX_ROOT}/codex-rs" && cargo publish -p "$crate") \
-          || error "cargo publish $crate failed — fix metadata gaps then re-run with --publish-crates only (other phases are idempotent or already done)"
-      fi
-    done
+  # cargo publish authenticates via CARGO_REGISTRY_TOKEN OR ~/.cargo/credentials.toml
+  # (whichever it finds) — gating on the env var alone is wrong; a credentials.toml
+  # login is a normal, working auth path this script must not treat as "no auth".
+  # Previously this warned and SKIPPED the whole publish loop when the env var was
+  # unset, still exiting 0 — a silent success that looked identical to actually
+  # publishing (found live during the 0.146.0 release: credentials.toml had a valid
+  # token the whole time, cargo publish worked fine when invoked directly, but
+  # release.sh itself never tried and reported success anyway). A channel that
+  # cannot run must say so — hard-fail only when NEITHER auth source exists.
+  if [[ -z "${CARGO_REGISTRY_TOKEN:-}" && ! -f "${HOME}/.cargo/credentials.toml" && "$DRY_RUN" -eq 0 ]]; then
+    error "no crates.io credentials found (CARGO_REGISTRY_TOKEN unset, ~/.cargo/credentials.toml missing) — get one at https://crates.io/me, or skip --publish-crates"
   fi
+  for crate in "${PUBLISH_ORDER[@]}"; do
+    log "[publish-crates] cargo publish -p ${crate}"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      printf '  [dry-run] cargo publish -p %s\n' "$crate" >&2
+    else
+      (cd "${ECODEX_ROOT}/codex-rs" && cargo publish -p "$crate") \
+        || error "cargo publish $crate failed — fix metadata gaps then re-run with --publish-crates only (other phases are idempotent or already done)"
+    fi
+  done
 fi
 
 # ─── Phase 3: homebrew Formula update ────────────────────────────────
