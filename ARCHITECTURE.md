@@ -145,9 +145,10 @@ State (SQLite / git-notes / Qdrant) is Empirica's, not ecodex's — see Empirica
 | `codex-rs/` | The Rust workspace (upstream codex + fork touch-points), ~250 crates |
 | `codex-rs/codex-empirica-plugin/` | Vendored Empirica hooks / skills / agents + the vendored-hooks test suite |
 | `codex-rs/codex-empirica-translator/` | Chat-provider → Responses-API shim |
-| `scripts/` | `setup-codex.py` (re-vendor + de-Claude), `check_vendored_firewall.py`, `release.sh` |
+| `scripts/` | `setup-codex.py` (re-vendor + de-Claude), `check_vendored_firewall.py`, `scoped_cargo_audit.py`, `release.sh` |
 | `docs/ecodex/` | ecodex-specific docs: architecture decisions, `api/`, `integrations/`, `positioning/`, `specs/` |
 | `.github/workflows/ci.yml` | Owned-crate build+test + vendored-firewall drift-guard |
+| `.github/workflows/security-audit.yml` | Weekly + PR-triggered `cargo audit`, scoped to what actually ships (via `cargo tree -i`, not raw Cargo.lock) |
 
 Versioning tracks the upstream codex base; ecodex patches increment as `0.146.x`,
 then move to the next base on each upstream re-sync (`scripts/release.sh` +

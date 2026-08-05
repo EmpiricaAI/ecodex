@@ -1,0 +1,59 @@
+name: security-audit
+
+# Periodic + PR-triggered cargo-audit, scoped to what ecodex actually SHIPS.
+#
+# `cargo audit` scans the whole Cargo.lock, which on this fork-of-a-fork
+# workspace includes a lot of code we don't ship (upstream codex crates,
+# platform/feature-gated deps). That surfaces advisories on crates that
+# never compile into the binary -- a Cargo.lock phantom entry, not a real
+# exposure (RUSTSEC-2026-0185 / quinn-proto was exactly this, found
+# 2026-08-04 during the v0.146.0 release). scripts/scoped_cargo_audit.py
+# cross-checks each advisory against the resolved workspace graph via
+# `cargo tree -i` and only fails for advisories with real reverse-dependents.
+#
+# Complements GitHub's native Dependabot security alerts (which don't make
+# this shipped-vs-phantom distinction) -- this is the release-blocking gate;
+# Dependabot PRs are still the mechanism that actually bumps the lockfile.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+  pull_request:
+    paths:
+      - "codex-rs/Cargo.lock"
+      - "codex-rs/Cargo.toml"
+      - ".github/workflows/security-audit.yml"
+      - "scripts/scoped_cargo_audit.py"
+  workflow_dispatch: {}
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-audit:
+    name: cargo audit (shipped-binary scoped)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codex-rs
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run scoped cargo audit
+        run: python3 ../scripts/scoped_cargo_audit.py
