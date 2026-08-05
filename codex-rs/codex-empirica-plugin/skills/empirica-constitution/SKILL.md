@@ -186,7 +186,7 @@ Uncertainty about approach
 
 Something is broken
 ├── Sentinel blocking incorrectly → Check: is it really incorrect? Don't assume
-├── Hook not firing → empirica setup-claude-code --force
+├── Hook not firing → re-run harness setup (Claude Code: `empirica setup-claude-code --force`)
 ├── Session state lost → empirica project-bootstrap
 ├── Qdrant search empty → empirica project-embed
 └── Cross-project search missing → empirica project-search --global
