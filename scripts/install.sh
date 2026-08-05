@@ -54,7 +54,15 @@ TARGET="${arch_part}-${os_part}"
 # --- resolve version -------------------------------------------------------
 if [ "$VERSION" = "latest" ]; then
   info "resolving latest release…"
-  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+  # Capture curl's full output into a variable FIRST, then grep it. Piping
+  # curl straight into `grep -m1` breaks under `set -o pipefail`: grep exits
+  # (and closes its end of the pipe) as soon as it finds the first match,
+  # while curl is often still writing -- curl sees that as a write failure
+  # ("curl: (23) Failure writing output to destination") and the whole
+  # pipeline's exit status (curl's, under pipefail) kills the script via -e,
+  # even though grep+sed already got what they needed.
+  latest_json="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")"
+  VERSION="$(printf '%s' "$latest_json" \
     | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name" *: *"([^"]+)".*/\1/')"
   [ -n "$VERSION" ] || err "could not resolve latest release tag"
 fi

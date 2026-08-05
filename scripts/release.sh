@@ -73,6 +73,7 @@ UPLOAD_ASSETS=0
 PUBLISH_CRATES=0
 PUBLISH_HOMEBREW=0
 PUBLISH_NPM=0
+VERIFY_INSTALL=0
 FORCE_VERSION=0
 
 # ─── Parse args ──────────────────────────────────────────────────────
@@ -105,6 +106,7 @@ while [[ $# -gt 0 ]]; do
     --publish-crates)   PUBLISH_CRATES=1;       shift ;;
     --publish-homebrew) PUBLISH_HOMEBREW=1;     shift ;;
     --publish-npm)      PUBLISH_NPM=1;          shift ;;
+    --verify-install)   VERIFY_INSTALL=1;       shift ;;
     --force-version)    FORCE_VERSION=1;        shift ;;
     -h|--help)
       sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#//'
@@ -565,6 +567,49 @@ if [[ "$PUBLISH_HOMEBREW" -eq 1 ]]; then
   fi
 fi
 
+# ─── Phase 3: install-path smoke test (opt-in) ───────────────────────
+# Runs the SAME installer real users run (scripts/install.sh) against a
+# scratch prefix, pointed at this release's tag, and checks the installed
+# binary actually reports the version we just cut. This is the "does the
+# thing we just shipped actually install and run" check — distinct from
+# --upload-assets (which only confirms assets got uploaded) and from
+# `cargo audit`/clippy (which check source, not the distributed artifact).
+#
+# Motivated by a real incident: install.sh's `curl | grep -m1 | sed`
+# version-resolution pipeline broke under `set -o pipefail` (grep -m1
+# closes the pipe before curl finishes writing -> curl reports a write
+# failure -> the whole script dies) — found 2026-08-05 when a LOCAL
+# install had silently drifted a full release behind (v0.145.0 running
+# against a v0.146.0 repo) and re-installing hit the bug live. Requires
+# the release-binaries CI workflow to have completed (same precondition
+# --publish-homebrew has) — this checks the REAL uploaded tarballs, not
+# a local build.
+if [[ "$VERIFY_INSTALL" -eq 1 ]]; then
+  if [[ "$CREATE_GH_RELEASE" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
+    warn "--verify-install needs --create-gh-release (or an existing release) — skipping"
+  else
+    log "Smoke-testing scripts/install.sh against v${new_version}"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      printf '  [dry-run] install to a scratch prefix, ECODEX_VERSION=v%s, check `ecodex --version` reports %s\n' \
+        "$new_version" "$new_version" >&2
+    else
+      verify_dir="$(mktemp -d)"
+      trap 'rm -rf "$verify_dir"' EXIT INT TERM
+      if ! ECODEX_VERSION="v${new_version}" "${SCRIPT_DIR}/install.sh" --prefix "$verify_dir" >"${verify_dir}/install.log" 2>&1; then
+        cat "${verify_dir}/install.log" >&2
+        error "install.sh failed against v${new_version} — see log above. Real users hit this too."
+      fi
+      installed_version="$("${verify_dir}/ecodex" --version 2>&1 || true)"
+      if [[ "$installed_version" != *"${new_version}"* ]]; then
+        error "installed binary reports '${installed_version}', expected to contain '${new_version}'"
+      fi
+      log "install.sh verified: ${installed_version}"
+      rm -rf "$verify_dir"
+      trap - EXIT INT TERM
+    fi
+  fi
+fi
+
 # ─── Phase 3: npm package publish ────────────────────────────────────
 # Syncs npm/package.json version to the release version and runs
 # `npm publish --access public`. The wrapper (npm/bin/ecodex.js) execs
@@ -634,6 +679,9 @@ echo "Phase 3 surfaces (canonical):"
 echo "  --upload-assets          gh release upload <ecodex,plugin,translator> binaries"
 echo "  --publish-crates         cargo publish own crates (translator + plugin)"
 echo "  --publish-homebrew       Update Formula in EmpiricaAI/homebrew-tap"
+echo "  --verify-install         Smoke-test scripts/install.sh against the release"
+echo "                             (needs release-binaries CI to have finished --"
+echo "                             same precondition as --publish-homebrew)"
 echo ""
 echo "Phase 3 surfaces (experimental, non-canonical):"
 echo "  --publish-npm            npm publish @nubaeon/ecodex — kept for future, not part of canonical release flow"
@@ -646,4 +694,4 @@ echo "                             and you want to re-run just publish phases"
 echo ""
 echo "Canonical v0.x invocation:"
 echo "  ./scripts/release.sh --patch --gate-all --push --create-gh-release \\"
-echo "    --upload-assets --publish-crates --publish-homebrew"
+echo "    --upload-assets --publish-crates --publish-homebrew --verify-install"
