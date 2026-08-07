@@ -13,6 +13,48 @@ Parity with Claude Code's `Monitor` tool. Closes the wake-on-event gap that prev
 
 The general shape: a background process produces output as a stream; you only want the agent to engage when something specific shows up in that stream.
 
+### Detect an Empirica lab stall
+
+`lab_stall_monitor.py` polls Empirica's real transaction activity signal rather
+than rollout or translator file mtimes. It emits a single JSON event when an
+open transaction's `updated_at` has not advanced for the threshold and the
+matching practitioner is still alive. Progress resets the detector, allowing a
+later stall to emit a new event.
+
+Arm it from an orchestrating ecodex session with the existing `monitor` tool:
+
+```json
+{
+  "action": "arm",
+  "command": [
+    "python3",
+    "-u",
+    "/path/to/plugin/hooks_scripts/scripts/lab_stall_monitor.py",
+    "--project",
+    "/home/user/empirical-ai/ecodex-lab",
+    "--ai-id",
+    "ecodex-lab",
+    "--threshold-seconds",
+    "600"
+  ],
+  "pattern": "\"event\": \"lab_stall\"",
+  "persistent": true
+}
+```
+
+Use `--instance <id>` when more than one practitioner inhabits the practice.
+The id can be the transaction filename suffix, Codex/Claude session id, or
+Empirica session id. The emitted event includes transaction identity,
+`tool_call_count`, frozen duration, and the latest PREFLIGHT/CHECK/POSTFLIGHT
+phase. Phase comes from the project's `reflexes` table because it is not stored
+in `active_transaction*.json` itself.
+
+The live-process check rejects abandoned open transaction files. It accepts a
+live tmux pane that is still running a worker command (not a shell prompt), or a
+signal-0-live presence PID. In containers where PID and tmux namespaces make
+both checks impossible, `--allow-unverified-process` is an explicit escape
+hatch; using it weakens the detector and can report dead sessions.
+
 ## API
 
 The tool takes a single `action` argument that selects the operation. All examples are JSON shapes the model emits to the tool.
