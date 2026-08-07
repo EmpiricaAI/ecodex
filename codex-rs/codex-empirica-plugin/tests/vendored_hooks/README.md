@@ -15,9 +15,10 @@ scripts/test-vendored-hooks.sh
 python3 -m pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -v
 ```
 
-Requires `pytest` and empirica core importable at `~/empirical-ai/empirica`
-(the same path the hooks insert at runtime). If empirica isn't importable the
-suite **skips** rather than fails (see `importorskip` in the test module).
+Requires `pytest`. When empirica core is installed, the tests use it normally.
+Otherwise `conftest.py` supplies a lazy `sys.meta_path` stub for the
+`empirica.*` hierarchy and a controllable `InstanceResolver`, so the ai_id
+regression tests still execute instead of silently skipping.
 
 ## Coverage
 

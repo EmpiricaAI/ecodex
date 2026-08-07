@@ -17,11 +17,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import empirica.utils.session_resolver as sr
 import pytest
-
-# Skip cleanly if empirica core isn't importable (the vendored hooks resolve
-# ai_id through it at runtime; conftest puts ~/empirical-ai/empirica on path).
-sr = pytest.importorskip("empirica.utils.session_resolver")
 
 _HOOKS = Path(__file__).resolve().parents[2] / "assets" / "hooks_scripts" / "hooks"
 

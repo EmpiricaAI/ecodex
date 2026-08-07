@@ -67,3 +67,12 @@ jobs:
       # Pure file inspection; no empirica dependency, no Rust build.
       - name: Check vendored firewall invariants
         run: python3 scripts/check_vendored_firewall.py
+
+      - name: Run hermetic vendored-hook tests
+        run: |
+          python3 -m venv "$RUNNER_TEMP/vendored-hooks-venv"
+          "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pip install --disable-pip-version-check pytest==8.3.5
+          "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -c \
+            'import importlib.util; assert importlib.util.find_spec("empirica") is None'
+          "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
+            codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -v
