@@ -17,6 +17,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerAuth;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
@@ -44,6 +45,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
@@ -277,6 +279,7 @@ struct TestMcpServerOptions {
     auth: McpServerAuth,
     supports_parallel_tool_calls: bool,
     tool_timeout_sec: Option<Duration>,
+    approval_mode: Option<AppToolApproval>,
 }
 
 impl Default for TestMcpServerOptions {
@@ -286,6 +289,7 @@ impl Default for TestMcpServerOptions {
             auth: McpServerAuth::default(),
             supports_parallel_tool_calls: false,
             tool_timeout_sec: None,
+            approval_mode: None,
         }
     }
 }
@@ -332,7 +336,7 @@ fn insert_mcp_server(
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(10)),
             tool_timeout_sec: options.tool_timeout_sec,
-            default_tools_approval_mode: None,
+            default_tools_approval_mode: options.approval_mode,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -692,6 +696,133 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     server.verify().await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn local_stdio_session_approval_covers_other_tools_from_the_server() -> anyhow::Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let server_name = "rmcp";
+    let namespace = format!("mcp__{server_name}");
+    responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_tool_search_call(
+                    "search-rmcp-tools",
+                    &json!({"query": "synchronize calls and return image scenarios"}),
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_function_call_with_namespace(
+                    "sync-call",
+                    &namespace,
+                    "sync",
+                    r#"{}"#,
+                ),
+                responses::ev_completed("resp-2"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-3"),
+                responses::ev_function_call_with_namespace(
+                    "image-call",
+                    &namespace,
+                    "image_scenario",
+                    r#"{"scenario":"text_only","caption":"done"}"#,
+                ),
+                responses::ev_completed("resp-3"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "done"),
+                responses::ev_completed("resp-4"),
+            ]),
+        ],
+    )
+    .await;
+
+    let stdio_server_bin = stdio_server_bin()?;
+    let fixture = test_codex()
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(stdio_server_bin, /*env*/ None, Vec::new()),
+                TestMcpServerOptions {
+                    approval_mode: Some(AppToolApproval::Auto),
+                    ..Default::default()
+                },
+            );
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
+    let mut user_turn = read_only_user_turn(&fixture, "call both rmcp tools");
+    let Op::UserInput {
+        thread_settings, ..
+    } = &mut user_turn
+    else {
+        unreachable!("read_only_user_turn returns user input")
+    };
+    thread_settings.approval_policy = Some(AskForApproval::OnRequest);
+    fixture.codex.submit(user_turn).await?;
+
+    let approval_event = wait_for_event(&fixture.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ElicitationRequest(_) | EventMsg::TurnComplete(_) | EventMsg::Error(_)
+        )
+    })
+    .await;
+    let EventMsg::ElicitationRequest(request) = approval_event else {
+        panic!("expected MCP approval request, got {approval_event:?}")
+    };
+    fixture
+        .codex
+        .submit(Op::ResolveElicitation {
+            server_name: request.server_name,
+            request_id: request.id,
+            decision: ElicitationAction::Accept,
+            content: None,
+            meta: Some(json!({"persist": "session"})),
+        })
+        .await?;
+
+    let mut completed_calls = 0;
+    loop {
+        match wait_for_event(&fixture.codex, |event| {
+            matches!(
+                event,
+                EventMsg::McpToolCallEnd(_)
+                    | EventMsg::RequestUserInput(_)
+                    | EventMsg::ElicitationRequest(_)
+                    | EventMsg::TurnComplete(_)
+            )
+        })
+        .await
+        {
+            EventMsg::McpToolCallEnd(_) => completed_calls += 1,
+            EventMsg::RequestUserInput(request) => {
+                panic!("second tool unexpectedly requested approval: {request:?}")
+            }
+            EventMsg::ElicitationRequest(request) => {
+                panic!("second tool unexpectedly requested approval: {request:?}")
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => unreachable!("event guard only accepts handled variants"),
+        }
+    }
+
+    assert_eq!(completed_calls, 2);
     Ok(())
 }
 
@@ -1454,6 +1585,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                     auth: Default::default(),
                     supports_parallel_tool_calls: true,
                     tool_timeout_sec: Some(Duration::from_secs(2)),
+                    approval_mode: None,
                 },
             );
         })

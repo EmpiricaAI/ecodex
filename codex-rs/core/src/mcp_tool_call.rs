@@ -232,6 +232,11 @@ pub(crate) async fn handle_mcp_tool_call(
     } else {
         McpToolApprovalPolicy::for_server(approval_mode)
     };
+    let session_approval_scope = mcp_session_approval_scope(
+        prepared_call.server_origin(),
+        prepared_call.server_environment_id(),
+        &metadata,
+    );
     if let Some(decision) = maybe_request_mcp_tool_approval(
         &sess,
         step_context,
@@ -241,6 +246,7 @@ pub(crate) async fn handle_mcp_tool_call(
         &metadata,
         prepared_call.config(),
         approval_policy,
+        session_approval_scope,
     )
     .await
     {
@@ -385,6 +391,11 @@ async fn handle_approved_mcp_tool_call(
     let connector_id = metadata.connector_id.as_deref();
     let connector_name = metadata.connector_name.as_deref();
     let server_origin = prepared_call.server_origin().map(str::to_string);
+    let session_approval_scope = mcp_session_approval_scope(
+        prepared_call.server_origin(),
+        prepared_call.server_environment_id(),
+        &metadata,
+    );
 
     let start = Instant::now();
     let mut tool_input = arguments_value
@@ -401,6 +412,7 @@ async fn handle_approved_mcp_tool_call(
                             &invocation,
                             Some(&metadata),
                             policy.mode,
+                            session_approval_scope,
                         );
                         let persistent_approval_key = if policy.allow_persistent {
                             persistent_mcp_tool_approval_key(
@@ -1259,8 +1271,20 @@ struct McpToolApprovalKey {
     tool_name: String,
 }
 
-fn mcp_tool_approval_prompt_options(
-    session_approval_key: Option<&McpToolApprovalKey>,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+enum McpSessionApprovalKey {
+    Server { server: String },
+    Tool(McpToolApprovalKey),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum McpSessionApprovalScope {
+    Server,
+    Tool,
+}
+
+fn mcp_tool_approval_prompt_options<SessionApprovalKey>(
+    session_approval_key: Option<&SessionApprovalKey>,
     persistent_approval_key: Option<&McpToolApprovalKey>,
     tool_call_mcp_elicitation_enabled: bool,
 ) -> McpToolApprovalPromptOptions {
@@ -1281,6 +1305,7 @@ async fn maybe_request_mcp_tool_approval(
     metadata: &McpToolApprovalMetadata,
     config: &codex_mcp::McpConfig,
     policy: McpToolApprovalPolicy,
+    session_approval_scope: McpSessionApprovalScope,
 ) -> Option<McpToolApprovalDecision> {
     let turn_context = &step_context.turn;
     let approvals_reviewer = connectors::mcp_approvals_reviewer_from_layers(
@@ -1304,8 +1329,12 @@ async fn maybe_request_mcp_tool_approval(
         return None;
     }
 
-    let session_approval_key =
-        session_mcp_tool_approval_key(invocation, Some(metadata), policy.mode);
+    let session_approval_key = session_mcp_tool_approval_key(
+        invocation,
+        Some(metadata),
+        policy.mode,
+        session_approval_scope,
+    );
     let persistent_approval_key = if policy.allow_persistent {
         persistent_mcp_tool_approval_key(invocation, Some(metadata), policy.mode)
     } else {
@@ -1456,6 +1485,31 @@ fn session_mcp_tool_approval_key(
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
+    scope: McpSessionApprovalScope,
+) -> Option<McpSessionApprovalKey> {
+    let key = mcp_tool_approval_key(invocation, metadata, approval_mode)?;
+    match scope {
+        McpSessionApprovalScope::Server if key.connector_id.is_none() => {
+            Some(McpSessionApprovalKey::Server { server: key.server })
+        }
+        McpSessionApprovalScope::Server | McpSessionApprovalScope::Tool => {
+            Some(McpSessionApprovalKey::Tool(key))
+        }
+    }
+}
+
+fn persistent_mcp_tool_approval_key(
+    invocation: &McpInvocation,
+    metadata: Option<&McpToolApprovalMetadata>,
+    approval_mode: AppToolApproval,
+) -> Option<McpToolApprovalKey> {
+    mcp_tool_approval_key(invocation, metadata, approval_mode)
+}
+
+fn mcp_tool_approval_key(
+    invocation: &McpInvocation,
+    metadata: Option<&McpToolApprovalMetadata>,
+    approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalKey> {
     if approval_mode != AppToolApproval::Auto {
         return None;
@@ -1473,12 +1527,19 @@ fn session_mcp_tool_approval_key(
     })
 }
 
-fn persistent_mcp_tool_approval_key(
-    invocation: &McpInvocation,
-    metadata: Option<&McpToolApprovalMetadata>,
-    approval_mode: AppToolApproval,
-) -> Option<McpToolApprovalKey> {
-    session_mcp_tool_approval_key(invocation, metadata, approval_mode)
+fn mcp_session_approval_scope(
+    server_origin: Option<&str>,
+    server_environment_id: &str,
+    metadata: &McpToolApprovalMetadata,
+) -> McpSessionApprovalScope {
+    if metadata.connector_id.is_none()
+        && server_origin == Some("stdio")
+        && server_environment_id == codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+    {
+        McpSessionApprovalScope::Server
+    } else {
+        McpSessionApprovalScope::Tool
+    }
 }
 
 pub(crate) fn build_guardian_mcp_tool_review_request(
@@ -1932,12 +1993,18 @@ fn normalize_approval_decision_for_mode(
     }
 }
 
-async fn mcp_tool_approval_is_remembered(sess: &Session, key: &McpToolApprovalKey) -> bool {
+async fn mcp_tool_approval_is_remembered<K>(sess: &Session, key: &K) -> bool
+where
+    K: Serialize,
+{
     let store = sess.services.tool_approvals.lock().await;
     matches!(store.get(key), Some(ReviewDecision::ApprovedForSession))
 }
 
-async fn remember_mcp_tool_approval(sess: &Session, key: McpToolApprovalKey) {
+async fn remember_mcp_tool_approval<K>(sess: &Session, key: K)
+where
+    K: Serialize,
+{
     let mut store = sess.services.tool_approvals.lock().await;
     store.put(key, ReviewDecision::ApprovedForSession);
 }
@@ -1946,7 +2013,7 @@ async fn apply_mcp_tool_approval_decision(
     sess: &Session,
     turn_context: &TurnContext,
     decision: &McpToolApprovalDecision,
-    session_approval_key: Option<McpToolApprovalKey>,
+    session_approval_key: Option<McpSessionApprovalKey>,
     persistent_approval_key: Option<McpToolApprovalKey>,
 ) {
     match decision {
@@ -1958,7 +2025,8 @@ async fn apply_mcp_tool_approval_decision(
         McpToolApprovalDecision::AcceptAndRemember => {
             if let Some(key) = persistent_approval_key {
                 maybe_persist_mcp_tool_approval(sess, turn_context, key).await;
-            } else if let Some(key) = session_approval_key {
+            }
+            if let Some(key) = session_approval_key {
                 remember_mcp_tool_approval(sess, key).await;
             }
         }

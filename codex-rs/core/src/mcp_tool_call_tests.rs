@@ -808,21 +808,47 @@ fn custom_mcp_tool_question_offers_session_remember_and_always_allow() {
 }
 
 #[test]
-fn custom_servers_support_session_and_persistent_approval() {
+fn local_stdio_session_approval_is_server_scoped() {
     let invocation = McpInvocation {
         server: "custom_server".to_string(),
         tool: "run_action".to_string(),
         arguments: None,
+    };
+    let other_invocation = McpInvocation {
+        tool: "other_action".to_string(),
+        ..invocation.clone()
     };
     let expected = McpToolApprovalKey {
         server: "custom_server".to_string(),
         connector_id: None,
         tool_name: "run_action".to_string(),
     };
+    let expected_session = Some(McpSessionApprovalKey::Server {
+        server: "custom_server".to_string(),
+    });
 
     assert_eq!(
-        session_mcp_tool_approval_key(&invocation, /*metadata*/ None, AppToolApproval::Auto),
-        Some(expected.clone())
+        session_mcp_tool_approval_key(
+            &invocation,
+            /*metadata*/ None,
+            AppToolApproval::Auto,
+            McpSessionApprovalScope::Server,
+        ),
+        expected_session
+    );
+    assert_eq!(
+        session_mcp_tool_approval_key(
+            &invocation,
+            /*metadata*/ None,
+            AppToolApproval::Auto,
+            McpSessionApprovalScope::Server,
+        ),
+        session_mcp_tool_approval_key(
+            &other_invocation,
+            /*metadata*/ None,
+            AppToolApproval::Auto,
+            McpSessionApprovalScope::Server,
+        )
     );
     assert_eq!(
         persistent_mcp_tool_approval_key(
@@ -831,6 +857,51 @@ fn custom_servers_support_session_and_persistent_approval() {
             AppToolApproval::Auto
         ),
         Some(expected)
+    );
+    assert_ne!(
+        persistent_mcp_tool_approval_key(
+            &invocation,
+            /*metadata*/ None,
+            AppToolApproval::Auto
+        ),
+        persistent_mcp_tool_approval_key(
+            &other_invocation,
+            /*metadata*/ None,
+            AppToolApproval::Auto
+        )
+    );
+}
+
+#[test]
+fn session_approval_scope_is_server_wide_only_for_local_stdio_without_connector() {
+    let metadata = approval_metadata(
+        /*connector_id*/ None, /*connector_name*/ None,
+        /*connector_description*/ None, /*tool_title*/ None,
+        /*tool_description*/ None,
+    );
+    let connector_metadata = approval_metadata(
+        Some("calendar"),
+        Some("Calendar"),
+        /*connector_description*/ None,
+        /*tool_title*/ None,
+        /*tool_description*/ None,
+    );
+
+    assert_eq!(
+        mcp_session_approval_scope(Some("stdio"), "local", &metadata),
+        McpSessionApprovalScope::Server
+    );
+    assert_eq!(
+        mcp_session_approval_scope(Some("https://example.com"), "local", &metadata),
+        McpSessionApprovalScope::Tool
+    );
+    assert_eq!(
+        mcp_session_approval_scope(Some("stdio"), "remote", &metadata),
+        McpSessionApprovalScope::Tool
+    );
+    assert_eq!(
+        mcp_session_approval_scope(Some("stdio"), "local", &connector_metadata),
+        McpSessionApprovalScope::Tool
     );
 }
 
@@ -855,8 +926,13 @@ fn codex_apps_connectors_support_persistent_approval() {
     };
 
     assert_eq!(
-        session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto),
-        Some(expected.clone())
+        session_mcp_tool_approval_key(
+            &invocation,
+            Some(&metadata),
+            AppToolApproval::Auto,
+            McpSessionApprovalScope::Tool,
+        ),
+        Some(McpSessionApprovalKey::Tool(expected.clone()))
     );
     assert_eq!(
         persistent_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto),
@@ -2344,6 +2420,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         &metadata,
         &approval_config(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Approve),
+        McpSessionApprovalScope::Tool,
     )
     .await;
 
@@ -2421,6 +2498,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         &metadata,
         &approval_config(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
+        McpSessionApprovalScope::Tool,
     )
     .await;
 
@@ -2481,6 +2559,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         &metadata,
         &approval_config(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
+        McpSessionApprovalScope::Tool,
     )
     .await;
 
@@ -2549,6 +2628,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
         &metadata,
         &approval_config(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
+        McpSessionApprovalScope::Tool,
     )
     .await;
 
@@ -2616,9 +2696,13 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };
-    let remembered_key =
-        session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto)
-            .expect("memory MCP tool should support session approval");
+    let remembered_key = session_mcp_tool_approval_key(
+        &invocation,
+        Some(&metadata),
+        AppToolApproval::Auto,
+        McpSessionApprovalScope::Tool,
+    )
+    .expect("memory MCP tool should support session approval");
     remember_mcp_tool_approval(&session, remembered_key).await;
 
     let session = Arc::new(session);
@@ -2632,6 +2716,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         &metadata,
         &approval_config(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
+        McpSessionApprovalScope::Tool,
     )
     .await;
 
@@ -2716,6 +2801,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         &metadata,
         &approval_config(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
+        McpSessionApprovalScope::Tool,
     )
     .await;
 
@@ -2777,6 +2863,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
                 &metadata,
                 &approval_config(&turn_context),
                 McpToolApprovalPolicy::for_server(AppToolApproval::Prompt),
+                McpSessionApprovalScope::Tool,
             )
             .await
         })
@@ -2836,6 +2923,7 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
             &metadata,
             &approval_config(&turn_context),
             McpToolApprovalPolicy::for_server(approval_mode),
+            McpSessionApprovalScope::Tool,
         )
         .await;
 
@@ -2926,6 +3014,7 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
             &metadata,
             &approval_config(&turn_context),
             McpToolApprovalPolicy::for_server(AppToolApproval::Approve),
+            McpSessionApprovalScope::Tool,
         )
         .await;
 
