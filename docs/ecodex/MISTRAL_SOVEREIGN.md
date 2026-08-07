@@ -144,8 +144,8 @@ All are EU-hosted and carried in ecodex's curated registry (`jurisdiction = FR`,
 | Model | Role | Context | Use for |
 |---|---|---|---|
 | **`devstral-latest`** | Agentic-coding flagship | 256K | Default for ecodex work — multi-step, tool use |
-| `devstral-2512` | Pinned Devstral snapshot | 256K | Reproducible / version-pinned runs |
-| `devstral-medium-latest` | Smaller Devstral | 256K | Lighter/cheaper coding turns |
+| `devstral-2512` | Pinned Devstral snapshot (aliased by `devstral-medium-latest`) | 256K | Reproducible / version-pinned runs |
+| `devstral-small-2512` | Smaller Devstral | 256K | Lighter/cheaper coding turns |
 | `codestral-latest` | Code-completion tier | 256K | Fast completion / FIM |
 | `mistral-large-latest` | General reasoning | large | Non-coding general tasks |
 
