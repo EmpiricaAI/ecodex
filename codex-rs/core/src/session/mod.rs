@@ -3802,7 +3802,33 @@ impl Session {
                     })
                     .await;
                 }
-                for injection in pinned_injections.items {
+                // ecodex extension: budget pinned-skill bodies against the
+                // model's context window (lean-prompt mode). Without this,
+                // small-context local providers get the full, un-trimmed set
+                // of framework skill bodies injected every session, which can
+                // exceed the model's own context window on its own.
+                let pinned_skill_budget = crate::skills::injection::default_pinned_skill_budget(
+                    turn_context.model_info.context_window,
+                );
+                let (budgeted_items, budget_report) =
+                    crate::skills::injection::budget_skill_injections(
+                        pinned_injections.items,
+                        pinned_skill_budget,
+                    );
+                if budget_report.omitted_count > 0 {
+                    self.send_event_raw(Event {
+                        id: String::new(),
+                        msg: EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "{} pinned skill(s) omitted from context to fit the model's context window: {}",
+                                budget_report.omitted_count,
+                                budget_report.omitted_names.join(", "),
+                            ),
+                        }),
+                    })
+                    .await;
+                }
+                for injection in budgeted_items {
                     items.push(ContextualUserFragment::into(SkillInstructions::from(
                         &injection,
                     )));

@@ -14,6 +14,7 @@ use codex_otel::SessionTelemetry;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_output_truncation::approx_token_count;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 
@@ -28,6 +29,99 @@ pub struct SkillInjection {
     pub name: String,
     pub path: String,
     pub contents: String,
+}
+
+/// Share of the model's context window that pinned-skill bodies (the
+/// framework skills re-injected every session start / post-compact) are
+/// allowed to consume. Mirrors `SKILL_METADATA_CONTEXT_WINDOW_PERCENT` in
+/// `render.rs` but sized for full skill bodies rather than short
+/// descriptions -- pinned bodies carry the actual framework instructions,
+/// so they get a much larger share.
+const PINNED_SKILL_CONTEXT_WINDOW_PERCENT: usize = 25;
+
+/// Fallback budget (in characters) when the model's context window is
+/// unknown, e.g. some local providers that don't report one.
+const DEFAULT_PINNED_SKILL_CHAR_BUDGET: usize = 40_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinnedSkillBudget {
+    Tokens(usize),
+    Characters(usize),
+}
+
+impl PinnedSkillBudget {
+    fn limit(self) -> usize {
+        match self {
+            Self::Tokens(limit) | Self::Characters(limit) => limit,
+        }
+    }
+
+    fn cost(self, text: &str) -> usize {
+        match self {
+            Self::Tokens(_) => approx_token_count(text),
+            Self::Characters(_) => text.chars().count(),
+        }
+    }
+}
+
+/// Default pinned-skill body budget for a session: a percentage of the
+/// model's context window when known, otherwise a fixed character budget.
+/// Small-context local models therefore get proportionally less pinned-skill
+/// content injected rather than the full, un-budgeted set every session.
+pub fn default_pinned_skill_budget(context_window: Option<i64>) -> PinnedSkillBudget {
+    context_window
+        .and_then(|window| usize::try_from(window).ok())
+        .filter(|window| *window > 0)
+        .map(|window| {
+            PinnedSkillBudget::Tokens(
+                window
+                    .saturating_mul(PINNED_SKILL_CONTEXT_WINDOW_PERCENT)
+                    .saturating_div(100)
+                    .max(1),
+            )
+        })
+        .unwrap_or(PinnedSkillBudget::Characters(
+            DEFAULT_PINNED_SKILL_CHAR_BUDGET,
+        ))
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PinnedSkillBudgetReport {
+    pub included_count: usize,
+    pub omitted_count: usize,
+    pub omitted_names: Vec<String>,
+}
+
+/// Trim already-loaded pinned-skill injections to fit `budget`, keeping
+/// whole skill bodies only (never truncates a body mid-content) and
+/// preserving their original order. Skills that don't fit are dropped
+/// entirely, starting from the first one that would push the running total
+/// over budget -- so higher-priority pinned skills (declared/loaded first)
+/// are kept over later ones. The very first skill is always kept even if it
+/// alone exceeds the budget, so a session never ends up with zero pinned
+/// content injected just because one skill is large.
+pub fn budget_skill_injections(
+    items: Vec<SkillInjection>,
+    budget: PinnedSkillBudget,
+) -> (Vec<SkillInjection>, PinnedSkillBudgetReport) {
+    let limit = budget.limit();
+    let mut kept = Vec::with_capacity(items.len());
+    let mut report = PinnedSkillBudgetReport::default();
+    let mut used = 0usize;
+
+    for item in items {
+        let cost = budget.cost(&item.contents);
+        if !kept.is_empty() && used.saturating_add(cost) > limit {
+            report.omitted_count += 1;
+            report.omitted_names.push(item.name);
+            continue;
+        }
+        used = used.saturating_add(cost);
+        report.included_count += 1;
+        kept.push(item);
+    }
+
+    (kept, report)
 }
 
 /// Host skill prompts that have already been injected by an extension for this

@@ -358,3 +358,92 @@ fn collect_explicit_skill_mentions_skips_missing_path_without_fallback() {
 
     assert_eq!(selected, Vec::new());
 }
+
+fn injection(name: &str, contents: &str) -> SkillInjection {
+    SkillInjection {
+        name: name.to_string(),
+        path: format!("/tmp/{name}/SKILL.md"),
+        contents: contents.to_string(),
+    }
+}
+
+#[test]
+fn default_pinned_skill_budget_scales_with_context_window() {
+    let budget = default_pinned_skill_budget(Some(16_384));
+    assert_eq!(budget, PinnedSkillBudget::Tokens(4_096));
+}
+
+#[test]
+fn default_pinned_skill_budget_falls_back_to_char_budget_when_unknown() {
+    assert_eq!(
+        default_pinned_skill_budget(None),
+        PinnedSkillBudget::Characters(DEFAULT_PINNED_SKILL_CHAR_BUDGET)
+    );
+    assert_eq!(
+        default_pinned_skill_budget(Some(0)),
+        PinnedSkillBudget::Characters(DEFAULT_PINNED_SKILL_CHAR_BUDGET)
+    );
+    assert_eq!(
+        default_pinned_skill_budget(Some(-1)),
+        PinnedSkillBudget::Characters(DEFAULT_PINNED_SKILL_CHAR_BUDGET)
+    );
+}
+
+#[test]
+fn budget_skill_injections_keeps_everything_under_budget() {
+    let items = vec![injection("a", "short"), injection("b", "also short")];
+    let (kept, report) =
+        budget_skill_injections(items.clone(), PinnedSkillBudget::Characters(1_000));
+
+    assert_eq!(kept, items);
+    assert_eq!(report.included_count, 2);
+    assert_eq!(report.omitted_count, 0);
+    assert!(report.omitted_names.is_empty());
+}
+
+#[test]
+fn budget_skill_injections_drops_lower_priority_items_over_budget() {
+    let items = vec![
+        injection("first", "12345"),
+        injection("second", "12345"),
+        injection("third", "12345"),
+    ];
+    // Budget fits exactly the first two 5-char bodies, not the third.
+    let (kept, report) = budget_skill_injections(items, PinnedSkillBudget::Characters(10));
+
+    assert_eq!(
+        kept.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
+    assert_eq!(report.included_count, 2);
+    assert_eq!(report.omitted_count, 1);
+    assert_eq!(report.omitted_names, vec!["third".to_string()]);
+}
+
+#[test]
+fn budget_skill_injections_always_keeps_the_first_item_even_if_oversized() {
+    let items = vec![injection("huge", "0123456789"), injection("small", "x")];
+    let (kept, report) = budget_skill_injections(items, PinnedSkillBudget::Characters(1));
+
+    assert_eq!(
+        kept.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
+        vec!["huge"]
+    );
+    assert_eq!(report.included_count, 1);
+    assert_eq!(report.omitted_count, 1);
+    assert_eq!(report.omitted_names, vec!["small".to_string()]);
+}
+
+#[test]
+fn budget_skill_injections_preserves_declared_order() {
+    let items = vec![
+        injection("epistemic-transaction", "aaaaa"),
+        injection("secondary", "bbbbb"),
+    ];
+    let (kept, _report) = budget_skill_injections(items, PinnedSkillBudget::Characters(100));
+
+    assert_eq!(
+        kept.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
+        vec!["epistemic-transaction", "secondary"]
+    );
+}

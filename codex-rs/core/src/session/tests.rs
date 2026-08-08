@@ -9153,6 +9153,104 @@ async fn build_initial_context_reinjects_pinned_skill_bodies() {
     );
 }
 
+#[tokio::test]
+async fn build_initial_context_budgets_pinned_skill_bodies_against_small_context_window() {
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+
+    // Lean-prompt mode (goal 1b76ac46): on a small-context-window model, the
+    // higher-priority (first-declared) pinned skill still gets injected in
+    // full, but a lower-priority pinned skill that would push the total over
+    // budget gets dropped entirely -- never truncated mid-body.
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let first_dir = tmp.path().join("first-skill");
+    std::fs::create_dir_all(&first_dir).expect("mkdir first");
+    let first_md = first_dir.join("SKILL.md");
+    std::fs::write(
+        &first_md,
+        "---\nname: first-skill\ndescription: highest priority framework skill\npinned: true\n---\n\n# First body\n\nFIRST_MARKER_TOKEN\n",
+    )
+    .expect("write first SKILL.md");
+
+    let second_dir = tmp.path().join("second-skill");
+    std::fs::create_dir_all(&second_dir).expect("mkdir second");
+    let second_md = second_dir.join("SKILL.md");
+    std::fs::write(
+        &second_md,
+        format!(
+            "---\nname: second-skill\ndescription: lower priority framework skill\npinned: true\n---\n\n# Second body\n\nSECOND_MARKER_TOKEN\n\n{}\n",
+            "padding to make this body clearly larger than the budget allows. ".repeat(200)
+        ),
+    )
+    .expect("write second SKILL.md");
+
+    let (session, mut turn_context) = make_session_and_context().await;
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![
+        SkillMetadata {
+            name: "first-skill".to_string(),
+            description: "highest priority framework skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: first_md.abs(),
+            scope: SkillScope::User,
+            pinned: true,
+            plugin_id: None,
+            remote_plugin_id: None,
+        },
+        SkillMetadata {
+            name: "second-skill".to_string(),
+            description: "lower priority framework skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: second_md.abs(),
+            scope: SkillScope::User,
+            pinned: true,
+            plugin_id: None,
+            remote_plugin_id: None,
+        },
+    ];
+    turn_context.turn_skills =
+        TurnSkillsContext::new(codex_core_skills::HostSkillsSnapshot::new(Arc::new(outcome)));
+    turn_context.model_info.context_window = Some(1_000);
+    let turn_context = Arc::new(turn_context);
+
+    let initial_context = build_initial_context(&session, &turn_context).await;
+
+    let mut found_first = false;
+    let mut found_second = false;
+    for item in &initial_context {
+        if let ResponseItem::Message { role, content, .. } = item
+            && role == "user"
+        {
+            for c in content {
+                if let ContentItem::InputText { text } = c {
+                    if text.contains("FIRST_MARKER_TOKEN") {
+                        found_first = true;
+                    }
+                    if text.contains("SECOND_MARKER_TOKEN") {
+                        found_second = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        found_first,
+        "expected the higher-priority pinned skill to survive the small context-window budget, got items: {initial_context:#?}"
+    );
+    assert!(
+        !found_second,
+        "expected the lower-priority, oversized pinned skill to be dropped by the small context-window budget, got items: {initial_context:#?}"
+    );
+}
+
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();
