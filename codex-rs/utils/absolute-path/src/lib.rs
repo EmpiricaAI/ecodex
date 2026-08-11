@@ -83,7 +83,18 @@ impl AbsolutePathBuf {
 
     /// Construct an absolute path from `path`, resolving relative paths against
     /// the process current working directory.
+    ///
+    /// ecodex: skips the `current_dir()` query entirely when `path` is
+    /// already absolute, since `resolve_path_against_base` ignores the base
+    /// in that case anyway. This also makes the function robust to a
+    /// deleted process cwd (`current_dir()` fails with ENOENT once the
+    /// launch directory is gone) as long as the caller already has an
+    /// absolute path in hand -- exactly the common case for callers passing
+    /// a previously-resolved/cached path rather than a fresh relative one.
     pub fn relative_to_current_dir<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        if path.as_ref().is_absolute() {
+            return Ok(Self::resolve_path_against_base(path, ""));
+        }
         Ok(Self::resolve_path_against_base(
             path,
             std::env::current_dir()?,

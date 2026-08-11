@@ -35,6 +35,16 @@ pub(crate) struct ConfigManager {
     cloud_config_bundle: Arc<RwLock<CloudConfigBundleLoader>>,
     arg0_paths: Arg0DispatchPaths,
     thread_config_loader: Arc<RwLock<Arc<dyn ThreadConfigLoader>>>,
+    /// ecodex extension: the process's working directory captured once at
+    /// startup. Used as the fallback whenever a caller passes
+    /// `fallback_cwd: None` to `load_latest_config`, instead of letting that
+    /// cascade into a live `std::env::current_dir()` re-query. A long-running
+    /// app-server process's launch directory can be deleted out from under it
+    /// (e.g. a git worktree removed while an ecodex-lab session inside it is
+    /// still alive) -- `current_dir()` then fails with ENOENT on every call,
+    /// which previously turned one unlucky background config refresh (e.g.
+    /// skills/list) into a session that never recovers without a manual kill.
+    startup_cwd: PathBuf,
 }
 
 impl ConfigManager {
@@ -47,6 +57,7 @@ impl ConfigManager {
         arg0_paths: Arg0DispatchPaths,
         thread_config_loader: Arc<dyn ThreadConfigLoader>,
     ) -> Self {
+        let startup_cwd = std::env::current_dir().unwrap_or_else(|_| codex_home.clone());
         Self {
             codex_home,
             cli_overrides: Arc::new(RwLock::new(cli_overrides)),
@@ -56,6 +67,7 @@ impl ConfigManager {
             cloud_config_bundle: Arc::new(RwLock::new(cloud_config_bundle)),
             arg0_paths,
             thread_config_loader: Arc::new(RwLock::new(thread_config_loader)),
+            startup_cwd,
         }
     }
 
@@ -245,6 +257,11 @@ impl ConfigManager {
             )
             .collect::<Vec<_>>();
 
+        // ecodex extension: substitute the cached startup cwd for a caller's
+        // None rather than letting it fall through to a live current_dir()
+        // re-query (see ConfigManager::startup_cwd doc comment).
+        let fallback_cwd = fallback_cwd.or_else(|| Some(self.startup_cwd.clone()));
+
         let mut config = codex_core::config::ConfigBuilder::default()
             .codex_home(self.codex_home.clone())
             .cli_overrides(merged_cli_overrides)
@@ -372,5 +389,81 @@ pub(crate) fn apply_runtime_feature_enablement(
                 "failed to apply runtime feature enablement"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_config::CloudConfigBundleLoader;
+    use std::process::Command;
+    use tempfile::tempdir;
+
+    fn test_config_manager(codex_home: PathBuf) -> ConfigManager {
+        ConfigManager::new(
+            codex_home,
+            Vec::new(),
+            LoaderOverrides::default(),
+            /*strict_config*/ false,
+            CloudConfigBundleLoader::default(),
+            Arg0DispatchPaths::default(),
+            Arc::new(codex_config::NoopThreadConfigLoader),
+        )
+    }
+
+    // ecodex extension: a long-running app-server process's launch directory
+    // can be deleted out from under it. std::env::set_current_dir mutates
+    // process-global state, so -- following the established pattern in
+    // codex-utils-absolute-path -- this runs the risky part in a child
+    // process rather than the shared test binary.
+    #[cfg(unix)]
+    #[test]
+    fn load_latest_config_survives_removed_launch_directory() {
+        let status = Command::new(std::env::current_exe().expect("current test binary"))
+            .arg("load_latest_config_with_removed_launch_directory_child")
+            .arg("--ignored")
+            .env(
+                "CODEX_CONFIG_MANAGER_REMOVED_CWD_CHILD",
+                "1",
+            )
+            .status()
+            .expect("run child test");
+
+        assert!(status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore]
+    fn load_latest_config_with_removed_launch_directory_child() {
+        if std::env::var_os("CODEX_CONFIG_MANAGER_REMOVED_CWD_CHILD").is_none() {
+            return;
+        }
+
+        let original_cwd = std::env::current_dir().expect("original cwd");
+        let codex_home = tempdir().expect("codex home");
+        let launch_dir = tempdir().expect("launch dir");
+        std::env::set_current_dir(launch_dir.path()).expect("enter launch dir");
+
+        // Captures startup_cwd = launch_dir while it still exists.
+        let config_manager = test_config_manager(codex_home.path().to_path_buf());
+
+        let launch_dir_path = launch_dir.path().to_path_buf();
+        std::fs::remove_dir_all(&launch_dir_path).expect("remove launch dir");
+        std::env::current_dir().expect_err("process cwd should now be unavailable");
+
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(config_manager.load_latest_config(/*fallback_cwd*/ None));
+
+        std::env::set_current_dir(&original_cwd).expect("restore cwd");
+
+        let config = result.expect(
+            "load_latest_config(None) should fall back to the cached startup cwd instead of \
+             failing when the live process cwd has been deleted",
+        );
+        assert_eq!(config.cwd.as_path(), launch_dir_path.as_path());
     }
 }
