@@ -160,7 +160,12 @@ SAFE_BASH_PREFIXES = (
     "rg ",
     "ag ",
     "ack ",
-    "sed -n",
+    # `sed ` not `sed -n`: sed writes to STDOUT unless -i is given, and -i is
+    # caught by _has_dangerous_tool_flags below. Pinning the prefix to -n gated
+    # `sed 's/x/y/'` — a pure stdout filter — which pushed toward the
+    # CHECK-to-read anti-pattern the firewall exists to forbid. Reported by
+    # empirica-cortex against a three-stage noetic grep pipeline.
+    "sed ",
     "awk ",
     "jq ",
     "jq.",  # JSON processing (read-only)
@@ -411,7 +416,7 @@ SAFE_PIPE_TARGETS = (
     "grep",
     "rg",
     "awk",
-    "sed -n",
+    "sed ",
     "cut",
     "tr",
     "less",
@@ -458,6 +463,29 @@ INFRA_SAFE_PREFIXES = (
     "vmstat",
     "iostat",
     "dmesg",
+    # macOS counterparts. Every OS-specific entry here was Linux, so on a darwin
+    # fleet work_type=infra gated exactly the read-only recon this tuple exists
+    # to permit: a bare `launchctl list` was denied while `systemctl list-units`
+    # passed. The asymmetry was precise — `vmstat` (Linux) present, `vm_stat`
+    # (darwin) absent — and all eight verbs below had zero occurrences anywhere
+    # in this file. Reported by empirica.philipp.empirica-mesh-support after
+    # hitting it live during a fleet check.
+    #
+    # Scoped to read-only SUBCOMMANDS, not bare binaries: `launchctl` also has
+    # bootstrap/bootout/kickstart and `plutil` has -convert, so `launchctl ` and
+    # `plutil ` as prefixes would permit mutation. `diskutil` likewise — list and
+    # info only, never erase/partition/mount.
+    "launchctl list",
+    "launchctl print",
+    "sw_vers",
+    "system_profiler",
+    "scutil --get",
+    "vm_stat",
+    "diskutil list",
+    "diskutil info",
+    "pmset -g",
+    "plutil -p",
+    "plutil -lint",
     # Docker inspection (not mutation)
     "docker ps",
     "docker images",
@@ -1699,6 +1727,28 @@ _TOOL_DANGEROUS_FLAGS: dict[str, frozenset[str]] = {
 _AWK_WRITE_RE = re.compile(r"(print|printf)[^;\n]*>>?\s*\"")
 _AWK_NAMES = frozenset({"awk", "gawk", "mawk", "nawk"})
 
+# sed needs its own branch rather than a flag SET, because in-place is not one
+# token. GNU sed takes an optional suffix (`-i.bak`) and allows short-flag
+# clustering (`-ni`), so exact-token membership would miss both and wave through
+# a genuine in-place edit. Any short cluster containing `i` counts.
+_SED_NAMES = frozenset({"sed", "gsed"})
+
+
+def _sed_edits_in_place(stripped: str) -> bool:
+    """True if this sed invocation writes files rather than stdout."""
+    for tok in stripped.split()[1:]:
+        if not tok.startswith("-") or tok == "-":
+            break  # first non-flag token is the script; flags are done
+        if tok == "--":
+            break
+        if tok.startswith("--"):
+            if tok.split("=", 1)[0] in ("--in-place", "--inplace"):
+                return True
+            continue
+        if "i" in tok[1:]:  # -i, -i.bak, -ni, -ni.bak
+            return True
+    return False
+
 
 def _has_dangerous_tool_flags(cmd: str) -> bool:
     """True if ``cmd`` is a safe-prefixed tool invoked with a mutating/exec flag
@@ -1714,6 +1764,8 @@ def _has_dangerous_tool_flags(cmd: str) -> bool:
     head = stripped.split(" ", 1)[0]
     if head in _AWK_NAMES:
         return "system(" in stripped or bool(_AWK_WRITE_RE.search(stripped))
+    if head in _SED_NAMES:
+        return _sed_edits_in_place(stripped)
     flags = _TOOL_DANGEROUS_FLAGS.get(head)
     if flags:
         for tok in stripped.split()[1:]:
@@ -1722,6 +1774,43 @@ def _has_dangerous_tool_flags(cmd: str) -> bool:
             if tok.startswith("--") and "=" in tok and tok.split("=", 1)[0] in flags:
                 return True
     return False
+
+
+# git accepts GLOBAL options between the binary and the subcommand, so the
+# read verbs in SAFE_BASH_PREFIXES ("git status", "git log", …) miss every
+# invocation that uses one. `git -C <path> status` is the common case — it is
+# how you read a SIBLING repo without cd — and it was denied while the identical
+# `git status` flowed.
+#
+# Only INERT globals are stripped. `-c <key>=<val>` and `--config-env` are
+# deliberately NOT here: `git -c alias.x='!rm -rf /' x` executes a shell command,
+# so a config-setting invocation must keep failing the prefix match.
+_GIT_INERT_GLOBAL_FLAGS = ("--no-pager", "--paginate", "--literal-pathspecs", "--no-replace-objects")
+_GIT_INERT_GLOBAL_VALUED = ("--git-dir", "--work-tree", "--namespace")
+
+
+def _normalize_git_globals(cmd: str) -> str:
+    """Rewrite `git <inert globals> <subcmd> …` as `git <subcmd> …`.
+
+    Verb-preserving by construction: the subcommand is whatever survives, so
+    `git -C /repo push` normalizes to `git push` and is still rejected. This
+    widens WHICH INVOCATIONS reach the check, never what the check permits.
+    """
+    parts = cmd.split()
+    if not parts or parts[0] != "git":
+        return cmd
+    i = 1
+    while i < len(parts):
+        tok = parts[i]
+        if tok == "-C" and i + 1 < len(parts):
+            i += 2
+        elif tok in _GIT_INERT_GLOBAL_FLAGS or (tok.startswith(_GIT_INERT_GLOBAL_VALUED) and "=" in tok):
+            i += 1
+        else:
+            break
+    if i == 1:
+        return cmd
+    return "git " + " ".join(parts[i:])
 
 
 def _matches_safe_prefix(cmd: str) -> bool:
@@ -1734,6 +1823,10 @@ def _matches_safe_prefix(cmd: str) -> bool:
     """
     if _has_dangerous_tool_flags(cmd):
         return False
+    # Strip git's inert global options so `git -C <path> status` reaches the
+    # same check as `git status`. The dangerous-flag guard above runs on the
+    # ORIGINAL text, so nothing is smuggled past it by normalization.
+    cmd = _normalize_git_globals(cmd)
     for prefix in SAFE_BASH_PREFIXES:
         if cmd.startswith(prefix):
             return True
@@ -1759,6 +1852,11 @@ _SHELL_KEYWORDS_INERT = frozenset(
         "false",  # bash builtins, no exec
     }
 )
+
+# `for VAR in ...` — the loop header binds a name over a word list and executes
+# nothing. Anchored and deliberately narrow: a NAME, then the `in` keyword. The
+# C-style `for ((...))` form does not match and keeps its existing treatment.
+_FOR_HEADER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s+in(\s|$)")
 
 # Compound keywords: `<keyword> <body>` — strip the keyword and recurse on body.
 # Covers `if cond`, `then cmd`, `else cmd`, `elif cond`, `while cond`, etc.
@@ -1977,6 +2075,23 @@ def _is_segment_safe(segment: str) -> bool:
             rest = stripped[len(prefix) :].strip()
             if not rest:
                 return True
+            # `for VAR in <words>` is a HEADER, not a command — it binds a name
+            # over a word list and runs nothing. Recursing on it asked whether
+            # `f in *.py` is a safe command, which it obviously is not, so a
+            # loop whose body was pure `wc` gated on its first line.
+            #
+            # Safe because the two things that CAN execute here are handled
+            # before we arrive: command substitutions in the word list were
+            # validated individually in step 1 and stripped in step 2, and the
+            # loop BODY is a separate chain segment (`do wc -l "$f"`) that still
+            # goes through the full classifier. Excusing the header does not
+            # excuse the body — `for f in a b; do rm "$f"; done` stays gated on
+            # the `rm`.
+            #
+            # C-style `for ((i=0; i<10; i++))` does not match the VAR-in shape
+            # and keeps its existing treatment.
+            if prefix == "for " and _FOR_HEADER_RE.match(rest):
+                return True
             return _is_segment_safe(rest)
 
     # 4. Original safe forms.
@@ -2144,7 +2259,26 @@ def is_safe_bash_command(tool_input: dict) -> bool:
     # after SSH-recon. The SSH branch below is the load-bearing relaxation.
     if _current_work_type in ("infra", "config", "debug", "remote-ops"):
         cmd = command.lstrip()
-        if any(cmd.startswith(prefix) for prefix in INFRA_SAFE_PREFIXES):
+        # The prefix match is a claim about the COMMAND WORD, not about the
+        # whole line. `systemctl status nginx | sh` and `systemctl status nginx
+        # > /etc/hosts` both start with a safe prefix and both do something this
+        # allowlist exists to forbid — the first executes arbitrary output, the
+        # second writes a file. Before this guard they returned True from here
+        # and were reported to the caller as "Safe Bash (read-only)".
+        #
+        # The `&&` case was already caught, by _classify_chain above, which is
+        # exactly why this was easy to miss: two of the four hazards were
+        # handled, so the branch looked guarded.
+        #
+        # Both checks already exist and are already used — the pipe guard on the
+        # empirica-prefix branch ten lines up (same reasoning, same comment
+        # about smuggling an executor), and the redirect guard on the
+        # chain-segment path. This branch is the one that had neither.
+        if (
+            any(cmd.startswith(prefix) for prefix in INFRA_SAFE_PREFIXES)
+            and not _contains_outside_quotes(command, "|")
+            and not _has_dangerous_redirects(command)
+        ):
             return True
 
     # Under work_type=remote-ops, SSH/rsync/scp pass wholesale — the AI's
