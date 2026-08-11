@@ -22,8 +22,14 @@ use super::npm_global_root_check;
 use super::run_command;
 
 const VERSION_FILE_NAME: &str = "version.json";
-const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
-const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
+const GITHUB_LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/EmpiricaAI/ecodex/releases/latest";
+// ecodex ships a Homebrew FORMULA (EmpiricaAI/tap/ecodex), not a cask, and
+// formulae.brew.sh only indexes the central homebrew-core/homebrew-cask taps
+// -- there's no API entry for a third-party tap formula, so this probe
+// always 404s and the check degrades to a warning below rather than failing.
+// Kept for parity with tui/src/updates.rs's identical, deliberate tradeoff.
+const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/ecodex.json";
 
 /// Builds the update-health row for the current installation.
 ///
@@ -131,11 +137,13 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 
 fn update_action_label(context: &InstallContext) -> &'static str {
     match &context.method {
-        InstallMethod::Npm => "npm install -g @openai/codex",
-        InstallMethod::Bun => "bun install -g @openai/codex",
-        InstallMethod::Pnpm => "pnpm add -g @openai/codex",
-        InstallMethod::Brew => "brew upgrade --cask codex",
-        InstallMethod::Standalone { .. } => "standalone installer",
+        // ecodex ships no npm/bun/pnpm package -- these install methods have
+        // no ecodex update action (see tui/src/update_action.rs).
+        InstallMethod::Npm => "no ecodex npm distribution -- update manually",
+        InstallMethod::Bun => "no ecodex bun distribution -- update manually",
+        InstallMethod::Pnpm => "no ecodex pnpm distribution -- update manually",
+        InstallMethod::Brew => "brew upgrade EmpiricaAI/tap/ecodex",
+        InstallMethod::Standalone { .. } => "ecodex standalone installer",
         InstallMethod::Other => "manual or unknown",
     }
 }
@@ -158,8 +166,9 @@ fn fetch_latest_github_release_version() -> Result<String, String> {
     }
 
     let info = http_get_json::<ReleaseInfo>(GITHUB_LATEST_RELEASE_URL)?;
+    // ecodex release tags look like `v0.146.0`, not upstream's `rust-v...`.
     info.tag_name
-        .strip_prefix("rust-v")
+        .strip_prefix('v')
         .map(str::to_string)
         .ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
 }
@@ -223,14 +232,21 @@ mod tests {
                 method: InstallMethod::Npm,
                 package_layout: None,
             }),
-            "npm install -g @openai/codex"
+            "no ecodex npm distribution -- update manually"
         );
         assert_eq!(
             update_action_label(&InstallContext {
                 method: InstallMethod::Pnpm,
                 package_layout: None,
             }),
-            "pnpm add -g @openai/codex"
+            "no ecodex pnpm distribution -- update manually"
+        );
+        assert_eq!(
+            update_action_label(&InstallContext {
+                method: InstallMethod::Brew,
+                package_layout: None,
+            }),
+            "brew upgrade EmpiricaAI/tap/ecodex"
         );
         assert_eq!(
             update_action_label(&InstallContext {

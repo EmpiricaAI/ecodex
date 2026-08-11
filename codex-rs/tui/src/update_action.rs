@@ -6,59 +6,52 @@ use codex_install_context::InstallMethod;
 use codex_install_context::StandalonePlatform;
 
 /// Update action the CLI should perform after the TUI exits.
+///
+/// ecodex: only channels ecodex actually distributes through are represented
+/// here. npm/bun/pnpm and the Windows standalone installer have no ecodex
+/// distribution (see docs/ecodex/INSTALL.md — Windows isn't supported yet),
+/// so `from_install_context` returns `None` for those methods rather than
+/// offering a command that would install/update the wrong product.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
-    /// Update via `npm install -g @openai/codex@latest`.
-    NpmGlobalLatest,
-    /// Update via `bun install -g @openai/codex@latest`.
-    BunGlobalLatest,
-    /// Update via `pnpm add -g @openai/codex@latest`.
-    PnpmGlobalLatest,
-    /// Update via `brew upgrade codex`.
+    /// Update via `brew upgrade EmpiricaAI/tap/ecodex`.
     BrewUpgrade,
-    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh`.
+    /// Update via `curl -fsSL .../scripts/install.sh | bash` (re-run, idempotent).
     StandaloneUnix,
-    /// Update via `$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex`.
-    StandaloneWindows,
 }
 
 impl UpdateAction {
     #[cfg(any(not(debug_assertions), test))]
     pub(crate) fn from_install_context(context: &InstallContext) -> Option<Self> {
         match &context.method {
-            InstallMethod::Npm => Some(UpdateAction::NpmGlobalLatest),
-            InstallMethod::Bun => Some(UpdateAction::BunGlobalLatest),
-            InstallMethod::Pnpm => Some(UpdateAction::PnpmGlobalLatest),
             InstallMethod::Brew => Some(UpdateAction::BrewUpgrade),
-            InstallMethod::Standalone { platform, .. } => Some(match platform {
-                StandalonePlatform::Unix => UpdateAction::StandaloneUnix,
-                StandalonePlatform::Windows => UpdateAction::StandaloneWindows,
-            }),
-            InstallMethod::Other => None,
+            InstallMethod::Standalone {
+                platform: StandalonePlatform::Unix,
+                ..
+            } => Some(UpdateAction::StandaloneUnix),
+            // ecodex ships no npm/bun/pnpm package and no Windows standalone
+            // installer yet -- offering these would run an update command for
+            // a different product (or one that doesn't exist for ecodex).
+            InstallMethod::Npm
+            | InstallMethod::Bun
+            | InstallMethod::Pnpm
+            | InstallMethod::Standalone {
+                platform: StandalonePlatform::Windows,
+                ..
+            }
+            | InstallMethod::Other => None,
         }
     }
 
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
-            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
-            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
-            UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@openai/codex"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
+            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "EmpiricaAI/tap/ecodex"]),
             UpdateAction::StandaloneUnix => (
                 "sh",
                 &[
                     "-c",
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
-                ],
-            ),
-            UpdateAction::StandaloneWindows => (
-                "powershell",
-                &[
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-c",
-                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
+                    "curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh | bash",
                 ],
             ),
         }
@@ -96,26 +89,27 @@ mod tests {
             }),
             None
         );
+        // ecodex ships no npm/bun/pnpm package, so these have no update action.
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
                 method: InstallMethod::Npm,
                 package_layout: None,
             }),
-            Some(UpdateAction::NpmGlobalLatest)
+            None
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
                 method: InstallMethod::Bun,
                 package_layout: None,
             }),
-            Some(UpdateAction::BunGlobalLatest)
+            None
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
                 method: InstallMethod::Pnpm,
                 package_layout: None,
             }),
-            Some(UpdateAction::PnpmGlobalLatest)
+            None
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
@@ -135,6 +129,7 @@ mod tests {
             }),
             Some(UpdateAction::StandaloneUnix)
         );
+        // ecodex isn't distributed for Windows yet (docs/ecodex/INSTALL.md).
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
                 method: InstallMethod::Standalone {
@@ -144,33 +139,29 @@ mod tests {
                 },
                 package_layout: None,
             }),
-            Some(UpdateAction::StandaloneWindows)
+            None
         );
     }
 
     #[test]
-    fn standalone_update_commands_rerun_latest_installer() {
+    fn standalone_update_command_reruns_ecodex_installer() {
         assert_eq!(
             UpdateAction::StandaloneUnix.command_args(),
             (
                 "sh",
                 &[
                     "-c",
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+                    "curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh | bash"
                 ][..],
             )
         );
+    }
+
+    #[test]
+    fn brew_update_command_targets_ecodex_tap() {
         assert_eq!(
-            UpdateAction::StandaloneWindows.command_args(),
-            (
-                "powershell",
-                &[
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-c",
-                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"
-                ][..],
-            )
+            UpdateAction::BrewUpgrade.command_args(),
+            ("brew", &["upgrade", "EmpiricaAI/tap/ecodex"][..])
         );
     }
 }

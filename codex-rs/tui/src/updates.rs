@@ -1,8 +1,6 @@
 #![cfg(not(debug_assertions))]
 
 use crate::legacy_core::config::Config;
-use crate::npm_registry;
-use crate::npm_registry::NpmPackageInfo;
 use crate::update_action;
 use crate::update_action::UpdateAction;
 use crate::update_versions::extract_version_from_latest_tag;
@@ -84,23 +82,7 @@ async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> 
                 .await?;
             version
         }
-        Some(UpdateAction::NpmGlobalLatest)
-        | Some(UpdateAction::BunGlobalLatest)
-        | Some(UpdateAction::PnpmGlobalLatest) => {
-            let latest_version = fetch_latest_github_release_version().await?;
-            let package_info = create_client()
-                .get(npm_registry::PACKAGE_URL)
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<NpmPackageInfo>()
-                .await?;
-            npm_registry::ensure_version_ready(&package_info, &latest_version)?;
-            latest_version
-        }
-        Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
-            fetch_latest_github_release_version().await?
-        }
+        Some(UpdateAction::StandaloneUnix) | None => fetch_latest_github_release_version().await?,
     };
 
     // Preserve any previously dismissed version if present.

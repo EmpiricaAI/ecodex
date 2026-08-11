@@ -1,0 +1,12 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 1150
+expression: rendered
+---
+╭──────────────────────────────────────────────────────╮
+│ ✨ Update available! 0.146.0 -> 9.9.9                │
+│ Run brew upgrade EmpiricaAI/tap/ecodex to update.    │
+│                                                      │
+│ See full release notes:                              │
+│ https://github.com/EmpiricaAI/ecodex/releases/latest │
+╰──────────────────────────────────────────────────────╯
