@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Upstream base sync `0.146` → `0.147`.** Merged upstream `rust-v0.147.0`
+  (1530 files touched). Notable composite areas: skill-catalog rendering
+  moved from `core-skills` into a new `ext/skills` extension crate (ported
+  ecodex's `pinned: true` framework-skill lifecycle text + frontmatter
+  parsing to the new location); provider representation changed from a
+  plain `ModelProviderInfo` struct to a `SharedModelProvider` trait object
+  (adapted the T78 provider hot-swap feature accordingly); a
+  `defer_loading`/`namespace_tools`-aware responses-lite tool encoding path
+  was added upstream (composed with ecodex's `filter_tools_for_provider`).
+
 ### Fixed
 - **`install.sh` broken pipe under `set -o pipefail`.** Version-resolution
   (`curl ... | grep -m1 ... | sed ...`) broke the documented one-liner
