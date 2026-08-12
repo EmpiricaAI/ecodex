@@ -160,9 +160,9 @@ pub struct InProcessStartArgs {
 #[derive(Debug, Clone)]
 pub enum InProcessServerEvent {
     /// Server request that requires client response/rejection.
-    ServerRequest(ServerRequest),
+    ServerRequest(Box<ServerRequest>),
     /// App-server notification directed to the embedded client.
-    ServerNotification(ServerNotification),
+    ServerNotification(Box<ServerNotification>),
     /// Indicates one or more events were dropped due to backpressure.
     Lagged { skipped: usize },
 }
@@ -383,14 +383,34 @@ pub async fn start(mut args: InProcessStartArgs) -> IoResult<InProcessClientHand
     Ok(client)
 }
 
+async fn run_outbound_router(
+    mut outgoing_rx: mpsc::Receiver<OutgoingEnvelope>,
+    mut outbound_connections: HashMap<ConnectionId, OutboundConnectionState>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut shutdown_rx => break,
+            envelope = outgoing_rx.recv() => {
+                let Some(envelope) = envelope else {
+                    break;
+                };
+                route_outgoing_envelope(&mut outbound_connections, envelope).await;
+            }
+        }
+    }
+}
+
 async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+    args.config.auth_config().validate()?;
     let channel_capacity = args.channel_capacity.max(1);
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
 
     let runtime_handle = tokio::spawn(async move {
-        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
+        let (outgoing_tx, outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
         let auth_manager =
             AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
                 .await;
@@ -418,14 +438,15 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 /*disconnect_sender*/ None,
             ),
         );
-        let mut outbound_handle = tokio::spawn(async move {
-            while let Some(envelope) = outgoing_rx.recv().await {
-                route_outgoing_envelope(&mut outbound_connections, envelope).await;
-            }
-        });
+        let (outbound_shutdown_tx, outbound_shutdown_rx) = oneshot::channel();
+        let mut outbound_handle = tokio::spawn(run_outbound_router(
+            outgoing_rx,
+            outbound_connections,
+            outbound_shutdown_rx,
+        ));
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
-        let config_manager = ConfigManager::new(
+        let mut config_manager = ConfigManager::new(
             args.config.codex_home.to_path_buf(),
             args.cli_overrides,
             args.loader_overrides,
@@ -434,6 +455,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             args.arg0_paths.clone(),
             args.thread_config_loader,
         );
+        config_manager.psp = args.config.psp;
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
             let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
@@ -621,7 +643,10 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                     match outgoing_message {
                         OutgoingMessage::Response(response) => {
                             if let Some(response_tx) = pending_request_responses.remove(&response.id) {
-                                let _ = response_tx.send(Ok(response.result));
+                                let result = serde_json::to_value(response.result).map_err(|err| {
+                                    internal_error(format!("failed to serialize response: {err}"))
+                                });
+                                let _ = response_tx.send(result);
                             } else {
                                 warn!(
                                     request_id = ?response.id,
@@ -643,7 +668,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                             // Send directly to avoid cloning; on failure the
                             // original value is returned inside the error.
                             if let Err(send_error) = event_tx
-                                .try_send(InProcessServerEvent::ServerRequest(request))
+                                .try_send(InProcessServerEvent::ServerRequest(Box::new(request)))
                             {
                                 let (error, inner) = match send_error {
                                     mpsc::error::TrySendError::Full(inner) => (
@@ -675,14 +700,18 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                             let notification = envelope.notification;
                             if server_notification_requires_delivery(&notification) {
                                 if event_tx
-                                    .send(InProcessServerEvent::ServerNotification(notification))
+                                    .send(InProcessServerEvent::ServerNotification(Box::new(
+                                        notification,
+                                    )))
                                     .await
                                     .is_err()
                                 {
                                     break;
                                 }
                             } else if let Err(send_error) =
-                                event_tx.try_send(InProcessServerEvent::ServerNotification(notification))
+                                event_tx.try_send(InProcessServerEvent::ServerNotification(
+                                    Box::new(notification),
+                                ))
                             {
                                 match send_error {
                                     mpsc::error::TrySendError::Full(_) => {
@@ -709,8 +738,8 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 "in-process app-server runtime is shutting down",
             )))
             .await;
-        // Drop the runtime's last sender before awaiting the router task so
-        // `outgoing_rx.recv()` can observe channel closure and exit cleanly.
+        // Detached processor work can retain outgoing senders, so channel
+        // closure alone cannot be used to shut down the outbound router.
         drop(outgoing_message_sender);
         for (_, response_tx) in pending_request_responses {
             let _ = response_tx.send(Err(internal_error(
@@ -722,6 +751,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             processor_handle.abort();
             let _ = processor_handle.await;
         }
+        let _ = outbound_shutdown_tx.send(());
         if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut outbound_handle).await {
             outbound_handle.abort();
             let _ = outbound_handle.await;
@@ -894,6 +924,30 @@ mod tests {
             .shutdown()
             .await
             .expect("in-process runtime should shutdown cleanly");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn in_process_outbound_router_shutdown_does_not_wait_for_retained_sender() {
+        let (outgoing_tx, outgoing_rx) = mpsc::channel(/*buffer*/ 1);
+        let retained_outgoing_tx = outgoing_tx.clone();
+        drop(outgoing_tx);
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let mut outbound_handle = tokio::spawn(run_outbound_router(
+            outgoing_rx,
+            HashMap::new(),
+            shutdown_rx,
+        ));
+
+        assert!(!retained_outgoing_tx.is_closed());
+        shutdown_tx
+            .send(())
+            .expect("outbound router should accept explicit shutdown");
+        timeout(SHUTDOWN_TIMEOUT, &mut outbound_handle)
+            .await
+            .expect("outbound router should not wait for its retained sender")
+            .expect("outbound router should complete successfully");
+        assert!(retained_outgoing_tx.is_closed());
     }
 
     #[tokio::test(start_paused = true)]

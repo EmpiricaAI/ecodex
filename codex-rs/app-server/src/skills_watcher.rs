@@ -7,15 +7,17 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::skills::SkillsLoadInput;
-use codex_core::skills::SkillsService;
+use codex_core::skills::HostSkillsLoadInput;
+use codex_core::skills::HostSkillsService;
 use codex_file_watcher::FileWatcher;
 use codex_file_watcher::FileWatcherSubscriber;
 use codex_file_watcher::Receiver;
 use codex_file_watcher::ThrottledWatchReceiver;
 use codex_file_watcher::WatchPath;
 use codex_file_watcher::WatchRegistration;
+use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_skills::system_cache_root_dir;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
@@ -35,7 +37,8 @@ pub(crate) struct SkillsWatcher {
 
 impl SkillsWatcher {
     pub(crate) fn new(
-        skills_service: Arc<SkillsService>,
+        skills_service: Arc<HostSkillsService>,
+        codex_home: &AbsolutePathBuf,
         outgoing: Arc<OutgoingMessageSender>,
     ) -> Arc<Self> {
         let file_watcher = match FileWatcher::new() {
@@ -48,7 +51,14 @@ impl SkillsWatcher {
         let (subscriber, rx) = file_watcher.add_subscriber();
         let shutdown_token = CancellationToken::new();
         let shutdown_drop_guard = shutdown_token.clone().drop_guard();
-        Self::spawn_event_loop(rx, skills_service, outgoing, shutdown_token.child_token());
+        let system_skills_root = system_cache_root_dir(codex_home);
+        Self::spawn_event_loop(
+            rx,
+            skills_service,
+            system_skills_root,
+            outgoing,
+            shutdown_token.child_token(),
+        );
         Arc::new(Self {
             subscriber,
             runtime_extra_roots_registration: Mutex::new(WatchRegistration::default()),
@@ -103,7 +113,7 @@ impl SkillsWatcher {
         let plugins_input = config.plugins_config_input();
         let plugins_manager = thread_manager.plugins_manager();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-        let skills_input = SkillsLoadInput::new(
+        let skills_input = HostSkillsLoadInput::new(
             config.cwd.clone(),
             plugin_outcome.effective_plugin_skill_roots(),
             config.config_layer_stack.clone(),
@@ -114,8 +124,9 @@ impl SkillsWatcher {
             .skill_roots_for_config(&skills_input, Some(environment.get_filesystem()))
             .await
             .into_iter()
-            // Plugin roots are invalidated by plugin lifecycle operations.
-            .filter(|root| root.plugin_identity.is_none())
+            // Plugin roots have explicit lifecycle invalidation; generated system skills are
+            // installed before this watcher starts.
+            .filter(|root| root.plugin_identity.is_none() && root.scope != SkillScope::System)
             .map(|root| WatchPath {
                 path: root.path.into_path_buf(),
                 recursive: true,
@@ -126,7 +137,8 @@ impl SkillsWatcher {
 
     fn spawn_event_loop(
         rx: Receiver,
-        skills_service: Arc<SkillsService>,
+        skills_service: Arc<HostSkillsService>,
+        system_skills_root: AbsolutePathBuf,
         outgoing: Arc<OutgoingMessageSender>,
         shutdown_token: CancellationToken,
     ) {
@@ -141,8 +153,16 @@ impl SkillsWatcher {
                     _ = shutdown_token.cancelled() => break,
                     event = rx.recv() => event,
                 };
-                if event.is_none() {
+                let Some(event) = event else {
                     break;
+                };
+                // The legacy user-skills root contains `.system` and is watched recursively.
+                if event
+                    .paths
+                    .iter()
+                    .all(|path| path.starts_with(system_skills_root.as_path()))
+                {
+                    continue;
                 }
                 skills_service.clear_cache();
                 outgoing

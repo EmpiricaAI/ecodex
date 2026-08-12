@@ -2,38 +2,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 
-/// Type-erased registration for a contextual user fragment.
-///
-/// Implementations are used by context filtering code to recognize injected
-/// fragments without constructing the concrete context payload.
-pub trait FragmentRegistration: Sync {
-    fn matches_text(&self, text: &str) -> bool;
-}
-
-pub struct FragmentRegistrationProxy<T> {
-    _marker: std::marker::PhantomData<fn() -> T>,
-}
-
-impl<T> FragmentRegistrationProxy<T> {
-    pub const fn new() -> Self {
-        Self {
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<T> Default for FragmentRegistrationProxy<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationProxy<T> {
-    fn matches_text(&self, text: &str) -> bool {
-        T::matches_text(text)
-    }
-}
-
 /// Context payload that is injected as a message fragment.
 ///
 /// Implementations own the response role and provide the exact fragment body.
@@ -45,6 +13,11 @@ impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationPro
 /// arbitrary text.
 pub trait ContextualUserFragment {
     fn role(&self) -> &'static str;
+
+    /// Whether this fragment must be recorded as its own response item.
+    fn requires_separate_message(&self) -> bool {
+        false
+    }
 
     fn markers(&self) -> (&'static str, &'static str);
 

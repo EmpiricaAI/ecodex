@@ -89,6 +89,7 @@ use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::create_tools_json_for_responses_api;
+use codex_tools::create_tools_json_for_responses_lite;
 use codex_tools::create_tools_raw_json_for_responses_api;
 use codex_tools::filter_tools_for_provider;
 use eventsource_stream::Event;
@@ -96,8 +97,7 @@ use eventsource_stream::EventStreamError;
 use futures::StreamExt;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
-use http::StatusCode as HttpStatusCode;
-use reqwest::StatusCode;
+use http::StatusCode;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -849,9 +849,16 @@ impl ModelClient {
         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
         let is_openai = self.state.provider.info().is_openai();
         if !is_openai {
-            input
-                .iter_mut()
-                .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
+            for item in &mut input {
+                item.clear_internal_chat_message_metadata_passthrough();
+                if let ResponseItem::FunctionCall {
+                    encrypted_function_args,
+                    ..
+                } = item
+                {
+                    *encrypted_function_args = None;
+                }
+            }
         }
         // Drop OpenAI built-in / namespace tool types for providers whose
         // Responses endpoint only accepts `type: "function"` (many local
@@ -861,7 +868,11 @@ impl ModelClient {
             self.state.provider.info().supports_openai_builtin_tools,
         );
         let (instructions, tools) = if model_info.use_responses_lite {
-            let tools = create_tools_json_for_responses_api(&provider_tools)?;
+            let tools = if self.state.provider.capabilities().namespace_tools {
+                create_tools_json_for_responses_lite(&provider_tools)?
+            } else {
+                create_tools_json_for_responses_api(&provider_tools)?
+            };
             let mut prefix = vec![ResponseItem::AdditionalTools {
                 id: None,
                 role: "developer".to_string(),
@@ -2324,7 +2335,7 @@ impl RequestTelemetry for ApiTelemetry {
     fn on_request(
         &self,
         attempt: u64,
-        status: Option<HttpStatusCode>,
+        status: Option<StatusCode>,
         error: Option<&TransportError>,
         duration: Duration,
     ) {

@@ -71,6 +71,7 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
@@ -136,6 +137,7 @@ fn stdio_mcp_with_args(command: &str, args: &[&str]) -> McpServerConfig {
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
+        omit_tools_from: None,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
@@ -162,6 +164,7 @@ fn http_mcp(url: &str) -> McpServerConfig {
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
+        omit_tools_from: None,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
@@ -566,6 +569,36 @@ disable_in_process_fallback = true
 }
 
 #[tokio::test]
+async fn load_config_resolves_tool_registry_config() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+
+    for (config_toml, error_on_tool_collisions) in [
+        ("", false),
+        (
+            "[features.tool_registry]\nerror_on_tool_collisions = true\n",
+            true,
+        ),
+    ] {
+        let config_toml: ConfigToml =
+            toml::from_str(config_toml).expect("TOML deserialization should succeed");
+        let config = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert_eq!(
+            config.tool_registry.error_on_tool_collisions,
+            error_on_tool_collisions
+        );
+        assert!(!config.features.enabled(Feature::CodeMode));
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
     for (config_toml, expected) in [
         (
@@ -576,6 +609,7 @@ async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
             r#"
 [features.token_budget]
 enabled = true
+mode = "thread"
 reminder_threshold_tokens = 16000
 reminder_message_template = "Custom reminder: {n_remaining} tokens."
 guidance_message = "Preserve important state before compaction."
@@ -583,11 +617,19 @@ auto_compact_fallback_prompt = "  Write notes immediately.  "
 auto_compact_fallback_buffer_tokens = 8000
 "#,
             TokenBudgetConfig {
+                mode: TokenBudgetMode::Thread,
                 reminder_threshold_tokens: Some(16_000),
                 reminder_message_template: "Custom reminder: {n_remaining} tokens.".to_string(),
                 guidance_message: Some("Preserve important state before compaction.".to_string()),
                 auto_compact_fallback_prompt: Some("Write notes immediately.".to_string()),
                 auto_compact_fallback_buffer_tokens: Some(8_000),
+            },
+        ),
+        (
+            "[features.token_budget]\nenabled = true\nmode = \"name\"\n",
+            TokenBudgetConfig {
+                mode: TokenBudgetMode::Name,
+                ..TokenBudgetConfig::default()
             },
         ),
     ] {
@@ -2369,11 +2411,7 @@ async fn managed_unrestricted_permission_profile_still_enables_network_requireme
 
     let layers = config
         .config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
+        .all_layers_low_to_high()
         .cloned()
         .collect();
     let mut requirements = config.config_layer_stack.requirements().clone();
@@ -4658,6 +4696,63 @@ fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
 }
 
 #[test]
+fn filter_plugin_mcp_servers_without_allowlists_does_not_filter_any_plugin() {
+    let original_servers = HashMap::from([
+        ("server-a".to_string(), stdio_mcp("cmd-a")),
+        ("server-b".to_string(), http_mcp("https://example.com/b")),
+    ]);
+    let requirements = Sourced::new(
+        BTreeMap::from([(
+            "sites@openai-bundled".to_string(),
+            codex_config::PluginRequirementsToml { mcp_servers: None },
+        )]),
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    );
+
+    for plugin_name in ["sites@openai-bundled", "sample@test"] {
+        let mut servers = original_servers.clone();
+        filter_plugin_mcp_servers_by_requirements(plugin_name, &mut servers, Some(&requirements));
+
+        assert_eq!(servers, original_servers);
+    }
+}
+
+#[test]
+fn filter_plugin_mcp_servers_by_empty_allowlist_blocks_all() {
+    let mut servers = HashMap::from([
+        ("server-a".to_string(), stdio_mcp("cmd-a")),
+        ("server-b".to_string(), http_mcp("https://example.com/b")),
+    ]);
+    let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+    let requirements = Sourced::new(
+        BTreeMap::from([(
+            "sample@test".to_string(),
+            codex_config::PluginRequirementsToml {
+                mcp_servers: Some(BTreeMap::new()),
+            },
+        )]),
+        source.clone(),
+    );
+
+    filter_plugin_mcp_servers_by_requirements("sample@test", &mut servers, Some(&requirements));
+
+    let reason = Some(McpServerDisabledReason::Requirements { source });
+    assert_eq!(
+        servers
+            .iter()
+            .map(|(name, server)| (
+                name.clone(),
+                (server.enabled, server.disabled_reason.clone())
+            ))
+            .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+        HashMap::from([
+            ("server-a".to_string(), (false, reason.clone())),
+            ("server-b".to_string(), (false, reason)),
+        ])
+    );
+}
+
+#[test]
 fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
     const MATCHED_SERVER: &str = "matched-should-allow";
     const MISMATCHED_SERVER: &str = "mismatched-should-disable";
@@ -4916,6 +5011,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
         refreshed_toml,
         ConfigOverrides {
             cwd: Some(codex_home.path().to_path_buf()),
+            psp: Some(true),
             ..Default::default()
         },
         codex_home.abs(),
@@ -4993,6 +5089,8 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
         .rebuild_preserving_session_layers(&refreshed_config)
         .await?;
 
+    assert!(config.psp);
+    assert!(config.http_client_factory().has_chatgpt_cookies());
     assert_eq!(
         config.mcp_servers.get(),
         &HashMap::from([
@@ -5744,7 +5842,11 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 #[test]
 fn web_search_mode_for_turn_preserves_indexed_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Indexed);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::Disabled,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Indexed);
 }
@@ -5753,7 +5855,11 @@ fn web_search_mode_for_turn_preserves_indexed_for_disabled_permissions() {
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
     let permission_profile = PermissionProfile::read_only();
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &permission_profile);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &permission_profile,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Cached);
 }
@@ -5761,15 +5867,75 @@ fn web_search_mode_for_turn_uses_preference_for_read_only() {
 #[test]
 fn web_search_mode_for_turn_prefers_live_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::Disabled,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Live);
 }
 
 #[test]
+fn web_search_mode_for_turn_falls_back_when_provider_disallows_external_web_access() {
+    for preferred in [WebSearchMode::Live, WebSearchMode::Indexed] {
+        let web_search_mode = Constrained::allow_any(preferred);
+        let mode = resolve_web_search_mode_for_turn(
+            &web_search_mode,
+            &PermissionProfile::Disabled,
+            ProviderCapabilities {
+                external_web_access: false,
+                ..ProviderCapabilities::default()
+            },
+        );
+
+        assert_eq!(mode, WebSearchMode::Cached);
+    }
+}
+
+#[test]
+fn web_search_mode_for_turn_disables_when_external_access_and_cached_are_disallowed()
+-> anyhow::Result<()> {
+    let allowed = [
+        WebSearchMode::Disabled,
+        WebSearchMode::Live,
+        WebSearchMode::Indexed,
+    ];
+    for preferred in [WebSearchMode::Live, WebSearchMode::Indexed] {
+        let web_search_mode = Constrained::new(preferred, move |candidate| {
+            if allowed.contains(candidate) {
+                Ok(())
+            } else {
+                Err(ConstraintError::InvalidValue {
+                    field_name: "web_search_mode",
+                    candidate: format!("{candidate:?}"),
+                    allowed: format!("{allowed:?}"),
+                    requirement_source: RequirementSource::Unknown,
+                })
+            }
+        })?;
+        let mode = resolve_web_search_mode_for_turn(
+            &web_search_mode,
+            &PermissionProfile::Disabled,
+            ProviderCapabilities {
+                external_web_access: false,
+                ..ProviderCapabilities::default()
+            },
+        );
+
+        assert_eq!(mode, WebSearchMode::Disabled);
+    }
+    Ok(())
+}
+
+#[test]
 fn web_search_mode_for_turn_respects_disabled_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Disabled);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::Disabled,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Disabled);
 }
@@ -5789,7 +5955,11 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
             })
         }
     })?;
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::Disabled,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Cached);
     Ok(())
@@ -5814,7 +5984,11 @@ fn web_search_mode_for_turn_does_not_implicitly_select_indexed() -> anyhow::Resu
             })
         }
     })?;
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::Disabled,
+        ProviderCapabilities::default(),
+    );
 
     assert_eq!(mode, WebSearchMode::Cached);
     Ok(())
@@ -6042,6 +6216,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(3)),
             tool_timeout_sec: Some(Duration::from_secs(5)),
@@ -6342,6 +6517,30 @@ async fn to_mcp_config_flows_mcp_tool_prefix_from_feature() -> std::io::Result<(
 }
 
 #[tokio::test]
+async fn to_mcp_config_flows_mcp_2026_feature_from_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    assert_eq!(mcp_config.protocol_mode, codex_mcp::McpProtocolMode::Legacy);
+
+    let _ = config.features.enable(Feature::Mcp20260728);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    assert_eq!(
+        mcp_config.protocol_mode,
+        codex_mcp::McpProtocolMode::V20260728
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn to_mcp_config_preserves_auth_elicitation_feature_from_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
@@ -6355,10 +6554,9 @@ async fn to_mcp_config_preserves_auth_elicitation_feature_from_config() -> std::
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert_eq!(
         mcp_config.client_elicitation_capability,
-        ElicitationCapability {
-            form: Some(FormElicitationCapability::default()),
-            url: Some(UrlElicitationCapability::default()),
-        }
+        ElicitationCapability::new()
+            .with_form(FormElicitationCapability::new())
+            .with_url(UrlElicitationCapability::new())
     );
 
     let _ = config.features.disable(Feature::AuthElicitation);
@@ -6418,6 +6616,7 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -6495,6 +6694,7 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -6557,6 +6757,7 @@ async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()>
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -6610,6 +6811,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -6665,6 +6867,7 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
@@ -6736,6 +6939,7 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
@@ -6819,6 +7023,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
@@ -6855,6 +7060,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -6926,6 +7132,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
+                omit_tools_from: None,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
@@ -6953,6 +7160,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
+                omit_tools_from: None,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -7042,6 +7250,7 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
             enabled: false,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -7093,6 +7302,7 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
             enabled: true,
             required: true,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -7144,6 +7354,7 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -7199,6 +7410,7 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -9236,6 +9448,8 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
     let fixture = create_test_fixture()?;
 
     let requirements_toml = codex_config::ConfigRequirementsToml {
+        allowed_login_methods: None,
+        allowed_chatgpt_workspaces: None,
         sqlite_home: None,
         log_dir: None,
         model_catalog_json: None,
@@ -10206,6 +10420,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
         resolve_web_search_mode_for_turn(
             &config.web_search_mode,
             &config.permissions.effective_permission_profile(),
+            ProviderCapabilities::default(),
         ),
         WebSearchMode::Cached,
     );
@@ -10707,6 +10922,7 @@ default_wait_timeout_ms = 30000
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
+subagent_developer_instructions = "  Delegate carefully.  "
 multi_agent_mode_hint_text = "Custom mode guidance."
 tool_namespace = "agents"
 hide_spawn_agent_metadata = true
@@ -10748,6 +10964,13 @@ max_concurrent_threads_per_session = 9
     assert_eq!(
         config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
         Some("Subagent guidance.")
+    );
+    assert_eq!(
+        config
+            .multi_agent_v2
+            .subagent_developer_instructions
+            .as_deref(),
+        Some("Delegate carefully.")
     );
     assert_eq!(
         config.multi_agent_v2.multi_agent_mode_hint_text.as_deref(),
@@ -10808,8 +11031,9 @@ max_concurrent_threads_per_session = 17
 
     let config = resolve_multi_agent_v2_config(&config_toml);
     let concurrency_guidance = "There are 17 available concurrency slots, meaning that up to 17 agents can be active at once, including you.";
-    let expected_suffix =
-        format!("{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{concurrency_guidance}");
+    let expected_suffix = format!(
+        "{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT}\n\n{concurrency_guidance}"
+    );
     assert!(
         [
             config.root_agent_usage_hint_text,
@@ -10910,11 +11134,13 @@ fn multi_agent_v2_preserves_empty_mode_hint_override() {
     let config_toml = toml::from_str(
         r#"[features.multi_agent_v2]
 multi_agent_mode_hint_text = ""
+subagent_developer_instructions = "  \t  "
 "#,
     )
     .expect("multi-agent v2 config should parse");
 
     let expected = MultiAgentV2Config {
+        subagent_developer_instructions: Some(String::new()),
         multi_agent_mode_hint_text: Some(String::new()),
         ..resolve_multi_agent_v2_config(&ConfigToml::default())
     };

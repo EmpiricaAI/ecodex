@@ -2896,6 +2896,26 @@ async fn experimental_features_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("experimental_features_popup", popup);
+
+    let mut config = codex_config::types::TuiKeymap::default();
+    config.list.accept = Some(codex_config::types::KeybindingsSpec::One(
+        codex_config::types::KeybindingSpec("ctrl-x enter".to_string()),
+    ));
+    let keymap = crate::keymap::RuntimeKeymap::from_config(&config)
+        .expect("valid experimental-feature chord");
+    let view = ExperimentalFeaturesView::new(
+        vec![ExperimentalFeatureItem {
+            feature: Feature::ShellTool,
+            name: "Shell tool".to_string(),
+            description: "Allow the model to run shell commands.".to_string(),
+            enabled: true,
+        }],
+        chat.app_event_tx.clone(),
+        keymap.list,
+    );
+    chat.bottom_pane.show_view(Box::new(view));
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("experimental_features_popup_configured_key_chords", popup);
 }
 
 #[tokio::test]
@@ -3121,6 +3141,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         model: slug.to_string(),
         display_name: slug.to_string(),
         description: format!("{slug} description"),
+        model_specialty: None,
         default_reasoning_effort: ReasoningEffortConfig::Medium,
         supported_reasoning_efforts: vec![ReasoningEffortPreset {
             effort: ReasoningEffortConfig::Medium,
@@ -3616,6 +3637,7 @@ async fn single_reasoning_option_skips_selection() {
         model: "model-with-single-reasoning".to_string(),
         display_name: "model-with-single-reasoning".to_string(),
         description: "".to_string(),
+        model_specialty: None,
         default_reasoning_effort: ReasoningEffortConfig::High,
         supported_reasoning_efforts: single_effort,
         supports_personality: false,

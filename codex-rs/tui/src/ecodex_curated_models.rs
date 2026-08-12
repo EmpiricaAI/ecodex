@@ -255,6 +255,7 @@ pub(crate) fn to_preset(entry: &EcodexCuratedModel) -> ModelPreset {
         supported_in_api: true,
         input_modalities: vec![InputModality::Text],
         multi_agent_version: None,
+        model_specialty: None,
     }
 }
 

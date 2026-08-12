@@ -9,7 +9,6 @@ use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigError;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigLoadError;
 use codex_config::ConfigLoadOptions;
 use codex_config::ConfigRequirements;
@@ -32,6 +31,7 @@ use codex_config::loader::load_config_layers_state;
 use codex_config::loader::load_requirements_toml;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_exec_server::LOCAL_FS;
+use codex_features::Feature;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
@@ -843,7 +843,6 @@ async fn returns_empty_when_all_layers_missing() {
     );
     let num_system_layers = layers
         .layers_high_to_low()
-        .iter()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::System { .. }))
         .count();
     assert_eq!(
@@ -895,10 +894,10 @@ approval_policy = "on-request"
     .await
     .expect("load layers");
 
-    let user_layers = layers.get_user_layers(
-        super::ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    );
+    let user_layers = layers
+        .layers_low_to_high()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::User { .. }))
+        .collect::<Vec<_>>();
     assert_eq!(user_layers.len(), 2);
     assert_eq!(
         user_layers[0].name,
@@ -961,7 +960,6 @@ async fn includes_thread_config_layers_in_stack() -> anyhow::Result<()> {
 
     let layer_sources = layers
         .layers_high_to_low()
-        .into_iter()
         .map(|layer| layer.name.clone())
         .collect::<Vec<_>>();
     assert_eq!(
@@ -1047,7 +1045,6 @@ flag = false
     assert_eq!(nested.get("flag"), Some(&TomlValue::Boolean(false)));
     let mdm_layer = state
         .layers_high_to_low()
-        .into_iter()
         .find(|layer| {
             matches!(
                 layer.name,
@@ -1347,6 +1344,43 @@ personality = true
             entries: BTreeMap::from([("personality".to_string(), true)]),
         })
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_requirements_control_in_app_updates() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let default_config = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .build()
+        .await?;
+    assert!(default_config.features.enabled(Feature::InAppUpdates));
+
+    let requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_path,
+        r#"
+[features]
+in_app_updates = false
+"#,
+    )
+    .await?;
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    let managed_config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+
+    assert!(!managed_config.features.enabled(Feature::InAppUpdates));
     Ok(())
 }
 
@@ -2254,11 +2288,7 @@ model_provider = "cloud-provider"
     );
     assert_eq!(
         layers
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ false,
-            )
-            .iter()
+            .layers_low_to_high()
             .map(|layer| layer.name.clone())
             .collect::<Vec<_>>(),
         vec![
@@ -2596,7 +2626,6 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
 
     let project_layers: Vec<_> = layers
         .layers_high_to_low()
-        .into_iter()
         .filter_map(|layer| match &layer.name {
             ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
             _ => None,
@@ -2678,7 +2707,6 @@ async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_h
 
     let project_layers: Vec<_> = layers
         .layers_high_to_low()
-        .into_iter()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     assert_eq!(project_layers.len(), 2);
@@ -2759,7 +2787,6 @@ async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_con
 
     let project_layers: Vec<_> = layers
         .layers_high_to_low()
-        .into_iter()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     assert_eq!(project_layers.len(), 1);
@@ -2829,7 +2856,6 @@ async fn nested_project_root_markers_do_not_redirect_regular_repo_hooks() -> std
 
     let project_layers: Vec<_> = layers
         .layers_high_to_low()
-        .into_iter()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     assert_eq!(project_layers.len(), 2);
@@ -3016,7 +3042,6 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
 
     let project_layers: Vec<_> = layers
         .layers_high_to_low()
-        .into_iter()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     let expected_project_layer = ConfigLayerEntry::new(
@@ -3055,11 +3080,7 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
     .await?;
 
     let project_layers: Vec<_> = layers
-        .get_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
+        .all_layers_high_to_low()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     let expected: Vec<&ConfigLayerEntry> = Vec::new();
@@ -3120,11 +3141,7 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
     .await?;
 
     let project_layers: Vec<_> = layers
-        .get_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
+        .all_layers_high_to_low()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
 
@@ -3194,11 +3211,7 @@ profile = "ignored"
     )
     .await?;
     let project_layers_untrusted: Vec<_> = layers_untrusted
-        .get_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
+        .all_layers_high_to_low()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     assert_eq!(project_layers_untrusted.len(), 1);
@@ -3240,11 +3253,7 @@ profile = "ignored"
     )
     .await?;
     let project_layers_unknown: Vec<_> = layers_unknown
-        .get_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
+        .all_layers_high_to_low()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     assert_eq!(project_layers_unknown.len(), 1);
@@ -3333,7 +3342,6 @@ wire_api = "responses"
 
     let project_layer = layers
         .layers_high_to_low()
-        .into_iter()
         .find(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .expect("expected project layer");
 
@@ -3434,11 +3442,7 @@ async fn project_trust_does_not_match_configured_alias_for_canonical_cwd() -> st
     .await?;
 
     let project_layers: Vec<_> = layers
-        .get_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
+        .all_layers_high_to_low()
         .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     assert_eq!(project_layers.len(), 1);
@@ -3598,11 +3602,7 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
         )
         .await?;
         let project_layers: Vec<_> = layers
-            .get_layers(
-                ConfigLayerStackOrdering::HighestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .into_iter()
+            .all_layers_high_to_low()
             .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
             .collect();
         assert_eq!(
@@ -3666,11 +3666,7 @@ async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown
         )
         .await?;
         let project_layers: Vec<_> = layers
-            .get_layers(
-                ConfigLayerStackOrdering::HighestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .into_iter()
+            .all_layers_high_to_low()
             .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
             .collect();
         assert_eq!(
@@ -3773,7 +3769,6 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
 
     let project_layers: Vec<_> = layers
         .layers_high_to_low()
-        .into_iter()
         .filter_map(|layer| match &layer.name {
             ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
             _ => None,

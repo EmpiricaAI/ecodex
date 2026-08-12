@@ -76,6 +76,54 @@ async fn resumed_initial_messages_render_history() {
 }
 
 #[tokio::test]
+async fn replayed_failed_turns_preserve_overload_warnings_between_retries() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let prompt = "The workspace also looks super confusing with its separator.";
+    let error_message = "Selected model is at capacity. Please try a different model.";
+    let failed_turn = |turn_id: &str, item_id: &str| AppServerTurn {
+        items: vec![AppServerThreadItem::UserMessage {
+            id: item_id.to_string(),
+            client_id: None,
+            content: vec![AppServerUserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+        }],
+        ..app_server_turn(
+            turn_id,
+            AppServerTurnStatus::Failed,
+            /*duration_ms*/ None,
+            /*error*/
+            Some(AppServerTurnError {
+                message: error_message.to_string(),
+                codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
+                additional_details: None,
+            }),
+        )
+    };
+
+    chat.replay_thread_turns(
+        vec![
+            failed_turn("turn-1", "user-1"),
+            failed_turn("turn-2", "user-2"),
+        ],
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+
+    assert_eq!(rendered.matches(prompt).count(), 2);
+    assert_eq!(rendered.matches(error_message).count(), 2);
+    insta::assert_snapshot!(
+        "replayed_failed_turns_preserve_overload_warnings_between_retries",
+        rendered
+    );
+}
+
+#[tokio::test]
 async fn restored_conversation_ultra_remains_selected_after_switching_to_plan() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
@@ -1123,6 +1171,7 @@ async fn replayed_in_progress_mcp_tool_call_stays_active() {
             app_context: None,
             mcp_app_resource_uri: None,
             plugin_id: None,
+            read_only_hint: None,
             result: None,
             error: None,
             duration_ms: None,
@@ -1156,6 +1205,7 @@ async fn deferred_mcp_lifecycle_events_keep_fifo_after_stream_finishes() {
         app_context: None,
         mcp_app_resource_uri: None,
         plugin_id: None,
+        read_only_hint: None,
         result: None,
         error: None,
         duration_ms: None,
@@ -1172,6 +1222,7 @@ async fn deferred_mcp_lifecycle_events_keep_fifo_after_stream_finishes() {
         app_context: None,
         mcp_app_resource_uri: None,
         plugin_id: None,
+        read_only_hint: None,
         result: Some(Box::new(codex_app_server_protocol::McpToolCallResult {
             content: vec![json!({"type": "text", "text": "deferred result"})],
             structured_content: None,

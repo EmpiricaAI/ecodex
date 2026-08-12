@@ -43,6 +43,7 @@ use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::HarnessKeyValidator;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
+use crate::server::RequestDispatchMode;
 use crate::trace_context::current_trace_context_headers;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
@@ -170,6 +171,15 @@ impl EnvironmentRegistryClient {
     }
 
     /// Authorize one Noise harness key and obtain the full rendezvous bundle.
+    #[tracing::instrument(
+        name = "codex.exec_server.remote.environment_registry.connect",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.environment_registry.connect",
+            environment_id = %environment_id,
+        )
+    )]
     async fn connect_environment(
         &self,
         environment_id: &str,
@@ -182,6 +192,7 @@ impl EnvironmentRegistryClient {
                 &format!("/cloud/environment/{environment_id}/connect"),
             ))
             .headers(self.auth_provider.to_auth_headers())
+            .headers(current_trace_context_headers())
             .json(&EnvironmentRegistryConnectRequest { harness_public_key })
             .timeout(self.connect_timeout)
             .send()
@@ -248,6 +259,16 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
     /// Authorize the harness key recovered from the first IK message.
     /// Noise proves key possession; the registry decides whether that key may use
     /// this executor. The authorization token and public key are checked together.
+    #[tracing::instrument(
+        name = "codex.exec_server.remote.environment_registry.validate_harness_key",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.environment_registry.validate_harness_key",
+            environment_id = %self.environment_id,
+            executor_registration_id = %self.executor_registration_id,
+        )
+    )]
     async fn validate_harness_key(
         &self,
         harness_public_key: &NoiseChannelPublicKey,
@@ -262,6 +283,7 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
                 &format!("/cloud/environment/{environment_id}/validate"),
             ))
             .headers(self.client.auth_provider.to_auth_headers())
+            .headers(current_trace_context_headers())
             .json(&EnvironmentRegistryHarnessKeyValidationRequest {
                 executor_registration_id: self.executor_registration_id.clone(),
                 harness_public_key: harness_public_key.clone(),
@@ -443,6 +465,7 @@ pub struct RemoteEnvironmentConfig {
     pub base_url: String,
     pub environment_id: String,
     pub name: String,
+    pub request_dispatch_mode: RequestDispatchMode,
     auth_provider: SharedAuthProvider,
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
@@ -454,6 +477,7 @@ impl std::fmt::Debug for RemoteEnvironmentConfig {
             .field("base_url", &self.base_url)
             .field("environment_id", &self.environment_id)
             .field("name", &self.name)
+            .field("request_dispatch_mode", &self.request_dispatch_mode)
             .field("auth_provider", &"<redacted>")
             .finish()
     }
@@ -471,6 +495,7 @@ impl RemoteEnvironmentConfig {
             base_url,
             environment_id,
             name: "codex-exec-server".to_string(),
+            request_dispatch_mode: RequestDispatchMode::Inline,
             auth_provider,
             telemetry: ExecServerTelemetry::default(),
             http_client_factory,
@@ -493,6 +518,20 @@ pub async fn run_remote_environment(
     config: RemoteEnvironmentConfig,
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), ExecServerError> {
+    run_remote_environment_until_shutdown(config, runtime_paths, std::future::pending()).await
+}
+
+/// Serve a remote environment until its owner requests graceful shutdown.
+///
+/// Active sessions and their processes are drained before this function returns.
+pub async fn run_remote_environment_until_shutdown<F>(
+    config: RemoteEnvironmentConfig,
+    runtime_paths: ExecServerRuntimePaths,
+    shutdown: F,
+) -> Result<(), ExecServerError>
+where
+    F: std::future::Future<Output = ()>,
+{
     ensure_rustls_crypto_provider();
     let client = EnvironmentRegistryClient::new_with_telemetry(
         config.base_url.clone(),
@@ -504,7 +543,26 @@ pub async fn run_remote_environment(
         runtime_paths,
         config.telemetry.clone(),
         config.http_client_factory.clone(),
+        config.request_dispatch_mode,
     );
+
+    let result = {
+        let run = run_remote_environment_connections(config, client, processor.clone());
+        tokio::pin!(run, shutdown);
+        tokio::select! {
+            result = &mut run => result,
+            _ = &mut shutdown => Ok(()),
+        }
+    };
+    processor.shutdown().await;
+    result
+}
+
+async fn run_remote_environment_connections(
+    config: RemoteEnvironmentConfig,
+    client: EnvironmentRegistryClient,
+    processor: ConnectionProcessor,
+) -> Result<(), ExecServerError> {
     let identity = NoiseChannelIdentity::generate().map_err(|error| {
         ExecServerError::Protocol(format!("failed to generate Noise relay identity: {error}"))
     })?;

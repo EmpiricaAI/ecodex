@@ -255,6 +255,7 @@ mod tests {
                 text: format!("{USER_MESSAGE_BEGIN} actual user request"),
                 text_elements: Vec::new(),
             }])),
+            started_at_ms: Some(0),
             completed_at_ms: 0,
         }));
 
@@ -694,7 +695,9 @@ mod tests {
             tokens_used: 1,
             first_user_message: None,
             archived_at: None,
-            is_pinned: false,
+            section: None,
+            section_position: None,
+            section_entered_at: None,
             git_sha: None,
             git_branch: None,
             git_origin_url: None,

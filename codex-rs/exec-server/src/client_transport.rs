@@ -106,15 +106,26 @@ impl ExecServerClient {
             transport_params => (transport_params, None),
         };
 
-        if let Some(readiness) = deferred_readiness {
-            readiness
+        if let Some(mut readiness) = deferred_readiness {
+            let provisioning_result = readiness
+                .wait_for(Option::is_some)
                 .await
-                .unwrap_or_else(|_| {
-                    Err("environment registration ended before completion".to_string())
-                })
-                .map_err(|message| {
-                    ExecServerError::Disconnected(format!("environment unavailable: {message}"))
+                .map_err(|_| {
+                    ExecServerError::Disconnected(
+                        "environment unavailable: environment provisioning ended before completion"
+                            .to_string(),
+                    )
+                })?
+                .clone()
+                .ok_or_else(|| {
+                    ExecServerError::Disconnected(
+                        "environment unavailable: provisioning remained pending after completion"
+                            .to_string(),
+                    )
                 })?;
+            provisioning_result.map_err(|message| {
+                ExecServerError::Disconnected(format!("environment unavailable: {message}"))
+            })?;
         }
 
         let (websocket_url, connect_timeout, initialize_timeout) = match transport_params {
@@ -170,6 +181,7 @@ impl ExecServerClient {
         .await
     }
 
+    #[tracing::instrument(name = "codex.exec_server.remote.noise.connect", skip_all)]
     async fn open_initial_noise_rendezvous_connection(
         provider: &Arc<dyn NoiseRendezvousConnectProvider>,
         identity: &NoiseChannelIdentity,
@@ -285,6 +297,16 @@ impl ExecServerClient {
         Self::connect(connection, options).await
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.remote.noise.websocket_connect",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.noise.websocket_connect",
+            environment_id = %args.bundle.environment_id,
+            executor_registration_id = %args.bundle.executor_registration_id,
+        )
+    )]
     pub(crate) async fn open_noise_rendezvous_connection(
         args: NoiseRendezvousConnectArgs,
     ) -> Result<(JsonRpcConnection, ExecServerClientConnectOptions), ExecServerError> {

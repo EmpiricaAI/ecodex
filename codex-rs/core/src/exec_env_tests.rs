@@ -83,6 +83,7 @@ fn test_core_inherit_defaults_keep_sensitive_vars() {
         "SECRET_TOKEN".to_string() => "t".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    expected.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.to_string());
 
     assert_eq!(result, expected);
 }
@@ -108,6 +109,7 @@ fn test_core_inherit_with_default_excludes_enabled() {
         "HOME".to_string() => "/home/user".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    expected.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.to_string());
 
     assert_eq!(result, expected);
 }
@@ -130,6 +132,7 @@ fn test_include_only() {
         "PATH".to_string() => "/usr/bin".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    expected.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.to_string());
 
     assert_eq!(result, expected);
 }
@@ -152,6 +155,7 @@ fn test_set_overrides() {
         "NEW_VAR".to_string() => "42".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    expected.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.to_string());
 
     assert_eq!(result, expected);
 }
@@ -167,6 +171,7 @@ fn populate_env_inserts_thread_id() {
         "PATH".to_string() => "/usr/bin".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    expected.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.to_string());
 
     assert_eq!(result, expected);
 }
@@ -198,6 +203,7 @@ fn test_inherit_all() {
     let result = populate_env(vars.clone(), &policy, Some(thread_id));
     let mut expected: HashMap<String, String> = vars.into_iter().collect();
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    expected.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.to_string());
     assert_eq!(result, expected);
 }
 
@@ -217,6 +223,7 @@ fn test_inherit_all_with_default_excludes() {
         "PATH".to_string() => "/usr/bin".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    expected.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.to_string());
     assert_eq!(result, expected);
 }
 
@@ -244,6 +251,7 @@ fn test_core_inherit_respects_case_insensitive_names_on_windows() {
         "TEMP".to_string() => "C:\\Temp".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    expected.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.to_string());
 
     assert_eq!(result, expected);
 }
@@ -308,5 +316,6 @@ fn test_inherit_none() {
         "ONLY_VAR".to_string() => "yes".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    expected.insert(EMPIRICA_INSTANCE_ID_ENV_VAR.to_string(), thread_id.to_string());
     assert_eq!(result, expected);
 }
