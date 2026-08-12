@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Dependencies
+- Post-0.147.0 Dependabot triage (49 alerts, Rust-ecosystem subset only —
+  npm/pnpm alerts are upstream's own JS tooling lockfile, not reviewed
+  here): 4 real, shipped-in-`codex-cli` advisories fixed by `cargo update`
+  within existing compatible ranges — `quinn-proto` 0.11.14 → 0.11.16
+  (RUSTSEC-2026-0185, re-introduced by taking upstream's Cargo.lock
+  wholesale during the 0.147.0 merge; was already fixed pre-sync),
+  `webbrowser` 1.0.6 → 1.2.2 (RUSTSEC-2026-0257, argument injection —
+  reachable via `codex-login`'s OAuth browser-open flow), `openssl`
+  0.10.75 → 0.10.81 (8 GHSA advisories across AES key-wrap, buffer
+  bounds, and callback-length checks), `serde_with` 3.17.0 → 3.21.0
+  (KeyValueMap panic on empty sequence/map). Post-fix `cargo audit`:
+  0 vulnerabilities, 6 pre-existing `unsound`/`yanked` warnings (no CVE).
+  Two advisories remain genuinely blocked, both already tracked as their
+  own goals: `hickory-proto` (capped by `rama-dns`'s own `^0.25` pin, a
+  transitive dep we don't control) and `opentelemetry_sdk` (workspace
+  0.31→0.32 bump blocked on `tracing-opentelemetry` not yet targeting
+  `opentelemetry` 0.32 in any release).
+
 ## [0.147.0] - 2026-08-12
 
 ### Changed
