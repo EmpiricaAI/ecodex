@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.147.0] - 2026-08-12
+
 ### Changed
 - **Upstream base sync `0.146` → `0.147`.** Merged upstream `rust-v0.147.0`
   (1530 files touched). Notable composite areas: skill-catalog rendering
@@ -420,7 +422,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.146.0...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.147.0...HEAD
+[0.147.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.147.0...v0.147.0
 [0.146.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.145.0...v0.146.0
 [0.145.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.7...v0.145.0
 [0.2.7]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.6...v0.2.7
