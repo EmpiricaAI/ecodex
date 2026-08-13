@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.147.1] - 2026-08-13
+
 ### Fixed
 - **Critical: `codex-code-mode-host` binary now shipped.** The `0.147.0`
   upstream sync made `code_mode_host` a `Stage::Stable`,
@@ -471,7 +473,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.147.0...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.147.1...HEAD
+[0.147.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.147.0...v0.147.1
 [0.147.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.147.0...v0.147.0
 [0.146.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.145.0...v0.146.0
 [0.145.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.2.7...v0.145.0
