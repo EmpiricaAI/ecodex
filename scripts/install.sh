@@ -95,7 +95,7 @@ fi
 # --- extract + install ------------------------------------------------------
 tar -xzf "${TMP}/${ARCHIVE}" -C "$TMP"
 mkdir -p "$INSTALL_DIR"
-for bin in ecodex codex-empirica-plugin codex-empirica-translator; do
+for bin in ecodex codex-empirica-plugin codex-empirica-translator codex-code-mode-host; do
   [ -f "${TMP}/${bin}" ] || err "archive missing expected binary: ${bin}"
   install -m 0755 "${TMP}/${bin}" "${INSTALL_DIR}/${bin}"
   info "installed ${INSTALL_DIR}/${bin}"

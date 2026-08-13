@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **Critical: `codex-code-mode-host` binary now shipped.** The `0.147.0`
+  upstream sync made `code_mode_host` a `Stage::Stable`,
+  `default_enabled: true` feature — and any model whose `models.json`
+  entry declares `tool_mode: code_mode_only` (currently `gpt-5.6-sol`,
+  `gpt-5.6-terra`, `gpt-5.6-luna`) has no fallback path: `effective_tool_mode`
+  only degrades `CodeMode` to `Direct` on a missing host, not
+  `CodeModeOnly`. `gpt-5.6-sol` is this repo's own default configured
+  model, so this broke real usage, not just an edge case. `codex-cli`
+  itself never needed the `v8`-backed `codex-code-mode-runtime` crate (only
+  `codex-code-mode-host` does), but that binary was never added to
+  `.github/workflows/release.yml`, `scripts/install.sh`, or the Homebrew
+  formula — v0.147.0's published release therefore shipped without it,
+  and any code-mode-only model failed every tool call with `failed to
+  spawn code-mode host ... No such file or directory`. We don't build
+  `codex-code-mode-host` ourselves: its `v8_enable_sandbox` feature has no
+  prebuilt archive published by `rusty_v8` for any platform in at least
+  its last 15 releases, so building it means compiling V8 from source
+  (hours, `depot_tools`/`gn`/`ninja`). `codex-code-mode-host` is
+  unmodified upstream code (verified zero ecodex commits touch
+  `code-mode-host`/`-runtime`/`-protocol` since the `0.147.0` merge), and
+  upstream's own `rust-v0.147.0` GitHub release already publishes the
+  exact binary we need — `.github/workflows/release.yml` now fetches it
+  from there per-target (`codex-rs/UPSTREAM_SYNC_TAG` records which
+  upstream tag to pull from; bump it alongside future upstream syncs) and
+  packages it as a fourth binary alongside
+  `ecodex`/`codex-empirica-plugin`/`codex-empirica-translator`, installed
+  by `scripts/install.sh` + the Homebrew formula. Verified fix end-to-end:
+  `gpt-5.6-sol` exec succeeds with the fetched binary in place.
+
 ### Dependencies
 - Post-0.147.0 Dependabot triage (49 alerts, Rust-ecosystem subset only —
   npm/pnpm alerts are upstream's own JS tooling lockfile, not reviewed

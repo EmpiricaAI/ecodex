@@ -35,8 +35,8 @@ class Ecodex < Formula
   end
 
   def install
-    # Tarball contains the three binaries at its root.
-    bin.install "ecodex", "codex-empirica-plugin", "codex-empirica-translator"
+    # Tarball contains the four binaries at its root.
+    bin.install "ecodex", "codex-empirica-plugin", "codex-empirica-translator", "codex-code-mode-host"
   end
 
   def caveats

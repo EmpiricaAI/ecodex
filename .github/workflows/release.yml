@@ -36,7 +36,7 @@ jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120   # cold-cache release build of the full workspace (v8/aws-lc) is slow on 2-core runners
+    timeout-minutes: 120   # cold-cache release build incl. codex-code-mode-host's v8 dep is slow on 2-core runners
     strategy:
       fail-fast: false
       matrix:
@@ -78,6 +78,41 @@ jobs:
           cargo build --release --target ${{ matrix.target }} \
             -p codex-cli -p codex-empirica-plugin -p codex-empirica-translator
 
+      - name: Fetch upstream codex-code-mode-host
+        # codex-code-mode-host is unmodified upstream code (verified: zero
+        # ecodex commits touch code-mode-host/-runtime/-protocol post-merge).
+        # We don't build it ourselves: its codex-code-mode-runtime dependency
+        # needs the v8 crate's `v8_enable_sandbox` feature, and rusty_v8 has
+        # never published a prebuilt "*_sandbox_*" archive for ANY platform
+        # (checked the last 15 releases) — building it requires a from-source
+        # V8 compile (hours, depot_tools/gn/ninja) that upstream's own CI
+        # clearly has infra for but we don't. Upstream already publishes the
+        # exact binary we need on their GitHub release for the tag we synced
+        # from — use that instead of re-solving their build problem.
+        working-directory: codex-rs
+        env:
+          UPSTREAM_TAG_FILE: UPSTREAM_SYNC_TAG
+        run: |
+          set -euo pipefail
+          UPSTREAM_TAG="$(tr -d ' \t\n' < "${UPSTREAM_TAG_FILE}")"
+          TARGET="${{ matrix.target }}"
+          case "${TARGET}" in
+            *-unknown-linux-gnu) UPSTREAM_TARGET="${TARGET%-gnu}-musl" ;; # upstream ships static musl for linux; runs fine on gnu hosts
+            *) UPSTREAM_TARGET="${TARGET}" ;;
+          esac
+          ASSET="codex-code-mode-host-${UPSTREAM_TARGET}.tar.gz"
+          URL="https://github.com/openai/codex/releases/download/${UPSTREAM_TAG}/${ASSET}"
+          echo "fetching ${URL}"
+          curl -fsSL -o "${ASSET}" "${URL}"
+          mkdir -p "upstream-code-mode-host"
+          tar -xzf "${ASSET}" -C "upstream-code-mode-host"
+          FETCHED="upstream-code-mode-host/codex-code-mode-host-${UPSTREAM_TARGET}"
+          [ -s "${FETCHED}" ] || { echo "downloaded binary is empty or missing: ${FETCHED}" >&2; exit 1; }
+          file "${FETCHED}" | grep -qi 'ELF\|Mach-O' || { echo "downloaded file is not a recognizable binary: ${FETCHED}" >&2; exit 1; }
+          mkdir -p "target/${TARGET}/release"
+          cp "${FETCHED}" "target/${TARGET}/release/codex-code-mode-host"
+          chmod +x "target/${TARGET}/release/codex-code-mode-host"
+
       - name: Stage, strip, and archive
         id: archive
         working-directory: codex-rs
@@ -87,15 +122,17 @@ jobs:
           OUTDIR="target/${TARGET}/release"
           STAGE="ecodex-${TARGET}"
           mkdir -p "${STAGE}"
-          cp "${OUTDIR}/ecodex" "${OUTDIR}/codex-empirica-plugin" "${OUTDIR}/codex-empirica-translator" "${STAGE}/"
+          cp "${OUTDIR}/ecodex" "${OUTDIR}/codex-empirica-plugin" "${OUTDIR}/codex-empirica-translator" "${OUTDIR}/codex-code-mode-host" "${STAGE}/"
 
           # profile.release keeps strip=false (symbols retained for packaging);
           # strip explicitly here so the shipped artifact is small (~300MB -> tens of MB).
           # macOS uses `strip -x` (external symbols only) so the code still runs.
+          # codex-code-mode-host is upstream-prebuilt and already stripped; a
+          # re-strip is a harmless no-op, kept for one uniform command.
           if [[ "${TARGET}" == *apple-darwin* ]]; then
-            strip -x "${STAGE}/ecodex" "${STAGE}/codex-empirica-plugin" "${STAGE}/codex-empirica-translator"
+            strip -x "${STAGE}/ecodex" "${STAGE}/codex-empirica-plugin" "${STAGE}/codex-empirica-translator" "${STAGE}/codex-code-mode-host"
           else
-            strip "${STAGE}/ecodex" "${STAGE}/codex-empirica-plugin" "${STAGE}/codex-empirica-translator"
+            strip "${STAGE}/ecodex" "${STAGE}/codex-empirica-plugin" "${STAGE}/codex-empirica-translator" "${STAGE}/codex-code-mode-host"
           fi
 
           ARCHIVE="ecodex-${TARGET}.tar.gz"
