@@ -46,6 +46,10 @@ regression tests still execute instead of silently skipping.
   libs, fastapi) landed in `sys.modules`. Presence-based (deterministic), not
   time-based (flaky). `_BUDGET` per-hook allow-sets are empty — baseline confirms
   every critical hook pulls empirica core lazily and nothing heavy.
+- `test_cli_parity.py` — source-discovers every concrete `empirica` subprocess
+  argv in the vendored Python hooks and Rust core, then checks each nested
+  command and referenced flag against Empirica's real argparse parser. This
+  catches wrapper/CLI flag drift without maintaining a second command map.
 
 ## Adding coverage
 
