@@ -14,6 +14,7 @@ use std::process::ExitCode;
 mod agents_md;
 mod empirica_cli;
 mod hooks;
+mod practice_bootstrap;
 mod subagents;
 mod translate_output;
 

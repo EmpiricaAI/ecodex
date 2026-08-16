@@ -12,6 +12,7 @@ use std::process::ExitCode;
 
 use crate::agents_md;
 use crate::empirica_cli;
+use crate::practice_bootstrap;
 use crate::subagents;
 
 /// Run the SessionStart hook against the current invocation.
@@ -59,6 +60,23 @@ pub fn handle() -> ExitCode {
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {
         eprintln!("codex-empirica-plugin session-start: failed to read stdin: {e}");
         return ExitCode::SUCCESS;
+    }
+
+    // SessionStart hook commands are launched by the harness before the model
+    // can request sandboxed tool execution. Use that narrow host-side boundary
+    // to establish git as the practice transport, then let the canonical
+    // session-init hook create the session against the initialized practice.
+    match practice_bootstrap::ensure_practice(&input) {
+        Ok(outcome) if outcome.changed() => {
+            eprintln!(
+                "codex-empirica-plugin: initialized practice at {}",
+                outcome.workspace().display()
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("codex-empirica-plugin: practice bootstrap failed (non-fatal): {error}")
+        }
     }
 
     match empirica_cli::run_hook_script("session-init.py", &input) {
