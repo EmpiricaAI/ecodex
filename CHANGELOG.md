@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **`writable_git` now works in linked git worktrees.** With
+  `[sandbox_workspace_write] writable_git = true`, the write grant only
+  covered `<project_root>/.git` — in a linked worktree that is a one-line
+  gitdir pointer file, so every `git add`/`commit` failed against the real
+  git state under `<main-repo>/.git` (read-only filesystem on `index.lock`).
+  Write entries targeting a `.git` pointer file now expand to the resolved
+  per-worktree gitdir and the common git dir, with the escalation-sensitive
+  shared entries (`HEAD`, `config`, `hooks`, `info`, `modules`, sibling
+  `worktrees`) pinned read-only — a sandboxed worktree session can commit,
+  but cannot plant hooks/config that would execute unsandboxed in the main
+  checkout, nor touch sibling worktrees' state. Submodule gitdir pointers
+  get their self-contained gitdir. Verified end-to-end under the real
+  bubblewrap sandbox. `writable_git = false` behavior is unchanged.
+
 ## [0.147.1] - 2026-08-13
 
 ### Fixed

@@ -1301,7 +1301,8 @@ impl FileSystemSandboxPolicy {
 
     fn resolved_entries_with_cwd(&self, cwd: &Path) -> Vec<ResolvedFileSystemEntry> {
         let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
-        self.entries
+        let mut entries: Vec<ResolvedFileSystemEntry> = self
+            .entries
             .iter()
             .filter_map(|entry| {
                 resolve_entry_path(&entry.path, cwd_absolute.as_ref()).map(|path| {
@@ -1311,7 +1312,9 @@ impl FileSystemSandboxPolicy {
                     }
                 })
             })
-            .collect()
+            .collect();
+        append_linked_worktree_git_entries(&mut entries);
+        entries
     }
 
     fn semantic_signature(&self, cwd: &Path) -> FileSystemSemanticSignature {
@@ -1883,6 +1886,97 @@ fn has_explicit_write_entry_for_metadata_path(
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
     path.as_path().is_file()
         && path.as_path().file_name() == Some(OsStr::new(PROTECTED_METADATA_GIT_PATH_NAME))
+}
+
+/// Common-git-dir entry names that stay read-only when a `writable_git` grant
+/// is extended into a linked worktree's resolved common git dir. The common
+/// dir is shared with the main checkout (and every sibling worktree), so
+/// writes here escape the session: a hook or config planted by a sandboxed
+/// worktree session executes UNSANDBOXED the next time git runs in the main
+/// checkout. `HEAD` is the main checkout's; `modules` holds submodule gitdirs;
+/// `worktrees` covers sibling worktrees — the session's own worktree gitdir is
+/// re-granted as a deeper (higher-precedence) write entry, so only siblings
+/// stay protected.
+const LINKED_WORKTREE_READ_ONLY_COMMON_GIT_NAMES: &[&str] =
+    &["HEAD", "config", "hooks", "info", "modules", "worktrees"];
+
+/// Expands write entries that target a `.git` gitdir POINTER FILE (linked
+/// worktree or submodule) into write entries for the git state the pointer
+/// stands for.
+///
+/// A `writable_git` grant materializes as a write entry for
+/// `<project_root>/.git`. In a normal repository that is the git state. In a
+/// linked worktree it is a one-line pointer file, and the real state lives in
+/// two places outside every writable root (verified by strace of `git add` +
+/// `git commit` from a linked worktree):
+///
+/// - the per-worktree gitdir (`<common>/worktrees/<name>`): index, HEAD,
+///   COMMIT_EDITMSG, merge state, per-worktree reflogs — written by `add`
+///   and `commit`;
+/// - the common git dir: `objects/` (written by `add` already, not just
+///   `commit`), `refs/`, `logs/`, and top-level lock files such as
+///   `packed-refs.lock` — which is why the common dir itself must be
+///   writable rather than an allowlist of its children.
+///
+/// The escalation-sensitive common-dir entries named in
+/// [`LINKED_WORKTREE_READ_ONLY_COMMON_GIT_NAMES`] are pinned read-only, which
+/// deliberately keeps this grant NARROWER in a worktree than in a normal
+/// repository: there `.git` belongs to the session's own workspace, here it is
+/// shared state of the main checkout.
+///
+/// With `writable_git=false` no write entry for `.git` exists, so this
+/// expands nothing and the existing protection (the resolved gitdir is pushed
+/// as a read-only subpath) is unchanged.
+fn append_linked_worktree_git_entries(entries: &mut Vec<ResolvedFileSystemEntry>) {
+    let mut expanded: Vec<ResolvedFileSystemEntry> = Vec::new();
+    for entry in entries.iter() {
+        if !entry.access.can_write() || !is_git_pointer_file(&entry.path) {
+            continue;
+        }
+        let Some(gitdir) = resolve_gitdir_from_file(&entry.path) else {
+            continue;
+        };
+        expanded.push(ResolvedFileSystemEntry {
+            path: gitdir.clone(),
+            access: FileSystemAccessMode::Write,
+        });
+        // Submodule gitdirs have no `commondir` file — they are self-contained,
+        // so the gitdir write entry above is the whole expansion.
+        let Some(commondir) = resolve_commondir_from_gitdir(&gitdir) else {
+            continue;
+        };
+        for name in LINKED_WORKTREE_READ_ONLY_COMMON_GIT_NAMES {
+            let protected = commondir.join(name);
+            if protected.as_path().exists() {
+                expanded.push(ResolvedFileSystemEntry {
+                    path: protected,
+                    access: FileSystemAccessMode::Read,
+                });
+            }
+        }
+        expanded.push(ResolvedFileSystemEntry {
+            path: commondir,
+            access: FileSystemAccessMode::Write,
+        });
+    }
+    entries.append(&mut expanded);
+}
+
+/// Resolves the common git dir a linked worktree's gitdir belongs to, via the
+/// `commondir` file git maintains inside every linked worktree gitdir. Returns
+/// `None` for self-contained gitdirs (normal repos, submodules).
+fn resolve_commondir_from_gitdir(gitdir: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
+    let commondir_file = gitdir.as_path().join("commondir");
+    let contents = std::fs::read_to_string(&commondir_file).ok()?;
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let commondir = normalize_effective_absolute_path(AbsolutePathBuf::resolve_path_against_base(
+        trimmed,
+        gitdir.as_path(),
+    ));
+    commondir.as_path().is_dir().then_some(commondir)
 }
 
 fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
@@ -3482,6 +3576,138 @@ mod tests {
             access_for_project_subpath(&on, ".codex"),
             Some(FileSystemAccessMode::Read),
             "writable_git must NOT weaken .codex"
+        );
+    }
+
+    /// Builds `<temp>/main` (a plausible main-repo `.git` layout, including a
+    /// sibling worktree's gitdir) plus `<temp>/wt`, a linked worktree whose
+    /// `.git` pointer file and `commondir` reference it — the on-disk shape
+    /// `git worktree add` produces, without needing a git binary in the test
+    /// environment.
+    ///
+    /// Tests using this fixture must pass `exclude_tmpdir_env_var=true` and
+    /// `exclude_slash_tmp=true`: the fixture lives under the system tmpdir,
+    /// which is otherwise itself a default writable root that would make
+    /// every positive assertion pass vacuously and every negative one fail.
+    fn linked_worktree_fixture(temp: &TempDir) -> (PathBuf, PathBuf) {
+        let main_git = temp.path().join("main/.git");
+        for dir in [
+            "objects/ab",
+            "refs/heads",
+            "logs/refs/heads",
+            "hooks",
+            "info",
+            "worktrees/wt/logs",
+            "worktrees/sibling",
+        ] {
+            std::fs::create_dir_all(main_git.join(dir)).expect("create main .git layout");
+        }
+        std::fs::write(main_git.join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+        std::fs::write(main_git.join("config"), "[core]\n").expect("write config");
+        std::fs::write(main_git.join("worktrees/wt/commondir"), "../..\n")
+            .expect("write commondir");
+
+        let worktree = temp.path().join("wt");
+        std::fs::create_dir_all(&worktree).expect("create worktree");
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", main_git.join("worktrees/wt").display()),
+        )
+        .expect("write .git pointer file");
+        (worktree, main_git)
+    }
+
+    #[test]
+    fn writable_git_extends_to_linked_worktree_git_state() {
+        let temp = TempDir::new().expect("tempdir");
+        let (worktree, main_git) = linked_worktree_fixture(&temp);
+        let on =
+            FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ true);
+
+        // Everything `git add` + `git commit` write from a linked worktree
+        // (established by strace): per-worktree gitdir, common objects/refs/
+        // logs, and top-level lock files in the common dir.
+        for path in [
+            main_git.join("worktrees/wt/index.lock"),
+            main_git.join("worktrees/wt/COMMIT_EDITMSG"),
+            main_git.join("worktrees/wt/logs/HEAD"),
+            main_git.join("objects/ab/tmp_obj_x"),
+            main_git.join("refs/heads/topic.lock"),
+            main_git.join("logs/refs/heads/topic"),
+            main_git.join("packed-refs.lock"),
+        ] {
+            assert!(
+                on.can_write_path_with_cwd(&path, &worktree),
+                "writable_git=true in a linked worktree must allow {path:?}"
+            );
+        }
+
+        // Escalation-sensitive shared state stays read-only: writes here
+        // escape the sandbox via the main checkout's next git invocation.
+        for path in [
+            main_git.join("config"),
+            main_git.join("hooks/post-commit"),
+            main_git.join("HEAD"),
+            main_git.join("info/exclude"),
+            main_git.join("worktrees/sibling/index"),
+        ] {
+            assert!(
+                !on.can_write_path_with_cwd(&path, &worktree),
+                "writable_git=true must NOT extend to shared common-dir state {path:?}"
+            );
+            assert!(
+                on.can_read_path_with_cwd(&path, &worktree),
+                "protected common-dir state must stay readable {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn writable_git_off_keeps_linked_worktree_git_state_protected() {
+        let temp = TempDir::new().expect("tempdir");
+        let (worktree, main_git) = linked_worktree_fixture(&temp);
+        let off =
+            FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ false);
+
+        for path in [
+            main_git.join("worktrees/wt/index.lock"),
+            main_git.join("objects/ab/tmp_obj_x"),
+            main_git.join("refs/heads/topic.lock"),
+        ] {
+            assert!(
+                !off.can_write_path_with_cwd(&path, &worktree),
+                "writable_git=false must keep worktree git state read-only: {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn writable_git_worktree_expansion_shapes_writable_roots_for_sandboxes() {
+        let temp = TempDir::new().expect("tempdir");
+        let (worktree, main_git) = linked_worktree_fixture(&temp);
+        let on =
+            FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ true);
+
+        let roots = on.get_writable_roots_with_cwd(&worktree);
+        let common_root = roots
+            .iter()
+            .find(|root| root.root.as_path() == main_git.as_path())
+            .expect("common git dir must be a writable root");
+        for name in ["config", "hooks", "HEAD", "info", "worktrees"] {
+            assert!(
+                common_root
+                    .read_only_subpaths
+                    .iter()
+                    .any(|subpath| subpath.as_path() == main_git.join(name).as_path()),
+                "common git dir writable root must carve out {name} read-only"
+            );
+        }
+        assert!(
+            roots
+                .iter()
+                .any(|root| root.root.as_path() == main_git.join("worktrees/wt").as_path()),
+            "the session's own worktree gitdir must be its own writable root, \
+             re-granting it inside the read-only `worktrees` carveout"
         );
     }
 }
