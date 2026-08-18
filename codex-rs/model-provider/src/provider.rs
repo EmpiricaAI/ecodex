@@ -307,6 +307,15 @@ impl ModelProvider for ConfiguredModelProvider {
 
         ProviderCapabilities {
             remote_compaction,
+            // A provider whose endpoint only accepts `type: "function"` tools
+            // cannot receive Namespace-typed MCP tools either — and dropping
+            // them (the old filter_tools_for_provider behavior) severed MCP
+            // entirely. Deriving the capability from the same flag makes
+            // spec_plan emit per-tool Function specs instead, which chat-only
+            // bridges (translator → Mistral etc.) can carry. Measured failure
+            // this fixes: mcp__cortex namespace tool arrived at Mistral with
+            // an empty parameters schema, so no model could call it.
+            namespace_tools: self.info.supports_openai_builtin_tools,
             ..ProviderCapabilities::default()
         }
     }
