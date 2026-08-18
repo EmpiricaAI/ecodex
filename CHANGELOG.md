@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+- **Pre-sandbox practice bootstrap.** A fresh workspace (no `.git`, no
+  `.empirica`) now becomes a working empirica practice at session start:
+  the plugin's SessionStart hook (harness-side, before any sandboxed
+  command) runs `git init` + `empirica project-init` — idempotent,
+  fail-open, with refusal guards (payload-vs-process cwd mismatch,
+  nested-under-ancestor-repo, `$HOME`, filesystem root) and
+  `EMPIRICA_AI_ID` persisted into the fresh `project.yaml`.
+- **CLI-parity CI guard.** A vendored-hooks test source-discovers every
+  `empirica` subprocess argv in the vendored Python hooks and Rust core
+  and checks each subcommand + flag against the real installed empirica
+  CLI parser, catching wrapper/CLI drift before it becomes a silent
+  capability loss.
+
+### Changed
+- **Re-vendored the empirica hook layer to develop @1.13.25-era.**
+  Sentinel firewall over-gating fixes (arithmetic expansion no longer
+  misparsed as command substitution; quote-aware heredoc detection;
+  progressive chain splitting; `noetic-batch` always-open — no praxic
+  gating weakened, verified by invariant guard + behavioral controls);
+  post-compact relevance now driven by the latest PREFLIGHT
+  `task_context`; optional statusline model tag. Vendored onboarding
+  prose corrected for ecodex's self-provisioning model (empirica's
+  `setup-claude-code` deliberately refuses ecodex).
+- **Chat-translator providers no longer receive uncallable namespace
+  tools**: `namespace_tools` capability now derives from
+  `supports_openai_builtin_tools`, so function-only providers get
+  namespace specs dropped instead of shipped broken.
+
 ### Fixed
 - **`writable_git` now works in linked git worktrees.** With
   `[sandbox_workspace_write] writable_git = true`, the write grant only
