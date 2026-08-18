@@ -129,8 +129,53 @@ def _rust_invocations(path: Path) -> list[Invocation]:
         tokens = ["empirica"]
         for literal in _RUST_STRING.findall(match.group("chain")):
             tokens.append(ast.literal_eval(f'"{literal}"'))
+
+        # Some callers must keep ownership of the Command, so they build it in
+        # one statement and add argv in the next instead of using a fluent
+        # chain. Recover that immediately-following `.args(...)` call rather
+        # than silently validating a command with no subcommand at all.
+        if len(tokens) == 1:
+            line_start = source.rfind("\n", 0, match.start()) + 1
+            assignment = re.search(
+                r"let\s+mut\s+(?P<name>[A-Za-z_]\w*)\s*=\s*$",
+                source[line_start : match.start()],
+            )
+            if assignment is not None:
+                name = re.escape(assignment.group("name"))
+                following = source[match.end() : match.end() + 2_000]
+                for args in re.finditer(
+                    rf"\b{name}\.args?\((?P<args>.*?)\);",
+                    following,
+                    re.DOTALL,
+                ):
+                    for literal in _RUST_STRING.findall(args.group("args")):
+                        tokens.append(ast.literal_eval(f'"{literal}"'))
+        if len(tokens) == 1:
+            # Nothing statically extractable (argv built dynamically). Skip
+            # rather than fail: this guard is a lower bound by design — a
+            # false negative is far cheaper than a false positive (see the
+            # module docstring's extraction philosophy).
+            continue
         invocations.append(Invocation(path, source.count("\n", 0, match.start()) + 1, tokens))
     return invocations
+
+
+def test_rust_invocations_extract_split_command_args(tmp_path: Path):
+    source = tmp_path / "split_command.rs"
+    source.write_text(
+        'let mut process = Command::new("empirica");\n'
+        'process.args(["project-init", "--non-interactive", "--output", "json"]);\n'
+        "process;\n",
+        encoding="utf-8",
+    )
+
+    assert _rust_invocations(source) == [
+        Invocation(
+            source=source,
+            line=1,
+            tokens=["empirica", "project-init", "--non-interactive", "--output", "json"],
+        )
+    ]
 
 
 def _all_invocations() -> list[Invocation]:

@@ -11,6 +11,10 @@ description: >
 pinned: true
 ---
 
+<!-- ECODEX VENDOR ADAPTATION: ecodex is self-provisioning, so recovery uses
+the ecodex diagnostic/installer path rather than another harness's setup
+writer. Re-apply this adaptation if the snapshot is refreshed. -->
+
 # Empirica Constitution
 
 ## Purpose
@@ -186,7 +190,7 @@ Uncertainty about approach
 
 Something is broken
 ├── Sentinel blocking incorrectly → Check: is it really incorrect? Don't assume
-├── Hook not firing → re-run harness setup (Claude Code: `empirica setup-claude-code --force`)
+├── Hook not firing → run `empirica diagnose --frontend ecodex`; repair via ecodex's installer/bootstrap
 ├── Session state lost → empirica project-bootstrap
 ├── Qdrant search empty → empirica project-embed
 └── Cross-project search missing → empirica project-search --global

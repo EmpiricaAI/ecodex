@@ -3,7 +3,8 @@ name: onboard
 description: >
   ecodex first-run onboarding + diagnostics orchestrator. Composes
   `empirica diagnose --frontend ecodex` (the deterministic integration
-  checks) with `empirica onboard --ai-id` and `empirica setup-claude-code`,
+  checks) with `empirica onboard --ai-id` and ecodex's self-provisioning
+  installer/bootstrap,
   then fills the gaps diagnose doesn't cover: local model-server probe,
   model-metadata-fallback check (the 32K-context-loss bug class fixed in
   0efb8c7), model smoke-test, plain-vs-ecosystem mode selection,
@@ -15,6 +16,11 @@ description: >
   the `diagnose` skill — that checks integration health; this is the
   full bring-up-to-working flow.
 ---
+
+<!-- ECODEX VENDOR ADAPTATION: Empirica's generic setup command deliberately
+refuses ecodex because ecodex self-provisions its plugin and hooks. Keep the
+onboarding path below on ecodex's installer/bootstrap plus the shared
+credentials file; re-apply this adaptation if the snapshot is refreshed. -->
 
 # Onboard ecodex
 
@@ -215,20 +221,17 @@ translator bridges chat↔Responses for the providers that can't speak it.
 
 ### Step 5 — ecosystem wiring (ecosystem mode only)
 
-```bash
-# Ecosystem (full mesh):
-empirica setup-claude-code
-#   → plugin + CLAUDE.md + hooks + MCP server + credentials + listener service
+ecodex already self-provisions its plugin, hooks, MCP surface, and native
+listener through its own installer/bootstrap. Do not run Empirica's generic
+harness setup command: the current CLI deliberately refuses ecodex rather than
+writing another harness's files.
 
-# Plain mode equivalent (skip the mesh pieces):
-empirica setup-claude-code --skip-mcp --skip-credentials --skip-listener-service
-```
-
-`setup-claude-code`'s `--skip-*` flags ARE the plain-vs-ecosystem
-mechanism. Ecosystem: run full (cortex MCP + listener +
-`credentials.yaml` cortex key). Verify cortex reachability with
-`empirica doctor` (the frontend-agnostic health check — checks Cortex
-reachability among others).
+Plain mode needs no mesh configuration. For ecosystem mode, provision the
+shared, harness-neutral `~/.empirica/credentials.yaml` through the existing
+ecodex bootstrap or with Cortex-issued credentials supplied by the user. Never
+invent or print credential values. Then verify the resulting Cortex and ntfy
+configuration with `empirica doctor` and re-run
+`empirica diagnose --frontend ecodex`.
 
 ### Step 6 — verify end-to-end
 
@@ -259,7 +262,7 @@ practices set up per project. ecodex is ready to run.
 - **`diagnose` skill** — the integration-health reasoning glue this composes (Step 1).
 - **`empirica diagnose --frontend ecodex`** — the deterministic checker (~12 checks).
 - **`empirica onboard --ai-id`** — practice identity derivation (Step 2/3e).
-- **`empirica setup-claude-code`** — ecosystem (cortex) wiring + plain-mode skip flags (Step 5).
+- **ecodex installer/bootstrap** — self-provisions plugin/hooks and consumes shared mesh credentials (Step 5).
 - **`empirica doctor`** — frontend-agnostic health check (cortex reachability).
 - **`ecodex/scripts/install.sh`** — the binary+plugin installer (prerequisite).
 - **commit `0efb8c7`** — the model-metadata-fallback / glm-5.2 1M fix (Step 3b cross-ref).

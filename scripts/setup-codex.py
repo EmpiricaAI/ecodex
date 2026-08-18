@@ -182,6 +182,7 @@ def main() -> int:
         return 2
 
     drifted: list[Path] = []
+    deployable: list[Path] = []
     new_upstream: list[str] = []
     all_flags: dict[str, list[tuple[int, str]]] = {}
 
@@ -203,6 +204,7 @@ def main() -> int:
             if blob is None:
                 continue
             target = eco_dir / name
+            deployable.append(target)
             cur = target.read_bytes()
             if cur != blob:
                 drifted.append(target)
@@ -287,22 +289,27 @@ def main() -> int:
             return 1
 
     # ── deploy ──
-    if args.apply and args.deploy and drifted:
+    if args.apply and args.deploy:
         cache = Path.home() / ".codex" / "plugins" / "cache" / "nubaeon" / "empirica"
         vers = sorted([d for d in cache.glob("*/") if d.is_dir()]) if cache.exists() else []
         if vers:
             cdir = vers[-1] / "hooks_scripts"
             print(f"\nDEPLOY → {cdir}:")
-            for p in drifted:
+            deployed = 0
+            for p in deployable:
                 # map assets/hooks_scripts/<sub>/<f> → cache/hooks_scripts/<sub>/<f>
                 try:
                     sub = p.relative_to(ASSETS / "hooks_scripts")
                     dest = cdir / sub
-                    if dest.parent.exists():
+                    cache_differs = not dest.exists() or dest.read_bytes() != p.read_bytes()
+                    if dest.parent.exists() and cache_differs:
                         dest.write_bytes(p.read_bytes())
                         print(f"  deployed {sub}")
+                        deployed += 1
                 except ValueError:
                     pass  # agents/ not under hooks_scripts → skip cache deploy
+            if not deployed:
+                print("  (already in sync)")
         else:
             print("\nDEPLOY: no runtime cache found, skipped")
 
