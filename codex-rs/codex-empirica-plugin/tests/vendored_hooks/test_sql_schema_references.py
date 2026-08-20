@@ -251,14 +251,11 @@ def _missing_symbol(message: str) -> str:
 #
 # Entries here are real, separately-tracked bugs — fix-tracking goal is logged
 # in empirica. They are listed in the open, CI-guarded against regrowth.
-_KNOWN_VIOLATIONS: frozenset[tuple[str, str]] = frozenset(
-    {
-        # Upstream Empirica removed this table in favor of reflexes, but its
-        # vendored tool-router still queries it. Kept visible here until fixed
-        # upstream and re-vendored; unknown tables are no longer skipped.
-        ("hooks/tool-router.py", "epistemic_assessments"),
-    }
-)
+_KNOWN_VIOLATIONS: frozenset[tuple[str, str]] = frozenset()
+# (Empty since the 2026-08-21 re-vendor: upstream fixed tool-router's
+# epistemic_assessments read — repointed to epistemic_snapshots, f3415b1e9 —
+# within a day of this guard surfacing it, and the ratchet correctly refused
+# to carry the stale exemption once the fix arrived.)
 
 
 # --------------------------------------------------------------------------- #
