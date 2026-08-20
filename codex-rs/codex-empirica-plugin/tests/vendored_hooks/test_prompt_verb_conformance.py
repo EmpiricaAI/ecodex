@@ -11,8 +11,8 @@ This guard closes that gap (the ecodex analogue of empirica's #291
 prompt-parser conformance test): every ``empirica <verb>`` token referenced in
 the prompt MUST resolve to a real empirica CLI subcommand.
 
-Skips cleanly when the ``empirica`` CLI isn't on PATH (e.g. a minimal CI image),
-so it never produces a false red — it only fails on a genuine phantom verb.
+The ``empirica`` CLI is this guard's instrument. If it is absent, the guard
+fails because no command was measured.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def test_prompt_file_exists():
 
 def test_every_referenced_verb_is_a_real_empirica_command():
     if not _empirica_available():
-        pytest.skip("empirica CLI not on PATH — cannot validate verbs")
+        pytest.fail("empirica CLI not on PATH — prompt verbs were not measured")
 
     verbs = _referenced_verbs()
     assert verbs, "no `empirica <verb>` references found — regex or prompt changed?"

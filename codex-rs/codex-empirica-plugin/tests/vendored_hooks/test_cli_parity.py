@@ -6,9 +6,9 @@ extracted from source. Every discovered command path and option is then checked
 against ``create_argument_parser()`` from the installed Empirica package.
 
 This catches a renamed or removed command/flag before a broad best-effort hook
-handler turns argparse rejection into a silent capability loss. The test skips
-when Empirica core is unavailable, matching the other real-schema/parser guards
-in this suite.
+handler turns argparse rejection into a silent capability loss. Empirica core
+is the instrument for this test; inability to import it is a failed guard, not
+a passing exemption.
 """
 
 import argparse
@@ -230,8 +230,8 @@ def _flags(tokens: list[str]) -> set[str]:
 def test_every_empirica_subprocess_invocation_matches_real_cli():
     try:
         from empirica.cli.cli_core import create_argument_parser
-    except (ImportError, ModuleNotFoundError):
-        pytest.skip("empirica core unavailable — cannot introspect the real CLI parser")
+    except (ImportError, ModuleNotFoundError) as exc:
+        pytest.fail(f"empirica core unavailable — CLI parity was not measured: {exc}")
 
     invocations = _all_invocations()
     assert invocations, "no ecodex empirica subprocess invocations discovered"

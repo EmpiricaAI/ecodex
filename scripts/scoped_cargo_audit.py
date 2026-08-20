@@ -10,12 +10,9 @@ quinn-proto 0.11.14, found 2026-08-04 -- 0 reverse-dependents anywhere in
 the resolved workspace graph, only present in Cargo.lock. See finding
 805bac8d in the ecodex project.)
 
-For each cargo-audit advisory, this asks the same question a human would:
-"does anything actually depend on this?" via `cargo tree -i <pkg> --target
-all` (the tool verified against ground truth during the 0.146.0 release --
-a hand-rolled `cargo metadata` graph walk gives FALSE POSITIVES here
-because it doesn't account for platform/feature-gated edges that `cargo
-tree`'s own resolution correctly prunes).
+For each cargo-audit advisory, this asks whether one of the three release roots
+depends on it through normal/build edges. A workspace-wide inverse tree is not
+authoritative: it includes dev dependencies and crates ecodex does not ship.
 
 Exit code: 1 if any advisory has a real reverse-dependent (SHIPPED), 0
 otherwise (including when only phantom/orphan-lockfile advisories exist).
@@ -26,6 +23,12 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+
+SHIPPED_ROOTS = (
+    "codex-cli",
+    "codex-empirica-plugin",
+    "codex-empirica-translator",
+)
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -47,16 +50,31 @@ def cargo_audit_json() -> dict:
 
 
 def has_reverse_dependents(name: str, version: str) -> bool:
-    """True if anything in the workspace's resolved graph actually depends
-    on this exact (name, version) -- across all platform targets."""
-    result = run(["cargo", "tree", "-i", f"{name}@{version}", "--target", "all"])
-    if result.returncode != 0:
-        # Package not in the lockfile at all (shouldn't happen -- audit
-        # read the same lockfile) or a cargo error. Treat conservatively
-        # as shipped so we don't silently swallow a real advisory.
-        sys.stderr.write(f"warning: `cargo tree -i {name}@{version}` failed, treating as shipped:\n{result.stderr}\n")
-        return True
-    return "nothing to print" not in result.stdout and "nothing to print" not in result.stderr
+    """True if a shipped release root depends on this exact package."""
+    package = f"{name}@{version}"
+    for root in SHIPPED_ROOTS:
+        command = [
+            "cargo",
+            "tree",
+            "-p",
+            root,
+            "--edges",
+            "normal,build",
+            "-i",
+            package,
+            "--target",
+            "all",
+        ]
+        result = run(command)
+        if result.returncode != 0:
+            sys.stderr.write(
+                f"warning: `{' '.join(command)}` failed, treating as shipped:\n{result.stderr}\n"
+            )
+            return True
+        output = result.stdout + result.stderr
+        if "nothing to print" not in output:
+            return True
+    return False
 
 
 def main() -> int:
@@ -72,17 +90,29 @@ def main() -> int:
         pkg = v["package"]
         (shipped if has_reverse_dependents(pkg["name"], pkg["version"]) else phantom).append(v)
 
-    print(f"cargo-audit: {len(vulns)} advisory(ies) on Cargo.lock ({len(shipped)} shipped, {len(phantom)} phantom/lockfile-only)")
+    print(
+        f"cargo-audit: {len(vulns)} advisory(ies) on Cargo.lock "
+        f"({len(shipped)} shipped, {len(phantom)} phantom/lockfile-only)"
+    )
 
     if phantom:
-        print(f"\nPHANTOM ({len(phantom)}) -- zero reverse-dependents in the resolved workspace graph, does not fail this gate:")
+        print(
+            f"\nPHANTOM ({len(phantom)}) -- no release-root normal/build "
+            "reverse-dependents; does not fail this gate:"
+        )
         for v in phantom:
-            print(f"  - {v['advisory']['id']}  {v['package']['name']} {v['package']['version']}  ({v['advisory']['title']})")
+            print(
+                f"  - {v['advisory']['id']}  {v['package']['name']} "
+                f"{v['package']['version']}  ({v['advisory']['title']})"
+            )
 
     if shipped:
         print(f"\nSHIPPED ({len(shipped)}) -- has real reverse-dependents, FAILS this gate:")
         for v in shipped:
-            print(f"  - {v['advisory']['id']}  {v['package']['name']} {v['package']['version']}  ({v['advisory']['title']})")
+            print(
+                f"  - {v['advisory']['id']}  {v['package']['name']} "
+                f"{v['package']['version']}  ({v['advisory']['title']})"
+            )
             print(f"    {v['advisory']['url']}")
         return 1
 

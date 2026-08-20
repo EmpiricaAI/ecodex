@@ -127,6 +127,18 @@ log()   { printf '→ %s\n' "$1" >&2; }
 warn()  { printf '⚠ %s\n' "$1" >&2; }
 error() { printf '✗ %s\n' "$1" >&2; exit 1; }
 
+version_output_has_exact_token() {
+  local output="$1"
+  local expected="$2"
+  local token
+  for token in $output; do
+    if [[ "$token" == "$expected" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 run_or_dry() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '  [dry-run] %s\n' "$*" >&2
@@ -593,28 +605,25 @@ fi
 # --publish-homebrew has) — this checks the REAL uploaded tarballs, not
 # a local build.
 if [[ "$VERIFY_INSTALL" -eq 1 ]]; then
-  if [[ "$CREATE_GH_RELEASE" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
-    warn "--verify-install needs --create-gh-release (or an existing release) — skipping"
+  log "Smoke-testing scripts/install.sh against v${new_version}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    # shellcheck disable=SC2016  # backticks are documentation, not substitution
+    printf '  [dry-run] install to a scratch prefix, ECODEX_VERSION=v%s, check `ecodex --version` reports %s\n' \
+      "$new_version" "$new_version" >&2
   else
-    log "Smoke-testing scripts/install.sh against v${new_version}"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-      printf '  [dry-run] install to a scratch prefix, ECODEX_VERSION=v%s, check `ecodex --version` reports %s\n' \
-        "$new_version" "$new_version" >&2
-    else
-      verify_dir="$(mktemp -d)"
-      trap 'rm -rf "$verify_dir"' EXIT INT TERM
-      if ! ECODEX_VERSION="v${new_version}" "${SCRIPT_DIR}/install.sh" --prefix "$verify_dir" >"${verify_dir}/install.log" 2>&1; then
-        cat "${verify_dir}/install.log" >&2
-        error "install.sh failed against v${new_version} — see log above. Real users hit this too."
-      fi
-      installed_version="$("${verify_dir}/ecodex" --version 2>&1 || true)"
-      if [[ "$installed_version" != *"${new_version}"* ]]; then
-        error "installed binary reports '${installed_version}', expected to contain '${new_version}'"
-      fi
-      log "install.sh verified: ${installed_version}"
-      rm -rf "$verify_dir"
-      trap - EXIT INT TERM
+    verify_dir="$(mktemp -d)"
+    trap 'rm -rf "$verify_dir"' EXIT INT TERM
+    if ! ECODEX_VERSION="v${new_version}" "${SCRIPT_DIR}/install.sh" --prefix "$verify_dir" >"${verify_dir}/install.log" 2>&1; then
+      cat "${verify_dir}/install.log" >&2
+      error "install.sh failed against v${new_version} — see log above. Real users hit this too."
     fi
+    installed_version="$("${verify_dir}/ecodex" --version 2>&1 || true)"
+    if ! version_output_has_exact_token "$installed_version" "$new_version"; then
+      error "installed binary reports '${installed_version}', expected exact version token '${new_version}'"
+    fi
+    log "install.sh verified: ${installed_version}"
+    rm -rf "$verify_dir"
+    trap - EXIT INT TERM
   fi
 fi
 

@@ -52,11 +52,23 @@ jobs:
   vendored-firewall-invariants:
     name: vendored firewall drift-guard
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
+
+      # The CLI-parity and SQL-schema guards use Empirica's production parser
+      # and schema as their instruments. Pin the exact source revision the
+      # vendored hook snapshot matches; an absent instrument must fail, not
+      # turn those guards into passing skips.
+      - name: Checkout matching Empirica core
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: EmpiricaAI/empirica
+          ref: f0e083c87523f8165c2623b568421ef079462d02
+          path: empirica-core
           persist-credentials: false
 
       # setup-codex.py re-vendors empirica's (genericized) hooks, so a content
@@ -71,8 +83,9 @@ jobs:
       - name: Run hermetic vendored-hook tests
         run: |
           python3 -m venv "$RUNNER_TEMP/vendored-hooks-venv"
-          "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pip install --disable-pip-version-check pytest==8.3.5
+          "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pip install \
+            --disable-pip-version-check pytest==8.3.5 "$GITHUB_WORKSPACE/empirica-core"
           "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -c \
-            'import importlib.util; assert importlib.util.find_spec("empirica") is None'
+            'from empirica.cli.cli_core import create_argument_parser; assert create_argument_parser()'
           "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
             codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -v

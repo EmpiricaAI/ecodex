@@ -33,12 +33,10 @@ Import *time* is flaky on shared CI; the *cause* we forbid (a heavy module in
 `sys.modules`) is deterministic. The budget is "which heavy modules loaded",
 measured in a fresh subprocess.
 
-SKIP, DON'T FAIL, WHEN EMPIRICA CORE IS ABSENT
-----------------------------------------------
-The hooks insert `~/empirical-ai/empirica` on sys.path and import empirica core
-at module load. Without that checkout the load errors for reasons unrelated to
-the budget, so the affected entry point is skipped (consistent with
-test-vendored-hooks.sh's skip-if-unavailable philosophy + the hermetic-CI goal).
+LOAD FAILURES ARE FAILURES
+--------------------------
+A missing hook or import dependency makes the instrument dead. It must fail
+the guard rather than manufacture a pass through ``pytest.skip``.
 """
 
 from __future__ import annotations
@@ -91,8 +89,7 @@ def _modules_after_loading_script(script_path: Path) -> tuple[set[str], str | No
     """`sys.modules` keys after loading ``script_path`` by path in a fresh interp.
 
     Returns (loaded_modules, error). On import/load failure error is a string and
-    loaded_modules is empty — the caller turns that into a pytest.skip (the hook
-    needs empirica core, absent in hermetic envs).
+    loaded_modules is empty; the caller fails the guard.
     """
     code = (
         "import sys, json, importlib.util\n"
@@ -133,20 +130,20 @@ def _heavy_loaded(forbidden: frozenset[str], loaded: set[str]) -> list[str]:
     )
 
 
+def _load_or_fail(script: Path) -> set[str]:
+    loaded, error = _modules_after_loading_script(script)
+    if error is not None:
+        pytest.fail(f"{script.name} failed to load at module level:\n{error}")
+    return loaded
+
+
 @pytest.mark.parametrize("hook_name", sorted(_BUDGET))
 def test_hot_path_hook_stays_within_import_budget(hook_name):
     script = HOOKS / hook_name
     if not script.exists():
-        pytest.skip(f"{hook_name} not vendored (no longer a hot-path hook?)")
+        pytest.fail(f"{hook_name} is budgeted but not vendored")
 
-    loaded, error = _modules_after_loading_script(script)
-    if error is not None:
-        if "empirica" in error.lower() or "ModuleNotFoundError" in error:
-            pytest.skip(
-                f"{hook_name} could not load (empirica core likely absent): "
-                f"{error.splitlines()[-1] if error else ''}"
-            )
-        pytest.fail(f"{hook_name} failed to load at module level:\n{error}")
+    loaded = _load_or_fail(script)
 
     allowed = _BUDGET[hook_name]
     forbidden = _HEAVY - allowed
@@ -159,6 +156,14 @@ def test_hot_path_hook_stays_within_import_budget(hook_name):
         f"_BUDGET['{hook_name}'] with a comment explaining why (widens the budget "
         f"on purpose, in the diff)."
     )
+
+
+def test_broken_import_is_a_failure_not_a_skip(tmp_path: Path):
+    script = tmp_path / "broken-hook.py"
+    script.write_text("import verdict_audit_missing_dependency\n", encoding="utf-8")
+
+    with pytest.raises(pytest.fail.Exception, match="failed to load at module level"):
+        _load_or_fail(script)
 
 
 def test_budget_entry_points_are_vendored():

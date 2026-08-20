@@ -148,12 +148,15 @@ def declaude_flags(path: Path, text: str) -> list[tuple[int, str]]:
 
 
 # ── git source access ───────────────────────────────────────────────
-def git_show(emp: Path, ref: str, relpath: str) -> bytes | None:
+def git_show(emp: Path, ref: str, relpath: str) -> bytes:
     r = subprocess.run(
         ["git", "-C", str(emp), "show", f"{ref}:{relpath}"],
         capture_output=True,
     )
-    return r.stdout if r.returncode == 0 else None
+    if r.returncode != 0:
+        detail = r.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"git show failed for {ref}:{relpath}: {detail}")
+    return r.stdout
 
 
 def git_ls(emp: Path, ref: str, reldir: str) -> list[str]:
@@ -162,7 +165,8 @@ def git_ls(emp: Path, ref: str, reldir: str) -> list[str]:
         capture_output=True, text=True,
     )
     if r.returncode != 0:
-        return []
+        detail = r.stderr.strip()
+        raise RuntimeError(f"git ls-tree failed for {ref}:{reldir}: {detail}")
     return [Path(p).name for p in r.stdout.split("\n") if p.strip() and not p.endswith("/")]
 
 
@@ -181,6 +185,12 @@ def main() -> int:
         print(f"✗ empirica repo not found at {emp}", file=sys.stderr)
         return 2
 
+    missing_targets = [path for path in DIR_MAP if not path.is_dir()]
+    if missing_targets:
+        for path in missing_targets:
+            print(f"✗ vendored target directory missing: {path}", file=sys.stderr)
+        return 2
+
     drifted: list[Path] = []
     deployable: list[Path] = []
     new_upstream: list[str] = []
@@ -188,11 +198,18 @@ def main() -> int:
 
     print(f"setup-codex: importing from {emp.name}@{args.ref}  ({'APPLY' if args.apply else 'dry-run'})\n")
 
+    try:
+        upstream_files = {
+            eco_dir: set(git_ls(emp, args.ref, emp_reldir))
+            for eco_dir, emp_reldir in DIR_MAP.items()
+        }
+    except RuntimeError as exc:
+        print(f"✗ cannot inspect empirica source: {exc}", file=sys.stderr)
+        return 2
+
     for eco_dir, emp_reldir in DIR_MAP.items():
-        if not eco_dir.exists():
-            continue
         eco_files = {p.name for p in eco_dir.iterdir() if p.is_file()}
-        emp_files = set(git_ls(emp, args.ref, emp_reldir))
+        emp_files = upstream_files[eco_dir]
 
         # files ecodex vendors → sync if drifted
         for name in sorted(eco_files):
@@ -200,9 +217,11 @@ def main() -> int:
                 continue  # deliberately retired — never re-vendor
             if name not in emp_files:
                 continue  # ecodex-only (e.g. native agents) — leave untouched
-            blob = git_show(emp, args.ref, f"{emp_reldir}/{name}")
-            if blob is None:
-                continue
+            try:
+                blob = git_show(emp, args.ref, f"{emp_reldir}/{name}")
+            except RuntimeError as exc:
+                print(f"✗ cannot read empirica source: {exc}", file=sys.stderr)
+                return 2
             target = eco_dir / name
             deployable.append(target)
             cur = target.read_bytes()

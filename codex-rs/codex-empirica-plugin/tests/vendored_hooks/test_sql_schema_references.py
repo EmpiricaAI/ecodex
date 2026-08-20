@@ -36,20 +36,14 @@ WHAT THIS TEST DOES
 2. AST-walks every ``.py`` under ``assets/hooks_scripts/`` and extracts every
    *static* SQL string passed to ``.execute()`` / ``.executemany()`` /
    ``.executescript()``. Dynamic queries (f-strings, ``.format()``, ``%``,
-   concatenation, name refs) are SKIPPED on purpose — they interpolate
-   identifiers from internal allow-lists (known-correct, unresolvable
-   statically).
+   concatenation and name refs) remain outside static validation and are
+   reported as a limitation of this guard.
 3. Validates each static DML query against the real schema using SQLite's own
    parser via ``EXPLAIN`` (no third-party SQL parser).
 4. Asserts no query references a missing column or table.
 
-SKIP, DON'T FAIL, WHEN EMPIRICA CORE IS ABSENT
-----------------------------------------------
-Unlike empirica's in-repo guard, this test runs in ecodex where empirica core
-is a dev-checkout dependency on ``sys.path`` (set by conftest.py). If it can't
-be imported (e.g. hermetic CI without the checkout) the test ``pytest.skip``s
-rather than failing — consistent with scripts/test-vendored-hooks.sh's
-"skip if empirica core unavailable" philosophy and the logged hermetic-CI goal.
+Empirica core is the schema instrument. If it cannot be imported, this guard
+fails rather than returning a green verdict without a schema.
 
 KNOWN LIMITATION — migration drift
 ----------------------------------
@@ -155,14 +149,8 @@ def _const_str(node: ast.AST) -> str | None:
 
 def _iter_static_queries(py_file: Path) -> list[tuple[int, str]]:
     """Yield ``(lineno, sql)`` for each static SQL exec call in ``py_file``."""
-    try:
-        source = py_file.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
-        return []
-    try:
-        tree = ast.parse(source, filename=str(py_file))
-    except SyntaxError:
-        return []
+    source = py_file.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(py_file))
 
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
@@ -223,14 +211,22 @@ def _primary_tables(sql: str) -> set[str]:
     return tables
 
 
+def _created_tables(sql: str) -> set[str]:
+    """Extract tables created by static DDL in the vendored hook layer."""
+    import re
+
+    pattern = re.compile(
+        r"\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?"
+        r"([A-Za-z_][A-Za-z0-9_]*)",
+        re.IGNORECASE,
+    )
+    return {match.group(1).lower() for match in pattern.finditer(sql)}
+
+
 def _looks_like_missing_ref(message: str) -> bool:
     """True if the error names a missing column/table — the bug class."""
     msg = message.lower()
-    return (
-        "no such column" in msg
-        or "no such table" in msg
-        or "has no column named" in msg
-    )
+    return "no such column" in msg or "no such table" in msg or "has no column named" in msg
 
 
 def _missing_symbol(message: str) -> str:
@@ -255,7 +251,14 @@ def _missing_symbol(message: str) -> str:
 #
 # Entries here are real, separately-tracked bugs — fix-tracking goal is logged
 # in empirica. They are listed in the open, CI-guarded against regrowth.
-_KNOWN_VIOLATIONS: frozenset[tuple[str, str]] = frozenset()
+_KNOWN_VIOLATIONS: frozenset[tuple[str, str]] = frozenset(
+    {
+        # Upstream Empirica removed this table in favor of reflexes, but its
+        # vendored tool-router still queries it. Kept visible here until fixed
+        # upstream and re-vendored; unknown tables are no longer skipped.
+        ("hooks/tool-router.py", "epistemic_assessments"),
+    }
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -279,8 +282,12 @@ def _classify_query(
         return ("non_dml", None)
 
     tables = _primary_tables(sql)
-    if tables and not (tables & known_tables):
-        return ("unknown_table", None)
+    missing_tables = tables - known_tables
+    if missing_tables:
+        missing = sorted(missing_tables)[0]
+        message = f"no such table: {missing}"
+        key = (relpath, missing)
+        return ("known" if key in _KNOWN_VIOLATIONS else "new", message)
 
     n_params = sql.count("?")
     try:
@@ -332,18 +339,20 @@ def test_static_sql_references_exist_in_schema():
     try:
         conn = _build_schema_connection()
     except ImportError as exc:
-        pytest.skip(
-            f"empirica core not importable ({exc}); SQL schema-ref guard needs "
-            "the empirica dev checkout on sys.path (see conftest.py / "
-            "test-vendored-hooks.sh)."
+        pytest.fail(
+            f"empirica core not importable ({exc}); SQL schema references were not measured"
         )
 
     schema = _introspect_columns(conn)
     known_tables = set(schema.keys())
     all_queries = _collect_all_static_queries()
+    for _path, _line, sql in all_queries:
+        if _created_tables(sql):
+            conn.execute(sql)
+    known_tables = set(_introspect_columns(conn))
 
     counts = {"validated": 0, "non_dml": 0, "unknown_table": 0}
-    new_violations: list[tuple[str, str, str]] = []    # (loc, sql, error) — fail
+    new_violations: list[tuple[str, str, str]] = []  # (loc, sql, error) — fail
     known_violations: list[tuple[str, str, str]] = []  # allow-listed, tracked
     ambiguous: list[tuple[str, str, str]] = []  # other OperationalErrors
     buckets = {"new": new_violations, "known": known_violations, "ambiguous": ambiguous}
@@ -360,19 +369,28 @@ def test_static_sql_references_exist_in_schema():
 
     conn.close()
 
-    print(_build_audit_report(
-        len(known_tables), len(all_queries), counts,
-        ambiguous, known_violations, new_violations,
-    ))
+    print(
+        _build_audit_report(
+            len(known_tables),
+            len(all_queries),
+            counts,
+            ambiguous,
+            known_violations,
+            new_violations,
+        )
+    )
+
+    assert len(known_violations) == len(_KNOWN_VIOLATIONS), (
+        "the known SQL violation ratchet is stale or did not observe every "
+        f"entry: expected {_KNOWN_VIOLATIONS}, observed {known_violations}"
+    )
 
     assert not new_violations, (
         f"{len(new_violations)} NEW static SQL quer"
         f"{'y' if len(new_violations) == 1 else 'ies'} in the vendored hooks "
         f"reference a column/table that does not exist in empirica's schema "
         f"(the bug class this guard catches):\n"
-        + "\n".join(
-            f"  {loc} — {err} — {sql.strip()[:120]}" for loc, sql, err in new_violations
-        )
+        + "\n".join(f"  {loc} — {err} — {sql.strip()[:120]}" for loc, sql, err in new_violations)
         + "\n\nFix the query (use the real column), re-vendor the hook from a "
         "matching empirica ref, OR — only if it's genuinely a pre-existing "
         "tracked case — add (relpath, symbol) to _KNOWN_VIOLATIONS with "

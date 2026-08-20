@@ -15,10 +15,11 @@ scripts/test-vendored-hooks.sh
 python3 -m pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -v
 ```
 
-Requires `pytest`. When empirica core is installed, the tests use it normally.
-Otherwise `conftest.py` supplies a lazy `sys.meta_path` stub for the
-`empirica.*` hierarchy and a controllable `InstanceResolver`, so the ai_id
-regression tests still execute instead of silently skipping.
+Requires `pytest` and the matching Empirica core revision. `conftest.py`
+supplies a narrow `InstanceResolver` stub so tests that do not need the real
+core remain hermetic, but parser/schema guards fail if their production
+instrument is unavailable. CI checks out and installs the pinned matching
+Empirica revision before running this suite.
 
 ## Coverage
 
@@ -35,8 +36,9 @@ regression tests still execute instead of silently skipping.
   production schema builders) via SQLite's own `EXPLAIN` parser. Fails on any
   query referencing a missing column/table — the silent-no-op bug class that the
   `created_timestamp`/`epistemic_importance` drift (fixed in `60a8c5b35e`) fell
-  into. Dynamic queries are skipped on purpose; a ratchet `_KNOWN_VIOLATIONS`
-  allow-list tracks any pre-existing cases (currently empty — clean baseline).
+  into. Hook-created static tables are installed into the test schema before
+  validation, and the one upstream-removed table reference remains an explicit
+  known violation until it is fixed upstream and re-vendored.
 - `test_import_budget.py` — adapted port of empirica's import-budget gate
   (empirica `d1f5dc736`). The Rust layer spawns a vendored hook as a fresh
   subprocess on every hot event (sentinel-gate on every Bash/Edit/Write,

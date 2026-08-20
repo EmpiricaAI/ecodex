@@ -77,20 +77,18 @@ trap 'rm -rf "$TMP"' EXIT
 info "downloading ${ARCHIVE}…"
 curl -fSL --proto '=https' --tlsv1.2 -o "${TMP}/${ARCHIVE}" "${BASE}/${ARCHIVE}" \
   || err "download failed — no prebuilt binary for ${TARGET} at ${VERSION}? See ${BASE}"
-if curl -fsSL -o "${TMP}/${ARCHIVE}.sha256" "${BASE}/${ARCHIVE}.sha256" 2>/dev/null; then
-  info "verifying checksum…"
-  ( cd "$TMP"
-    expected="$(awk '{print $1}' "${ARCHIVE}.sha256")"
-    if command -v sha256sum >/dev/null 2>&1; then
-      actual="$(sha256sum "${ARCHIVE}" | awk '{print $1}')"
-    else
-      actual="$(shasum -a 256 "${ARCHIVE}" | awk '{print $1}')"
-    fi
-    [ "$expected" = "$actual" ] || err "checksum mismatch — refusing to install (expected $expected, got $actual)"
-  )
-else
-  info "WARNING: no .sha256 published for this artifact; skipping checksum verification"
-fi
+curl -fsSL -o "${TMP}/${ARCHIVE}.sha256" "${BASE}/${ARCHIVE}.sha256" \
+  || err "checksum download failed — refusing to install an unverified artifact"
+info "verifying checksum…"
+( cd "$TMP"
+  expected="$(awk '{print $1}' "${ARCHIVE}.sha256")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "${ARCHIVE}" | awk '{print $1}')"
+  else
+    actual="$(shasum -a 256 "${ARCHIVE}" | awk '{print $1}')"
+  fi
+  [ "$expected" = "$actual" ] || err "checksum mismatch — refusing to install (expected $expected, got $actual)"
+)
 
 # --- extract + install ------------------------------------------------------
 tar -xzf "${TMP}/${ARCHIVE}" -C "$TMP"

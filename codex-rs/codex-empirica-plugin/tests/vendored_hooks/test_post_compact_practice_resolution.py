@@ -15,6 +15,7 @@ vouch):
   - nothing resolves → graceful exit 0 (a boundary hook with no practice is a
     no-op), NOT exit 1.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -22,11 +23,11 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 # The hook's module-level `from project_resolver import ...` (not try/excepted)
-# must resolve; conftest puts assets/hooks_scripts/lib on sys.path.
-pytest.importorskip("project_resolver")
+# must resolve; conftest puts assets/hooks_scripts/lib on sys.path. Import
+# failure is a real guard failure, not a skip.
+import project_resolver  # noqa: F401
+import pytest
 
 _HOOKS = Path(__file__).resolve().parents[2] / "assets" / "hooks_scripts" / "hooks"
 
