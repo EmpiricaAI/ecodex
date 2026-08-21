@@ -49,6 +49,14 @@ jobs:
       - name: Build + test owned crates
         run: cargo test -p codex-empirica-plugin -p codex-empirica-translator
 
+      - name: Check Hugging Face integration contract
+        working-directory: .
+        run: |
+          python3 scripts/check_huggingface_integration.py
+          python3 scripts/test_huggingface_integration.py
+          cd codex-rs
+          cargo test -p codex-skills-extension hugging_face_cli_skill_in_global_agents_root_is_discovered
+
   vendored-firewall-invariants:
     name: vendored firewall drift-guard
     runs-on: ubuntu-latest

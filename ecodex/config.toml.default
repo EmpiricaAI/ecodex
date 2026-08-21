@@ -34,10 +34,11 @@ enabled = true
 # instructions for each.
 #
 # ⚠ WIRE-API STATUS: codex upstream removed `wire_api = "chat"` support
-# (commit d2394a2494, "chore: nuke chat/completions API"). All curated
-# providers below speak chat-completions, NOT Responses API natively, so
-# requests sent directly to their base_url will fail at runtime with an
-# unknown-endpoint error.
+# (commit d2394a2494, "chore: nuke chat/completions API"). Many legacy remote
+# providers below speak chat-completions, NOT Responses API natively, so their
+# requests fail at runtime unless routed through the translator. Providers
+# explicitly documented as native Responses endpoints, including Hugging Face
+# and the local backends, do not need the translator.
 #
 # The fix is `codex-empirica-translator` — SHIPPED in v0.2.5 (published on
 # crates.io). It bridges codex Responses <-> provider chat/anthropic via a
@@ -173,15 +174,21 @@ env_key = "OPENROUTER_API_KEY"
 env_key_instructions = "Get an API key at https://openrouter.ai/keys, then export OPENROUTER_API_KEY in your shell or add to ~/.codex/.env."
 wire_api = "responses"
 
+# Hugging Face Inference Providers' OpenAI-compatible router. The router
+# implements the Responses API directly, so this provider does not need the
+# ecodex translator. Use a fine-grained token with the "Make calls to Inference
+# Providers" permission. The separate huggingface.config.toml overlay selects
+# a representative model for `ecodex exec -p huggingface`.
+[model_providers.huggingface]
+name = "Hugging Face Inference Providers"
+base_url = "https://router.huggingface.co/v1"
+env_key = "HF_TOKEN"
+env_key_instructions = "Create a fine-grained token with Inference Providers permission at https://huggingface.co/settings/tokens, then export HF_TOKEN in your shell."
+wire_api = "responses"
+
 # ─── Frontier direct: OpenAI (GPT-5.x) ───────────────────────────────
 # ecodex leads with open-weights but does NOT lock out frontier models.
-# The GPT-5.x presets in `/model` (gpt-5.6-sol/terra/luna, gpt-5.5, gpt-5.4)
-# route here — selecting one auto-switches model_provider to `openai`. Native
-# Responses API, so no translator needed. Requires an OpenAI API key with
-# access to those models.
-[model_providers.openai]
-name = "OpenAI"
-base_url = "https://api.openai.com/v1"
-env_key = "OPENAI_API_KEY"
-env_key_instructions = "Get an API key at https://platform.openai.com/api-keys, then export OPENAI_API_KEY in your shell or add to ~/.codex/.env."
-wire_api = "responses"
+# `openai` is a reserved built-in provider ID in ecodex 0.147+, so it must not
+# be redefined under `model_providers`. The GPT-5.x presets in `/model`
+# auto-select the built-in provider, which reads OPENAI_API_KEY and speaks the
+# native Responses API without a translator.

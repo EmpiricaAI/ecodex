@@ -285,6 +285,38 @@ fn layer_roots_preserve_scope_precedence_and_disabled_projects() {
 }
 
 #[tokio::test]
+async fn hugging_face_cli_skill_in_global_agents_root_is_discovered() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let home_folder = absolute(temp_dir.path().join("home"));
+    let codex_home = home_folder.join(".codex");
+    let cwd = absolute(temp_dir.path().join("workspace"));
+    fs::create_dir_all(&cwd).expect("create workspace");
+    let skill_path = write_skill(&home_folder.join(".agents/skills"), "hf-cli", "hf-cli");
+
+    let roots = resolve_skill_roots_with_home_dir(
+        /*repository_file_system*/ None,
+        &stack(vec![user_layer(&codex_home)]),
+        &cwd,
+        Some(&home_folder),
+        Vec::new(),
+        Vec::new(),
+    )
+    .await;
+    let outcome = load_skills_from_roots(
+        roots,
+        /*plugin_skill_snapshots*/ None,
+        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+    )
+    .await;
+
+    assert!(outcome.errors.is_empty());
+    assert_eq!(
+        outcome.skills,
+        vec![expected_skill(skill_path, "hf-cli", SkillScope::User)]
+    );
+}
+
+#[tokio::test]
 async fn plugin_roots_preserve_plugin_resolution_metadata() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = absolute(temp_dir.path().join("workspace"));

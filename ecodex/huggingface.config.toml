@@ -1,0 +1,17 @@
+# Hugging Face quick-testing profile.
+#
+# Installed as $CODEX_HOME/huggingface.config.toml so profile-v2 selection works:
+#   ecodex exec -p huggingface "Say hello"
+#
+# Keep the provider block here as well as in config.toml.default. Profile-v2
+# overlays replace the base user-config path, so this file must be standalone
+# for users who already had a config when ecodex was installed.
+model = "openai/gpt-oss-120b:groq"
+model_provider = "huggingface"
+
+[model_providers.huggingface]
+name = "Hugging Face Inference Providers"
+base_url = "https://router.huggingface.co/v1"
+env_key = "HF_TOKEN"
+env_key_instructions = "Create a fine-grained token with Inference Providers permission at https://huggingface.co/settings/tokens, then export HF_TOKEN in your shell."
+wire_api = "responses"

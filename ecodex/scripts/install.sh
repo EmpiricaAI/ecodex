@@ -83,6 +83,7 @@ else
 fi
 
 CODEX_CONFIG="${HOME}/.codex/config.toml"
+HUGGINGFACE_PROFILE="${HOME}/.codex/huggingface.config.toml"
 
 # ─── Build (auto, unless --no-build) ─────────────────────────────────
 # Run cargo build --release for both targets. cargo is a fast no-op
@@ -151,6 +152,16 @@ if [[ -f "$CODEX_CONFIG" ]]; then
 else
   echo "→ Installing default config to $CODEX_CONFIG"
   cp "${ECODEX_ROOT}/config.toml.default" "$CODEX_CONFIG"
+fi
+
+# Profile-v2 uses a separate `$CODEX_HOME/<name>.config.toml` file rather than
+# the legacy `[profiles.<name>]` table. Keep the Hugging Face quick-test profile
+# independently installable and never overwrite user edits.
+if [[ -f "$HUGGINGFACE_PROFILE" ]]; then
+  echo "→ ~/.codex/huggingface.config.toml already exists — leaving it alone"
+else
+  echo "→ Installing Hugging Face profile to $HUGGINGFACE_PROFILE"
+  cp "${ECODEX_ROOT}/huggingface.config.toml" "$HUGGINGFACE_PROFILE"
 fi
 
 # ─── Idempotent feature-flag patch (A — unlocks plugin host) ─────────
