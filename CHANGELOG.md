@@ -8,6 +8,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Upstream sync to rust-v0.149.0** (622 commits from openai/codex,
+  one hop from 0.147.0; 37 conflicted files resolved by code read).
+  Notable upstream changes ecodex users see: native mid-turn steering
+  (`Op::TurnInput` / `RecoverTurn`), consolidated hooks engine, the
+  `psp` flag migrated into the features system.
+- **Steering machinery deduplicated.** Upstream 0.149 ships turn
+  steering natively; ecodex's earlier steering-admission chain
+  (`user_input_or_turn`, `UserMessageAdmission`, `SteerInputError`)
+  was fully superseded and removed. The ecodex mesh-wake spine
+  (Monitor / ntfy doorbell `inject_response_items`) is preserved,
+  remapped onto upstream's new mailbox API.
+- **Pinned-skill BODY auto-injection removed** (David-ratified). The
+  `pinned: true` frontmatter flag survives as FRAMEWORK-skill metadata
+  and the skills catalog prompt now instructs the model to proactively
+  Read framework SKILL.md files (and re-Read after `/compact`);
+  guaranteed-ambient framework content routes through the plugin's
+  AGENTS.md channel instead of per-session injection. Rationale:
+  measured pinned bodies at 40.5% of the empirica frame — the main
+  driver of small-context-model failures.
+- **Vendored empirica hooks re-synced** (sentinel-gate, tool-router):
+  the Sentinel recovery escape now uses the stricter whole-command
+  predicate (`is_safe_empirica_statement`), closing a chained-statement
+  bypass where a safe leading verb could smuggle a second mutating
+  statement past the gate.
+
+### Fixed
+- Preserved ecodex behaviors re-woven onto restructured upstream code
+  paths: T78 provider hot-swap (`model_provider` thread-settings
+  override + ArcSwap ModelClient), silent recording of hook-injected
+  additionalContext (model reads it, screen stays clean — upstream's
+  new envelope path would have rendered it), TUI plugin statusline
+  sources, and MCP server-scope approvals (ported onto upstream's
+  `ReviewDecision` rename).
+- `Cargo.lock` regenerated with security floors re-pinned:
+  quinn-proto 0.11.16, openssl 0.10.81, serde_with 3.21.0.
+
 ## [0.147.2] - 2026-08-18
 
 ### Added
