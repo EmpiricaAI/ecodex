@@ -75,7 +75,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: EmpiricaAI/empirica
-          ref: f0e083c87523f8165c2623b568421ef079462d02
+          ref: c5bf53a4ac7f2b3d5d21208964ea08338f99c107
           path: empirica-core
           persist-credentials: false
 
@@ -95,5 +95,10 @@ jobs:
             --disable-pip-version-check pytest==8.3.5 "$GITHUB_WORKSPACE/empirica-core"
           "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -c \
             'from empirica.cli.cli_core import create_argument_parser; assert create_argument_parser()'
-          "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
+          # The venv's bin must be on PATH: test_prompt_verb_conformance
+          # resolves the `empirica` executable via shutil.which and fails
+          # loudly when absent (round-12 verdict-integrity fix — before that
+          # it silently skipped, so CI never actually measured prompt verbs).
+          PATH="$RUNNER_TEMP/vendored-hooks-venv/bin:$PATH" \
+            "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
             codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -v
