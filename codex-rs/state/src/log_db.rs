@@ -46,21 +46,31 @@ use uuid::Uuid;
 use crate::LogEntry;
 use crate::StateRuntime;
 
-const LOG_QUEUE_CAPACITY: usize = 512;
-const LOG_BATCH_SIZE: usize = 128;
-const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
+const LOG_QUEUE_CAPACITY: usize = 2048;
+const LOG_BATCH_SIZE: usize = 512;
+const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(10);
 
 pub fn default_filter() -> Targets {
     Targets::new()
         .with_default(LevelFilter::TRACE)
         .with_target("hyper_util", LevelFilter::WARN)
         .with_target("log", LevelFilter::OFF)
+        // SQLite warnings must not feed back into the same SQLite log writer.
+        .with_target("sqlx::query", LevelFilter::OFF)
+        .with_target("sqlx::pool::acquire", LevelFilter::OFF)
         .with_target("codex_rmcp_client", LevelFilter::INFO)
         .with_target("codex_otel.log_only", LevelFilter::OFF)
         .with_target("codex_otel.trace_safe", LevelFilter::OFF)
         .with_target("rmcp", LevelFilter::INFO)
         .with_target("codex_api::responses_websocket_timing", LevelFilter::OFF)
         .with_target("codex_core::post_sampling_token_estimate", LevelFilter::OFF)
+        // Full model request bodies and streamed response payloads overwhelm the
+        // SQLite log database, but remain available to explicit TRACE subscribers.
+        .with_target("codex_http_client::transport", LevelFilter::DEBUG)
+        .with_target("codex_api::sse", LevelFilter::DEBUG)
+        // Per-chunk streaming traces otherwise flood the bounded SQLite log queue.
+        .with_target("codex_tui::streaming::controller", LevelFilter::DEBUG)
+        .with_target("codex_tui::streaming::table_holdback", LevelFilter::DEBUG)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

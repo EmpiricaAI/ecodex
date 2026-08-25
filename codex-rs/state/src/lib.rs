@@ -19,11 +19,18 @@ mod runtime;
 mod sqlite;
 mod telemetry;
 
+pub use model::CreatedProject;
 pub use model::LogEntry;
 pub use model::LogQuery;
 pub use model::LogRow;
 pub use model::Phase2JobClaimOutcome;
+pub use model::Project;
+pub use model::ProjectRoot;
+pub use model::ProjectsPage;
 pub use model::QueuedUserSubmissionRecord;
+pub use model::RolloutMigrationCursor;
+pub use model::RolloutMigrationSkippedRollout;
+pub use model::RolloutMigrationState;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 pub use sqlite::SqliteConfig;
@@ -53,6 +60,7 @@ pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadRelationFilter;
 pub use model::ThreadSection;
+pub use model::ThreadSectionAppearance;
 pub use model::ThreadSectionsPage;
 pub use model::ThreadsPage;
 pub use runtime::ExternalAgentConfigImportDetailsRecord;

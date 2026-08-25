@@ -11,7 +11,8 @@
 //! recent killed span.
 //!
 //! Wrapping also reserves a visible insertion point: full logical lines get continuation rows,
-//! and overflowing spaces wrap instead of moving the cursor outside the textarea.
+//! and trailing spaces wrap instead of moving the cursor outside the textarea. At soft word
+//! breaks, interior separators hang off the preceding row without changing the editable text.
 
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_altgr;
@@ -32,16 +33,20 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Span;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 use std::borrow::Cow;
 use std::cell::Ref;
 use std::cell::RefCell;
 use std::ops::Range;
-use textwrap::Options;
+use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod vim;
+mod vim_commands;
+mod wrapping;
 use self::vim::VimMode;
 use self::vim::VimMotion;
 use self::vim::VimOperator;
@@ -126,7 +131,7 @@ pub(crate) struct TextArea {
     vim_enabled: bool,
     vim_mode: VimMode,
     vim_pending: VimPending,
-    editor_keymap: EditorKeymap,
+    editor_keymap: Arc<EditorKeymap>,
     vim_normal_keymap: VimNormalKeymap,
     vim_operator_keymap: VimOperatorKeymap,
     vim_text_object_keymap: VimTextObjectKeymap,
@@ -181,7 +186,7 @@ impl TextArea {
     /// the kill buffer, so callers can safely apply a live config update while
     /// preserving the current draft exactly as typed.
     pub fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
-        self.editor_keymap = keymap.editor.clone();
+        self.editor_keymap = Arc::clone(&keymap.editor);
         self.vim_normal_keymap = keymap.vim_normal.clone();
         self.vim_operator_keymap = keymap.vim_operator.clone();
         self.vim_text_object_keymap = keymap.vim_text_object.clone();
@@ -291,6 +296,7 @@ impl TextArea {
         }
         match self.vim_pending {
             VimPending::None => KeymapContext::VimNormal,
+            VimPending::Replace => KeymapContext::Editor,
             VimPending::Operator(_) => KeymapContext::VimOperator,
             VimPending::TextObject { .. } => KeymapContext::VimTextObject,
         }
@@ -338,12 +344,11 @@ impl TextArea {
 
     /// Return whether Escape should be intercepted before composer-level routing.
     ///
-    /// In Vim insert mode, Escape is an editing transition rather than a popup
-    /// cancel/backtrack shortcut. Letting the composer handle it first would
-    /// close UI surfaces while leaving the textarea in insert mode.
+    /// In Vim insert mode or while a command is pending, Escape is an editing
+    /// transition rather than a popup cancel/backtrack or turn-interrupt shortcut.
     pub(crate) fn should_handle_vim_insert_escape(&self, event: KeyEvent) -> bool {
         self.vim_enabled
-            && self.vim_mode == VimMode::Insert
+            && (self.vim_mode == VimMode::Insert || !matches!(self.vim_pending, VimPending::None))
             && event.code == KeyCode::Esc
             && event.modifiers == KeyModifiers::NONE
             && matches!(event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
@@ -354,6 +359,7 @@ impl TextArea {
     /// `None` means Vim editing is disabled, so callers should omit the mode
     /// indicator rather than rendering an insert-mode label for normal
     /// non-modal editing.
+    #[cfg(test)]
     pub(crate) fn vim_mode_label(&self) -> Option<&'static str> {
         if !self.vim_enabled {
             return None;
@@ -361,6 +367,17 @@ impl TextArea {
         Some(match self.vim_mode {
             VimMode::Normal => "Normal",
             VimMode::Insert => "Insert",
+        })
+    }
+
+    /// Return the styled footer indicator for the active Vim editing mode.
+    pub(crate) fn vim_mode_indicator_span(&self) -> Option<Span<'static>> {
+        if !self.vim_enabled {
+            return None;
+        }
+        Some(match self.vim_mode {
+            VimMode::Normal => "Vim: Normal".magenta(),
+            VimMode::Insert => "Vim: Insert".green(),
         })
     }
 
@@ -449,16 +466,13 @@ impl TextArea {
         }
 
         let lines = self.wrapped_lines(area.width);
-        let effective_scroll = self.effective_scroll(area.height, &lines, state.scroll);
-        let i = Self::wrapped_line_index_by_start(&lines, self.cursor_pos)?;
-        let ls = &lines[i];
-        let col = display_width(&self.text[ls.start..self.cursor_pos])
-            .min(usize::from(area.width.saturating_sub(1))) as u16;
+        let effective_scroll = self.effective_scroll(area, &lines, state.scroll);
+        let (i, col) = wrapping::cursor_position(&self.text, &lines, area.width, self.cursor_pos)?;
         let screen_row = i
             .saturating_sub(effective_scroll as usize)
             .try_into()
             .unwrap_or(0);
-        Some((area.x + col, area.y + screen_row))
+        Some((area.x + col as u16, area.y + screen_row))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -468,13 +482,6 @@ impl TextArea {
     fn current_display_col(&self) -> usize {
         let bol = self.beginning_of_current_line();
         display_width(&self.text[bol..self.cursor_pos])
-    }
-
-    fn wrapped_line_index_by_start(lines: &[Range<usize>], pos: usize) -> Option<usize> {
-        // partition_point returns the index of the first element for which
-        // the predicate is false, i.e. the count of elements with start <= pos.
-        let idx = lines.partition_point(|r| r.start <= pos);
-        if idx == 0 { None } else { Some(idx - 1) }
     }
 
     fn move_to_display_col_on_line(
@@ -687,6 +694,10 @@ impl TextArea {
                 self.handle_vim_text_object(operator, scope, event);
                 return;
             }
+            VimPending::Replace => {
+                self.handle_vim_pending_command(pending, event);
+                return;
+            }
         }
 
         if self.vim_normal_keymap.enter_insert.is_pressed(event) {
@@ -816,7 +827,9 @@ impl TextArea {
         }
         if self.vim_normal_keymap.cancel_operator.is_pressed(event) {
             self.vim_pending = VimPending::None;
+            return;
         }
+        self.handle_vim_extra_command(event);
     }
 
     fn handle_vim_operator(&mut self, op: VimOperator, event: KeyEvent) -> bool {
@@ -839,10 +852,19 @@ impl TextArea {
             return true;
         }
 
-        if op != VimOperator::Change
-            && let Some(motion) = self.vim_motion_for_event(event)
-        {
+        if let Some(motion) = self.vim_motion_for_event(event) {
             self.apply_vim_operator(op, motion);
+            return true;
+        }
+        if op == VimOperator::Change
+            && self
+                .vim_normal_keymap
+                .start_change_operator
+                .is_pressed(event)
+        {
+            let range = self.beginning_of_current_line()..self.end_of_current_line();
+            self.kill_line_range(range);
+            self.vim_mode = VimMode::Insert;
             return true;
         }
         false
@@ -906,14 +928,48 @@ impl TextArea {
     }
 
     fn apply_vim_operator(&mut self, op: VimOperator, motion: VimMotion) {
+        if op == VimOperator::Change && motion == VimMotion::WordForward {
+            let target = if self.text[self.cursor_pos..]
+                .chars()
+                .next()
+                .is_some_and(|ch| !ch.is_whitespace())
+            {
+                self.end_of_next_word()
+            } else {
+                self.beginning_of_next_word()
+                    .min(self.end_of_current_line())
+            };
+            if target > self.cursor_pos {
+                self.apply_vim_operator_to_range(op, self.cursor_pos..target);
+            } else {
+                self.vim_mode = VimMode::Insert;
+            }
+            return;
+        }
         let Some(range) = self.range_for_motion(motion) else {
+            if op == VimOperator::Change && motion == VimMotion::LineEnd {
+                self.vim_mode = VimMode::Insert;
+            }
             return;
         };
-        match op {
-            VimOperator::Delete => self.kill_range(range),
-            VimOperator::Yank => self.yank_range(range),
-            VimOperator::Change => {}
+        if op == VimOperator::Change && matches!(motion, VimMotion::Up | VimMotion::Down) {
+            if motion == VimMotion::Up && self.beginning_of_current_line() == 0
+                || motion == VimMotion::Down && self.end_of_current_line() == self.text.len()
+            {
+                return;
+            }
+            let retain_newline =
+                range.end < self.text.len() && self.text[range.clone()].ends_with('\n');
+            let start = range.start;
+            self.kill_line_range(range);
+            if retain_newline {
+                self.insert_str_at(start, "\n");
+                self.set_cursor(start);
+            }
+            self.vim_mode = VimMode::Insert;
+            return;
         }
+        self.apply_vim_operator_to_range(op, range);
     }
 
     fn apply_vim_operator_to_range(&mut self, op: VimOperator, range: Range<usize>) {
@@ -1006,7 +1062,22 @@ impl TextArea {
         }
         let mut target = self.cursor_pos;
         for _ in 0..n {
-            target = self.prev_atomic_boundary(target);
+            if let Some((boundary, ch)) = self.text[..target].char_indices().next_back()
+                && matches!(
+                    ch,
+                    // Thai-only special casing is not ideal; refactor if it becomes more complex.
+                    // All Thai nonspacing marks: vowel signs, tone marks, and other diacritics.
+                    '\u{0e31}' | '\u{0e34}'..='\u{0e3a}' | '\u{0e47}'..='\u{0e4e}'
+                )
+                && !self
+                    .elements
+                    .iter()
+                    .any(|element| target > element.range.start && target <= element.range.end)
+            {
+                target = boundary;
+            } else {
+                target = self.prev_atomic_boundary(target);
+            }
             if target == 0 {
                 break;
             }
@@ -1233,11 +1304,16 @@ impl TextArea {
             let cache_ref = self.wrap_cache.borrow();
             if let Some(cache) = cache_ref.as_ref() {
                 let lines = &cache.lines;
-                if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
+                if let Some((idx, col)) =
+                    wrapping::cursor_position(&self.text, lines, cache.width, self.cursor_pos)
+                {
                     let cur_range = &lines[idx];
-                    let target_col = self.preferred_col.unwrap_or_else(|| {
-                        display_width(&self.text[cur_range.start..self.cursor_pos])
-                    });
+                    // A saved column can outlive a resize. Do not land in hanging whitespace
+                    // that is displayed on the following row.
+                    let target_col = self
+                        .preferred_col
+                        .unwrap_or(col)
+                        .min(usize::from(cache.width.saturating_sub(1)));
                     if idx > 0 {
                         let prev = &lines[idx - 1];
                         let line_start = prev.start;
@@ -1299,11 +1375,13 @@ impl TextArea {
             let cache_ref = self.wrap_cache.borrow();
             if let Some(cache) = cache_ref.as_ref() {
                 let lines = &cache.lines;
-                if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
-                    let cur_range = &lines[idx];
-                    let target_col = self.preferred_col.unwrap_or_else(|| {
-                        display_width(&self.text[cur_range.start..self.cursor_pos])
-                    });
+                if let Some((idx, col)) =
+                    wrapping::cursor_position(&self.text, lines, cache.width, self.cursor_pos)
+                {
+                    let target_col = self
+                        .preferred_col
+                        .unwrap_or(col)
+                        .min(usize::from(cache.width.saturating_sub(1)));
                     if idx + 1 < lines.len() {
                         let next = &lines[idx + 1];
                         let line_start = next.start;
@@ -1881,8 +1959,9 @@ impl TextArea {
 
     /// Returns cached grapheme-safe visual ranges, including cursor-position sentinel bytes.
     ///
-    /// Overflowing spaces get their own rows, and full logical lines receive a continuation row
-    /// so their insertion point stays visible.
+    /// Overflowing spaces wrap without separating a partial whitespace continuation from the next
+    /// word, existing word breakpoints stay intact, and full logical lines receive a continuation
+    /// row so their insertion point stays visible.
     #[expect(clippy::unwrap_used)]
     fn wrapped_lines(&self, width: u16) -> Ref<'_, Vec<Range<usize>>> {
         // Ensure cache is ready (potentially mutably borrow, then drop)
@@ -1894,39 +1973,7 @@ impl TextArea {
             };
             if needs_recalc {
                 let display_text = text_for_display(&self.text);
-                let mut lines = crate::wrapping::wrap_ranges(
-                    display_text.as_ref(),
-                    Options::new(width as usize).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-                );
-                if width > 0 {
-                    let wrapped_lines = lines;
-                    lines = Vec::with_capacity(wrapped_lines.len());
-                    for wrapped_line in wrapped_lines {
-                        let line_end = wrapped_line.end.saturating_sub(1);
-                        let mut line_start = wrapped_line.start;
-                        let mut line_width = 0;
-
-                        for (offset, grapheme) in display_text[wrapped_line.start..line_end]
-                            .grapheme_indices(/*is_extended*/ true)
-                        {
-                            let grapheme_width = display_width(grapheme);
-                            if line_width > 0 && line_width + grapheme_width > usize::from(width) {
-                                let next_line_start = wrapped_line.start + offset;
-                                lines.push(line_start..next_line_start + 1);
-                                line_start = next_line_start;
-                                line_width = 0;
-                            }
-                            line_width += grapheme_width;
-                        }
-
-                        lines.push(line_start..line_end + 1);
-                        if line_width >= usize::from(width)
-                            && matches!(display_text.as_bytes().get(line_end), None | Some(b'\n'))
-                        {
-                            lines.push(line_end..line_end + 1);
-                        }
-                    }
-                }
+                let lines = wrapping::wrapped_lines(display_text.as_ref(), width);
                 *cache = Some(WrapCache { width, lines });
             }
         }
@@ -1940,30 +1987,24 @@ impl TextArea {
     ///
     /// - Cursor is always on screen.
     /// - No scrolling if content fits in the area.
-    fn effective_scroll(
-        &self,
-        area_height: u16,
-        lines: &[Range<usize>],
-        current_scroll: u16,
-    ) -> u16 {
+    fn effective_scroll(&self, area: Rect, lines: &[Range<usize>], current_scroll: u16) -> u16 {
         let total_lines = lines.len() as u16;
-        if area_height >= total_lines {
+        if area.height >= total_lines {
             return 0;
         }
 
-        // Where is the cursor within wrapped lines? Prefer assigning boundary positions
-        // (where pos equals the start of a wrapped line) to that later line.
         let cursor_line_idx =
-            Self::wrapped_line_index_by_start(lines, self.cursor_pos).unwrap_or(0) as u16;
+            wrapping::cursor_position(&self.text, lines, area.width, self.cursor_pos)
+                .map_or(0, |(row, _)| row) as u16;
 
-        let max_scroll = total_lines.saturating_sub(area_height);
+        let max_scroll = total_lines.saturating_sub(area.height);
         let mut scroll = current_scroll.min(max_scroll);
 
         // Ensure cursor is visible within [scroll, scroll + area_height)
         if cursor_line_idx < scroll {
             scroll = cursor_line_idx;
-        } else if cursor_line_idx >= scroll + area_height {
-            scroll = cursor_line_idx + 1 - area_height;
+        } else if cursor_line_idx >= scroll + area.height {
+            scroll = cursor_line_idx + 1 - area.height;
         }
         scroll
     }
@@ -1988,7 +2029,7 @@ impl StatefulWidgetRef for &TextArea {
 
     fn render_ref(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let lines = self.wrapped_lines(area.width);
-        let scroll = self.effective_scroll(area.height, &lines, state.scroll);
+        let scroll = self.effective_scroll(area, &lines, state.scroll);
         state.scroll = scroll;
 
         let start = scroll as usize;
@@ -2006,7 +2047,7 @@ impl TextArea {
         mask_char: char,
     ) {
         let lines = self.wrapped_lines(area.width);
-        let scroll = self.effective_scroll(area.height, &lines, state.scroll);
+        let scroll = self.effective_scroll(area, &lines, state.scroll);
         state.scroll = scroll;
 
         let start = scroll as usize;
@@ -2027,7 +2068,7 @@ impl TextArea {
         highlights: &[(Range<usize>, Style)],
     ) {
         let lines = self.wrapped_lines(area.width);
-        let scroll = self.effective_scroll(area.height, &lines, state.scroll);
+        let scroll = self.effective_scroll(area, &lines, state.scroll);
         state.scroll = scroll;
 
         let start = scroll as usize;
@@ -2045,56 +2086,46 @@ impl TextArea {
         base_style: Style,
         highlights: &[(Range<usize>, Style)],
     ) {
+        let element_style = base_style.fg(Color::Cyan);
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
-            let line_range = r.start..r.end - 1;
+            let visible = wrapping::visible_prefix(&self.text[r.start..r.end - 1], area.width);
+            let line_range = r.start..r.start + visible.len();
             buf.set_style(Rect::new(area.x, y, area.width, 1), base_style);
             // Draw base line with the provided style.
             buf.set_stringn(
                 area.x,
                 y,
-                text_for_display(&self.text[line_range.clone()]),
+                text_for_display(visible),
                 usize::from(area.width),
                 base_style,
             );
 
-            // Overlay styled segments for elements that intersect this line.
-            for elem in &self.elements {
-                // Compute overlap with displayed slice.
-                let overlap_start = elem.range.start.max(line_range.start);
-                let overlap_end = elem.range.end.min(line_range.end);
+            // Apply search highlights last so they remain visible over styled elements.
+            let overlays = self
+                .elements
+                .iter()
+                .map(|element| (&element.range, element_style))
+                .chain(highlights.iter().map(|(range, style)| (range, *style)));
+            for (overlay_range, style) in overlays {
+                let overlap_start = overlay_range.start.max(line_range.start);
+                let overlap_end = overlay_range.end.min(line_range.end);
                 if overlap_start >= overlap_end {
                     continue;
                 }
                 let styled = &self.text[overlap_start..overlap_end];
-                let x_off = display_width(&self.text[line_range.start..overlap_start]) as u16;
-                let style = base_style.fg(Color::Cyan);
+                let x_off = display_width(&self.text[line_range.start..overlap_start]);
+                if x_off >= usize::from(area.width) {
+                    continue;
+                }
+                let x_off = x_off as u16;
                 buf.set_stringn(
                     area.x + x_off,
                     y,
                     text_for_display(styled),
                     usize::from(area.width.saturating_sub(x_off)),
                     style,
-                );
-            }
-
-            // Overlay render-only highlight ranges last so transient search highlighting remains
-            // visible even when it intersects attachment placeholders or other styled elements.
-            for (highlight_range, style) in highlights {
-                let overlap_start = highlight_range.start.max(line_range.start);
-                let overlap_end = highlight_range.end.min(line_range.end);
-                if overlap_start >= overlap_end {
-                    continue;
-                }
-                let highlighted = &self.text[overlap_start..overlap_end];
-                let x_off = display_width(&self.text[line_range.start..overlap_start]) as u16;
-                buf.set_stringn(
-                    area.x + x_off,
-                    y,
-                    text_for_display(highlighted),
-                    usize::from(area.width.saturating_sub(x_off)),
-                    *style,
                 );
             }
         }
@@ -2112,8 +2143,8 @@ impl TextArea {
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
-            let line_range = r.start..r.end - 1;
-            let masked = self.text[line_range.clone()]
+            let visible = wrapping::visible_prefix(&self.text[r.start..r.end - 1], area.width);
+            let masked = visible
                 .graphemes(/*is_extended*/ true)
                 .flat_map(|grapheme| std::iter::repeat_n(mask_char, display_width(grapheme)))
                 .collect::<String>();
@@ -2273,6 +2304,63 @@ mod tests {
         t.set_cursor(t.text().len());
         t.delete_forward(/*n*/ 1);
         assert_eq!(t.text(), "b");
+    }
+
+    #[test]
+    fn delete_backward_removes_thai_marks_one_at_a_time() {
+        let mut t = ta_with("ที่");
+
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        let area = Rect::new(0, 0, /*width*/ 8, /*height*/ 1);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        let mut state = TextAreaState::default();
+        terminal
+            .draw(|frame| {
+                StatefulWidgetRef::render_ref(&(&t), frame.area(), frame.buffer_mut(), &mut state);
+            })
+            .unwrap();
+        insta::assert_snapshot!(
+            "textarea_thai_backspace_preserves_remaining_marks",
+            format!("cursor: {:?}\n{}", t.cursor_pos(area), terminal.backend())
+        );
+        assert_eq!(t.text(), "ที");
+
+        t.delete_backward(/*n*/ 1);
+        assert_eq!(t.text(), "ท");
+
+        t.delete_backward(/*n*/ 1);
+        assert_eq!(t.text(), "");
+    }
+
+    #[test]
+    fn delete_backward_preserves_other_grapheme_behavior() {
+        let mut thai_spacing_vowel = ta_with("ซ้ำ");
+        thai_spacing_vowel.delete_backward(/*n*/ 1);
+        assert_eq!(thai_spacing_vowel.text(), "ซ้");
+
+        let mut decomposed_latin = ta_with("e\u{301}");
+        decomposed_latin.delete_backward(/*n*/ 1);
+        assert_eq!(decomposed_latin.text(), "");
+
+        let mut family_emoji = ta_with("👨\u{200d}👩\u{200d}👧\u{200d}👦");
+        family_emoji.delete_backward(/*n*/ 1);
+        assert_eq!(family_emoji.text(), "");
+    }
+
+    #[test]
+    fn delete_backward_keeps_thai_elements_atomic() {
+        let mut t = TextArea::new();
+        t.insert_str("before ");
+        t.insert_element("ที่");
+        t.insert_str(" after");
+
+        t.set_cursor(t.elements[0].range.end);
+        t.delete_backward(/*n*/ 1);
+
+        assert_eq!(t.text(), "before  after");
+        assert_eq!(t.cursor(), "before ".len());
+        assert!(t.elements.is_empty());
     }
 
     #[test]
@@ -2703,18 +2791,10 @@ mod tests {
     }
 
     #[test]
-    fn vim_text_object_cancellation_and_unsupported_change_motions_do_not_edit() {
+    fn vim_text_object_cancellation_does_not_edit() {
         let mut t = ta_with("hello world");
         t.set_cursor(/*pos*/ 1);
         t.set_vim_enabled(/*enabled*/ true);
-
-        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
-        t.input(KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE));
-
-        assert_eq!(t.text(), "hello world");
-        assert_eq!(t.kill_buffer, "");
-        assert_eq!(t.vim_mode_label(), Some("Normal"));
-        assert!(!t.is_vim_operator_pending());
 
         t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
@@ -2929,8 +3009,8 @@ mod tests {
         let mut t = ta_with("abc\ndef\nghi");
         t.set_cursor(/*pos*/ 5);
         let mut keymap = RuntimeKeymap::defaults().editor;
-        keymap.kill_line_start.clear();
-        keymap.kill_whole_line = vec![key_hint::ctrl(KeyCode::Char('u'))];
+        Arc::make_mut(&mut keymap).kill_line_start.clear();
+        Arc::make_mut(&mut keymap).kill_whole_line = vec![key_hint::ctrl(KeyCode::Char('u'))];
 
         t.input_with_keymap(
             KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
@@ -3180,7 +3260,7 @@ mod tests {
         let mut t = ta_with("a\nb");
         t.set_cursor(/*pos*/ 2);
         let mut keymap = RuntimeKeymap::defaults().editor;
-        keymap.move_up.clear();
+        Arc::make_mut(&mut keymap).move_up.clear();
 
         t.input_with_keymap(
             KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE),
@@ -3195,8 +3275,8 @@ mod tests {
         let mut t = ta_with("a\nb");
         t.set_cursor(/*pos*/ 0);
         let mut keymap = RuntimeKeymap::defaults().editor;
-        keymap.move_up.clear();
-        keymap.move_down = vec![crate::key_hint::ctrl(KeyCode::Char('p'))];
+        Arc::make_mut(&mut keymap).move_up.clear();
+        Arc::make_mut(&mut keymap).move_down = vec![crate::key_hint::ctrl(KeyCode::Char('p'))];
 
         t.input_with_keymap(
             KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE),
@@ -3603,15 +3683,166 @@ mod tests {
     }
 
     #[test]
-    fn space_runs_wrap_before_later_text() {
-        let mut t = ta_with("abad     next");
+    fn separator_after_full_line_hangs_before_following_text() {
+        let mut t = ta_with("abad a");
+        t.set_cursor(t.text().len());
+        let area = Rect::new(0, 0, /*width*/ 4, /*height*/ 2);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        let mut state = TextAreaState::default();
+        terminal
+            .draw(|frame| {
+                StatefulWidgetRef::render_ref(&(&t), frame.area(), frame.buffer_mut(), &mut state);
+            })
+            .unwrap();
+
+        assert_eq!(t.desired_height(area.width), 2);
+        assert_eq!(t.cursor_pos(area), Some((1, 1)));
+        insta::assert_snapshot!(
+            "textarea_separator_after_full_line_hangs_before_following_text",
+            format!("cursor: {:?}\n{}", t.cursor_pos(area), terminal.backend())
+        );
+
+        for text in ["界界 a", "abｶﾞ a", "abad\ta"] {
+            let mut t = ta_with(text);
+            t.set_cursor(t.text().len());
+
+            assert_eq!(t.desired_height(area.width), 2);
+            assert_eq!(t.cursor_pos(area), Some((1, 1)));
+        }
+    }
+
+    #[test]
+    fn breakable_unicode_space_hangs_before_following_text() {
+        let mut t = ta_with("abad\u{3000}abcde");
+        t.set_cursor(t.text().len());
+        let area = Rect::new(0, 0, /*width*/ 4, /*height*/ 3);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        let mut state = TextAreaState::default();
+        terminal
+            .draw(|frame| {
+                StatefulWidgetRef::render_ref(&(&t), frame.area(), frame.buffer_mut(), &mut state);
+            })
+            .unwrap();
+
+        assert_eq!(t.desired_height(area.width), 3);
+        assert_eq!(t.cursor_pos(area), Some((1, 2)));
+        insta::assert_snapshot!(
+            "textarea_breakable_unicode_space_hangs_before_following_text",
+            format!("cursor: {:?}\n{}", t.cursor_pos(area), terminal.backend())
+        );
+    }
+
+    #[test]
+    fn leading_space_reflows_across_following_wrapped_fragments() {
+        let mut t = ta_with("abad abcde wxyz");
         let area = Rect::new(0, 0, /*width*/ 4, /*height*/ 5);
-
         assert_eq!(t.desired_height(area.width), 5);
-
-        for (cursor, expected) in [(4, (0, 1)), (6, (2, 1)), (8, (0, 2)), (9, (0, 3))] {
+        for (cursor, expected) in [(11, (0, 3)), (14, (3, 3)), (15, (0, 4))] {
             t.set_cursor(cursor);
             assert_eq!(t.cursor_pos(area), Some(expected));
+        }
+
+        let mut t = ta_with("abad abcde xy zz");
+        let area = Rect::new(0, 0, /*width*/ 4, /*height*/ 4);
+        assert_eq!(t.desired_height(area.width), 4);
+        for (cursor, expected) in [
+            (4, (0, 1)),
+            (5, (0, 1)),
+            (8, (3, 1)),
+            (9, (0, 2)),
+            (10, (1, 2)),
+            (11, (2, 2)),
+            (12, (3, 2)),
+            (13, (0, 3)),
+            (14, (0, 3)),
+            (16, (2, 3)),
+        ] {
+            t.set_cursor(cursor);
+            assert_eq!(t.cursor_pos(area), Some(expected));
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        let mut state = TextAreaState::default();
+        terminal
+            .draw(|frame| {
+                StatefulWidgetRef::render_ref(&(&t), frame.area(), frame.buffer_mut(), &mut state);
+            })
+            .unwrap();
+
+        insta::assert_snapshot!(
+            "textarea_leading_space_reflows_across_following_wrapped_fragments",
+            format!("cursor: {:?}\n{}", t.cursor_pos(area), terminal.backend())
+        );
+    }
+
+    #[test]
+    fn reflow_keeps_fitting_remainder_on_current_row() {
+        for (text, width, expected_height, expected_cursor) in [
+            ("  -", 1, 4, (0, 3)),
+            ("p    a b", 3, 3, (0, 2)),
+            ("p     a b", 5, 2, (3, 1)),
+            (" aaaa a   ", 3, 4, (1, 3)),
+        ] {
+            let mut t = ta_with(text);
+            t.set_cursor(t.text().len());
+            let area = Rect::new(0, 0, width, expected_height);
+
+            assert_eq!(t.desired_height(area.width), expected_height);
+            assert_eq!(t.cursor_pos(area), Some(expected_cursor));
+            for range in t.wrapped_lines(width).iter() {
+                assert!(
+                    display_width(text[range.start..range.end - 1].trim_end_matches(' '))
+                        <= usize::from(width)
+                );
+            }
+        }
+
+        let mut t = ta_with("p     a b");
+        t.set_cursor(t.text().len());
+        let area = Rect::new(0, 0, /*width*/ 5, /*height*/ 2);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        let mut state = TextAreaState::default();
+        terminal
+            .draw(|frame| {
+                StatefulWidgetRef::render_ref(&(&t), frame.area(), frame.buffer_mut(), &mut state);
+            })
+            .unwrap();
+
+        insta::assert_snapshot!(
+            "textarea_reflow_keeps_fitting_remainder_on_current_row",
+            format!("cursor: {:?}\n{}", t.cursor_pos(area), terminal.backend())
+        );
+    }
+
+    #[test]
+    fn reflow_preserves_hyphenated_word_breakpoint_when_rendering() {
+        let mut t = ta_with("a foo-barbaz");
+        t.set_cursor(t.text().len());
+        let area = Rect::new(0, 0, /*width*/ 10, /*height*/ 2);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        let mut state = TextAreaState::default();
+        terminal
+            .draw(|frame| {
+                StatefulWidgetRef::render_ref(&(&t), frame.area(), frame.buffer_mut(), &mut state);
+            })
+            .unwrap();
+
+        insta::assert_snapshot!(
+            "textarea_reflow_preserves_hyphenated_word_breakpoint",
+            format!("cursor: {:?}\n{}", t.cursor_pos(area), terminal.backend())
+        );
+    }
+
+    #[test]
+    fn space_runs_hang_before_later_text() {
+        let mut t = ta_with("abad     next");
+        let area = Rect::new(0, 0, /*width*/ 4, /*height*/ 3);
+
+        assert_eq!(t.desired_height(area.width), 3);
+
+        for cursor in 4..=9 {
+            t.set_cursor(cursor);
+            assert_eq!(t.cursor_pos(area), Some((0, 1)));
         }
     }
 
@@ -4010,31 +4241,25 @@ mod tests {
     fn wrapped_navigation_with_newlines_and_spaces() {
         // Include spaces and an explicit newline to exercise boundaries
         let mut t = ta_with("word1  word2\nword3");
-        // Width 6 wraps "word1 ", its remaining space, and then "word2" before the newline.
+        // Width 6 leaves both separators on the first visual row.
         let _ = t.desired_height(/*width*/ 6);
 
         // Put the cursor at column 1 of "word2".
         let start_word2 = t.text().find("word2").unwrap();
         t.set_cursor(start_word2 + 1);
 
-        // Up first lands on the short whitespace continuation instead of skipping it.
-        t.move_cursor_up();
-        assert_eq!(t.cursor(), start_word2 - 1);
-
-        // A second Up preserves the preferred column on the first wrapped line.
+        // Up moves directly to the preceding visual line while preserving the visual column.
         t.move_cursor_up();
         assert_eq!(t.cursor(), 1);
 
-        // Down visits the whitespace continuation before returning to "word2".
-        t.move_cursor_down();
-        assert_eq!(t.cursor(), start_word2 - 1);
+        // Down returns to the same visual column of "word2".
         t.move_cursor_down();
         assert_eq!(t.cursor(), start_word2 + 1);
 
-        // Down again should cross the logical newline to the next visual line ("word3"), clamped to its length if needed
+        // Down crosses the logical newline to the next visual line ("word3").
         t.move_cursor_down();
         let start_word3 = t.text().find("word3").unwrap();
-        assert!(t.cursor() >= start_word3 && t.cursor() <= start_word3 + "word3".len());
+        assert_eq!(t.cursor(), start_word3 + 1);
     }
 
     #[test]

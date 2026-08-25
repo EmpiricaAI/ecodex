@@ -1046,6 +1046,7 @@ fn blocking_replace_mcp_servers_round_trips() {
                         .collect(),
                 ),
                 env_http_headers: None,
+                http_headers_helper: Some("auth-cli headers".to_string()),
             },
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: false,
@@ -1061,6 +1062,7 @@ fn blocking_replace_mcp_servers_round_trips() {
             scopes: None,
             oauth: Some(McpServerOAuthConfig {
                 client_id: Some("eci-prd-pub-codex-123".to_string()),
+                callback_port: Some(9876),
             }),
             oauth_resource: Some("https://resource.example.com".to_string()),
             tools: HashMap::new(),
@@ -1078,6 +1080,7 @@ fn blocking_replace_mcp_servers_round_trips() {
 [mcp_servers.http]
 url = \"https://example.com\"
 bearer_token_env_var = \"TOKEN\"
+http_headers_helper = \"auth-cli headers\"
 enabled = false
 startup_timeout_sec = 5.0
 disabled_tools = [\"forbidden\"]
@@ -1088,6 +1091,7 @@ Z-Header = \"z\"
 
 [mcp_servers.http.oauth]
 client_id = \"eci-prd-pub-codex-123\"
+callback_port = 9876
 
 [mcp_servers.stdio]
 command = \"cmd\"

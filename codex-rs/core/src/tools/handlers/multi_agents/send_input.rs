@@ -34,7 +34,6 @@ impl Handler {
         let ToolInvocation {
             session,
             turn,
-            step_context,
             payload,
             call_id,
             ..
@@ -49,8 +48,7 @@ impl Handler {
             .agent_control
             .get_agent_metadata(receiver_thread_id);
         if receiver_agent.is_some() {
-            let resume_config =
-                build_agent_resume_config(turn.as_ref(), step_context.environments.primary())?;
+            let resume_config = build_agent_resume_config(turn.as_ref())?;
             session
                 .services
                 .agent_control
@@ -86,7 +84,12 @@ impl Handler {
             .await;
         let agent_control = session.services.agent_control.clone();
         let result = agent_control
-            .send_input(receiver_thread_id, input_items, Some(turn.sub_id.clone()))
+            .send_input(
+                receiver_thread_id,
+                input_items,
+                Some(turn.sub_id.clone()),
+                turn.turn_metadata_state.root_turn_id(),
+            )
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err));
         let status = session

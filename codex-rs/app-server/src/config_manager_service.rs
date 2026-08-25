@@ -30,6 +30,7 @@ use codex_core::path_utils;
 use codex_core::path_utils::SymlinkWritePaths;
 use codex_core::path_utils::resolve_symlink_write_paths;
 use codex_core::path_utils::write_atomically;
+use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
@@ -143,7 +144,10 @@ impl ConfigManager {
             .map_err(|err| ConfigManagerError::json("failed to deserialize configuration", err))?;
 
         let mut origins = layers.origins();
-        origins.retain(|path, _| {
+        origins.retain(|path, metadata| {
+            if matches!(&metadata.name, ConfigLayerSource::PackagedDefaults { .. }) {
+                return false;
+            }
             let segments = path.split('.').map(str::to_string).collect::<Vec<_>>();
             layers
                 .requirements_toml()
@@ -160,6 +164,9 @@ impl ConfigManager {
             layers: params.include_layers.then(|| {
                 layers
                     .all_layers_high_to_low()
+                    .filter(|layer| {
+                        !matches!(&layer.name, ConfigLayerSource::PackagedDefaults { .. })
+                    })
                     .map(|layer| config_layer_to_api(layer.as_layer()))
                     .collect()
             }),
@@ -728,8 +735,13 @@ fn toml_value_to_value(value: &TomlValue) -> anyhow::Result<toml_edit::Value> {
     }
 }
 
-fn validate_config(value: &TomlValue) -> Result<(), toml::de::Error> {
-    let _: ConfigToml = value.clone().try_into()?;
+fn validate_config(value: &TomlValue) -> anyhow::Result<()> {
+    let config: ConfigToml = value.clone().try_into()?;
+    if config.approval_policy == Some(AskForApproval::UnlessTrusted) {
+        anyhow::bail!(
+            "approval_policy = \"untrusted\" is no longer supported; remove this setting"
+        );
+    }
     Ok(())
 }
 
@@ -781,6 +793,9 @@ fn value_at_semantic_path<'a>(root: &'a TomlValue, segments: &[String]) -> Optio
 
 fn override_message(layer: &ConfigLayerSource) -> String {
     match layer {
+        ConfigLayerSource::PackagedDefaults { file } => {
+            format!("Overridden by packaged defaults: {}", file.display())
+        }
         ConfigLayerSource::Mdm { domain, key: _ } => {
             format!("Overridden by managed policy (MDM): {domain}")
         }
@@ -815,10 +830,8 @@ fn compute_override_metadata(
     effective: &TomlValue,
     segments: &[String],
 ) -> Option<OverriddenMetadata> {
-    let user_value = match layers.get_active_user_layer() {
-        Some(user_layer) => value_at_semantic_path(&user_layer.config, segments),
-        None => return None,
-    };
+    let user_layer = layers.get_active_user_layer()?;
+    let user_value = value_at_semantic_path(&user_layer.config, segments);
     let effective_value = value_at_semantic_path(effective, segments);
 
     if user_value.is_some() && user_value == effective_value {
@@ -830,6 +843,9 @@ fn compute_override_metadata(
     }
 
     let overriding_layer = find_effective_layer(layers, segments)?;
+    if overriding_layer.name.precedence() <= user_layer.name.precedence() {
+        return None;
+    }
     let message = override_message(&overriding_layer.name);
 
     Some(OverriddenMetadata {

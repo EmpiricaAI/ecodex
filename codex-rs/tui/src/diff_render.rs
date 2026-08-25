@@ -464,8 +464,10 @@ fn render_changes_block(rows: Vec<Row<'_>>, wrap_cols: usize, cwd: &Path) -> Vec
         let lang_path = r.move_path.unwrap_or(r.path);
         let lang = detect_lang_for_path(lang_path);
         let mut lines = vec![];
-        render_change(r.change, &mut lines, wrap_cols - 4, lang.as_deref());
-        out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
+        let prefix = "    ";
+        let content_width = wrap_cols.saturating_sub(prefix.len());
+        render_change(r.change, &mut lines, content_width, lang.as_deref());
+        out.extend(prefix_lines(lines, prefix.into(), prefix.into()));
     }
 
     out
@@ -1631,6 +1633,12 @@ mod tests {
             /*width*/ 80,
             /*height*/ 10,
         );
+
+        let narrow = create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 3);
+        assert_snapshot!(format!("{}\n{}", narrow[1], narrow[2]), @r"
+            1 +a
+               l
+        ");
     }
 
     #[test]
@@ -2438,18 +2446,11 @@ mod tests {
     fn large_update_diff_skips_highlighting() {
         // Build a patch large enough to exceed MAX_HIGHLIGHT_LINES (10_000).
         // Without the pre-check this would attempt 10k+ parser initializations.
-        let line_count = 10_500;
-        let original: String = (0..line_count).map(|i| format!("line {i}\n")).collect();
-        let modified: String = (0..line_count)
-            .map(|i| {
-                if i % 2 == 0 {
-                    format!("line {i} changed\n")
-                } else {
-                    format!("line {i}\n")
-                }
-            })
-            .collect();
-        let patch = diffy::create_patch(&original, &modified).to_string();
+        let line_count = 10_001;
+        let patch = format!(
+            "--- a/huge.rs\n+++ b/huge.rs\n@@ -0,0 +1,{line_count} @@\n{}",
+            "+let value = 1;\n".repeat(line_count)
+        );
 
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
         changes.insert(

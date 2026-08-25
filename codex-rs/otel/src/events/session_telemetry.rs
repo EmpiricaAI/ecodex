@@ -260,6 +260,25 @@ impl SessionTelemetry {
         );
     }
 
+    pub fn record_turn_cost(
+        &self,
+        turn_id: &str,
+        estimated_usd: &str,
+        interrupted: bool,
+        speed: Option<&str>,
+        reasoning_effort: Option<&str>,
+    ) {
+        log_event!(
+            self,
+            event.name = "codex.turn_cost",
+            turn.id = turn_id,
+            usage.estimated_usd = estimated_usd,
+            turn.interrupted = interrupted,
+            speed = speed,
+            reasoning_effort = reasoning_effort,
+        );
+    }
+
     /// Records the moment a plugin or connector install elicitation is dispatched.
     pub fn record_plugin_install_elicitation_sent(
         &self,
@@ -992,16 +1011,25 @@ impl SessionTelemetry {
         tool_name: &str,
         call_id: &str,
         decision: &ReviewDecision,
-        source: ToolDecisionSource,
+        source: Option<ToolDecisionSource>,
     ) {
-        log_event!(
-            self,
-            event.name = "codex.tool_decision",
-            tool_name = %tool_name,
-            call_id = %call_id,
-            decision = %decision.clone().to_string().to_lowercase(),
-            source = %source.to_string(),
-        );
+        match source {
+            Some(source) => log_event!(
+                self,
+                event.name = "codex.tool_decision",
+                tool_name = %tool_name,
+                call_id = %call_id,
+                decision = %decision.to_opaque_string(),
+                source = %source.to_string(),
+            ),
+            None => log_event!(
+                self,
+                event.name = "codex.tool_decision",
+                tool_name = %tool_name,
+                call_id = %call_id,
+                decision = %decision.to_opaque_string(),
+            ),
+        }
     }
 
     pub fn sandbox_outcome(

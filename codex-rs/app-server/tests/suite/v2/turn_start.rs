@@ -3,6 +3,7 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_apply_patch_sse_response;
+use app_test_support::create_escalated_shell_command_sse_response;
 use app_test_support::create_exec_command_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
@@ -81,17 +82,21 @@ use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
 use core_test_support::skip_if_wine_exec;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use wiremock::ResponseTemplate;
 
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
+use super::analytics::wait_for_matching_analytics_event;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -285,6 +290,89 @@ async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
         "empty turn/start should not synthesize an empty user message: {input:?}"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()> {
+    let (release_response, response_gate) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: responses::sse(vec![responses::ev_response_created("resp-1")]),
+            },
+            StreamingSseChunk {
+                gate: Some(response_gate),
+                body: responses::sse(vec![responses::ev_completed("resp-1")]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_completed("resp-2"),
+            ]),
+        }],
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(server.uri()).write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let TurnStartResponse { turn: active_turn } = mcp
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![V2UserInput::Text {
+                    text: "start".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+
+    let TurnStartResponse { turn: steered_turn } = mcp
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![V2UserInput::Text {
+                    text: "steer".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?;
+    assert_eq!(steered_turn.id, active_turn.id);
+
+    release_response
+        .send(())
+        .expect("active response gate should remain open");
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
     Ok(())
 }
 
@@ -1023,18 +1111,50 @@ async fn code_mode_exec_emits_correlated_production_analytics() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()> {
-    let responses = vec![
+    let control_tools = [
+        ("call1", "request_user_input", json!({})),
+        (
+            "plan-call",
+            "update_plan",
+            json!({"plan": [{"step": "PRIVATE_PLAN", "status": "in_progress"}]}),
+        ),
+        (
+            "image-call",
+            "view_image",
+            json!({"path": "PRIVATE_IMAGE_PATH.png"}),
+        ),
+        ("get-goal-call", "get_goal", json!({})),
+        (
+            "create-goal-call",
+            "create_goal",
+            json!({"objective": "PRIVATE_GOAL"}),
+        ),
+        (
+            "update-goal-call",
+            "update_goal",
+            json!({"status": "complete"}),
+        ),
+    ];
+    let mut responses = vec![
         create_request_user_input_sse_response("call1")?,
         create_final_assistant_message_sse_response("Done")?,
     ];
+    responses.extend(control_tools.iter().skip(1).map(|(call_id, tool, args)| {
+        let response_id = format!("resp-{call_id}");
+        responses::sse(vec![
+            responses::ev_response_created(&response_id),
+            responses::ev_function_call(call_id, tool, &args.to_string()),
+            responses::ev_completed(&response_id),
+        ])
+    }));
+    responses.push(create_final_assistant_message_sse_response("Done")?);
     let server = create_mock_responses_server_sequence(responses).await;
 
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml_with_chatgpt_base_url(
-        codex_home.path(),
-        &server.uri(),
-        &server.uri(),
-    )?;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::Goals)
+        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
+        .write(codex_home.path())?;
     mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
@@ -1107,14 +1227,88 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
                 .is_some_and(|duration| duration > 0),
             "samplingRequestCount": params["sampling_request_count"],
             "samplingRetryCount": params["sampling_retry_count"],
+            "totalToolCalls": params["total_tool_call_count"],
+            "dynamicToolCalls": params["dynamic_tool_call_count"],
             "status": params["status"],
         }),
         json!({
             "toolBlockingIsPositive": true,
             "samplingRequestCount": 2,
             "samplingRetryCount": 0,
+            "totalToolCalls": 1,
+            "dynamicToolCalls": 0,
             "status": "completed",
         })
+    );
+
+    let second_turn = mcp
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run the other control tools".to_string(),
+                text_elements: Vec::new(),
+            }],
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "mock-model".to_string(),
+                    reasoning_effort: Some(ReasoningEffort::Medium),
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        })
+        .await?;
+
+    for (call_id, tool_name, _) in control_tools {
+        let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+            event["event_type"] == "codex_control_tool_call_event"
+                && event["event_params"]["item_id"] == call_id
+        })
+        .await?;
+        let success = tool_name != "view_image";
+        assert_eq!(
+            json!({
+                "tool": event["event_params"]["tool_name"],
+                "success": event["event_params"]["success"],
+                "status": event["event_params"]["terminal_status"],
+                "hasOrigin": event["event_params"]["originating_response_id"]
+                    .as_str()
+                    .is_some(),
+            }),
+            json!({
+                "tool": tool_name,
+                "success": success,
+                "status": if success { "completed" } else { "failed" },
+                "hasOrigin": true,
+            })
+        );
+        let serialized = event.to_string();
+        assert!(
+            ![
+                "PRIVATE_PLAN",
+                "PRIVATE_IMAGE_PATH",
+                "PRIVATE_GOAL",
+                "Proceed with the plan?"
+            ]
+            .iter()
+            .any(|private_input| serialized.contains(private_input)),
+            "tool-call analytics must not contain private tool arguments: {serialized}"
+        );
+    }
+
+    let second_turn_event =
+        wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+            event["event_type"] == "codex_turn_event"
+                && event["event_params"]["turn_id"] == second_turn.turn.id
+        })
+        .await?;
+    assert_eq!(
+        json!({
+            "total": second_turn_event["event_params"]["total_tool_call_count"],
+            "dynamic": second_turn_event["event_params"]["dynamic_tool_call_count"],
+        }),
+        json!({"total": 5, "dynamic": 0})
     );
 
     Ok(())
@@ -2060,7 +2254,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Mock server: first turn requests a shell call (elicitation), then completes.
     // Second turn same, but we'll set approval_policy=never to avoid elicitation.
     let responses = vec![
-        create_shell_command_sse_response(
+        create_escalated_shell_command_sse_response(
             first_shell_command,
             /*workdir*/ None,
             Some(5000),
@@ -2080,9 +2274,9 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         create_final_assistant_message_sse_response("done 2")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    // Default approval is untrusted to force elicitation on first turn.
+    // The first tool call explicitly requests escalation to force elicitation.
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .write(codex_home.as_path())?;
 
     let mut mcp = TestAppServer::builder()
@@ -2274,7 +2468,7 @@ async fn run_turn_start_exec_approval_rejection_v2(
         expected_approval_command.replace(bearer_token, "[REDACTED_SECRET]");
 
     let responses = vec![
-        create_shell_command_sse_response(
+        create_escalated_shell_command_sse_response(
             shell_command,
             /*workdir*/ None,
             Some(5000),
@@ -2284,7 +2478,7 @@ async fn run_turn_start_exec_approval_rejection_v2(
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .write(codex_home.as_path())?;
 
     let mut mcp = TestAppServer::builder()
@@ -2445,7 +2639,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .write(&codex_home)?;
 
     let mut mcp = TestAppServer::builder()
@@ -2635,6 +2829,11 @@ base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+
+# This test only exercises writable workspace roots; the Windows restricted-token
+# sandbox cannot enforce a filesystem policy without root read access.
+[permissions.dev.filesystem]
+":root" = "read"
 
 [permissions.dev.filesystem.":workspace_roots"]
 "." = "write"
@@ -2886,7 +3085,8 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     ];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
+        .with_sandbox_mode("read-only")
         // Snapshot startup is unrelated to the file-approval behavior under test.
         .disable_feature(Feature::ShellSnapshot)
         .write(&codex_home)?;
@@ -3582,6 +3782,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
                 ]),
                 archived: None,
                 section_id: None,
+                project_id: None,
                 cwd: None,
                 use_state_db_only: true,
                 search_term: None,
@@ -3856,7 +4057,8 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
+        .with_sandbox_mode("read-only")
         .write(&codex_home)?;
 
     let mut mcp = TestAppServer::builder()
@@ -4084,7 +4286,8 @@ async fn run_turn_start_file_change_approval_rejection_v2(
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
+        .with_sandbox_mode("read-only")
         .write(&codex_home)?;
 
     let mut mcp = TestAppServer::builder()
@@ -4330,7 +4533,7 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
     let curated_sha = "0123456789abcdef0123456789abcdef01234567";
     let plugin_root = codex_home
         .path()
-        .join("plugins/cache/openai-curated/google-calendar/01234567");
+        .join("plugins/cache/openai-api-curated/google-calendar/01234567");
     let script_path = plugin_root.join("scripts/run.sh");
     let synced_root = codex_home.path().join(".tmp/plugins");
     for path in [
@@ -4353,9 +4556,9 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
         format!("{curated_sha}\n"),
     )?;
     std::fs::write(
-        synced_root.join(".agents/plugins/marketplace.json"),
+        synced_root.join(".agents/plugins/api_marketplace.json"),
         r#"{
-  "name": "openai-curated",
+  "name": "openai-api-curated",
   "plugins": [{
     "name": "google-calendar",
     "source": {"source": "local", "path": "./plugins/google-calendar"}
@@ -4376,11 +4579,11 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     MockResponsesConfig::new(&server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .with_sandbox_mode("danger-full-access")
         .enable_feature(Feature::Plugins)
         .disable_feature(Feature::RemotePlugin)
-        .with_extra_config("[plugins.\"google-calendar@openai-curated\"]\nenabled = true")
+        .with_extra_config("[plugins.\"google-calendar@openai-api-curated\"]\nenabled = true")
         .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
@@ -4422,7 +4625,7 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
                         .expect("command execution item should include scriptPath");
                     assert_eq!(
                         (item_json["pluginId"].as_str(), emitted_script_path),
-                        (Some("google-calendar@openai-curated"), "scripts/run.sh")
+                        (Some("google-calendar@openai-api-curated"), "scripts/run.sh")
                     );
                     assert!(
                         !emitted_script_path.contains(script_path.to_string_lossy().as_ref()),
@@ -4438,25 +4641,9 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
         })
         .await??;
         if method == "item/started" {
-            let server_req = timeout(
-                DEFAULT_READ_TIMEOUT,
-                mcp.read_stream_until_request_message(),
-            )
-            .await??;
-            let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req
-            else {
-                panic!("expected CommandExecutionRequestApproval request");
-            };
-            assert_eq!(params.item_id, "plugin-command");
-            mcp.send_response(
-                request_id,
-                serde_json::to_value(CommandExecutionRequestApprovalResponse {
-                    decision: CommandExecutionApprovalDecision::Decline,
-                })?,
-            )
-            .await?;
+            assert_eq!(status, CommandExecutionStatus::InProgress);
         } else {
-            assert_eq!(status, CommandExecutionStatus::Declined);
+            assert_eq!(status, CommandExecutionStatus::Completed);
         }
     }
 

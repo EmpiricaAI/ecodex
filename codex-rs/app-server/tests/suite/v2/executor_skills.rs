@@ -28,6 +28,9 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+use super::analytics::mount_analytics_capture;
+use super::analytics::wait_for_matching_analytics_event;
+
 #[cfg(target_os = "macos")]
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(target_os = "macos"))]
@@ -109,11 +112,17 @@ async fn exercise_executor_skill(scenario: ExecutorSkillScenario) -> Result<()> 
         } else {
             ("never", "")
         };
+    let analytics_config = if scenario == ExecutorSkillScenario::ExplicitOnly {
+        format!("chatgpt_base_url = \"{}\"", server.uri())
+    } else {
+        String::new()
+    };
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
             r#"
 model = "mock-model"
+{analytics_config}
 approval_policy = "{approval_policy}"
 {sandbox_config}
 model_provider = "mock_provider"
@@ -133,6 +142,9 @@ stream_max_retries = 0
             server.uri()
         ),
     )?;
+    if scenario == ExecutorSkillScenario::ExplicitOnly {
+        mount_analytics_capture(&server, codex_home.path()).await?;
+    }
     let local_skill_dir = codex_home.path().join("skills/local-deploy");
     std::fs::create_dir_all(&local_skill_dir)?;
     std::fs::write(
@@ -157,7 +169,10 @@ stream_max_retries = 0
         file_system
             .create_directory(
                 directory,
-                CreateDirectoryOptions { recursive: true },
+                CreateDirectoryOptions {
+                    recursive: true,
+                    follow_symlinks: true,
+                },
                 /*sandbox*/ None,
             )
             .await?;
@@ -182,7 +197,7 @@ stream_max_retries = 0
         file_system.write_file(
             &manifest_path,
             br#"{"name":"demo-plugin"}"#.to_vec(),
-            /*sandbox*/ None,
+            Default::default(), /*sandbox*/ None,
         ),
         file_system.write_file(
             &skill_path,
@@ -190,7 +205,7 @@ stream_max_retries = 0
                 "---\nname: deploy\ndescription: Deploy through the executor.\n---\n\n# Deploy\n\n{SKILL_MARKER}\n\nRead references/details.md.\n"
             )
             .into_bytes(),
-            /*sandbox*/ None,
+            Default::default(), /*sandbox*/ None,
         ),
         file_system.write_file(
             &openai_yaml_path,
@@ -198,12 +213,12 @@ stream_max_retries = 0
                 "policy:\n  allow_implicit_invocation: {allow_implicit_invocation}\n"
             )
             .into_bytes(),
-            /*sandbox*/ None,
+            Default::default(), /*sandbox*/ None,
         ),
         file_system.write_file(
             &reference_path,
             reference_contents.into_bytes(),
-            /*sandbox*/ None,
+            Default::default(), /*sandbox*/ None,
         ),
     )?;
     #[cfg(unix)]
@@ -243,7 +258,10 @@ stream_max_retries = 0
                     file_system
                         .create_directory(
                             &skill_dir,
-                            CreateDirectoryOptions { recursive: true },
+                            CreateDirectoryOptions {
+                                recursive: true,
+                                follow_symlinks: true,
+                            },
                             /*sandbox*/ None,
                         )
                         .await?;
@@ -255,6 +273,7 @@ stream_max_retries = 0
                                 "x".repeat(1_025)
                             )
                             .into_bytes(),
+                            Default::default(),
                             /*sandbox*/ None,
                         )
                         .await?;
@@ -276,6 +295,11 @@ stream_max_retries = 0
         )
     };
     let package = locator(&skill_dir);
+    let main_package = if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
+        "e0/skills/deploy".to_string()
+    } else {
+        package.clone()
+    };
     let main_resource = locator(&skill_dir.join("SKILL.md")?);
     let reference_resource = locator(&reference_dir.join("details.md")?);
     let tool_response = |call_id: &str, tool: &str, arguments: serde_json::Value| {
@@ -296,8 +320,7 @@ stream_max_retries = 0
             "main",
             "read",
             json!({
-                "authority": {"kind": "executor", "id": authority_id},
-                "package": package.clone(),
+                "package": main_package,
                 "resource": main_resource.clone(),
             }),
         ),
@@ -305,8 +328,11 @@ stream_max_retries = 0
             "reference",
             "read",
             json!({
-                "authority": {"kind": "executor", "id": authority_id},
                 "package": package.clone(),
+                "authority": {
+                    "kind": "executor",
+                    "id": authority_id,
+                },
                 "resource": reference_resource.clone(),
             }),
         ),
@@ -342,7 +368,6 @@ stream_max_retries = 0
                 "approved-reference",
                 "read",
                 json!({
-                    "authority": {"kind": "executor", "id": authority_id},
                     "package": package.clone(),
                     "resource": reference_resource.clone(),
                 }),
@@ -410,33 +435,51 @@ stream_max_retries = 0
             .await?;
     }
     if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
+        let is_skills_budget_warning = |message: &str| {
+            message.starts_with("Exceeded skills context budget.")
+                || message.starts_with(
+                    "Skill descriptions were shortened to fit the skills context budget.",
+                )
+        };
         let warning = timeout(READ_TIMEOUT, async {
             loop {
                 let warning: WarningNotification = app_server.read_notification("warning").await?;
-                if warning
-                    .message
-                    .starts_with("Exceeded skills context budget.")
-                {
+                if is_skills_budget_warning(&warning.message) {
                     return Ok::<WarningNotification, anyhow::Error>(warning);
                 }
             }
         })
         .await??;
         assert_eq!(warning.thread_id, Some(thread_id));
-        assert!(
-            warning
-                .message
-                .starts_with("Exceeded skills context budget.")
-        );
+        assert!(is_skills_budget_warning(&warning.message));
     }
     timeout(
         READ_TIMEOUT,
         app_server.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    if scenario == ExecutorSkillScenario::ExplicitOnly {
+        for invocation_type in ["explicit", "implicit"] {
+            let event = wait_for_matching_analytics_event(&server, READ_TIMEOUT, |event| {
+                event["event_type"] == "skill_invocation"
+                    && event["event_params"]["invoke_type"] == invocation_type
+            })
+            .await?;
+            assert_eq!(event["event_params"]["plugin_id"], authority_id);
+            assert_eq!(event["event_params"]["skill_scope"], "user");
+        }
+    }
 
     let requests = response_mock.requests();
     let request = &requests[0];
+    if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
+        assert!(
+            request
+                .message_input_texts("developer")
+                .iter()
+                .any(|text| text.contains("executor package: e0/skills/deploy"))
+        );
+    }
     assert!(
         request
             .message_input_texts("developer")
@@ -518,11 +561,19 @@ stream_max_retries = 0
             assert_eq!(list_output["skills"], json!([]));
         }
     }
-    assert!(
-        requests[2]
+    let main_output = serde_json::from_str::<serde_json::Value>(
+        &requests[2]
             .function_call_output_text("main")
-            .expect("main skill output")
-            .contains(SKILL_MARKER)
+            .expect("main skill output"),
+    )?;
+    assert!(
+        main_output["contents"]
+            .as_str()
+            .is_some_and(|contents| contents.contains(SKILL_MARKER))
+    );
+    assert_eq!(
+        main_output["skill_root"],
+        json!(skill_dir.inferred_native_path_string())
     );
     let reference_output_text = requests[3]
         .function_call_output_text("reference")
@@ -541,6 +592,10 @@ stream_max_retries = 0
         reference_output["contents"]
             .as_str()
             .is_some_and(|contents| contents.contains(REFERENCE_MARKER))
+    );
+    assert_eq!(
+        reference_output["skill_root"],
+        json!(skill_dir.inferred_native_path_string())
     );
     match scenario {
         ExecutorSkillScenario::VisibleWithBudgetWarning => {

@@ -5,29 +5,50 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
+use codex_config::types::McpServerConfig;
 use codex_core::SleepFuture;
 use codex_core::TimeFuture;
 use codex_core::TimeProvider;
+use codex_core::TurnInputRequest;
+use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::ToolStartInput;
 use codex_features::CurrentTimeSource;
 use codex_features::Feature;
+use codex_history::RolloutItem;
+use codex_history::RolloutLine;
 use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
+use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfig;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
+use core_test_support::responses::assert_parent_turn;
+use core_test_support::responses::assert_root_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_sse_once;
@@ -42,6 +63,7 @@ use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -52,11 +74,35 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_case::test_case;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::http::Method;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
+
+use super::rmcp_client::remote_aware_environment_id;
+use super::rmcp_client::remote_aware_stdio_server_bin;
 
 const CURRENT_TIME_AT: i64 = 1_781_717_655;
 
 struct RecordingTimeProvider {
     thread_ids: Mutex<Vec<ThreadId>>,
+}
+
+#[derive(Default)]
+struct RecordingToolLifecycleContributor {
+    call_ids: Mutex<Vec<String>>,
+}
+
+impl ToolLifecycleContributor for RecordingToolLifecycleContributor {
+    fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            self.call_ids
+                .lock()
+                .expect("recorded tool call ids lock should not be poisoned")
+                .push(input.call_id.to_string());
+        })
+    }
 }
 
 impl TimeProvider for RecordingTimeProvider {
@@ -74,6 +120,78 @@ impl TimeProvider for RecordingTimeProvider {
     fn sleep(&self, _thread_id: ThreadId, _duration: Duration) -> SleepFuture<'_> {
         Box::pin(async { Ok(()) })
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_session_inherits_parent_http_fallback() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+
+    let server = start_mock_server().await;
+    Mock::given(method("GET"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(ResponseTemplate::new(426))
+        .mount(&server)
+        .await;
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call(
+                    "call",
+                    "exec_command",
+                    r#"{"cmd":"true","sandbox_permissions":"require_escalated","justification":"test"}"#,
+                ),
+                ev_completed("parent-tool"),
+            ]),
+            sse(vec![
+                ev_assistant_message("guardian", r#"{"outcome":"deny"}"#),
+                ev_completed("guardian-review"),
+            ]),
+            sse(vec![ev_completed("parent-complete")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.model_provider.supports_websockets = true;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.approvals_reviewer = ApprovalsReviewer::User;
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "run a command".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let websocket_attempts = requests
+        .iter()
+        .filter(|request| request.method == Method::GET)
+        .count();
+    assert_eq!(websocket_attempts, 1);
+    assert!(responses.requests().iter().any(|request| {
+        request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+    }));
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -206,6 +324,9 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         "startup prewarm must not request the external clock"
     );
     let prewarm_requests = [first.body_json(), second.body_json()];
+    for prewarm in &prewarm_requests {
+        assert_root_turn(prewarm, /*expected*/ None)?;
+    }
     let guardian_prewarm = prewarm_requests
         .iter()
         .find(|request| {
@@ -250,13 +371,10 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         .expect("guardian thread id");
 
     test.codex
-        .submit(
-            vec![UserInput::Text {
-                text: "run a command that requires Guardian review".into(),
-                text_elements: Vec::new(),
-            }]
-            .into(),
-        )
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "run a command that requires Guardian review".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
     let guardian_review = tokio::time::timeout(
         Duration::from_secs(5),
@@ -264,6 +382,15 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
     )
     .await?
     .body_json();
+    let parent_request = server.connections()[2][0].body_json();
+    let parent_turn_id = parent_request["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("reviewed parent turn id");
+    assert_parent_turn(&parent_request, /*expected*/ None)?;
+    assert_parent_turn(&guardian_review, Some(parent_turn_id))?;
+    for request in [&parent_request, &guardian_review] {
+        assert_root_turn(request, Some(parent_turn_id))?;
+    }
     assert_eq!(
         guardian_review["client_metadata"]["x-openai-subagent"].as_str(),
         Some("guardian")
@@ -329,6 +456,149 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case("first_node"; "injects_policy_for_first_node_action")]
+#[test_case("shell_then_nodes"; "reuses_shell_reviewer_and_injects_policy_once")]
+#[test_case("ineligible_node"; "omits_policy_for_ineligible_parent_model")]
+async fn guardian_node_repl_policy_follows_production_approval_path(scenario: &str) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian MCP approvals require a host-native test stdio server"
+    );
+
+    let server = start_mock_server().await;
+    let mcp_server_bin = remote_aware_stdio_server_bin()?;
+    let node_repl_auto_review_required = scenario != "ineligible_node";
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", move |model| {
+            model.node_repl_auto_review_required = node_repl_auto_review_required;
+        })
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            let node_repl: McpServerConfig = serde_json::from_value(json!({
+                "command": mcp_server_bin,
+                "environment_id": remote_aware_environment_id(),
+                "default_tools_approval_mode": "prompt",
+                "env": { "MCP_TEST_ENABLE_NODE_REPL_JS": "1" }
+            }))
+            .expect("valid Node REPL MCP test server");
+            config
+                .mcp_servers
+                .set(
+                    [(String::from("node_repl"), node_repl)]
+                        .into_iter()
+                        .collect(),
+                )
+                .expect("configure Node REPL MCP test server");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_mcp_server(&test.codex, "node_repl").await?;
+
+    let actions: &[&str] = if scenario == "shell_then_nodes" {
+        &["shell", "node-first", "node-second"]
+    } else {
+        &["node-first"]
+    };
+    let mut responses = Vec::new();
+    for action in actions {
+        let call_id = format!("call-{action}");
+        let tool_call = if *action == "shell" {
+            ev_function_call(
+                &call_id,
+                "exec_command",
+                &json!({
+                    "cmd": "true",
+                    "sandbox_permissions": "require_escalated",
+                    "justification": "Review a shell action before Node REPL."
+                })
+                .to_string(),
+            )
+        } else {
+            ev_function_call_with_namespace(
+                &call_id,
+                "mcp__node_repl",
+                "js",
+                r#"{"code":"nodeRepl.empty()"}"#,
+            )
+        };
+        responses.push(sse(vec![
+            ev_response_created(&format!("parent-{action}")),
+            tool_call,
+            ev_completed(&format!("parent-{action}")),
+        ]));
+        responses.push(sse(vec![
+            ev_response_created(&format!("guardian-{action}")),
+            ev_assistant_message(
+                &format!("guardian-message-{action}"),
+                r#"{"outcome":"allow"}"#,
+            ),
+            ev_completed(&format!("guardian-{action}")),
+        ]));
+    }
+    responses.push(sse(vec![ev_completed("parent-complete")]));
+    let response_mock = mount_sse_sequence(&server, responses).await;
+
+    test.submit_text_turn("Inspect the browser with Node REPL.")
+        .await?;
+
+    let requests = response_mock.requests();
+    let guardian_requests = requests
+        .iter()
+        .filter(|request| {
+            request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(guardian_requests.len(), actions.len());
+
+    let policy = include_str!("../../src/guardian/node_repl_policy.md");
+    let first_guardian_thread = guardian_requests[0].body_json()["client_metadata"]["thread_id"]
+        .as_str()
+        .expect("Guardian reviewer thread id")
+        .to_string();
+    for (index, request) in guardian_requests.iter().enumerate() {
+        assert_eq!(
+            request.body_json()["client_metadata"]["thread_id"].as_str(),
+            Some(first_guardian_thread.as_str()),
+            "shell and Node approvals must reuse the same Guardian reviewer"
+        );
+        let expected = usize::from(
+            node_repl_auto_review_required && !(scenario == "shell_then_nodes" && index == 0),
+        );
+        assert_eq!(
+            request
+                .message_input_texts("developer")
+                .iter()
+                .filter(|text| text.as_str() == policy)
+                .count(),
+            expected,
+            "Node REPL policy must appear exactly once on eligible Node reviews"
+        );
+        if expected == 1 && (index == 0 || scenario == "shell_then_nodes" && index == 1) {
+            let body = request.body_json();
+            let input = body["input"].as_array().expect("Guardian reviewer input");
+            let policy_index = input
+                .iter()
+                .position(|item| {
+                    item["role"] == "developer"
+                        && item["content"].as_array().is_some_and(|content| {
+                            content.iter().any(|span| span["text"] == policy)
+                        })
+                })
+                .expect("Node REPL developer policy");
+            let user_index = input
+                .iter()
+                .rposition(|item| item["role"] == "user")
+                .expect("Node REPL approval request");
+            assert_eq!(policy_index + 1, user_index);
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -337,25 +607,49 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
         "Guardian approval actions require host-native paths"
     );
 
+    const SECRET: &str = "guardian-parent-policy-test-secret";
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
-    let sandbox_policy_for_config = sandbox_policy.clone();
-
-    let mut builder = test_codex().with_config(move |config| {
-        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-        config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
-            .expect("set sandbox policy");
-    });
+    let lifecycle_recorder = Arc::new(RecordingToolLifecycleContributor::default());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_lifecycle_contributor(lifecycle_recorder.clone());
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(move |config| {
+            let secret_file = config.cwd.join("guardian-secret.txt");
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            let mut file_system_policy = FileSystemSandboxPolicy::workspace_write(
+                &[],
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            );
+            file_system_policy.entries.push(FileSystemSandboxEntry::new(
+                secret_file.into(),
+                FileSystemAccessMode::Deny,
+            ));
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::from_runtime_permissions(
+                    &file_system_policy,
+                    NetworkSandboxPolicy::Restricted,
+                ))
+                .expect("set parent permission profile");
+        })
+        .with_workspace_setup(|cwd, fs| async move {
+            fs.write_file(
+                &codex_utils_path_uri::PathUri::from_abs_path(&cwd.join("guardian-secret.txt")),
+                SECRET.as_bytes().to_vec(),
+                Default::default(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        });
     let test = builder.build_with_auto_env(&server).await?;
 
+    let secret_file = test.config.cwd.join("guardian-secret.txt");
+    let guardian_output_file = test.cwd.path().join("guardian-write.txt");
     let first_output_file = test.cwd.path().join("guardian-first.txt");
     let second_output_file = test.cwd.path().join("guardian-second.txt");
     let first_command = format!("printf first > {}", first_output_file.display());
@@ -372,6 +666,14 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
         "sandbox_permissions": SandboxPermissions::RequireEscalated,
         "justification": "Exercise the second Guardian approval.",
     });
+    let guardian_tool_args = json!({
+        "cmd": format!(
+            "cat {}; printf hostile > {}",
+            secret_file.display(),
+            guardian_output_file.display()
+        ),
+        "sandbox_permissions": SandboxPermissions::UseDefault,
+    });
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -386,6 +688,15 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
             ]),
             sse(vec![
                 ev_response_created("resp-guardian-first-review"),
+                ev_function_call(
+                    "exec-guardian-denied-read",
+                    "exec_command",
+                    &serde_json::to_string(&guardian_tool_args)?,
+                ),
+                ev_completed("resp-guardian-first-review"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-first-assessment"),
                 ev_assistant_message(
                     "msg-guardian-first-review",
                     &json!({
@@ -396,7 +707,7 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
                     })
                     .to_string(),
                 ),
-                ev_completed("resp-guardian-first-review"),
+                ev_completed("resp-guardian-first-assessment"),
             ]),
             sse(vec![
                 ev_response_created("resp-parent-second-tool"),
@@ -429,40 +740,58 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
         ],
     )
     .await;
+    let mut parent_environments = local_selections(test.config.cwd.clone());
+    let parent_environment_config = EnvironmentConfig {
+        allow_login_shell: test.config.permissions.allow_login_shell,
+        permission_profile: PermissionProfileSnapshot::legacy(
+            test.config.permissions.permission_profile().clone(),
+        ),
+        shell_environment_policy: Default::default(),
+        exec_policy: None,
+        mcp_policy: None,
+        network_policy: None,
+        selected_capability_roots: Vec::new(),
+    };
+    parent_environments
+        .environments
+        .first_mut()
+        .expect("local environment selection")
+        .config = EnvironmentConfigState::Ready(parent_environment_config);
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "run two commands that require Guardian review".into(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                environments: Some(parent_environments),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-                sandbox_policy: Some(sandbox_policy),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-
-    let guardian_requests = responses
-        .requests()
-        .into_iter()
+    let requests = responses.requests();
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.body_contains_text(SECRET)),
+        "Guardian disclosed a file denied by the parent task"
+    );
+    let guardian_requests = requests
+        .iter()
         .filter(|request| {
             request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
         })
         .collect::<Vec<_>>();
-    assert_eq!(guardian_requests.len(), 2);
+    assert_eq!(guardian_requests.len(), 3);
     let first_guardian_request = guardian_requests[0].body_json();
-    let second_guardian_request = guardian_requests[1].body_json();
+    let second_guardian_request = guardian_requests[2].body_json();
     let first_guardian_thread_id = first_guardian_request["client_metadata"]["thread_id"]
         .as_str()
         .expect("first Guardian review should have a thread id");
@@ -470,8 +799,22 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
         .as_str()
         .expect("second Guardian review should have a thread id");
     assert_eq!(first_guardian_thread_id, second_guardian_thread_id);
+    assert!(
+        !guardian_output_file.exists(),
+        "Guardian wrote a local file"
+    );
     assert_eq!(fs::read_to_string(first_output_file)?, "first");
     assert_eq!(fs::read_to_string(second_output_file)?, "second");
+    assert_eq!(
+        *lifecycle_recorder
+            .call_ids
+            .lock()
+            .expect("recorded tool call ids lock should not be poisoned"),
+        vec![
+            "exec-call-first".to_string(),
+            "exec-call-second".to_string()
+        ]
+    );
 
     Ok(())
 }
@@ -557,22 +900,19 @@ async fn interrupted_guardian_tool_review_aborts_without_executing_the_command()
     .await;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "interrupt a Guardian-reviewed command".into(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 sandbox_policy: Some(sandbox_policy),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
 
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -604,13 +944,10 @@ async fn interrupted_guardian_tool_review_aborts_without_executing_the_command()
     )
     .await;
     test.codex
-        .submit(
-            vec![UserInput::Text {
-                text: "verify Guardian cancellation left the next turn clean".into(),
-                text_elements: Vec::new(),
-            }]
-            .into(),
-        )
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "verify Guardian cancellation left the next turn clean".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -704,21 +1041,18 @@ async fn guardian_denial_rejects_tool_call_with_rationale() -> Result<()> {
     .await;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "run a command that Guardian should deny".into(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 sandbox_policy: Some(sandbox_policy),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -743,6 +1077,124 @@ async fn guardian_denial_rejects_tool_call_with_rationale() -> Result<()> {
     assert!(
         !output_file.exists(),
         "Guardian-denied command unexpectedly executed"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cyber_model_guardian_denial_interrupts_turn_immediately() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model| {
+            model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
+        })
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+                .expect("set sandbox policy");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let output_file = test.cwd.path().join("cyber-guardian-denied.txt");
+    let command = format!("printf should-not-run > {}", output_file.display());
+    let tool_args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": "Exercise immediate Guardian interruption for cyber models.",
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-cyber-parent-tool-denied"),
+                ev_function_call(
+                    "exec-cyber-call-denied",
+                    "exec_command",
+                    &serde_json::to_string(&tool_args)?,
+                ),
+                ev_completed("resp-cyber-parent-tool-denied"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-cyber-guardian-denied"),
+                ev_assistant_message(
+                    "msg-cyber-guardian-denied",
+                    &json!({
+                        "risk_level": "high",
+                        "user_authorization": "low",
+                        "outcome": "deny",
+                        "rationale": "The requested command has unacceptable test risk.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-cyber-guardian-denied"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "run a command that Guardian should deny for a cyber model".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                sandbox_policy: Some(sandbox_policy),
+                ..Default::default()
+            }),
+        )
+        .await?;
+
+    let warning = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::GuardianWarning(warning)
+                if warning.message.contains("too many approval requests")
+        )
+    })
+    .await;
+    let EventMsg::GuardianWarning(warning) = warning else {
+        unreachable!("wait_for_event returned a non-warning event")
+    };
+    assert!(
+        warning
+            .message
+            .contains("1 consecutive, 1 in the last 50 reviews")
+    );
+
+    let aborted = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    let EventMsg::TurnAborted(aborted) = aborted else {
+        unreachable!("wait_for_event returned a non-abort event")
+    };
+    assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
+    assert_eq!(responses.requests().len(), 2);
+    assert!(
+        !output_file.exists(),
+        "Guardian-denied cyber-model command unexpectedly executed"
     );
 
     Ok(())
@@ -829,22 +1281,19 @@ printf '%s\n' "${@: -1}" >> "${payload_path}""#,
     .await;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "run a command that requires Guardian review".into(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 sandbox_policy: Some(sandbox_policy),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

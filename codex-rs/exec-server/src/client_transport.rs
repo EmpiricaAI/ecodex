@@ -11,6 +11,7 @@ use tracing::debug;
 use tracing::warn;
 
 use codex_http_client::HttpClientFactory;
+use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use codex_websocket_client::WebSocketConnector;
 use codex_websocket_client::WebSocketTlsMode;
@@ -33,7 +34,7 @@ use crate::noise_relay::NoiseHarnessConnectionArgs;
 use crate::noise_relay::noise_harness_connection_from_websocket;
 use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::harness_connection_from_websocket;
-use crate::trace_context::current_trace_context_headers;
+use crate::trace_context::current_rendezvous_headers;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 
@@ -341,9 +342,7 @@ impl ExecServerClient {
                 url: diagnostic_url.clone(),
                 source,
             })?;
-        request
-            .headers_mut()
-            .extend(current_trace_context_headers());
+        request.headers_mut().extend(current_rendezvous_headers());
         let (stream, _) = timeout(
             connect_timeout,
             WebSocketConnector::new_with_tls_mode(
@@ -441,6 +440,7 @@ fn stdio_command_process(stdio_command: &StdioExecServerCommand) -> Command {
     let mut command = Command::new(&stdio_command.program);
     command.args(&stdio_command.args);
     command.envs(&stdio_command.env);
+    scrub_non_inheritable_env_vars(command.as_std_mut());
     if let Some(cwd) = &stdio_command.cwd {
         command.current_dir(cwd);
     }

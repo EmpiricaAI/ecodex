@@ -35,7 +35,7 @@ pub(crate) struct ConfigManager {
     strict_config: bool,
     cloud_config_bundle: Arc<RwLock<CloudConfigBundleLoader>>,
     arg0_paths: Arg0DispatchPaths,
-    thread_config_loader: Arc<RwLock<Arc<dyn ThreadConfigLoader>>>,
+    thread_config_loader: Arc<dyn ThreadConfigLoader>,
     /// ecodex extension: the process's working directory captured once at
     /// startup. Used as the fallback whenever a caller passes
     /// `fallback_cwd: None` to `load_latest_config`, instead of letting that
@@ -46,7 +46,6 @@ pub(crate) struct ConfigManager {
     /// which previously turned one unlucky background config refresh (e.g.
     /// skills/list) into a session that never recovers without a manual kill.
     startup_cwd: PathBuf,
-    pub(crate) psp: bool,
 }
 
 impl ConfigManager {
@@ -68,9 +67,8 @@ impl ConfigManager {
             strict_config,
             cloud_config_bundle: Arc::new(RwLock::new(cloud_config_bundle)),
             arg0_paths,
-            thread_config_loader: Arc::new(RwLock::new(thread_config_loader)),
+            thread_config_loader,
             startup_cwd,
-            psp: false,
         }
     }
 
@@ -125,22 +123,12 @@ impl ConfigManager {
         }
     }
 
-    pub(crate) fn replace_thread_config_loader(
-        &self,
-        thread_config_loader: Arc<dyn ThreadConfigLoader>,
-    ) {
-        if let Ok(mut guard) = self.thread_config_loader.write() {
-            *guard = thread_config_loader;
+    pub(crate) fn clear_cloud_config_bundle_loader(&self) {
+        if let Ok(mut guard) = self.cloud_config_bundle.write() {
+            *guard = CloudConfigBundleLoader::default();
         } else {
-            warn!("failed to update thread config loader");
+            warn!("failed to clear cloud config bundle loader");
         }
-    }
-
-    fn current_thread_config_loader(&self) -> Arc<dyn ThreadConfigLoader> {
-        self.thread_config_loader
-            .read()
-            .map(|guard| Arc::clone(&*guard))
-            .unwrap_or_else(|_| Arc::new(codex_config::NoopThreadConfigLoader))
     }
 
     pub(crate) async fn sync_default_client_residency_requirement(&self) {
@@ -194,7 +182,6 @@ impl ConfigManager {
             .cloud_config_bundle(CloudConfigBundleLoader::default())
             .build()
             .await?;
-        config.psp = self.psp;
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
         Ok(config)
@@ -255,7 +242,6 @@ impl ConfigManager {
                     .map(|(key, value)| (key, json_to_toml(value))),
             )
             .collect::<Vec<_>>();
-        typesafe_overrides.psp = Some(self.psp);
 
         // ecodex extension: substitute the cached startup cwd for a caller's
         // None rather than letting it fall through to a live current_dir()
@@ -270,7 +256,7 @@ impl ConfigManager {
             .harness_overrides(typesafe_overrides)
             .fallback_cwd(fallback_cwd)
             .cloud_config_bundle(self.current_cloud_config_bundle())
-            .thread_config_loader(self.current_thread_config_loader())
+            .thread_config_loader(Arc::clone(&self.thread_config_loader))
             .build()
             .await?;
         self.apply_runtime_feature_enablement(&mut config);
@@ -289,7 +275,6 @@ impl ConfigManager {
         &self,
         cwd: Option<AbsolutePathBuf>,
     ) -> std::io::Result<ConfigLayerStack> {
-        let thread_config_loader = self.current_thread_config_loader();
         load_config_layers_state(
             LOCAL_FS.as_ref(),
             &self.codex_home,
@@ -300,7 +285,7 @@ impl ConfigManager {
                 strict_config: self.strict_config,
                 cloud_config_bundle: self.current_cloud_config_bundle(),
             },
-            thread_config_loader.as_ref(),
+            self.thread_config_loader.as_ref(),
         )
         .await
     }

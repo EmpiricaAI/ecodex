@@ -129,8 +129,13 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
                     Err(_) => std::process::exit(1),
                 };
                 let cwd = cwd.into();
-                match runtime.block_on(codex_apply_patch::apply_patch(
+                let update_file_mode = codex_apply_patch::apply_patch_file_update_mode_from_env();
+                match runtime.block_on(codex_apply_patch::apply_patch_with_options(
                     &patch_arg,
+                    codex_apply_patch::ApplyPatchOptions {
+                        update_file_mode,
+                        ..Default::default()
+                    },
                     &cwd,
                     &mut stdout,
                     &mut stderr,

@@ -1,6 +1,9 @@
 mod app_mcp_routing;
+mod artifact_operation;
 mod command_migration;
 mod discoverable;
+mod error_subtype;
+mod git_policy;
 mod http_client_selector;
 pub mod installed_marketplaces;
 pub mod loader;
@@ -13,18 +16,25 @@ pub mod marketplace_remove;
 pub mod marketplace_upgrade;
 mod npm_source;
 mod plugin_bundle_archive;
+mod plugin_metrics;
+mod plugin_metrics_sidecar;
 mod provider;
+mod recommended_plugin_install;
 pub mod remote;
 pub mod remote_bundle;
 pub mod remote_legacy;
 mod remote_plugin_id_resolver;
 mod script_attribution;
+mod skill_snapshots;
 pub mod startup_sync;
 pub mod store;
 #[cfg(test)]
 mod test_support;
 pub mod toggles;
 mod tool_suggest_metadata;
+
+pub(crate) use git_policy::PluginGitMode;
+pub(crate) use git_policy::configure_trusted_git_repository;
 
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_API_CURATED_MARKETPLACE_NAME: &str = "openai-api-curated";
@@ -41,6 +51,8 @@ pub type LoadedPlugin = codex_plugin::LoadedPlugin<codex_config::McpServerConfig
 pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::McpServerConfig>;
 
 pub use app_mcp_routing::apps_route_available;
+pub use artifact_operation::ArtifactOperation;
+pub use artifact_operation::recognize_artifact_operation;
 pub use command_migration::CommandDescriptionMode;
 pub use command_migration::CommandMigrationProfile;
 pub use command_migration::RewriteProfile as CommandRewriteProfile;
@@ -69,10 +81,19 @@ pub use manager::RecommendedPluginCandidatesInput;
 pub use marketplace_policy::allowed_configured_marketplace_names;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeError as PluginMarketplaceUpgradeError;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarketplaceUpgradeOutcome;
+pub use plugin_metrics::PluginMeasurementDefinition;
+pub use plugin_metrics::PluginMetricsOperation;
+pub use plugin_metrics::ResolvedPluginMetricsOperation;
+pub use plugin_metrics_sidecar::PLUGIN_METRICS_OUTPUT_ENV_VAR;
+pub use plugin_metrics_sidecar::PluginMeasurementBatch;
+pub use plugin_metrics_sidecar::PluginMetricsSidecar;
+pub use plugin_metrics_sidecar::strip_output_env;
 pub use provider::ExecutorPluginProvider;
 pub use provider::ExecutorPluginProviderError;
 pub use provider::ResolvedExecutorPlugin;
+pub use recommended_plugin_install::hydrate_selected_recommended_plugin_install_metadata;
 pub use remote::RecommendedPlugin;
 pub use remote::RecommendedPluginsMode;
 pub use script_attribution::PluginCommandAttribution;
 pub use script_attribution::TrustedPluginRoots;
+pub use script_attribution::command_script_arguments;

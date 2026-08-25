@@ -11,8 +11,37 @@ use ts_rs::TS;
 
 /// Extension ID for OpenAI form elicitation.
 pub const OPENAI_FORM_EXTENSION_ID: &str = "openai/form";
+/// Extension ID for standard MCP form elicitations that require user-entered input.
+pub const OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID: &str = "openai/standard-form-input";
 /// Extension ID for MCP App UI rendering.
 pub const MCP_APP_UI_EXTENSION_ID: &str = "io.modelcontextprotocol/ui";
+
+/// Bounded app-resource provenance retained across a compaction checkpoint.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct McpResourceOriginCheckpoint {
+    pub origins: Vec<McpResourceOrigin>,
+    pub turns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_turn_id: Option<String>,
+}
+
+/// The original app, account, tool, and URI that authorize one widget read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct McpResourceOrigin {
+    pub call_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    pub tool: String,
+    pub connector_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_id: Option<String>,
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ambiguous_account: bool,
+}
+
+/// Client extensions that must not be advertised to MCP servers.
+const MCP_CLIENT_ONLY_EXTENSION_IDS: [&str; 1] = [OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID];
 
 /// MCP extensions supplied by the client that created a Codex session.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -36,6 +65,16 @@ impl ClientMcpExtensions {
     /// Returns the client's settings for the given extension.
     pub fn get(&self, extension_id: &str) -> Option<&serde_json::Value> {
         self.extensions.get(extension_id)
+    }
+
+    /// Returns only client extensions that should be advertised to MCP servers.
+    pub fn for_mcp_servers(&self) -> Self {
+        Self::new(
+            self.extensions
+                .iter()
+                .filter(|(id, _)| !MCP_CLIENT_ONLY_EXTENSION_IDS.contains(&id.as_str()))
+                .map(|(id, settings)| (id.clone(), settings.clone())),
+        )
     }
 
     /// Iterates over the extensions and their settings.
@@ -377,6 +416,40 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn client_mcp_extensions_for_mcp_servers_excludes_client_only_extensions() {
+        let openai_form_settings = serde_json::json!({ "version": 1 });
+        let app_ui_settings = serde_json::json!({ "mimeTypes": ["text/html"] });
+        let future_server_extension_settings = serde_json::json!({ "version": 2 });
+        let extensions = ClientMcpExtensions::new([
+            (
+                OPENAI_FORM_EXTENSION_ID.to_string(),
+                openai_form_settings.clone(),
+            ),
+            (MCP_APP_UI_EXTENSION_ID.to_string(), app_ui_settings.clone()),
+            (
+                OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID.to_string(),
+                serde_json::json!({}),
+            ),
+            (
+                "example/future-server-extension".to_string(),
+                future_server_extension_settings.clone(),
+            ),
+        ]);
+
+        assert_eq!(
+            extensions.for_mcp_servers(),
+            ClientMcpExtensions::new([
+                (OPENAI_FORM_EXTENSION_ID.to_string(), openai_form_settings),
+                (MCP_APP_UI_EXTENSION_ID.to_string(), app_ui_settings),
+                (
+                    "example/future-server-extension".to_string(),
+                    future_server_extension_settings,
+                ),
+            ])
+        );
+    }
 
     #[test]
     fn resource_size_deserializes_without_narrowing() {

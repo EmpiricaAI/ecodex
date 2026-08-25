@@ -4,7 +4,7 @@ use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::request_processors::populate_thread_turns_from_history;
 use crate::request_processors::thread_from_stored_thread;
-use crate::request_processors::thread_settings_from_core_snapshot;
+use crate::request_processors::thread_settings_from_config_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
@@ -53,6 +53,7 @@ use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::StrictReviewRequiredNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -89,6 +90,7 @@ use codex_app_server_protocol::guardian_auto_approval_review_notification;
 use codex_app_server_protocol::item_event_to_server_notification;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_guardian_v2::StrictReviewReason;
 use codex_protocol::ThreadId;
 use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
 use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -321,6 +323,22 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &assessment,
             );
             outgoing.send_server_notification(notification).await;
+            if assessment.status == codex_protocol::protocol::GuardianAssessmentStatus::InProgress
+                && conversation
+                    .thread_extension_data()
+                    .remove::<StrictReviewReason>()
+                    .is_some()
+            {
+                outgoing
+                    .send_server_notification(ServerNotification::StrictReviewRequired(
+                        StrictReviewRequiredNotification {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: assessment_turn_id.clone(),
+                            started_at_ms: assessment.started_at_ms,
+                        },
+                    ))
+                    .await;
+            }
             let completion_status = match assessment.status {
                 codex_protocol::protocol::GuardianAssessmentStatus::Denied
                 | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
@@ -1186,9 +1204,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 ))
                 .await;
         }
-        EventMsg::ThreadSettingsApplied(thread_settings_event) => {
+        EventMsg::ThreadQueueChanged(_) => {}
+        EventMsg::ThreadSettingsApplied(_) => {
             let thread_settings =
-                thread_settings_from_core_snapshot(thread_settings_event.thread_settings);
+                thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
             let changed = {
                 let mut state = thread_state.lock().await;
                 state.note_thread_settings(thread_settings.clone())
@@ -2142,11 +2161,11 @@ mod tests {
     use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::RateLimitSnapshot;
     use codex_protocol::protocol::RateLimitWindow;
-    use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_protocol::protocol::UserMessageEvent;
+    use codex_rollout::RolloutItem;
     use codex_thread_store::StoredThread;
     use codex_thread_store::StoredThreadHistory;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -2206,6 +2225,7 @@ mod tests {
                 message: "after rollback".to_string(),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
             })),
         ];
         let stored_thread = StoredThread {
@@ -2226,6 +2246,7 @@ mod tests {
             section: None,
             section_position: None,
             section_entered_at: None,
+            project_id: None,
             cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
@@ -3614,6 +3635,7 @@ mod tests {
                         ],
                         phase: None,
                         memory_citation: None,
+                        delivery: None,
                     }),
                     started_at_ms: Some(0),
                     completed_at_ms: 0,
@@ -3631,6 +3653,7 @@ mod tests {
                         }],
                         phase: None,
                         memory_citation: None,
+                        delivery: None,
                     }),
                     started_at_ms: Some(0),
                     completed_at_ms: 0,

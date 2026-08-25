@@ -374,9 +374,11 @@ pub fn enrich(mut template: ModelInfo, e: &CuratedEntry) -> ModelInfo {
         template.context_window = Some(ctx);
         template.max_context_window = Some(ctx);
     }
-    if let Some(tools) = e.supports_tools {
-        template.supports_parallel_tool_calls = tools;
-    }
+    // (0.149.0 sync: upstream removed ModelInfo.supports_parallel_tool_calls —
+    // parallel tool-call capability is no longer a per-model flag. The curated
+    // `supports_tools` hint has no remaining ModelInfo target; entries keep the
+    // field in their schema for forward-compat but it maps to nothing here.)
+    let _ = e.supports_tools;
     // A curated entry is, by definition, a recognized model — suppress the
     // "fallback model metadata" warning the way the family table does.
     template.used_fallback_model_metadata = false;

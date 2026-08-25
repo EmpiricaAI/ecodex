@@ -70,7 +70,6 @@ fn curated_entry_inherits_runtime_template_fields() {
         "curated entry must inherit base_instructions from the runtime template"
     );
     assert_eq!(info.context_window, Some(262_144));
-    assert!(info.supports_parallel_tool_calls);
 }
 
 #[test]

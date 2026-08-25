@@ -1,5 +1,6 @@
 use super::mcp_refresh::McpRefreshInvalidationGuard;
 use super::*;
+use crate::tools::sandboxing::executor_windows_sandbox_level;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::FileSystemSandboxContext;
@@ -95,11 +96,12 @@ impl Session {
         config: &Config,
     ) -> (McpConfig, McpRuntimeContext) {
         let originator = self.originator().await;
-        let (windows_sandbox_level, session_source) = {
+        let (windows_sandbox_level, session_source, host_fallback_cwd) = {
             let state = self.state.lock().await;
             (
                 state.session_configuration.windows_sandbox_level,
                 state.session_configuration.session_source.clone(),
+                state.session_configuration.cwd().clone(),
             )
         };
         let environments = self.services.turn_environments.snapshot().await;
@@ -126,20 +128,20 @@ impl Session {
                 McpThreadIdentity {
                     session_source: &session_source,
                     originator: &originator,
+                    environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                 },
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),
             )
             .await
             .config;
-        let local_stdio_fallback_cwd = environments
-            .primary()
-            .and_then(|environment| environment.cwd().to_abs_path().ok())
+        let local_process_cwd = environments
+            .local_environment_cwd()
             .map(|cwd| cwd.to_path_buf())
-            .unwrap_or_else(|| config.cwd.to_path_buf());
+            .unwrap_or_else(|| host_fallback_cwd.to_path_buf());
         let runtime_context = McpRuntimeContext::new(
             self.services.turn_environments.environment_manager(),
-            local_stdio_fallback_cwd,
+            local_process_cwd,
         );
         (mcp_config, runtime_context)
     }
@@ -159,14 +161,10 @@ impl Session {
         };
         loop {
             let auth = self.services.auth_manager.auth_cached();
-            if self
+            if !self
                 .services
-                .plugins_manager
-                .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode))
-                || !self
-                    .services
-                    .mcp_runtime
-                    .current_auth_matches(auth.as_ref())
+                .mcp_runtime
+                .current_auth_matches(auth.as_ref())
             {
                 self.mark_mcp_runtime_dirty();
             }
@@ -179,9 +177,6 @@ impl Session {
                 published: false,
             };
             let auth = self.services.auth_manager.auth().await;
-            self.services
-                .plugins_manager
-                .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
             let desired = self.latest_mcp_desired_state(auth).await;
             let selected_capability_roots = self
                 .resolve_selected_capability_roots_for_step(&desired.environments)
@@ -206,6 +201,7 @@ impl Session {
                     McpThreadIdentity {
                         session_source: &desired.session_source,
                         originator: &desired.originator,
+                        environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                     },
                     &ready_selected_capability_roots,
                     executor_capability_discovery.as_deref(),
@@ -236,9 +232,6 @@ impl Session {
             .await
             .map_err(|_| anyhow::anyhow!("MCP runtime refresh semaphore closed"))?;
         let auth = self.services.auth_manager.auth().await;
-        self.services
-            .plugins_manager
-            .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
         let desired = self.latest_mcp_desired_state(auth).await;
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&desired.environments)
@@ -263,11 +256,13 @@ impl Session {
                 McpThreadIdentity {
                     session_source: &desired.session_source,
                     originator: &desired.originator,
+                    environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                 },
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),
             )
             .await;
+        let selected_plugins = mcp_projection.selected_plugins.clone();
         let input = self.build_mcp_runtime_input(
             &desired,
             mcp_projection,
@@ -278,7 +273,9 @@ impl Session {
             input.mcp_servers.contains_key(CODEX_APPS_MCP_SERVER_NAME),
             "unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"
         );
-        self.services.mcp_runtime.replace_fresh(input).await
+        let refreshed = self.services.mcp_runtime.replace_fresh(input).await;
+        self.services.thread_extension_data.insert(selected_plugins);
+        refreshed
     }
 
     pub(super) fn mark_mcp_runtime_dirty(&self) {
@@ -302,11 +299,32 @@ impl Session {
         {
             self.mark_mcp_runtime_dirty();
         }
+
+        let recovered_oauth_servers = self
+            .services
+            .mcp_runtime
+            .updated_oauth_credentials_after_auth_failure()
+            .await;
+        if !recovered_oauth_servers.is_empty()
+            && let Ok(_refresh) = self.mcp_refresh.acquire().await
+            && self
+                .services
+                .mcp_runtime
+                .has_authentication_failed_servers(&recovered_oauth_servers)
+                .await
+        {
+            self.mark_mcp_runtime_dirty();
+        }
         self.refresh_mcp_if_dirty().await;
+        let required_servers = required_servers
+            .iter()
+            .chain(&recovered_oauth_servers)
+            .cloned()
+            .collect::<Vec<_>>();
         if let Some(binding) = self
             .services
             .mcp_runtime
-            .current_binding_with_required_servers(required_servers)
+            .current_binding_with_required_servers(&required_servers)
             .await
         {
             return binding;
@@ -365,11 +383,12 @@ impl Session {
                         environment.cwd().clone(),
                     );
                     sandbox.workspace_roots = environment.workspace_roots().to_vec();
-                    sandbox.windows_sandbox_level = windows_sandbox_level;
+                    sandbox.windows_sandbox_level =
+                        executor_windows_sandbox_level(windows_sandbox_level, environment.cwd());
                     sandbox.windows_sandbox_private_desktop =
                         config.permissions.windows_sandbox_private_desktop;
                     sandbox.use_legacy_landlock = config.features.use_legacy_landlock();
-                    (environment.environment_id.clone(), sandbox)
+                    (environment.selection.environment_id.clone(), sandbox)
                 })
                 .collect::<HashMap<_, _>>()
         } else {
@@ -399,11 +418,14 @@ impl Session {
             })
             .cloned()
             .collect::<Vec<_>>();
-        Some(Arc::new(
-            cache
-                .snapshot(&selected_capability_roots, &sandbox_contexts)
-                .await,
-        ))
+        let discovery = cache
+            .snapshot(&selected_capability_roots, &sandbox_contexts)
+            .await;
+        if cache.take_recovered_discovery() {
+            // Root selection is unchanged, but recovered manifests can change MCP servers.
+            self.mark_mcp_runtime_dirty();
+        }
+        Some(Arc::new(discovery))
     }
 
     pub(crate) async fn resolve_selected_capability_roots_for_step(
@@ -422,7 +444,7 @@ impl Session {
             .chain(
                 environments
                     .turn_environments()
-                    .flat_map(|environment| environment.environment.selected_capability_roots()),
+                    .flat_map(|environment| environment.config().selected_capability_roots.clone()),
             )
             .enumerate()
         {
@@ -597,9 +619,6 @@ impl Session {
             return;
         };
         let auth = self.services.auth_manager.auth().await;
-        self.services
-            .plugins_manager
-            .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
         {
             let mut state = self.state.lock().await;
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
@@ -629,6 +648,7 @@ impl Session {
                 McpThreadIdentity {
                     session_source: &turn_context.session_source,
                     originator: &turn_context.originator,
+                    environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                 },
                 &ready_selected_capability_roots,
                 executor_capability_discovery.as_deref(),
@@ -731,6 +751,7 @@ async fn review_guardian_mcp_elicitation(
             || crate::connectors::mcp_approvals_reviewer_from_layers(
                 &mcp_config.config_layer_stack,
                 ApprovalsReviewer::AutoReview,
+                Some(turn_context.model_info.slug.as_str()),
                 request.server_name.as_str(),
                 connector_id,
             ) != ApprovalsReviewer::AutoReview
@@ -800,6 +821,7 @@ async fn review_guardian_mcp_elicitation(
     let approvals_reviewer = crate::connectors::mcp_approvals_reviewer_from_layers(
         &mcp_config.config_layer_stack,
         mcp_config.approvals_reviewer,
+        Some(turn_context.model_info.slug.as_str()),
         request.server_name.as_str(),
         elicitation_connector_id(&request.elicitation),
     );
@@ -986,6 +1008,7 @@ fn mcp_elicitation_response_from_guardian_decision(
     match decision {
         ReviewDecision::Approved
         | ReviewDecision::ApprovedForSession
+        | ReviewDecision::ApprovedMcpPolicyAmendment
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => ElicitationResponse {
             action: ElicitationAction::Accept,

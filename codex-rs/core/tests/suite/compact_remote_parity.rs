@@ -1,15 +1,19 @@
+use codex_core::TurnInputRequest;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use codex_features::Feature;
+use codex_history::RolloutItem;
+use codex_history::RolloutLine;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
@@ -605,13 +609,13 @@ async fn capture_from_requests(
 
 async fn submit_user_input(codex: &codex_core::CodexThread, items: Vec<UserInput>) -> Result<()> {
     codex
-        .submit(Op::UserInput {
-            items,
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(items).with_thread_settings(
+            ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                permission_profile: Some(PermissionProfile::Disabled),
+                ..Default::default()
+            },
+        ))
         .await?;
     wait_for_turn_complete(codex).await;
     Ok(())
@@ -794,7 +798,7 @@ fn replacement_history_from_rollout(path: &Path) -> Result<Value> {
         {
             let values = items
                 .into_iter()
-                .map(|item| serde_json::to_value(item).expect("serialize replacement item"))
+                .map(|item| serde_json::to_value(item.item).expect("serialize replacement item"))
                 .collect::<Vec<_>>();
             replacement_history = Some(Value::Array(values));
         }

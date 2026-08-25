@@ -1,14 +1,24 @@
 use super::*;
+use crate::environment_selection::EnvironmentConfigOrigin;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::exec_policy::AllowPrefixRules;
 use crate::shell_snapshot::ShellSnapshotFile;
+use crate::tools::sandboxing::executor_windows_sandbox_level;
 use codex_core_plugins::PluginCommandAttribution;
+use codex_core_plugins::ResolvedPluginMetricsOperation;
 use codex_core_plugins::TrustedPluginRoots;
+use codex_exec_server::ExecutorFileSystem;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::permissions::RawFileSystemSandboxPolicy;
+use codex_protocol::protocol::EnvironmentConfig;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -25,46 +35,53 @@ use tracing::instrument;
 
 pub(crate) type ShellSnapshotTask = Shared<BoxFuture<'static, Option<Arc<ShellSnapshotFile>>>>;
 
-/// Effective per-environment config; fields move here as executor config is migrated.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct EnvironmentConfig {
-    pub(crate) allow_login_shell: bool,
-    pub(crate) permission_profile: PermissionProfileSnapshot,
-}
-
 #[derive(Clone)]
 pub(crate) struct TurnEnvironment {
-    pub(crate) environment_id: String,
+    pub(crate) selection: TurnEnvironmentSelection,
+    pub(crate) config_origin: EnvironmentConfigOrigin,
     pub(crate) environment: Arc<Environment>,
-    cwd: PathUri,
-    workspace_roots: Vec<PathUri>,
     pub(crate) shell: Option<shell::Shell>,
-    pub(crate) config: EnvironmentConfig,
     pub(crate) shell_snapshot: ShellSnapshotTask,
 }
 
 impl TurnEnvironment {
     pub(crate) fn new(
-        environment_id: String,
+        selection: TurnEnvironmentSelection,
+        config_origin: EnvironmentConfigOrigin,
         environment: Arc<Environment>,
-        cwd: PathUri,
-        workspace_roots: Vec<PathUri>,
         shell: Option<shell::Shell>,
-        config: EnvironmentConfig,
     ) -> Self {
+        debug_assert!(matches!(selection.config, EnvironmentConfigState::Ready(_)));
         Self {
-            environment_id,
+            selection,
+            config_origin,
             environment,
-            cwd,
-            workspace_roots,
             shell,
-            config,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
         }
     }
 
+    pub(crate) fn config(&self) -> &EnvironmentConfig {
+        let EnvironmentConfigState::Ready(config) = &self.selection.config else {
+            unreachable!("ready turn environments always carry resolved configuration")
+        };
+        config
+    }
+
+    pub(crate) fn shell_environment_policy(&self) -> &ShellEnvironmentPolicy {
+        &self.config().shell_environment_policy
+    }
+
+    #[cfg(test)]
+    pub(crate) fn config_mut(&mut self) -> &mut EnvironmentConfig {
+        let EnvironmentConfigState::Ready(config) = &mut self.selection.config else {
+            unreachable!("ready turn environments always carry resolved configuration")
+        };
+        config
+    }
+
     pub(crate) fn shell_snapshot(&self, cwd: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
-        if self.cwd != PathUri::from_abs_path(cwd) {
+        if self.selection.cwd != PathUri::from_abs_path(cwd) {
             return None;
         }
         self.shell_snapshot
@@ -74,19 +91,19 @@ impl TurnEnvironment {
     }
 
     pub(crate) fn cwd(&self) -> &PathUri {
-        &self.cwd
+        &self.selection.cwd
     }
 
     pub(crate) fn workspace_roots(&self) -> &[PathUri] {
-        &self.workspace_roots
+        &self.selection.workspace_roots
     }
 
     pub(crate) fn permission_profile(&self) -> &PermissionProfile {
-        self.config.permission_profile.permission_profile()
+        self.config().permission_profile.permission_profile()
     }
 
     pub(crate) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
-        self.config.permission_profile.active_permission_profile()
+        self.config().permission_profile.active_permission_profile()
     }
 
     pub(crate) fn permission_profile_with_workspace_roots(&self) -> PermissionProfile {
@@ -101,23 +118,21 @@ impl TurnEnvironment {
     }
 
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
-        TurnEnvironmentSelection {
-            environment_id: self.environment_id.clone(),
-            cwd: self.cwd.clone(),
-            workspace_roots: self.workspace_roots.clone(),
-        }
+        self.config_origin
+            .into_input_selection(self.selection.clone())
     }
 }
 
 impl std::fmt::Debug for TurnEnvironment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TurnEnvironment")
-            .field("environment_id", &self.environment_id)
+            .field("environment_id", &self.selection.environment_id)
             .field("environment", &self.environment)
-            .field("cwd", &self.cwd)
-            .field("workspace_roots", &self.workspace_roots)
+            .field("cwd", &self.selection.cwd)
+            .field("workspace_roots", &self.selection.workspace_roots)
             .field("shell", &self.shell)
-            .field("config", &self.config)
+            .field("config", self.config())
+            .field("config_origin", &self.config_origin)
             .finish_non_exhaustive()
     }
 }
@@ -129,12 +144,18 @@ pub struct TurnContext {
     pub(crate) trace_id: Option<String>,
     pub(crate) realtime_active: bool,
     pub(crate) code_mode_available: bool,
+    /// Turn-scoped configuration. Read step-specific settings such as service tier and
+    /// approvals reviewer from the corresponding `StepContext` fields instead.
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
-    pub(crate) model_info: ModelInfo,
+    /// Legacy turn model; step-scoped execution should use `StepContext::model_info`.
+    pub(crate) model_info: Arc<ModelInfo>,
+    /// Turn-wide telemetry; model-attributed step work should use `StepContext::session_telemetry`.
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
+    /// Legacy turn effort; step-scoped execution should use `StepContext::reasoning_effort`.
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+    /// Legacy turn summary; step-scoped execution should use `StepContext::reasoning_summary`.
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) history_mode: ThreadHistoryMode,
@@ -202,25 +223,104 @@ impl TurnContext {
             .resolve_attribution(command, cwd)
     }
 
+    pub(crate) async fn plugin_attribution_for_executor_command(
+        &self,
+        command: &[String],
+        cwd: &PathUri,
+        file_system: &dyn ExecutorFileSystem,
+    ) -> Option<PluginCommandAttribution> {
+        self.extension_data
+            .get::<TrustedPluginRoots>()?
+            .resolve_executor_attribution(command, cwd, file_system)
+            .await
+    }
+
+    /// Approval policy admitted with the turn; step-scoped actions should use
+    /// `StepContext::approval_policy` instead.
     pub(crate) fn approval_policy(&self) -> AskForApproval {
         self.config.permissions.approval_policy.value()
     }
 
+    pub(crate) fn allow_prefix_rules(&self) -> AllowPrefixRules {
+        let ignore_rules = self
+            .config
+            .config_layer_stack
+            .requirements_toml()
+            .auto_review
+            .as_ref()
+            .and_then(|auto_review| auto_review.ignore_rules.as_ref())
+            .is_some_and(|models| models.contains(&self.model_info.slug));
+        if self.model_info.model_specialty.as_deref() == Some(MODEL_SPECIALTY_CYBER) || ignore_rules
+        {
+            AllowPrefixRules::IgnoreForCyberModel
+        } else {
+            AllowPrefixRules::Honor
+        }
+    }
+
+    pub(crate) async fn plugin_metrics_operation_for_command(
+        &self,
+        command: &[String],
+        cwd: &PathUri,
+        environment: &Environment,
+    ) -> Option<ResolvedPluginMetricsOperation> {
+        let trusted_roots = self.extension_data.get::<TrustedPluginRoots>()?;
+        if environment.is_remote() {
+            trusted_roots
+                .resolve_metrics_operation_in_filesystem(
+                    command,
+                    cwd,
+                    environment.get_filesystem().as_ref(),
+                )
+                .await
+        } else {
+            trusted_roots.resolve_metrics_operation(command, &cwd.to_abs_path().ok()?)
+        }
+    }
+
+    /// Returns the selected environment's permissions, or the thread's permissions when none is ready.
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
-        self.config.permissions.effective_permission_profile()
+        self.environments
+            .permission_profile_or_else(|| self.config.permissions.effective_permission_profile())
     }
 
     pub(crate) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.config.permissions.file_system_sandbox_policy()
+        self.permission_profile().file_system_sandbox_policy()
     }
 
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        self.config.permissions.network_sandbox_policy()
+        self.permission_profile().network_sandbox_policy()
     }
 
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
         #[allow(deprecated)]
-        self.config.permissions.legacy_sandbox_policy(&self.cwd)
+        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+            &self.permission_profile(),
+            &self.cwd,
+        )
+    }
+
+    /// Combines the selected environment's workspace roots with its permission profile roots.
+    pub(crate) fn effective_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+        let Some(environment) = self.environments.primary() else {
+            return self.config.effective_workspace_roots();
+        };
+
+        let mut workspace_roots = environment
+            .workspace_roots()
+            .iter()
+            .filter_map(|root| root.to_abs_path().ok())
+            .collect::<Vec<_>>();
+        for root in environment
+            .config()
+            .permission_profile
+            .profile_workspace_roots()
+        {
+            if !workspace_roots.contains(root) {
+                workspace_roots.push(root.clone());
+            }
+        }
+        workspace_roots
     }
 
     pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
@@ -294,6 +394,7 @@ impl TurnContext {
                 config.http_client_factory(),
             )
             .await;
+        let model_info = Arc::new(model_info);
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -302,7 +403,7 @@ impl TurnContext {
             code_mode_available: self.code_mode_available,
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
-            model_info: model_info.clone(),
+            model_info: Arc::clone(&model_info),
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -359,7 +460,10 @@ impl TurnContext {
             permissions: permissions.into(),
             cwd: Some(environment.cwd().clone()),
             workspace_roots: environment.workspace_roots().to_vec(),
-            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_level: executor_windows_sandbox_level(
+                self.windows_sandbox_level,
+                environment.cwd(),
+            ),
             windows_sandbox_private_desktop: self
                 .config
                 .permissions
@@ -369,7 +473,7 @@ impl TurnContext {
         }
     }
 
-    fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
+    fn non_legacy_file_system_sandbox_policy(&self) -> Option<RawFileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
         // while both fields exist; once callers consume only the split policy,
@@ -381,12 +485,15 @@ impl TurnContext {
                 &self.cwd,
             );
         let file_system_sandbox_policy = self.file_system_sandbox_policy();
+        // `permission_profile` below is authoritative and serializes the same
+        // runtime entries, so this compatibility field may omit an unrenderable policy.
         (file_system_sandbox_policy != legacy_file_system_sandbox_policy)
-            .then_some(file_system_sandbox_policy)
+            .then(|| file_system_sandbox_policy.try_into().ok())
+            .flatten()
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
-        let workspace_roots = self.config.effective_workspace_roots();
+        let workspace_roots = self.effective_workspace_roots();
         #[allow(deprecated)]
         let cwd = self.cwd.clone();
         TurnContextItem {
@@ -399,6 +506,10 @@ impl TurnContext {
             approvals_reviewer: Some(self.config.approvals_reviewer),
             sandbox_policy: self.sandbox_policy(),
             permission_profile: Some(self.permission_profile()),
+            active_permission_profile: self.environments.primary().map_or_else(
+                || self.config.permissions.active_permission_profile(),
+                TurnEnvironment::active_permission_profile,
+            ),
             network: self.turn_context_network_item(),
             file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
             model: self.model_info.slug.clone(),
@@ -448,6 +559,7 @@ fn local_time_context() -> (String, String) {
 impl Session {
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(
+        &self,
         session_configuration: &SessionConfiguration,
         cwd: AbsolutePathBuf,
     ) -> Config {
@@ -456,7 +568,7 @@ impl Session {
         let mut per_turn_config = (*config).clone();
         per_turn_config.cwd = cwd;
         per_turn_config.permissions.approval_policy = session_configuration.approval_policy.clone();
-        let workspace_roots = session_configuration.primary_workspace_roots();
+        let workspace_roots = self.services.turn_environments.primary_workspace_roots();
         per_turn_config.workspace_roots = workspace_roots.clone();
         per_turn_config
             .permissions
@@ -492,10 +604,11 @@ impl Session {
     }
 
     pub(crate) fn build_effective_session_config(
+        &self,
         session_configuration: &SessionConfiguration,
     ) -> Config {
         let mut config =
-            Self::build_per_turn_config(session_configuration, session_configuration.cwd().clone());
+            self.build_per_turn_config(session_configuration, session_configuration.cwd().clone());
         config.model = Some(session_configuration.collaboration_mode.model().to_string());
         config
     }
@@ -547,7 +660,13 @@ impl Session {
             per_turn_config.features.enabled(Feature::FastMode),
             &model_info,
         );
-        let permission_profile = per_turn_config.permissions.effective_permission_profile();
+        let permission_profile = environments.permission_profile_or_else(|| {
+            per_turn_config.permissions.effective_permission_profile()
+        });
+        let auto_review_enabled = crate::guardian::routes_approval_policy_to_guardian(
+            per_turn_config.permissions.approval_policy.value(),
+            per_turn_config.approvals_reviewer,
+        );
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
@@ -561,7 +680,11 @@ impl Session {
             &permission_profile,
             session_configuration.windows_sandbox_level,
             network.is_some(),
+            auto_review_enabled,
+            &model_info,
         ));
+        turn_metadata_state
+            .set_responses_api_metadata(per_turn_config.responses_api_metadata.clone());
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
         extension_data.insert(skills_snapshot);
@@ -572,7 +695,7 @@ impl Session {
             code_mode_available: true,
             config: per_turn_config,
             auth_manager,
-            model_info,
+            model_info: Arc::new(model_info),
             session_telemetry: session_telemetry_for_context,
             provider,
             reasoning_effort,
@@ -619,14 +742,20 @@ impl Session {
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
             let previous_provider_name = state.session_configuration.provider.info().name.clone();
-            match state.session_configuration.clone().apply(&updates) {
+            match self.apply_session_settings(&state.session_configuration, &updates) {
                 Ok(next) => {
-                    let mcp_inputs_changed = state.session_configuration.mcp_inputs_differ(&next);
+                    let mcp_inputs_changed =
+                        self.mcp_inputs_differ(&state.session_configuration, &next, &updates);
+                    if mcp_inputs_changed {
+                        self.mark_mcp_runtime_dirty();
+                    }
                     let previous_permission_profile =
                         state.session_configuration.permission_profile();
                     let next_permission_profile = next.permission_profile();
                     let permission_profile_changed =
                         previous_permission_profile != next_permission_profile;
+                    let previous_config = notify_config_contributors
+                        .then(|| self.build_effective_session_config(&state.session_configuration));
                     // ecodex extension (T78): detect provider hot-swap. Same
                     // pattern as `Session::update_settings` — capture the swap
                     // plan inside the lock, execute the rebuild outside it so
@@ -650,26 +779,21 @@ impl Session {
                     } else {
                         None
                     };
-                    let previous_config = notify_config_contributors.then(|| {
-                        Self::build_effective_session_config(&state.session_configuration)
-                    });
-                    let new_config = notify_config_contributors
-                        .then(|| Self::build_effective_session_config(&next));
-                    let environment_config = next.environment_config();
-                    if updates.environments.is_some() {
+                    let environment_config = next.inferred_environment_config();
+                    if let Some(environments) = &updates.environments {
                         self.services
                             .turn_environments
-                            .update_selections(next.environment_selections(), &environment_config);
-                    } else if state.session_configuration.environment_config() != environment_config
+                            .update_selections(&environments.environments, &environment_config);
+                    } else if state.session_configuration.inferred_environment_config()
+                        != environment_config
                     {
                         self.services
                             .turn_environments
-                            .update_environment_configs(&environment_config);
-                    }
-                    if mcp_inputs_changed {
-                        self.mark_mcp_runtime_dirty();
+                            .update_thread_config(&environment_config);
                     }
                     state.session_configuration = next.clone();
+                    let new_config = notify_config_contributors
+                        .then(|| self.build_effective_session_config(&state.session_configuration));
                     Ok((
                         next,
                         mcp_inputs_changed,
@@ -777,7 +901,11 @@ impl Session {
             .as_ref()
             .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
-        let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
+        let per_turn_config = self.build_per_turn_config(&session_configuration, cwd.clone());
+        let network_permission_profile = primary_turn_environment
+            .map(TurnEnvironment::permission_profile)
+            .cloned()
+            .unwrap_or_else(|| session_configuration.permission_profile());
         let model_info = self
             .services
             .models_manager
@@ -843,7 +971,7 @@ impl Session {
                 .as_ref()
                 .and_then(|started_proxy| {
                     Self::managed_network_proxy_active_for_permission_profile(
-                        &session_configuration.permission_profile(),
+                        &network_permission_profile,
                     )
                     .then(|| started_proxy.proxy())
                 }),

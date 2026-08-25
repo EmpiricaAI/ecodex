@@ -15,6 +15,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 
 impl App {
     pub(super) async fn sync_active_thread_model_setting(
@@ -55,7 +56,8 @@ impl App {
             crate::ecodex_curated_models::provider_for_model(&model).map(str::to_string);
         let is_cyber_model = self.model_catalog.try_list_models().is_ok_and(|models| {
             models.iter().any(|preset| {
-                preset.model == model && preset.model_specialty.as_deref() == Some("cyber")
+                preset.model == model
+                    && preset.model_specialty.as_deref() == Some(MODEL_SPECIALTY_CYBER)
             })
         });
 
