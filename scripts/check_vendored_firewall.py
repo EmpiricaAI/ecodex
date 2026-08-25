@@ -55,7 +55,13 @@ def _recovery_escape_is_hoisted(tree: ast.Module) -> bool:
         for statement in first.body
         for node in ast.walk(statement)
     )
-    return "is_safe_empirica_command" in calls and returns_none
+    # empirica ≥1.13.28 renamed the escape's predicate to the stricter
+    # whole-command form (is_safe_empirica_statement wraps the verb allowlist
+    # with chained-statement inspection). Either name satisfies the invariant;
+    # what must never change is that the hoisted escape consults the
+    # safe-empirica allowlist family and returns None.
+    allowlist_family = {"is_safe_empirica_command", "is_safe_empirica_statement"}
+    return bool(allowlist_family & calls) and returns_none
 
 
 def _permission_decision_uses_argument(tree: ast.Module) -> bool:
@@ -99,7 +105,8 @@ def check(path: Path = SENTINEL) -> list[str]:
     if not _recovery_escape_is_hoisted(tree):
         failures.append(
             "_validate_check_record must begin with an executable recovery escape "
-            "that calls is_safe_empirica_command and returns None"
+            "that calls is_safe_empirica_command/is_safe_empirica_statement "
+            "and returns None"
         )
     if not _permission_decision_uses_argument(tree):
         failures.append("respond() must emit permissionDecision from its decision argument")
