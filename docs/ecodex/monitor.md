@@ -101,7 +101,7 @@ On each matching line, the agent's pending input receives a user-role message wi
 </task-notification>
 ```
 
-If a turn is active, the notification lands as pending input for that turn. If no turn is active, ecodex queues the message for delivery at the start of the next turn (same fallback as `Session::inject_user_message_without_turn`).
+If a turn is active, the notification attaches to that turn's pending input. If no turn is active, the wake starts one — since 0.149 delivery rides upstream's mailbox mechanism (`Session::inject_response_items` enqueues the item as a mailbox communication and lets the shared pending-work scheduler either attach it to the active turn or wake the idle session).
 
 ### `kill` — disarm a watch
 
@@ -150,7 +150,7 @@ If a turn is active, the notification lands as pending input for that turn. If n
 
 - **Spawn**: ecodex spawns the subprocess via `tokio::Command` with `stdout` + `stderr` piped and `kill_on_drop = true`.
 - **Read loop**: a background `tokio::spawn` task reads the chosen stream line-by-line. The regex is compiled once at arm time.
-- **Wake**: on each match, the watcher constructs a `ResponseInputItem::Message` (user role) and calls `Session::inject_response_items`. If the session has an active turn, the item is pushed to the turn's pending input. Otherwise the item is queued for the next turn.
+- **Wake**: on each match, the watcher constructs a `ResponseInputItem::Message` (user role) and calls `Session::inject_response_items`. Since 0.149 this wraps the item as a synthetic `InterAgentCommunication` (`trigger_turn = true`) on upstream's mailbox API: an active turn picks it up as pending input, an idle session is woken into a new turn by the shared pending-work scheduler.
 - **Disarm**:
   - **`persistent = false`** + match → watcher self-disarms after the first wake.
   - **`persistent = true`** → watcher stays in the read loop indefinitely.
