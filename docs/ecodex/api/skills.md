@@ -39,7 +39,7 @@ metadata:
 
 The loader (`codex-rs/ext/skills/src/loader/host.rs`, field on `codex-rs/skills/src/model.rs::SkillMetadata`) parses `name`, `description`, `metadata.short-description`, and `pinned`:
 
-- **`pinned: true`** — marks a FRAMEWORK skill: session-wide standing policy rather than a per-task tool. Used by `empirica-constitution`, `epistemic-transaction`, and `epistemic-persistence-protocol`. Up to ecodex 0.147.x this auto-reinjected the skill body on every context window (incl. after `/compact`); **since 0.149** upstream removed the injection mechanism and ecodex ratified dropping the behavior with it — the skills catalog prompt now instructs the model to proactively read framework `SKILL.md` files and re-read them after `/compact`; anything needing guaranteed ambience routes through codex's native AGENTS.md instructions channel instead. Default is `false` (progressive disclosure).
+- **`pinned: true`** — marks a FRAMEWORK skill: session-wide standing policy rather than a per-task tool. Used by `empirica-constitution`, `epistemic-transaction`, and `epistemic-persistence-protocol`. The skill body is **not** auto-injected (earlier ecodex releases reinjected pinned bodies each context window; that behavior was dropped when upstream removed its skill-injection mechanism — see CHANGELOG): the skills catalog prompt instead instructs the model to proactively read framework `SKILL.md` files and re-read them after `/compact`, and anything needing guaranteed ambience routes through codex's native AGENTS.md instructions channel. Default is `false` (progressive disclosure).
 
 A `version:` field is **not** consumed by the loader — including one is harmless but ignored.
 

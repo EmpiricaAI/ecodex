@@ -158,10 +158,10 @@ All are EU-hosted and carried in ecodex's curated registry (`jurisdiction = FR`,
 ## Context window matters
 
 ecodex is a *deep* harness by design: the empirica epistemic frame (system
-prompt + hooks + tooling + skills catalog) is ~18K tokens on top of your own
-context (down from ~31K before 0.149 dropped pinned-skill body injection).
-This is intentional — it's what makes ecodex more than a generic LLM
-wrapper. **Real use wants ≥200K context**, so short-context models struggle.
+prompt + hooks + tooling + skills catalog) is roughly 18K tokens on top of
+your own context. This is intentional — it's what makes ecodex more than a
+generic LLM wrapper. **Real use wants ≥200K context**, so short-context
+models struggle.
 
 Devstral's **256K** window holds the full deep frame plus a substantial working
 context comfortably — one reason it's the recommended EU default.

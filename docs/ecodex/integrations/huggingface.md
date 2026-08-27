@@ -49,8 +49,8 @@ The check never writes to the real home directory or live ecodex config.
 The source installer copies `ecodex/huggingface.config.toml` to
 `~/.codex/huggingface.config.toml` (the default `CODEX_HOME`) if the destination
 does not already exist. Profile-v2 selection uses this separate file; a legacy
-`[profiles.huggingface]` table is not selected by `-p huggingface` in ecodex
-0.147 and later.
+`[profiles.huggingface]` table in the main config is not selected by
+`-p huggingface` on current ecodex.
 
 For a source checkout without running the installer:
 

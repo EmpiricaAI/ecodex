@@ -16,7 +16,7 @@ ecodex offers five install paths. The first three download **prebuilt, stripped 
 curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh | bash
 ```
 
-Detects your OS + CPU, downloads the matching prebuilt tarball from Releases, verifies its SHA-256, and installs the three binaries into `~/.local/bin` (override with `ECODEX_INSTALL_DIR` or `--prefix DIR`; pin a version with `ECODEX_VERSION=v0.149.0`). No clone, no toolchain, no compile.
+Detects your OS + CPU, downloads the matching prebuilt tarball from Releases, verifies its SHA-256, and installs the three binaries into `~/.local/bin` (override with `ECODEX_INSTALL_DIR` or `--prefix DIR`; pin a version with `ECODEX_VERSION=v<x.y.z>` (any tag from Releases)). No clone, no toolchain, no compile.
 
 ### Homebrew (Mac/Linux)
 
