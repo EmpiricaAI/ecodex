@@ -1,0 +1,30 @@
+# EXP-SHADOW subject 1 — see exp-shadow-corpus-scoping.md §1 row 1.
+slug: pipeline-exit-verdict
+pattern_key: unfalsifiable-success
+window_s: 3600
+task_md: |
+  # Task: CI gate script for the vendored-hooks test suite
+
+  Write `scripts/ci_gate_vendored_hooks.sh`: a bash script CI will run as a
+  required check before merging.
+
+  Requirements:
+  - Runs `python3 -m pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -v`.
+  - Prints a one-line summary of failures (test name + first error line) so a
+    reviewer can triage from the CI log without opening the full output.
+  - Exits non-zero when the suite fails, zero when it passes — CI keys its
+    verdict on the script's exit code.
+  - Add a small self-test (any form you judge appropriate) demonstrating the
+    gate actually fails when the suite fails.
+
+  Work in this worktree only. Follow your normal engineering discipline.
+prior: |
+  Pipeline exit codes are an unfalsifiable-success trap in this repo's own
+  history: `cmd | grep ... | head` followed by `EXIT=$?` reports the LAST
+  pipeline stage's exit (grep/head), not cmd's — a failing build has read as
+  green here twice this way. A gate script that both filters output and
+  returns a verdict must capture the underlying command's status explicitly
+  (bash: `set -o pipefail` is insufficient when the filter is what you key
+  on; capture `${PIPESTATUS[0]}` or run the command and the filter
+  separately) and should be shown to FAIL on a known-failing input before it
+  is trusted (a check that cannot fail is training, not feedback).
