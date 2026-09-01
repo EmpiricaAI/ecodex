@@ -332,9 +332,48 @@ def main() -> int:
         else:
             print("\nDEPLOY: no runtime cache found, skipped")
 
+    if args.apply:
+        stamp_vendor_vintage(emp, args.ref)
+
     print(f"\nDone. {'Wrote' if args.apply else 'Dry-run —'} {len(drifted)} file(s)"
           f"{'.' if args.apply else '; re-run with --apply to write.'}")
     return 0
+
+
+def stamp_vendor_vintage(emp: Path, ref: str) -> None:
+    """Record the vendored empirica vintage in the plugin manifest.
+
+    `empiricaVendorVersion` (+ source commit) is an extra manifest field —
+    codex's RawPluginManifest ignores unknown keys, so this is diagnostics
+    metadata only. The `version` field (which drives the plugin cache path)
+    is deliberately NOT rolled here; that is a separate decision.
+    """
+    import json as _json
+
+    manifest_path = REPO / "codex-rs" / "codex-empirica-plugin" / "manifest.json"
+    try:
+        pyproject = subprocess.run(
+            ["git", "show", f"{ref}:pyproject.toml"],
+            cwd=emp, capture_output=True, text=True, check=True,
+        ).stdout
+        version = next(
+            line.split('"')[1] for line in pyproject.splitlines()
+            if line.strip().startswith("version =")
+        )
+        commit = subprocess.run(
+            ["git", "rev-parse", ref], cwd=emp,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, StopIteration, IndexError) as exc:
+        print(f"  ⚠ vintage stamp skipped: {exc}", file=sys.stderr)
+        return
+    manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+    stamp = {"empiricaVendorVersion": version, "empiricaVendorCommit": commit[:12]}
+    if all(manifest.get(k) == v for k, v in stamp.items()):
+        return
+    manifest.update(stamp)
+    manifest_path.write_text(_json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"  stamped manifest vintage: empirica {version} @ {commit[:12]}")
 
 
 if __name__ == "__main__":

@@ -1,18 +1,29 @@
 {
   "name": "empirica@nubaeon",
   "version": "0.1.0",
-  "description": "Empirica epistemic discipline plugin for codex — sentinel firewall, transaction lifecycle, calibration vectors.",
+  "description": "Empirica epistemic discipline plugin for codex \u2014 sentinel firewall, transaction lifecycle, calibration vectors.",
   "interface": {
     "displayName": "Empirica",
     "shortDescription": "Epistemic discipline for AI coding agents",
     "longDescription": "Brings Empirica's sentinel/transactions/calibration framework to codex. Gates praxic actions on PREFLIGHT/CHECK gates, captures findings/decisions/dead-ends/mistakes as you work, and calibrates self-assessment against deterministic services (tests, lint, git).",
     "developerName": "Nubaeon",
     "category": "agent-discipline",
-    "capabilities": ["hooks", "epistemic-state", "calibration", "skills", "mcp", "statusline"]
+    "capabilities": [
+      "hooks",
+      "epistemic-state",
+      "calibration",
+      "skills",
+      "mcp",
+      "statusline"
+    ]
   },
   "hooks": "./hooks.json",
   "skills": "./skills",
   "mcpServers": "./mcp_servers.json",
   "statusline": "./hooks_scripts/scripts/statusline_empirica.py",
-  "writableRoots": ["~/.empirica"]
+  "writableRoots": [
+    "~/.empirica"
+  ],
+  "empiricaVendorVersion": "1.13.34",
+  "empiricaVendorCommit": "4eb6a6ad718a"
 }
