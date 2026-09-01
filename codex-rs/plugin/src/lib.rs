@@ -11,6 +11,7 @@ mod provider;
 
 use codex_config::HookEventsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 pub use load_outcome::LoadedPlugin;
 pub use load_outcome::PluginLoadOutcome;
 pub use load_outcome::prompt_safe_plugin_description;
@@ -22,6 +23,8 @@ pub use provider::PluginResourceLocator;
 pub use provider::ResolvedPlugin;
 pub use provider::ResolvedPluginError;
 pub use provider::ResolvedPluginLocation;
+use serde_json::Map;
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AppConnectorId(pub String);
@@ -96,6 +99,21 @@ pub struct PluginWritableRootSource {
     pub plugin_id: PluginId,
     pub plugin_root: AbsolutePathBuf,
     pub root: AbsolutePathBuf,
+}
+
+/// Inline plugin hooks discovered in an executor environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutorPluginHookSource {
+    pub plugin_id: PluginId,
+    pub environment_id: String,
+    /// An admitted MCP target can run outside the plugin's source environment.
+    pub mcp_environment_id: Option<String>,
+    /// Trusted MCP routing metadata for this cleanup target.
+    pub mcp_metadata: Option<Map<String, Value>>,
+    pub plugin_root: PathUri,
+    pub manifest_path: PathUri,
+    pub source_relative_path: String,
+    pub hooks: HookEventsToml,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

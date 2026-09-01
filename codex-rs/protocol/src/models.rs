@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
+use serde_with::serde_as;
 use ts_rs::TS;
 
 use crate::local_media::audio_mime_for_path;
@@ -32,6 +33,7 @@ use crate::mcp::CallToolResult;
 use codex_utils_path_uri::PathUri;
 
 mod executed_tool_calls;
+mod item_metadata;
 
 pub use crate::local_media::MAX_PROMPT_AUDIO_INPUT_BYTES;
 pub use crate::local_media::snapshot_local_user_input;
@@ -42,6 +44,7 @@ pub use executed_tool_calls::ExecutedToolCallTruncation;
 pub use executed_tool_calls::bound_executed_tool_calls_for_prompt;
 pub use executed_tool_calls::bound_executed_tool_calls_for_prompt_prioritizing_recent;
 pub use executed_tool_calls::executed_tool_call_metadata_bytes;
+pub use item_metadata::ContentItemKind;
 
 /// Controls the per-command sandbox override requested by a shell-like tool call.
 #[derive(
@@ -565,14 +568,27 @@ impl PermissionProfile {
         self,
         workspace_roots: &[AbsolutePathBuf],
     ) -> Self {
+        self.materialize_project_roots_with(|policy| {
+            policy.materialize_project_roots_with_workspace_roots(workspace_roots)
+        })
+    }
+
+    pub fn materialize_project_roots_with_path_uris(self, workspace_roots: &[PathUri]) -> Self {
+        self.materialize_project_roots_with(|policy| {
+            policy.materialize_project_roots_with_path_uris(workspace_roots)
+        })
+    }
+
+    fn materialize_project_roots_with(
+        self,
+        materialize: impl FnOnce(FileSystemSandboxPolicy) -> FileSystemSandboxPolicy,
+    ) -> Self {
         match self {
             Self::Managed {
                 file_system,
                 network,
             } => {
-                let file_system = file_system
-                    .to_sandbox_policy()
-                    .materialize_project_roots_with_workspace_roots(workspace_roots);
+                let file_system = materialize(file_system.to_sandbox_policy());
                 Self::Managed {
                     file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
                     network,
@@ -923,6 +939,7 @@ pub enum MessagePhase {
 ///
 /// Responses API strongly types this payload. Do not modify it without first getting API
 /// approval and making the corresponding Responses API change.
+#[serde_as]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct InternalChatMessageMetadataPassthrough {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -933,11 +950,29 @@ pub struct InternalChatMessageMetadataPassthrough {
     #[schemars(skip)]
     #[ts(skip)]
     pub create_time: Option<serde_json::Number>,
+    /// Harness-owned classifications aligned with the item's content entries.
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub content_item_kinds: Option<Vec<ContentItemKind>>,
+    // Ignore input values so requests cannot fake tool call records.
+    /// Host-owned Code Mode cell shared by its `exec` and subsequent `wait` outputs.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub cell_id: Option<String>,
     /// Warehouse-only Responses metadata, not part of the public app-server protocol.
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     #[ts(skip)]
     pub executed_tool_calls: Option<Vec<ExecutedToolCall>>,
+    /// Whether the host finished recording this cell's calls without losing calls or arguments.
+    /// This describes the call inventory across the cell's outputs, not tool success.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub tool_calls_complete: Option<bool>,
 }
 
 impl InternalChatMessageMetadataPassthrough {
@@ -1062,7 +1097,15 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         id: Option<ResponseItemId>,
-        call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        call_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        namespace: Option<String>,
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
@@ -1313,6 +1356,21 @@ impl ResponseItem {
     /// not accept it.
     pub fn clear_internal_chat_message_metadata_passthrough(&mut self) {
         if let Some(metadata) = self.internal_chat_message_metadata_passthrough_mut() {
+            *metadata = None;
+        }
+    }
+
+    /// Removes content item classifications while preserving other passthrough metadata.
+    pub fn clear_content_item_kinds(&mut self) {
+        let Some(metadata) = self.internal_chat_message_metadata_passthrough_mut() else {
+            return;
+        };
+        let Some(metadata_value) = metadata else {
+            return;
+        };
+
+        metadata_value.content_item_kinds = None;
+        if metadata_value == &InternalChatMessageMetadataPassthrough::default() {
             *metadata = None;
         }
     }
@@ -1795,7 +1853,9 @@ impl From<ResponseInputItem> for ResponseItem {
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => Self::FunctionCallOutput {
                 id: None,
-                call_id,
+                call_id: Some(call_id),
+                name: None,
+                namespace: None,
                 output,
                 internal_chat_message_metadata_passthrough: None,
             },
@@ -1803,7 +1863,9 @@ impl From<ResponseInputItem> for ResponseItem {
                 let output = output.into_function_call_output_payload();
                 Self::FunctionCallOutput {
                     id: None,
-                    call_id,
+                    call_id: Some(call_id),
+                    name: None,
+                    namespace: None,
                     output,
                     internal_chat_message_metadata_passthrough: None,
                 }
@@ -1988,32 +2050,6 @@ pub struct SearchToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub limit: Option<usize>,
-}
-
-/// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
-/// `arguments` field should deserialize to this struct.
-#[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-pub struct ShellCommandToolCallParams {
-    pub command: String,
-    pub workdir: Option<String>,
-
-    /// Whether to run the shell with login shell semantics
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub login: Option<bool>,
-    /// This is the maximum time in milliseconds that the command is allowed to run.
-    #[serde(alias = "timeout")]
-    pub timeout_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub sandbox_permissions: Option<SandboxPermissions>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub prefix_rule: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub justification: Option<String>,
 }
 
 /// Responses API compatible content items that can be returned by a tool call.
@@ -2225,13 +2261,12 @@ impl CallToolResult {
 
     pub fn as_function_call_output_payload(&self) -> FunctionCallOutputPayload {
         let content_items = convert_mcp_content_to_items(&self.content);
-        if content_items.as_ref().is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| matches!(item, FunctionCallOutputContentItem::EncryptedContent { .. }))
-        }) {
+        if content_items
+            .iter()
+            .any(|item| matches!(item, FunctionCallOutputContentItem::EncryptedContent { .. }))
+        {
             return FunctionCallOutputPayload {
-                body: FunctionCallOutputBody::ContentItems(content_items.unwrap_or_default()),
+                body: FunctionCallOutputBody::ContentItems(content_items),
                 success: Some(self.success()),
             };
         }
@@ -2255,23 +2290,8 @@ impl CallToolResult {
             }
         }
 
-        let serialized_content = match serde_json::to_string(&self.content) {
-            Ok(serialized_content) => serialized_content,
-            Err(err) => {
-                return FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(err.to_string()),
-                    success: Some(false),
-                };
-            }
-        };
-
-        let body = match content_items {
-            Some(content_items) => FunctionCallOutputBody::ContentItems(content_items),
-            None => FunctionCallOutputBody::Text(serialized_content),
-        };
-
         FunctionCallOutputPayload {
-            body,
+            body: FunctionCallOutputBody::ContentItems(content_items),
             success: Some(self.success()),
         }
     }
@@ -2283,7 +2303,7 @@ impl CallToolResult {
 
 fn convert_mcp_content_to_items(
     contents: &[serde_json::Value],
-) -> Option<Vec<FunctionCallOutputContentItem>> {
+) -> Vec<FunctionCallOutputContentItem> {
     const CODEX_ENCRYPTED_CONTENT_META_KEY: &str = "codex/encryptedContent";
     const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
 
@@ -2316,7 +2336,6 @@ fn convert_mcp_content_to_items(
         Unknown,
     }
 
-    let mut saw_content_item = false;
     let mut items = Vec::with_capacity(contents.len());
 
     for content in contents {
@@ -2328,7 +2347,6 @@ fn convert_mcp_content_to_items(
                     .and_then(serde_json::Value::as_bool)
                     == Some(true)
                 {
-                    saw_content_item = true;
                     FunctionCallOutputContentItem::EncryptedContent {
                         encrypted_content: text,
                     }
@@ -2341,7 +2359,6 @@ fn convert_mcp_content_to_items(
                 mime_type,
                 meta,
             }) => {
-                saw_content_item = true;
                 let image_url = if data.starts_with("data:") {
                     data
                 } else {
@@ -2368,7 +2385,6 @@ fn convert_mcp_content_to_items(
             Ok(McpContent::Audio {
                 data, mime_type, ..
             }) => {
-                saw_content_item = true;
                 let audio_url = if data.starts_with("data:") {
                     data
                 } else {
@@ -2384,7 +2400,7 @@ fn convert_mcp_content_to_items(
         items.push(item);
     }
 
-    if saw_content_item { Some(items) } else { None }
+    items
 }
 
 // Implement Display so callers can treat the payload like a plain string when logging or doing
@@ -2674,7 +2690,7 @@ mod tests {
             "mimeType": "image/png",
         })];
 
-        let items = convert_mcp_content_to_items(&contents).expect("expected image items");
+        let items = convert_mcp_content_to_items(&contents);
         assert_eq!(
             items,
             vec![FunctionCallOutputContentItem::InputImage {
@@ -3006,7 +3022,7 @@ mod tests {
             "mimeType": "image/png",
         })];
 
-        let items = convert_mcp_content_to_items(&contents).expect("expected image items");
+        let items = convert_mcp_content_to_items(&contents);
         assert_eq!(
             items,
             vec![FunctionCallOutputContentItem::InputImage {
@@ -3034,25 +3050,30 @@ mod tests {
 
         assert_eq!(
             convert_mcp_content_to_items(&contents),
-            Some(vec![
+            vec![
                 FunctionCallOutputContentItem::InputAudio {
                     audio_url: "data:audio/wav;base64,Zm9v".to_string(),
                 },
                 FunctionCallOutputContentItem::InputAudio {
                     audio_url: "data:audio/ogg;base64,YmFy".to_string(),
                 },
-            ])
+            ]
         );
     }
 
     #[test]
-    fn convert_mcp_content_to_items_returns_none_without_media() {
+    fn convert_mcp_content_to_items_converts_text_without_media() {
         let contents = vec![serde_json::json!({
             "type": "text",
             "text": "hello",
         })];
 
-        assert_eq!(convert_mcp_content_to_items(&contents), None);
+        assert_eq!(
+            convert_mcp_content_to_items(&contents),
+            vec![FunctionCallOutputContentItem::InputText {
+                text: "hello".to_string(),
+            }]
+        );
     }
 
     #[test]
@@ -3142,6 +3163,55 @@ mod tests {
                 internal_chat_message_metadata_passthrough: None,
             }
         );
+    }
+
+    #[test]
+    fn paired_function_call_output_preserves_existing_wire_shape() {
+        let value = serde_json::json!({
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": "done",
+        });
+        let item: ResponseItem = serde_json::from_value(value.clone())
+            .expect("paired function call output should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: Some("call-1".to_string()),
+                name: None,
+                namespace: None,
+                output: FunctionCallOutputPayload::from_text("done".to_string()),
+                internal_chat_message_metadata_passthrough: None,
+            }
+        );
+        assert_eq!(serde_json::to_value(item).expect("serialize item"), value);
+    }
+
+    #[test]
+    fn named_unpaired_function_call_output_round_trips_without_call_id() {
+        let value = serde_json::json!({
+            "type": "function_call_output",
+            "name": "notifications",
+            "namespace": "slack",
+            "output": "Alice mentioned you.",
+        });
+        let item: ResponseItem = serde_json::from_value(value.clone())
+            .expect("named unpaired function call output should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: None,
+                name: Some("notifications".to_string()),
+                namespace: Some("slack".to_string()),
+                output: FunctionCallOutputPayload::from_text("Alice mentioned you.".to_string()),
+                internal_chat_message_metadata_passthrough: None,
+            }
+        );
+        assert_eq!(serde_json::to_value(item).expect("serialize item"), value);
     }
 
     #[test]
@@ -3246,6 +3316,69 @@ mod tests {
 
         assert_eq!(v.get("output").unwrap().as_str().unwrap(), "bad");
         Ok(())
+    }
+
+    #[test]
+    fn converts_unstructured_mcp_content_to_items() {
+        let content = vec![
+            serde_json::json!({"type":"text","text":"caption"}),
+            serde_json::json!({
+                "type": "resource_link",
+                "uri": "file:///notes.txt",
+                "name": "notes",
+            }),
+            serde_json::json!({
+                "type": "audio",
+                "mimeType": "audio/wav",
+            }),
+        ];
+        let call_tool_result = CallToolResult {
+            content: content.clone(),
+            structured_content: Some(serde_json::Value::Null),
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let resource_link = serde_json::to_string(&content[1]).expect("serialize resource link");
+        let malformed_audio =
+            serde_json::to_string(&content[2]).expect("serialize malformed audio");
+        assert_eq!(
+            call_tool_result.as_function_call_output_payload(),
+            FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "caption".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: resource_link,
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: malformed_audio,
+                    },
+                ]),
+                success: Some(true),
+            }
+        );
+    }
+
+    #[test]
+    fn preserves_structured_mcp_content() {
+        let call_tool_result = CallToolResult {
+            content: vec![serde_json::json!({"type":"text","text":"ignored"})],
+            structured_content: Some(serde_json::json!({"result":"structured"})),
+            is_error: Some(false),
+            meta: None,
+        };
+
+        assert_eq!(
+            call_tool_result.as_function_call_output_payload(),
+            FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(
+                    serde_json::json!({"result":"structured"}).to_string(),
+                ),
+                success: Some(true),
+            }
+        );
     }
 
     #[test]

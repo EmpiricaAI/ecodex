@@ -15,6 +15,20 @@ use toml::Table;
 use toml::Value as TomlValue;
 
 #[test]
+fn transcript_v2_resolves_explicit_config_overrides() {
+    let mut features = Features::with_defaults();
+    for enabled in [false, true, false] {
+        features.apply_map(&BTreeMap::from([("transcript_v2".to_string(), enabled)]));
+        assert_eq!(features.enabled(Feature::TranscriptV2), enabled);
+    }
+}
+
+#[test]
+fn sleep_tool_config_rejects_unknown_mode() {
+    assert!(toml::from_str::<FeaturesToml>("[sleep_tool]\nmode = 'off'").is_err());
+}
+
+#[test]
 fn under_development_features_are_disabled_by_default() {
     for spec in crate::FEATURES {
         if matches!(spec.stage, Stage::UnderDevelopment) {
@@ -154,15 +168,19 @@ fn guardian_v2_feature_config_deserializes_classifier_and_transcript_settings() 
         r#"
 [guardianv2]
 enabled = true
+free_guardian = true
+persist_scores = true
 classifier_instructions = "Review this action"
 review_threshold = 0.65
 max_tool_call_lag = 2
 reasoning_effort = "minimal"
 max_action_tokens = 512
 max_classifier_instruction_tokens = 256
+reuse_parent_compaction = false
 max_parent_compaction_tokens = 384
 
 [guardianv2.review_scope]
+computer_use_only = true
 sandboxed_exec_commands = true
 
 [guardianv2.transcript]
@@ -181,14 +199,18 @@ max_recent_non_user_entries = 12
         features.guardianv2,
         Some(FeatureToml::Config(crate::GuardianV2ConfigToml {
             enabled: Some(true),
+            free_guardian: Some(true),
+            persist_scores: Some(true),
             classifier_instructions: Some("Review this action".to_owned()),
             review_threshold: Some(0.65),
             max_tool_call_lag: Some(2),
             reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Minimal),
             max_action_tokens: Some(512),
             max_classifier_instruction_tokens: Some(256),
+            reuse_parent_compaction: Some(false),
             max_parent_compaction_tokens: Some(384),
             review_scope: Some(crate::GuardianV2ReviewScopeConfigToml {
+                computer_use_only: Some(true),
                 sandboxed_exec_commands: Some(true),
             }),
             transcript: Some(crate::GuardianV2TranscriptConfigToml {

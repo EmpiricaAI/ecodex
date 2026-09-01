@@ -40,7 +40,7 @@ pub struct MonitorToolOutput {
 }
 
 impl ToolOutput for MonitorToolOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         self.text.clone()
     }
 
@@ -79,7 +79,10 @@ impl ToolExecutor<ToolInvocation> for MonitorHandler {
         monitor_tool_spec()
     }
 
-    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
         Box::pin(async move {
             let ToolInvocation {
                 session, payload, ..

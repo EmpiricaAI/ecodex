@@ -3,11 +3,17 @@
 //! It is responsible for:
 //!
 //! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
-//! - Routing keys to the active popup (slash commands, file search, skill/apps mentions).
+//! - Routing keys to the active popup (slash commands, file search, skill/apps/task mentions).
 //! - Promoting typed slash commands into atomic elements when the command name is completed.
 //! - Handling submit vs newline on Enter.
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
 //!   don't provide reliable bracketed paste (notably Windows).
+//!
+//! # Mention Menus
+//!
+//! By default, `@` lists plugins, filesystem entries, and skills. Skills are hidden when their
+//! owning plugin is listed. `$` lists individual skills and apps, but not plugins.
+//! Disabling `mentions_v2` restores file-only `@` search and adds plugins back to `$`.
 //!
 //! # Key Event Routing
 //!
@@ -15,6 +21,8 @@
 //! popup-specific handler if a popup is visible and otherwise to
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
+//! Fresh Vim drafts start in Insert; Normal `/` and `?` search the composer.
+//! Backspace on an empty Vim search query cancels search and any pending operator.
 //!
 //! # Completion and Popup Dismissal
 //!
@@ -41,17 +49,19 @@
 //!
 //! The Up/Down history path is managed by [`ChatComposerHistory`]. It merges:
 //!
-//! - Persistent cross-session history (text-only; no element ranges or attachments).
+//! - Persistent cross-session history (text-only storage; task links recover element ranges and
+//!   mention bindings, but attachments cannot be restored).
 //! - Local in-session history (full text + text elements + local/remote image attachments).
 //!
 //! When recalling a local entry, the composer rehydrates text elements and both attachment kinds
 //! (local image paths + remote image URLs).
-//! When recalling a persistent entry, only the text is restored.
+//! When recalling a persistent entry, encoded task links restore atomic elements and bindings.
 //! Recalled entries move the cursor to end-of-line so repeated Up/Down presses keep shell-like
 //! history traversal semantics instead of dropping to column 0.
 //! `Ctrl+R` opens a reverse incremental search mode. The footer becomes the search input; once the
 //! query is non-empty, the composer body previews the current match. `Enter` accepts the preview as
 //! an editable draft and `Esc` restores the draft that was active when search started.
+//! Vim queries stay draft-local.
 //!
 //! Slash commands are staged for local history instead of being recorded immediately. Command
 //! recall is a two-phase handoff: stage the submitted slash text here, then record it after
@@ -285,6 +295,7 @@ mod footer_state;
 mod history_search;
 mod popup_state;
 mod slash_input;
+mod vim_search;
 
 use self::attachment_state::AttachmentState;
 use self::draft_state::ComposerMentionBinding;
@@ -500,6 +511,7 @@ pub(crate) struct ChatComposer {
     pending_slash_command_history: Option<HistoryEntry>,
     skills: Option<Vec<SkillMetadata>>,
     plugins: Option<Vec<PluginCapabilitySummary>>,
+    task_mentions: Option<Vec<crate::task_mentions::TaskMention>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
     collaboration_modes_enabled: bool,
     config: ChatComposerConfig,
@@ -555,19 +567,6 @@ pub(crate) struct ComposerDraftSnapshot {
 }
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
-
-/// Builds the one-line nudge that replaces the ambient footer without adding layout height.
-fn plan_mode_nudge_line() -> Line<'static> {
-    Line::from(vec![
-        "Create a plan?".magenta(),
-        "  ".into(),
-        key_hint::shift(KeyCode::Tab).into(),
-        " use Plan mode".into(),
-        "   ".into(),
-        key_hint::plain(KeyCode::Esc).into(),
-        " dismiss".into(),
-    ])
-}
 
 impl ChatComposer {
     fn slash_input(&self) -> SlashInput<'_> {
@@ -639,7 +638,6 @@ impl ChatComposer {
                 use_shift_enter_hint,
                 mode: FooterMode::ComposerEmpty,
                 hint_override: None,
-                plan_mode_nudge_visible: false,
                 flash: None,
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -686,6 +684,7 @@ impl ChatComposer {
             pending_slash_command_history: None,
             skills: None,
             plugins: None,
+            task_mentions: None,
             connectors_snapshot: None,
             collaboration_modes_enabled: false,
             config,
@@ -746,7 +745,6 @@ impl ChatComposer {
             self.effort_ignition = Some(EffortIgnition::new(tier, style));
             self.effort_animation_style = Some(style);
             if self.footer.status_line_enabled
-                && !self.footer.plan_mode_nudge_visible
                 && let Some(previous) = passive_footer_status_line(&self.footer_props())
             {
                 self.effort_status_line_transition =
@@ -782,6 +780,47 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    pub(crate) fn set_task_mentions_enabled(&mut self, enabled: bool) {
+        self.task_mentions = enabled.then(Vec::new);
+        self.refresh_mentions_v2_popup_candidates();
+        if enabled
+            && matches!(self.popups.active, ActivePopup::MentionV2(_))
+            && let Some(query) = self.current_mentions_v2_token()
+            && !query.is_empty()
+        {
+            self.app_event_tx.send(AppEvent::StartFileSearch(query));
+        }
+    }
+
+    pub(crate) fn task_mentions_enabled(&self) -> bool {
+        self.task_mentions.is_some()
+    }
+
+    pub(crate) fn on_task_search_result(
+        &mut self,
+        query: &str,
+        mut matches: Vec<crate::task_mentions::TaskMention>,
+    ) {
+        if self.current_mentions_v2_token().as_deref() != Some(query) {
+            return;
+        }
+        let mentioned_ids = self
+            .current_mention_elements()
+            .into_iter()
+            .filter_map(|(id, _, _)| self.draft.mention_bindings.get(&id))
+            .filter_map(|binding| crate::task_mentions::valid_thread_path(&binding.path))
+            .collect::<std::collections::HashSet<_>>();
+        matches.retain(|task| {
+            mentioned_ids.len() < crate::task_mentions::MAX_REFERENCED_TASKS
+                && !mentioned_ids.contains(task.thread_id.as_str())
+        });
+        let Some(task_mentions) = &mut self.task_mentions else {
+            return;
+        };
+        *task_mentions = matches;
+        self.refresh_mentions_v2_popup_candidates();
+    }
+
     /// Refreshes an open mention catalog when skill or plugin metadata changes.
     fn refresh_mentions_v2_popup_candidates(&mut self) {
         let ActivePopup::MentionV2(popup) = &mut self.popups.active else {
@@ -790,6 +829,7 @@ impl ChatComposer {
         popup.set_candidates(super::mentions_v2::build_search_catalog(
             self.skills.as_deref(),
             self.plugins.as_deref(),
+            self.task_mentions.as_deref().unwrap_or_default(),
         ));
     }
 
@@ -901,13 +941,17 @@ impl ChatComposer {
 
     /// Return the contexts whose handlers can consume the next composer key.
     pub(crate) fn keymap_contexts(&self) -> KeymapContextSet {
+        if self.draft.textarea.vim_query().is_some() {
+            return KeymapContextSet::new(KeymapContext::Editor);
+        }
         if self.history_search.is_some() {
             return KeymapContextSet::new(KeymapContext::Composer);
         }
         if !self.draft.input_enabled || self.popups.active() {
             return KeymapContextSet::default();
         }
-        KeymapContextSet::new(KeymapContext::Composer).with(self.draft.textarea.keymap_context())
+        let contexts = self.draft.textarea.keymap_contexts();
+        contexts.with(KeymapContext::Composer)
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -1029,7 +1073,10 @@ impl ChatComposer {
             return None;
         }
 
-        if let Some(pos) = self.history_search_cursor_pos(area) {
+        if let Some(pos) = self
+            .vim_search_cursor_pos(area)
+            .or_else(|| self.history_search_cursor_pos(area))
+        {
             return Some(pos);
         }
 
@@ -1151,6 +1198,10 @@ impl ChatComposer {
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let pasted = sanitize_user_text(pasted.into());
+        if let Some(query) = self.draft.textarea.vim_query_mut() {
+            query.editor.insert_str(&pasted);
+            return true;
+        }
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = self.next_large_paste_placeholder(char_count);
@@ -1312,6 +1363,7 @@ impl ChatComposer {
     /// commands, not as candidate literal paste text. It also resets transient
     /// footer mode so the visible hints match the new editing surface.
     pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
+        self.draft.textarea.enable_vim_search();
         self.draft.textarea.set_vim_enabled(enabled);
         self.draft.paste_burst.clear_after_explicit_paste();
         self.footer.mode = reset_mode_after_activity(self.footer.mode);
@@ -1438,23 +1490,6 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer.hint_override = items;
-    }
-
-    /// Updates whether the Plan-mode nudge replaces the ambient footer row.
-    ///
-    /// Returns `true` only when the rendered footer can change so callers can avoid scheduling
-    /// redundant redraws while reevaluating nudge policy on routine composer updates.
-    pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) -> bool {
-        if self.footer.plan_mode_nudge_visible == visible {
-            return false;
-        }
-        self.footer.plan_mode_nudge_visible = visible;
-        true
-    }
-
-    #[cfg(test)]
-    pub(crate) fn plan_mode_nudge_visible(&self) -> bool {
-        self.footer.plan_mode_nudge_visible
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
@@ -1930,6 +1965,13 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
+        if self.history_search.is_none()
+            && !self.popups.active()
+            && self.draft.textarea.wants_vim_search_key(key_event)
+        {
+            return self.handle_input_basic(key_event);
+        }
+
         if self.history_search.is_some() {
             return self.handle_history_search_key(key_event);
         }
@@ -1951,9 +1993,11 @@ impl ChatComposer {
         result
     }
 
-    /// Return true if any popup or history search is active.
+    /// Whether a popup or query owns input.
     pub(crate) fn popup_active(&self) -> bool {
-        self.history_search.is_some() || self.popups.active()
+        self.history_search.is_some()
+            || self.draft.textarea.vim_query().is_some()
+            || self.popups.active()
     }
 
     #[inline]
@@ -2759,9 +2803,18 @@ impl ChatComposer {
         let id = self.draft.textarea.insert_element(insert_text);
         let inserted_range = start_idx..start_idx.saturating_add(insert_text.len());
 
-        if let (Some(path), Some((sigil, mention))) =
-            (path, Self::mention_token_from_insert_text(insert_text))
+        let mention = if path
+            .and_then(crate::task_mentions::valid_thread_path)
+            .is_some()
         {
+            insert_text
+                .strip_prefix('@')
+                .filter(|name| !name.is_empty())
+                .map(|name| ('@', name.to_string()))
+        } else {
+            Self::mention_token_from_insert_text(insert_text)
+        };
+        if let (Some(path), Some((sigil, mention))) = (path, mention) {
             self.draft.mention_bindings.insert(
                 id,
                 ComposerMentionBinding {
@@ -2770,6 +2823,13 @@ impl ChatComposer {
                     path: path.to_string(),
                 },
             );
+        }
+        if path
+            .and_then(crate::task_mentions::valid_thread_path)
+            .is_some()
+            && let Some(task_mentions) = &mut self.task_mentions
+        {
+            task_mentions.clear();
         }
 
         self.advance_past_completion_separator();
@@ -2828,6 +2888,12 @@ impl ChatComposer {
             .text_element_snapshots()
             .into_iter()
             .filter_map(|snapshot| {
+                if let Some(binding) = self.draft.mention_bindings.get(&snapshot.id)
+                    && crate::task_mentions::valid_thread_path(&binding.path).is_some()
+                    && snapshot.text == format!("{}{}", binding.sigil, binding.mention)
+                {
+                    return Some((snapshot.id, binding.sigil, binding.mention.clone()));
+                }
                 Self::mention_token_from_insert_text(snapshot.text.as_str())
                     .map(|(sigil, mention)| (snapshot.id, sigil, mention))
             })
@@ -2861,9 +2927,17 @@ impl ChatComposer {
         let mut scan_from = 0usize;
         for binding in mention_bindings {
             let token = format!("{}{}", binding.sigil, binding.mention);
-            let Some(range) =
+            let range = if crate::task_mentions::valid_thread_path(&binding.path).is_some() {
+                self.draft
+                    .textarea
+                    .text_element_snapshots()
+                    .into_iter()
+                    .find(|element| element.range.start >= scan_from && element.text == token)
+                    .map(|element| element.range)
+            } else {
                 find_next_mention_token_range(text.as_str(), token.as_str(), scan_from)
-            else {
+            };
+            let Some(range) = range else {
                 continue;
             };
 
@@ -3052,7 +3126,7 @@ impl ChatComposer {
                 | InputResult::ServiceTierCommand(_)
                 | InputResult::CommandWithArgs(_, _, _)
         ) {
-            self.draft.textarea.enter_vim_normal_mode();
+            self.draft.textarea.enter_vim_insert_mode();
         }
     }
 
@@ -3312,6 +3386,7 @@ impl ChatComposer {
             slash_input::args_elements(prepared_rest, prepared_rest_offset, &prepared_elements);
         let trimmed_rest = prepared_rest.trim();
         args_elements = Self::trim_text_elements(prepared_rest, trimmed_rest, args_elements);
+        self.draft.textarea.enter_vim_insert_mode();
         Some((trimmed_rest.to_string(), args_elements))
     }
 
@@ -3402,26 +3477,6 @@ impl ChatComposer {
         if self.draft.textarea.is_vim_normal_mode() && self.draft.textarea.is_vim_operator_pending()
         {
             return self.handle_input_basic(key_event);
-        }
-        if self.draft.textarea.is_vim_normal_mode()
-            && self.is_empty()
-            && matches!(
-                key_event,
-                KeyEvent {
-                    code: KeyCode::Char('/'),
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }
-            )
-        {
-            self.footer.mode = reset_mode_after_activity(self.footer.mode);
-            self.draft.textarea.set_text_clearing_elements("/");
-            self.draft
-                .textarea
-                .set_cursor(self.draft.textarea.text().len());
-            self.draft.textarea.enter_vim_insert_mode();
-            return (InputResult::None, true);
         }
         if self.draft.textarea.is_vim_normal_mode()
             && self.is_empty()
@@ -3675,6 +3730,7 @@ impl ChatComposer {
         };
 
         if self.draft.is_bash_mode
+            && self.draft.textarea.vim_query().is_none()
             && matches!(input.code, KeyCode::Backspace)
             && self.draft.textarea.cursor() == 0
         {
@@ -3805,7 +3861,7 @@ impl ChatComposer {
     /// modes (Esc hint, overlay, quit reminder) can override that base when
     /// their conditions are active.
     fn footer_mode(&self) -> FooterMode {
-        if self.history_search.is_some() {
+        if self.history_search.is_some() || self.draft.textarea.vim_query().is_some() {
             return FooterMode::HistorySearch;
         }
 
@@ -3833,7 +3889,7 @@ impl ChatComposer {
     }
 
     fn custom_footer_height(&self) -> Option<u16> {
-        if self.footer.flash_visible() {
+        if self.draft.textarea.vim_query().is_some() || self.footer.flash_visible() {
             return Some(1);
         }
         self.footer
@@ -3844,7 +3900,7 @@ impl ChatComposer {
 
     pub(crate) fn sync_popups(&mut self) {
         self.sync_slash_command_elements();
-        if self.history_search.is_some() {
+        if self.history_search.is_some() || self.draft.textarea.vim_query().is_some() {
             if self.popups.current_file_query.is_some() {
                 self.app_event_tx
                     .send(AppEvent::StartFileSearch(String::new()));
@@ -4130,6 +4186,7 @@ impl ChatComposer {
                 let candidates = super::mentions_v2::build_search_catalog(
                     self.skills.as_deref(),
                     self.plugins.as_deref(),
+                    self.task_mentions.as_deref().unwrap_or_default(),
                 );
                 self.popups.active =
                     ActivePopup::MentionV2(MentionV2Popup::new(candidates, &query));
@@ -4163,7 +4220,9 @@ impl ChatComposer {
             }
         }
 
-        if let Some(plugins) = self.plugins.as_ref() {
+        if !self.mentions_v2_enabled
+            && let Some(plugins) = self.plugins.as_ref()
+        {
             for plugin in plugins {
                 let (plugin_name, marketplace_name) = plugin
                     .config_name
@@ -4275,7 +4334,6 @@ impl ChatComposer {
         self.footer.quit_shortcut_expires_at = None;
         self.footer.mode = FooterMode::ComposerEmpty;
         self.footer.hint_override = Some(Vec::new());
-        self.footer.plan_mode_nudge_visible = false;
         self.footer.flash = None;
     }
 
@@ -4594,19 +4652,10 @@ impl ChatComposer {
                 } else {
                     popup_rect
                 };
-                if let Some(line) = self.history_search_footer_line() {
+                if let Some(input) = self.draft.textarea.vim_query() {
+                    input.render(inset_footer_hint_area(hint_rect), buf);
+                } else if let Some(line) = self.history_search_footer_line() {
                     render_footer_line(hint_rect, buf, line);
-                } else if self.footer.plan_mode_nudge_visible {
-                    let available_width =
-                        hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
-                    render_footer_line(
-                        hint_rect,
-                        buf,
-                        truncate_line_with_ellipsis_if_overflow(
-                            plan_mode_nudge_line(),
-                            available_width,
-                        ),
-                    );
                 } else {
                     let available_width =
                         hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
@@ -4863,6 +4912,7 @@ impl ChatComposer {
                 highlights.extend(
                     self.history_search_highlight_ranges()
                         .into_iter()
+                        .chain(self.draft.textarea.vim_search_highlights())
                         .map(|range| (range, search_highlight_style)),
                 );
                 if highlights.is_empty() {
@@ -5048,6 +5098,29 @@ mod tests {
             /*enhanced_keys_supported*/ false,
             ChatComposer::set_parent_owned_thread,
         );
+    }
+
+    #[test]
+    fn light_terminal_palette_renders_light_composer_snapshot() {
+        let colors = crate::terminal_probe::DefaultColors {
+            fg: (0x55, 0x57, 0x53),
+            bg: (0xff, 0xff, 0xff),
+        };
+
+        crate::terminal_palette::with_test_default_colors(colors, || {
+            let (composer, _rx) = new_test_composer();
+            let area = Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 6,
+            );
+            let mut buffer = Buffer::empty(area);
+            composer.render(area, &mut buffer);
+
+            assert_eq!(
+                buffer[(0, 1)].bg,
+                crate::terminal_palette::rgb_color((244, 244, 244))
+            );
+            insta::assert_snapshot!("light_terminal_palette_composer", format!("{buffer:?}"));
+        });
     }
 
     #[test]
@@ -5974,7 +6047,7 @@ mod tests {
     }
 
     #[test]
-    fn slash_opens_command_popup_in_vim_normal_mode() {
+    fn slash_opens_command_popup_in_vim_insert_mode() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -5989,6 +6062,7 @@ mod tests {
             /*disable_paste_burst*/ true,
         );
         composer.set_vim_enabled(/*enabled*/ true);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
 
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
@@ -6005,7 +6079,7 @@ mod tests {
     }
 
     #[test]
-    fn slash_command_can_be_typed_and_dispatched_after_vim_normal_slash() {
+    fn slash_command_dispatches_after_vim_insert_slash() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -6021,7 +6095,7 @@ mod tests {
         );
         composer.set_vim_enabled(/*enabled*/ true);
 
-        for ch in ['/', 'd', 'i', 'f', 'f'] {
+        for ch in ['i', '/', 'd', 'i', 'f', 'f'] {
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
         assert_eq!(composer.draft.textarea.text(), "/diff");
@@ -6034,13 +6108,13 @@ mod tests {
         assert!(composer.is_empty());
         assert_eq!(
             composer.vim_mode_indicator_span(),
-            Some("Vim: Normal".magenta())
+            Some("Vim: Insert".green())
         );
         assert!(matches!(result, InputResult::Command(SlashCommand::Diff)));
     }
 
     #[test]
-    fn inline_slash_command_dispatch_resets_vim_mode_to_normal() {
+    fn inline_slash_command_dispatch_resets_vim_mode_to_insert() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -6066,7 +6140,7 @@ mod tests {
         assert!(needs_redraw);
         assert_eq!(
             composer.vim_mode_indicator_span(),
-            Some("Vim: Normal".magenta())
+            Some("Vim: Insert".green())
         );
         match result {
             InputResult::CommandWithArgs(cmd, args, text_elements) => {
@@ -6076,6 +6150,13 @@ mod tests {
             }
             _ => panic!("expected CommandWithArgs"),
         }
+        composer
+            .prepare_inline_args_submission(/*record_history*/ false)
+            .unwrap();
+        for code in [KeyCode::Char('x'), KeyCode::Esc, KeyCode::Char('.')] {
+            composer.handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
+        }
+        assert_eq!(composer.current_text(), "xx");
     }
 
     #[test]
@@ -6286,7 +6367,7 @@ mod tests {
     }
 
     #[test]
-    fn vim_mode_resets_to_normal_after_submission() {
+    fn vim_mode_resets_to_insert_after_submission() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -6317,7 +6398,7 @@ mod tests {
         assert!(composer.draft.textarea.is_vim_enabled());
         assert_eq!(
             composer.vim_mode_indicator_span(),
-            Some("Vim: Normal".magenta())
+            Some("Vim: Insert".green())
         );
         assert!(composer.is_empty());
         match result {
@@ -6327,7 +6408,7 @@ mod tests {
     }
 
     #[test]
-    fn vim_mode_resets_to_normal_after_queued_submission() {
+    fn vim_mode_resets_to_insert_after_queued_submission() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -6351,7 +6432,7 @@ mod tests {
 
         assert_eq!(
             composer.vim_mode_indicator_span(),
-            Some("Vim: Normal".magenta())
+            Some("Vim: Insert".green())
         );
         assert!(composer.is_empty());
         match result {
@@ -6823,6 +6904,7 @@ mod tests {
             path: test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
             scope: crate::test_support::skill_scope_user(),
             enabled: true,
+            plugin_id: None,
         }
     }
 
@@ -7474,6 +7556,7 @@ mod tests {
             path: skill_path.clone(),
             scope: crate::test_support::skill_scope_user(),
             enabled: true,
+            plugin_id: None,
         }]));
 
         let ActivePopup::Skill(popup) = &composer.popups.active else {
@@ -7487,7 +7570,7 @@ mod tests {
     }
 
     #[test]
-    fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
+    fn mention_items_keep_direct_skills_and_apps_with_unified_mentions() {
         let skill_path = test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs();
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -7518,6 +7601,7 @@ mod tests {
             path: skill_path.clone(),
             scope: crate::test_support::skill_scope_repo(),
             enabled: true,
+            plugin_id: Some("google-calendar@debug".to_string()),
         }]));
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
             config_name: "google-calendar@debug".to_string(),
@@ -7563,6 +7647,25 @@ mod tests {
         );
         assert_eq!(mentions[2].category_tag, Some("[App]".to_string()));
         assert_eq!(mentions[2].path, Some("app://google_calendar".to_string()));
+
+        composer.set_mentions_v2_enabled(/*enabled*/ true);
+        assert_eq!(
+            composer
+                .mention_items()
+                .into_iter()
+                .map(|mention| (mention.insert_text, mention.path))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "$google-calendar:availability".to_string(),
+                    Some(skill_path.display().to_string()),
+                ),
+                (
+                    "$google-calendar".to_string(),
+                    Some("app://google_calendar".to_string()),
+                ),
+            ],
+        );
     }
 
     #[test]
@@ -7597,17 +7700,144 @@ mod tests {
                 let features = codex_features::Features::with_defaults();
                 composer
                     .set_mentions_v2_enabled(features.enabled(codex_features::Feature::MentionsV2));
+                composer.set_skill_mentions(Some(vec![
+                    SkillMetadata {
+                        name: "sample-tools:search".to_string(),
+                        plugin_id: Some("sample@test".to_string()),
+                        ..test_skill_metadata("sample-search")
+                    },
+                    SkillMetadata {
+                        name: "sample:summarize".to_string(),
+                        plugin_id: Some("sample@test".to_string()),
+                        ..test_skill_metadata("sample-summarize")
+                    },
+                    SkillMetadata {
+                        name: "sample:notes".to_string(),
+                        ..test_skill_metadata("sample-notes")
+                    },
+                    SkillMetadata {
+                        name: "sample:other".to_string(),
+                        plugin_id: Some("sample@other-marketplace".to_string()),
+                        ..test_skill_metadata("sample-other")
+                    },
+                ]));
                 composer.set_text_content("@sa".to_string(), Vec::new(), Vec::new());
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                     config_name: "sample@test".to_string(),
                     display_name: "Sample Plugin".to_string(),
-                    plugin_namespace: None,
+                    plugin_namespace: Some("sample".to_string()),
                     description: Some("Plugin with skills and an MCP server".to_string()),
                     has_skills: true,
                     mcp_server_names: vec!["sample".to_string()],
                     app_connector_ids: Vec::new(),
                 }]));
             },
+        );
+    }
+
+    #[test]
+    fn task_mention_popup_and_selected_composer_snapshots() {
+        for selected in [false, true] {
+            snapshot_composer_state(
+                if selected {
+                    "task_mention_selected_composer"
+                } else {
+                    "task_mention_popup"
+                },
+                /*enhanced_keys_supported*/ false,
+                |composer| {
+                    composer.set_mentions_v2_enabled(/*enabled*/ true);
+                    composer.set_task_mentions_enabled(/*enabled*/ true);
+                    composer.set_text_content("@migr".to_string(), Vec::new(), Vec::new());
+                    composer.on_task_search_result(
+                        "migr",
+                        vec![
+                            crate::task_mentions::TaskMention {
+                                thread_id: "task-123".to_string(),
+                                title: "Review database migration".to_string(),
+                                cwd: "/workspace/project".to_string(),
+                                snippet: "database migration".to_string(),
+                            },
+                            crate::task_mentions::TaskMention {
+                                thread_id: "task-456".to_string(),
+                                title: "migration".to_string(),
+                                cwd: "/another/project".to_string(),
+                                snippet: "migration".to_string(),
+                            },
+                        ],
+                    );
+                    if selected {
+                        composer
+                            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                        assert!(matches!(composer.mention_bindings().as_slice(),
+                            [MentionBinding { mention, path, .. }]
+                                if mention == "Review database migration"
+                                    && path == "thread://task-123"));
+                        assert!(composer.task_mentions.as_ref().is_some_and(Vec::is_empty));
+                        let area = Rect::new(0, 0, 40, 5);
+                        let mut buf = Buffer::empty(area);
+                        composer.render(area, &mut buf);
+                        assert_eq!(buf[(2, 1)].style().fg, Some(Color::Cyan));
+                    }
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn task_mention_titles_are_normalized_and_bounded_before_insertion() {
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_mentions_v2_enabled(/*enabled*/ true);
+        composer.set_task_mentions_enabled(/*enabled*/ true);
+        composer.set_text_content("@task".to_string(), Vec::new(), Vec::new());
+        let task = crate::task_mentions::TaskMention {
+            thread_id: "task-123".to_string(),
+            title: format!("task\n\t{}é{}", "a".repeat(154), "é".repeat(200)),
+            cwd: "/workspace/project".to_string(),
+            snippet: String::new(),
+        };
+        composer.on_task_search_result("task", vec![task.clone()]);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            composer.mention_bindings(),
+            vec![MentionBinding {
+                sigil: '@',
+                mention: format!("task {}é", "a".repeat(154)),
+                path: "thread://task-123".to_string(),
+            }]
+        );
+        composer.draft.textarea.set_text_clearing_elements("@task");
+        composer.sync_popups();
+        composer.on_task_search_result("task", vec![task]);
+        assert!(matches!(&composer.popups.active,
+            ActivePopup::MentionV2(popup) if popup.selected().is_some()));
+
+        let history = HistoryEntry::new(
+            "[@sample](plugin://sample@test) @sample [@sample](thread://task-123)x".to_string(),
+        );
+        composer.set_text_content_with_mention_bindings(
+            history.text,
+            history.text_elements,
+            Vec::new(),
+            history.mention_bindings,
+        );
+        assert_eq!(
+            composer.mention_bindings(),
+            ["plugin://sample@test", "thread://task-123"]
+                .into_iter()
+                .map(|path| MentionBinding {
+                    sigil: '@',
+                    mention: "sample".to_string(),
+                    path: path.to_string(),
+                })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            composer.draft.textarea.text_element_snapshots()[1]
+                .range
+                .start,
+            "@sample @sample ".len()
         );
     }
 
@@ -7685,6 +7915,7 @@ mod tests {
             /*width*/ 72,
             /*enhanced_keys_supported*/ false,
             |composer| {
+                composer.set_mentions_v2_enabled(/*enabled*/ true);
                 composer.set_connectors_enabled(/*enabled*/ true);
                 composer.set_text_content("$goog".to_string(), Vec::new(), Vec::new());
                 composer.set_skill_mentions(Some(vec![SkillMetadata {
@@ -7705,6 +7936,7 @@ mod tests {
                     path: test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs(),
                     scope: crate::test_support::skill_scope_repo(),
                     enabled: true,
+                    plugin_id: None,
                 }]));
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                 config_name: "google-calendar@debug".to_string(),
@@ -9458,7 +9690,7 @@ mod tests {
     }
 
     // Test helper: simulate human typing with a brief delay and flush the paste-burst buffer
-    fn type_chars_humanlike(composer: &mut ChatComposer, chars: &[char]) {
+    pub(super) fn type_chars_humanlike(composer: &mut ChatComposer, chars: &[char]) {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyEventKind;
@@ -11065,148 +11297,6 @@ mod tests {
             composer.draft.textarea.cursor(),
             composer.draft.textarea.text().len()
         );
-    }
-
-    #[test]
-    fn vim_normal_j_k_navigate_history_at_history_boundaries() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-
-        type_chars_humanlike(&mut composer, &['f', 'i', 'r', 's', 't']);
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(matches!(result, InputResult::Submitted { .. }));
-
-        type_chars_humanlike(&mut composer, &['s', 'e', 'c', 'o', 'n', 'd']);
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(matches!(result, InputResult::Submitted { .. }));
-
-        composer.set_vim_enabled(/*enabled*/ true);
-
-        let (_result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-        assert_eq!(composer.draft.textarea.text(), "second");
-        assert_eq!(composer.draft.textarea.cursor(), "second".len() - 1);
-
-        let (_result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-        assert_eq!(composer.draft.textarea.text(), "first");
-        assert_eq!(composer.draft.textarea.cursor(), "first".len() - 1);
-
-        let (_result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        assert_eq!(composer.draft.textarea.text(), "second");
-        assert_eq!(composer.draft.textarea.cursor(), "second".len() - 1);
-
-        let (_result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        assert!(composer.draft.textarea.is_empty());
-        assert_eq!(
-            composer.draft.textarea.cursor(),
-            composer.draft.textarea.text().len()
-        );
-    }
-
-    #[test]
-    fn remapped_vim_normal_history_navigation_does_not_fall_back_to_j_k() {
-        use crate::key_hint;
-        use crate::keymap::RuntimeKeymap;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-
-        type_chars_humanlike(&mut composer, &['f', 'i', 'r', 's', 't']);
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(matches!(result, InputResult::Submitted { .. }));
-
-        let mut keymap = RuntimeKeymap::defaults();
-        keymap.vim_normal.move_up = vec![key_hint::plain(KeyCode::F(2))];
-        keymap.vim_normal.move_down = vec![key_hint::plain(KeyCode::F(3))];
-        composer.set_keymap_bindings(&keymap);
-        composer.set_vim_enabled(/*enabled*/ true);
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-        assert!(composer.draft.textarea.is_empty());
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
-        assert_eq!(composer.draft.textarea.text(), "first");
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
-        assert!(composer.draft.textarea.is_empty());
-    }
-
-    #[test]
-    fn vim_normal_j_k_fall_back_to_multiline_cursor_movement() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-        composer
-            .draft
-            .textarea
-            .set_text_clearing_elements("one\ntwo");
-        composer.draft.textarea.set_cursor(/*pos*/ 0);
-        composer.set_vim_enabled(/*enabled*/ true);
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        assert_eq!(composer.draft.textarea.cursor(), "one\n".len());
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-        assert_eq!(composer.draft.textarea.cursor(), 0);
-    }
-
-    #[test]
-    fn vim_normal_operator_motion_does_not_navigate_history() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-
-        type_chars_humanlike(&mut composer, &['f', 'i', 'r', 's', 't']);
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(matches!(result, InputResult::Submitted { .. }));
-
-        type_chars_humanlike(&mut composer, &['s', 'e', 'c', 'o', 'n', 'd']);
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(matches!(result, InputResult::Submitted { .. }));
-
-        composer.set_vim_enabled(/*enabled*/ true);
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-        assert_eq!(composer.draft.textarea.text(), "second");
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-        assert!(composer.draft.textarea.is_empty());
-        assert_eq!(composer.current_text(), "");
     }
 
     #[test]

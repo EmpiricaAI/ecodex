@@ -4,7 +4,6 @@
 use codex_arg0::Arg0DispatchPaths;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::GrpcCodeModeSessionProvider;
-use codex_code_mode::WebSocketCodeModeSessionProvider;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_core::config::Config;
@@ -82,6 +81,14 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 const SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY: &str = "Codex rebuilt its local database.";
 
+fn is_unsupported_untrusted_approval_policy_error(err: &std::io::Error) -> bool {
+    err.get_ref().is_some_and(
+        <dyn std::error::Error + Send + Sync + 'static>::is::<
+            UnsupportedUntrustedApprovalPolicyError,
+        >,
+    )
+}
+
 mod analytics_utils;
 mod app_info;
 mod app_server_tracing;
@@ -89,6 +96,7 @@ mod attestation;
 mod auth_mode;
 mod bespoke_event_handling;
 mod code_mode_host;
+mod codex_home_metrics;
 mod command_exec;
 mod config_layer;
 mod config_manager;
@@ -111,8 +119,11 @@ mod mcp_refresh;
 mod message_processor;
 mod models;
 mod models_refresh_worker;
+mod notification_media;
 mod otel_reloader;
 mod outgoing_message;
+mod realtime_event_handling;
+mod realtime_history;
 mod request_processors;
 mod request_serialization;
 mod server_request_error;
@@ -505,13 +516,7 @@ pub async fn run_main_with_transport_options(
                 config.http_client_factory(),
             );
         }
-        Err(err)
-            if err.get_ref().is_some_and(
-                <dyn std::error::Error + Send + Sync + 'static>::is::<
-                    UnsupportedUntrustedApprovalPolicyError,
-                >,
-            ) =>
-        {
+        Err(err) if is_unsupported_untrusted_approval_policy_error(&err) => {
             return Err(err);
         }
         Err(err) => {
@@ -526,6 +531,9 @@ pub async fn run_main_with_transport_options(
         .await
     {
         Ok(config) => config,
+        Err(err) if is_unsupported_untrusted_approval_policy_error(&err) => {
+            return Err(err);
+        }
         Err(err) => {
             if strict_config {
                 return Err(err);
@@ -545,20 +553,6 @@ pub async fn run_main_with_transport_options(
     let code_mode_session_provider: Option<Arc<dyn CodeModeSessionProvider>> =
         match &runtime_options.code_mode_host_transport {
             CodeModeHostTransport::Local => None,
-            CodeModeHostTransport::WebSocket(url) => {
-                if !config.features.enabled(Feature::CodeModeHost) {
-                    return Err(std::io::Error::new(
-                        ErrorKind::InvalidInput,
-                        "remote code-mode host requires the code_mode_host feature to be enabled",
-                    ));
-                }
-                Some(Arc::new(
-                    WebSocketCodeModeSessionProvider::with_http_client_factory(
-                        url.to_string(),
-                        config.http_client_factory(),
-                    ),
-                ))
-            }
             CodeModeHostTransport::Grpc(url) => {
                 if !config.features.enabled(Feature::CodeModeHost) {
                     return Err(std::io::Error::new(
@@ -828,6 +822,15 @@ pub async fn run_main_with_transport_options(
         }
     }
     transport_accept_handles.push(remote_control_accept_handle);
+
+    // Only the standalone server measures its local home, not embedded/cloud runtimes.
+    if let Some(metrics) = otel.as_ref().and_then(codex_otel::OtelProvider::metrics) {
+        codex_home_metrics::spawn(
+            config.codex_home.to_path_buf(),
+            metrics.clone(),
+            transport_shutdown_token.clone(),
+        );
+    }
 
     let otel_reloader_handle = otel_reloader::spawn(
         otel,
@@ -1171,11 +1174,11 @@ pub async fn run_main_with_transport_options(
             };
 
             if !shutdown_state.forced() {
-                futures::future::join_all(
-                    connections
-                        .values()
-                        .map(|connection_state| connection_state.session.rpc_gate.shutdown()),
-                )
+                futures::future::join_all(connections.iter().map(
+                    |(&connection_id, connection_state)| {
+                        processor.connection_closed(connection_id, &connection_state.session)
+                    },
+                ))
                 .await;
                 connection_cleanup_tasks.drain().await;
                 processor.drain_background_tasks().await;

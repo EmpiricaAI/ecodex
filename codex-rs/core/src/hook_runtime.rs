@@ -5,6 +5,10 @@ use std::time::Duration;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
+use codex_connectors::AppToolPolicyEvaluator;
+use codex_connectors::AppToolPolicyInput;
+use codex_core_plugins::executor_plugin_hook_sources;
+use codex_hooks::InterruptRequest;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
@@ -23,8 +27,11 @@ use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_hooks::hook_execution_mode_label;
 use codex_hooks::hook_handler_type_label;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
+use codex_plugin::ExecutorPluginHookSource;
+use codex_protocol::items::FunctionCallOutputItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ResponseItem;
@@ -40,13 +47,16 @@ use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
+use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use codex_rollout::state_db;
 use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
+use serde_json::Map;
 use serde_json::Value;
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 use crate::context::ContextualUserFragment;
@@ -54,9 +64,12 @@ use crate::context::HookAdditionalContext;
 use crate::event_mapping::parse_turn_item;
 use crate::session::TurnInput;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
+use crate::state::TurnState;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
+use crate::turn_metadata::McpTurnMetadataContext;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -142,7 +155,7 @@ pub(crate) async fn run_pending_session_start_hooks(
             #[allow(deprecated)]
             cwd: turn_context.cwd.clone(),
             transcript_path: sess.hook_transcript_path().await,
-            model: turn_context.model_info.slug.clone(),
+            model: turn_context.model_info().slug.clone(),
             permission_mode: hook_permission_mode(turn_context),
             target,
         };
@@ -184,7 +197,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
-        model: turn_context.model_info.slug.clone(),
+        model: turn_context.model_info().slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
         tool_name: tool_name.name().to_string(),
         matcher_aliases: tool_name.matcher_aliases().to_vec(),
@@ -245,7 +258,7 @@ pub(crate) async fn run_permission_request_hooks(
         #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
         transcript_path: sess.hook_transcript_path().await,
-        model: turn_context.model_info.slug.clone(),
+        model: turn_context.model_info().slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
         tool_name: payload.tool_name.name().to_string(),
         matcher_aliases: payload.tool_name.matcher_aliases().to_vec(),
@@ -287,7 +300,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
-        model: turn_context.model_info.slug.clone(),
+        model: turn_context.model_info().slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
         tool_name,
         matcher_aliases,
@@ -329,7 +342,7 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
-        model: turn_context.model_info.slug.clone(),
+        model: turn_context.model_info().slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
         tool_name,
         matcher_aliases,
@@ -347,13 +360,70 @@ pub(crate) async fn run_post_tool_use_failure_hooks(
     outcome
 }
 
+fn executor_hook_sources_for_step(step_context: &StepContext) -> Vec<ExecutorPluginHookSource> {
+    step_context
+        .executor_capability_discovery
+        .as_deref()
+        .map(|snapshot| {
+            let app_tool_policy =
+                AppToolPolicyEvaluator::new(&step_context.mcp.config().config_layer_stack);
+            executor_plugin_hook_sources(snapshot, |server, tool| {
+                step_context
+                    .mcp
+                    .tool_info(server, tool)
+                    .filter(|tool_info| {
+                        if server != CODEX_APPS_MCP_SERVER_NAME {
+                            return true;
+                        }
+                        let annotations = tool_info.tool.annotations.as_ref();
+                        app_tool_policy
+                            .policy(AppToolPolicyInput {
+                                connector_id: tool_info.connector_id.as_deref(),
+                                tool_name: &tool_info.tool.name,
+                                tool_title: tool_info.tool.title.as_deref(),
+                                destructive_hint: annotations
+                                    .and_then(|annotations| annotations.destructive_hint),
+                                open_world_hint: annotations
+                                    .and_then(|annotations| annotations.open_world_hint),
+                            })
+                            .enabled
+                    })
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn build_request_metadata(
+    step_context: Option<&StepContext>,
+    turn_context: &TurnContext,
+) -> Map<String, Value> {
+    let settings = step_context
+        .map(|step_context| step_context.settings.as_ref())
+        .unwrap_or(turn_context.initial_settings.as_ref());
+    turn_context
+        .turn_metadata_state
+        .current_meta_value_for_mcp_request(McpTurnMetadataContext {
+            model: settings.model_info.slug.as_str(),
+            reasoning_effort: settings.effective_reasoning_effort(),
+            node_repl_disabled: settings.model_info.node_repl_disabled,
+        })
+        .map(|turn_metadata| {
+            Map::from_iter([(
+                crate::X_CODEX_TURN_METADATA_HEADER.to_string(),
+                turn_metadata,
+            )])
+        })
+        .unwrap_or_default()
+}
+
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn run_turn_stop_hooks(
     sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     stop_hook_active: bool,
     last_assistant_message: Option<String>,
 ) -> StopOutcome {
+    let turn_context = &step_context.turn;
     // Resolve the stop hook kind from the session source before building the
     // request. Root turns run Stop; thread-spawned child turns run SubagentStop.
     let (target, transcript_path) = match &turn_context.session_source {
@@ -396,21 +466,28 @@ pub(crate) async fn run_turn_stop_hooks(
         // Internal/synthetic subagents do not expose user-configured lifecycle
         // hooks, so there is no Stop or SubagentStop request to dispatch.
         SessionSource::SubAgent(_) => return StopOutcome::default(),
+        SessionSource::Internal(InternalSessionSource::MemoryConsolidation) => (
+            StopHookTarget::MemoryConsolidation,
+            sess.hook_transcript_path().await,
+        ),
         _ => (StopHookTarget::Stop, sess.hook_transcript_path().await),
     };
+    let request_metadata = build_request_metadata(Some(step_context), turn_context);
     let request = codex_hooks::StopRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path,
-        model: turn_context.model_info.slug.clone(),
+        model: turn_context.model_info().slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
+        request_metadata: (!request_metadata.is_empty()).then_some(request_metadata),
         stop_hook_active,
         last_assistant_message,
         target,
     };
-    let hooks = sess.hooks();
+    let executor_hook_sources = executor_hook_sources_for_step(step_context);
+    let hooks = sess.hooks().with_executor_hooks(executor_hook_sources);
     emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
 
     let mut outcome = hooks.run_stop(request).await;
@@ -450,6 +527,48 @@ pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
     emit_hook_completed_events(sess, &turn_context, outcome.hook_events).await;
 }
 
+pub(crate) async fn run_turn_interrupt_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    turn_state: &Mutex<TurnState>,
+) {
+    if matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
+        return;
+    }
+
+    // The active turn has already been detached. Reuse only its last executing step's discovery.
+    let last_known_step_context = turn_state.lock().await.last_known_step_context.clone();
+    let executor_hook_sources = last_known_step_context
+        .as_deref()
+        .map(executor_hook_sources_for_step)
+        .unwrap_or_default();
+    let has_executor_hooks = !executor_hook_sources.is_empty();
+    let hooks = sess.hooks().with_executor_hooks(executor_hook_sources);
+    let preview_runs = hooks.preview_interrupt();
+    if preview_runs.is_empty() && !has_executor_hooks {
+        return;
+    }
+
+    let request_metadata = build_request_metadata(last_known_step_context.as_deref(), turn_context);
+    let request = InterruptRequest {
+        session_id: sess.session_id().into(),
+        turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info().slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        request_metadata: (!request_metadata.is_empty()).then_some(request_metadata),
+    };
+    if let Err(err) = sess.flush_rollout().await {
+        tracing::warn!("failed to flush transcript before Interrupt hook: {err}");
+    }
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = hooks.run_interrupt(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+}
+
 pub(crate) async fn run_pre_compact_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -462,7 +581,7 @@ pub(crate) async fn run_pre_compact_hooks(
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
-        model: turn_context.model_info.slug.clone(),
+        model: turn_context.model_info().slug.clone(),
         trigger: compaction_trigger_label(trigger).to_string(),
     };
     let preview_runs = sess.hooks().preview_pre_compact(&request);
@@ -499,7 +618,7 @@ pub(crate) async fn run_post_compact_hooks(
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
-        model: turn_context.model_info.slug.clone(),
+        model: turn_context.model_info().slug.clone(),
         trigger: compaction_trigger_label(trigger).to_string(),
     };
     let preview_runs = sess.hooks().preview_post_compact(&request);
@@ -575,6 +694,7 @@ pub(crate) async fn run_legacy_after_agent_hook(
         return false;
     };
     let event = EventMsg::Error(codex_protocol::protocol::ErrorEvent {
+        misalignment: None,
         message,
         codex_error_info: Some(CodexErrorInfo::Other),
     });
@@ -596,7 +716,7 @@ pub(crate) async fn inspect_pending_input(
                 #[allow(deprecated)]
                 cwd: turn_context.cwd.clone(),
                 transcript_path: sess.hook_transcript_path().await,
-                model: turn_context.model_info.slug.clone(),
+                model: turn_context.model_info().slug.clone(),
                 permission_mode: hook_permission_mode(turn_context),
                 prompt: UserMessageItem::new(content).message(),
             };
@@ -610,7 +730,7 @@ pub(crate) async fn inspect_pending_input(
             )
             .await
         }
-        TurnInput::ResponseItem(_) => HookRuntimeOutcome {
+        TurnInput::ResponseItem(_) | TurnInput::FunctionCallOutput(_) => HookRuntimeOutcome {
             should_stop: false,
             additional_contexts: Vec::new(),
         },
@@ -642,6 +762,28 @@ pub(crate) async fn record_pending_input(
             sess.record_annotated_conversation_items(turn_context, vec![item])
                 .await;
         }
+        TurnInput::FunctionCallOutput(item) => {
+            sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
+                .await;
+            if let ResponseItem::FunctionCallOutput {
+                id: Some(id),
+                name: Some(name),
+                namespace,
+                output,
+                ..
+            } = item
+            {
+                let item = TurnItem::FunctionCallOutput(FunctionCallOutputItem {
+                    id: id.to_string(),
+                    name,
+                    namespace,
+                    output: output.body,
+                });
+                sess.emit_turn_item_started(turn_context, &item).await;
+                sess.emit_turn_item_completed(turn_context, item).await;
+            }
+            sess.ensure_rollout_materialized(persist_context).await;
+        }
         TurnInput::InterAgentCommunication(communication) => {
             sess.record_inter_agent_communication(turn_context, communication)
                 .await;
@@ -672,10 +814,21 @@ pub(crate) async fn drain_async_hook_results(
             .collect::<Vec<_>>();
 
         if before_user_prompt {
+            // A fresh user turn owns its root; automatic turns only inherit one.
+            let current_turn_id = Some(turn_context.sub_id.as_str());
+            if !additional_contexts.is_empty()
+                && result.turn_id.as_deref() != current_turn_id
+                && turn_context.turn_metadata_state.root_turn_id().as_deref() != current_turn_id
+            {
+                turn_context.turn_metadata_state.mark_root_turn_ambiguous();
+            }
             record_additional_contexts(sess, turn_context, additional_contexts).await;
         } else if !additional_contexts.is_empty() {
             let _ = sess
-                .inject_if_running(additional_context_messages(additional_contexts))
+                .inject_hook_context_if_running(
+                    additional_context_messages(additional_contexts),
+                    result.turn_id.as_deref(),
+                )
                 .await;
         }
 
@@ -837,7 +990,7 @@ fn hook_run_analytics_payload(
 ) -> (codex_analytics::TrackEventsContext, HookRunFact) {
     (
         build_track_events_context(
-            turn_context.model_info.slug.clone(),
+            turn_context.model_info().slug.clone(),
             thread_id,
             completed
                 .turn_id
@@ -868,6 +1021,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
+        HookEventName::Interrupt => "Interrupt",
         // ecodex hook event additions (goal f0004294; shared events are upstream-native above)
         HookEventName::TaskCompleted => "TaskCompleted",
         HookEventName::PostToolUseFailure => "PostToolUseFailure",
@@ -1065,7 +1219,7 @@ mod tests {
 
         assert_eq!(tracking.thread_id, "thread-123");
         assert_eq!(tracking.turn_id, "turn-from-hook");
-        assert_eq!(tracking.model_slug, turn_context.model_info.slug);
+        assert_eq!(tracking.model_slug, turn_context.model_info().slug);
         assert_eq!(hook.event_name, HookEventName::Stop);
         assert_eq!(hook.handler_type, HookHandlerType::Command);
         assert_eq!(hook.execution_mode, HookExecutionMode::Sync);

@@ -9,12 +9,15 @@ export type ModelReasoningEffort =
   | "high"
   | "xhigh"
   | "max"
-  | "ultra";
+  | "ultra"
+  | "persistent";
 
 export type WebSearchMode = "disabled" | "cached" | "live";
 
 export type ThreadOptions = {
   model?: string;
+  /** Source classification applied when this thread is first created. */
+  threadSource?: string;
   sandboxMode?: SandboxMode;
   workingDirectory?: string;
   skipGitRepoCheck?: boolean;

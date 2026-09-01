@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/hooks_browser_view.rs
-assertion_line: 1083
 expression: "render_lines(&view, 112)"
 ---
                                                                                                                 
@@ -23,8 +22,8 @@ expression: "render_lines(&view, 112)"
   SubagentStart         0           0           When a subagent is created                                      
   SubagentStop          0           0           Right before a subagent ends its turn                           
   Stop                  0           0           Right before Codex ends its turn                                
-  SessionEnd            0           0           When a codex session ends                                       
   TaskCompleted         0           0           When the agent declares task completion                         
   PostToolUseFailure    0           0           When a tool invocation fails                                    
+  Interrupt             0           0           Right before an interrupted turn is aborted                     
                                                                                                                 
   Press enter to view hooks; esc to close

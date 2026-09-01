@@ -82,7 +82,10 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
         false
     }
 
-    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
         Box::pin(self.handle_call(invocation))
     }
 }
@@ -217,7 +220,7 @@ impl RequestPluginInstallHandler {
                 .analytics_events_client
                 .track_plugin_install_requested(
                     build_track_events_context(
-                        turn.model_info.slug.clone(),
+                        turn.model_info().slug.clone(),
                         session.thread_id.to_string(),
                         turn.sub_id.clone(),
                         turn.originator.clone(),
@@ -235,8 +238,9 @@ impl RequestPluginInstallHandler {
                 );
         }
 
+        let request =
+            build_request_plugin_install_elicitation_request(suggest_reason, &tool, &suggestion_id);
         let request_id = RequestId::String(suggestion_id.into());
-        let request = build_request_plugin_install_elicitation_request(suggest_reason, &tool);
         let elicitation = session
             .request_mcp_server_elicitation(
                 turn.as_ref(),

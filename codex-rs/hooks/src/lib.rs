@@ -21,10 +21,9 @@ pub use engine::dispatcher::hook_handler_type_label;
 pub use events::common::SubagentHookContext;
 /// Hook event names as they appear in hooks JSON and config files.
 ///
-/// The first 11 (incl. SessionEnd) are codex-stock; the last 2 (TaskCompleted /
-/// PostToolUseFailure) are ecodex divergences upstream lacks. Upstream added its
-/// own SessionEnd in the 2026-07 sync, converging with ours.
-pub const HOOK_EVENT_NAMES: [&str; 13] = [
+/// The first 12 (incl. SessionEnd + Interrupt) are codex-stock; the last 2
+/// (TaskCompleted / PostToolUseFailure) are ecodex divergences upstream lacks.
+pub const HOOK_EVENT_NAMES: [&str; 14] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
@@ -36,7 +35,8 @@ pub const HOOK_EVENT_NAMES: [&str; 13] = [
     "SubagentStart",
     "SubagentStop",
     "Stop",
-    // ecodex additions (upstream lacks these 2; SessionEnd converged upstream):
+    "Interrupt",
+    // ecodex additions (upstream lacks these 2):
     "TaskCompleted",
     "PostToolUseFailure",
 ];
@@ -64,6 +64,8 @@ pub use events::compact::PostCompactRequest;
 pub use events::compact::PreCompactOutcome;
 pub use events::compact::PreCompactRequest;
 pub use events::compact::StatelessHookOutcome;
+pub use events::interrupt::InterruptOutcome;
+pub use events::interrupt::InterruptRequest;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;
@@ -118,7 +120,8 @@ pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "subagent_start",
         HookEventName::SubagentStop => "subagent_stop",
         HookEventName::Stop => "stop",
-        // ecodex additions (SessionEnd is now upstream-native, above):
+        HookEventName::Interrupt => "interrupt",
+        // ecodex additions:
         HookEventName::TaskCompleted => "task_completed",
         HookEventName::PostToolUseFailure => "post_tool_use_failure",
     }

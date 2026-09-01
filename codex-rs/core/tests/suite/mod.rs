@@ -40,6 +40,7 @@ mod agent_execution;
 mod agent_websocket;
 mod agents_md;
 mod apply_patch_cli;
+mod apply_patch_serialization;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
 mod audio_truncation;
@@ -57,8 +58,11 @@ mod compact;
 mod compact_remote;
 mod compact_remote_parity;
 mod compact_resume_fork;
+mod context_annotations;
 mod current_time_reminder;
+mod cyber_access_program;
 mod cyber_exec_policy;
+mod daybreak_access;
 mod deprecation_notice;
 mod exec;
 mod exec_policy;
@@ -67,19 +71,31 @@ mod extension_sandbox;
 mod external_auth;
 mod fork_thread;
 mod git_enrichment;
+mod guardian_authorization;
+mod guardian_history;
+mod guardian_mcp_elicitation;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
 #[cfg(not(target_os = "windows"))]
+mod guardian_review_cancellation;
+#[cfg(not(target_os = "windows"))]
+mod guardian_subagent_authorization;
+#[cfg(not(target_os = "windows"))]
 mod hooks;
+#[cfg(not(target_os = "windows"))]
+mod hooks_executor;
 #[cfg(not(target_os = "windows"))]
 mod hooks_mcp;
 mod image_rollout;
 mod injected_models_cache;
+#[cfg(not(target_os = "windows"))]
+mod interrupt_hooks;
 mod items;
 mod json_result;
 mod live_cli;
 mod mcp_auth_elicitation;
 mod mcp_auth_refresh;
+mod mcp_optional_startup_grace;
 #[cfg(unix)]
 mod mcp_refresh_cleanup;
 mod mcp_startup_refresh_http_proxy;
@@ -129,22 +145,26 @@ mod retry_after;
 mod review;
 mod rmcp_client;
 mod rollout_budget;
+mod rollout_compression;
 mod rollout_list_find;
 mod safety_buffering;
 mod safety_check_downgrade;
 mod search_tool;
 mod send_user_message_async;
-mod shell_command;
-mod shell_serialization;
+mod settings_commits;
+mod settings_constraints;
 mod shell_snapshot;
 mod skill_approval;
 mod skills;
 mod skills_extension;
 mod spawn_agent_description;
 mod sqlite_state;
+mod step_settings;
+mod step_settings_snapshots;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod subagent_notifications;
+mod subagent_service_tier;
 mod token_budget;
 mod tool_harness;
 mod tool_lifecycle;
@@ -155,6 +175,8 @@ mod turn_input_submission;
 mod turn_state;
 mod unified_exec;
 mod unified_exec_process_events;
+mod unified_exec_stdin_approval;
+mod unified_exec_stdin_review_size;
 #[cfg(unix)]
 mod unified_exec_zsh_fork_approvals;
 mod unstable_features_warning;

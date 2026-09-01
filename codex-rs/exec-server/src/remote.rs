@@ -15,6 +15,7 @@ use http::HeaderValue;
 use http::StatusCode;
 use serde::Deserialize;
 use tokio::time::sleep;
+use tokio::time::timeout_at;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
 use tracing::info;
@@ -51,6 +52,8 @@ use crate::trace_context::current_trace_context_headers;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
 const NOISE_RELAY_SECURITY_PROFILE: &str = "noise_hybrid_ik_v1";
+
+mod registration_retry;
 
 #[derive(Clone)]
 struct EnvironmentRegistryClient {
@@ -132,6 +135,7 @@ impl EnvironmentRegistryClient {
         environment_id: &str,
         executor_public_key: &NoiseChannelPublicKey,
     ) -> Result<EnvironmentRegistryRegistrationResponse, ExecServerError> {
+        let deadline = tokio::time::Instant::now() + self.connect_timeout;
         let url = endpoint_url(
             &self.base_url,
             &format!("/cloud/environment/{environment_id}/register"),
@@ -140,16 +144,40 @@ impl EnvironmentRegistryClient {
             security_profile: NOISE_RELAY_SECURITY_PROFILE.to_string(),
             executor_public_key: executor_public_key.clone(),
         };
-        let response = self
-            .http
-            .post(url)
-            .headers(self.resolve_auth_headers().await?)
-            .headers(current_trace_context_headers())
-            .json(&body)
-            .send()
-            .await?;
+        let response = timeout_at(deadline, async {
+            self.http
+                .post(url)
+                .headers(self.resolve_auth_headers().await?)
+                .headers(current_trace_context_headers())
+                .json(&body)
+                .send()
+                .await
+                .map_err(ExecServerError::EnvironmentRegistryRequest)
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(ExecServerError::EnvironmentRegistryRequest(
+                codex_http_client::RouteAwareRequestError::Timeout,
+            ))
+        })?;
+        let status = response.status();
+        // Read diagnostics within the same attempt budget, preserving a known error status.
         let response: EnvironmentRegistryRegistrationResponse =
-            self.parse_json_response(response).await?;
+            timeout_at(deadline, self.parse_json_response(response))
+                .await
+                .unwrap_or_else(|_| {
+                    Err(match status {
+                        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                            environment_registry_auth_error(status, "response body timed out")
+                        }
+                        status if !status.is_success() => {
+                            environment_registry_http_error(status, "response body timed out")
+                        }
+                        _ => ExecServerError::EnvironmentRegistryRequest(
+                            codex_http_client::RouteAwareRequestError::Timeout,
+                        ),
+                    })
+                })?;
         if response.environment_id != environment_id {
             return Err(ExecServerError::Protocol(
                 "environment registry returned a different environment id".to_string(),
@@ -250,10 +278,11 @@ impl EnvironmentRegistryClient {
         R: for<'de> Deserialize<'de>,
     {
         if response.status().is_success() {
-            return response
-                .json::<R>()
+            let body = response
+                .text()
                 .await
-                .map_err(|error| ExecServerError::EnvironmentRegistryRequest(error.into()));
+                .map_err(|error| ExecServerError::EnvironmentRegistryRequest(error.into()))?;
+            return serde_json::from_str(&body).map_err(ExecServerError::Json);
         }
 
         let status = response.status();
@@ -615,7 +644,7 @@ async fn run_remote_environment_connections<H: NoiseStreamHandler>(
     })?;
     let mut backoff = Duration::from_secs(1);
     let mut response = client
-        .register_environment(&config.environment_id, &identity.public_key())
+        .register_environment_with_retry(&config.environment_id, &identity.public_key())
         .await?;
 
     loop {
@@ -673,7 +702,10 @@ async fn run_remote_environment_connections<H: NoiseStreamHandler>(
                 if registration_rejected {
                     config.telemetry.remote_reconnect("registration_rejected");
                     response = client
-                        .register_environment(&config.environment_id, &identity.public_key())
+                        .register_environment_with_retry(
+                            &config.environment_id,
+                            &identity.public_key(),
+                        )
                         .await?;
                 } else {
                     config.telemetry.remote_reconnect("connect_failed");
@@ -817,6 +849,7 @@ mod tests {
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
+    use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
     use tracing::Instrument;
@@ -1037,6 +1070,85 @@ mod tests {
             error,
             ExecServerError::EnvironmentRegistryRequest(error) if error.is_timeout()
         ));
+    }
+
+    #[tokio::test]
+    async fn connect_environment_retries_interrupted_registry_response_bodies() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("registry listener should bind");
+        let registry_url = format!(
+            "http://{}",
+            listener
+                .local_addr()
+                .expect("registry listener should have an address")
+        );
+        tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("registry request should connect");
+            let mut request = [0_u8; 4096];
+            let bytes_read = stream
+                .read(&mut request)
+                .await
+                .expect("registry request should arrive before the response");
+            assert_ne!(bytes_read, 0, "registry request should not be empty");
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 256\r\n\r\n{",
+                )
+                .await
+                .expect("registry response headers should write");
+            stream
+                .shutdown()
+                .await
+                .expect("registry connection should close");
+        });
+        let client = EnvironmentRegistryClient::new(registry_url, static_registry_auth_provider())
+            .expect("client");
+        let harness_public_key = NoiseChannelIdentity::generate()
+            .expect("identity")
+            .public_key();
+
+        let error = client
+            .connect_environment("environment-requested", harness_public_key)
+            .await
+            .err()
+            .expect("interrupted response body must fail");
+
+        assert!(
+            crate::client::is_retryable_registry_error(&error),
+            "interrupted registry response body should be retryable: {error:?}"
+        );
+        assert!(matches!(
+            error,
+            ExecServerError::EnvironmentRegistryRequest(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn connect_environment_does_not_retry_malformed_successful_responses() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/cloud/environment/environment-requested/connect"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{"))
+            .mount(&server)
+            .await;
+        let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
+            .expect("client");
+        let harness_public_key = NoiseChannelIdentity::generate()
+            .expect("identity")
+            .public_key();
+
+        let error = client
+            .connect_environment("environment-requested", harness_public_key)
+            .await
+            .err()
+            .expect("malformed response must fail");
+
+        assert!(!crate::client::is_retryable_registry_error(&error));
+        assert!(matches!(error, ExecServerError::Json(_)));
     }
 
     #[tokio::test]

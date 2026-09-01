@@ -36,7 +36,6 @@ impl ChatWidget {
                 || self.review.is_review_mode
                 || self.mcp_startup_status.is_some(),
         );
-        self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
     }
 
@@ -386,7 +385,12 @@ impl ChatWidget {
     pub(super) fn on_cyber_policy_error(&mut self) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
-        self.add_to_history(history_cell::new_cyber_policy_error_event());
+        let plan_type = if self.has_chatgpt_account {
+            self.plan_type
+        } else {
+            None
+        };
+        self.add_to_history(history_cell::new_cyber_policy_error_event(plan_type));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
@@ -394,6 +398,8 @@ impl ChatWidget {
     }
 
     pub(super) fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
+        // on_error can drain queued input, before the asynchronous recovery read completes.
+        self.input_queue.rate_limit_recovery_pending = self.has_chatgpt_account;
         let usage_limit_error = matches!(error_kind, RateLimitErrorKind::UsageLimit);
         let rate_limit_reached_type = self.codex_rate_limit_reached_type.map(|kind| {
             if usage_limit_error {
@@ -410,31 +416,38 @@ impl ChatWidget {
                 kind
             }
         });
+        if self.codex_rate_limit_reached_type != rate_limit_reached_type {
+            self.clear_backend_banner();
+        }
         self.codex_rate_limit_reached_type = rate_limit_reached_type;
-        match rate_limit_reached_type {
-            Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => {
-                self.on_error(
+        // Keep owner remediation in history even when the optional backend banner is unavailable.
+        let (message, nudge) = match rate_limit_reached_type {
+            Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => (
                     "You're out of credits. Your workspace is out of credits. Add credits to continue using Codex."
                         .to_string(),
-                );
-            }
-            Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached) => {
-                self.on_error(
+                    None,
+            ),
+            Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached) => (
                     "Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex."
                         .to_string(),
-                );
-            }
-            Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted) => {
-                self.on_error(message);
-                self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::Credits);
-            }
-            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached) => {
-                self.on_error(message);
-                self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::UsageLimit);
-            }
-            Some(RateLimitReachedType::RateLimitReached) | None => {
-                self.on_error(message);
-            }
+                    None,
+            ),
+            Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted) =>
+                (message, Some(AddCreditsNudgeCreditType::Credits)),
+            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached) =>
+                (message, Some(AddCreditsNudgeCreditType::UsageLimit)),
+            Some(RateLimitReachedType::RateLimitReached) | None => (message, None),
+        };
+        self.on_error(message);
+        if !self.has_applicable_backend_banner()
+            && let Some(credit_type) = nudge
+        {
+            self.open_workspace_owner_nudge_prompt(credit_type);
+        }
+        if self.has_chatgpt_account {
+            self.app_event_tx.send(AppEvent::RefreshRateLimits {
+                origin: crate::app_event::RateLimitRefreshOrigin::Recovery,
+            });
         }
     }
 

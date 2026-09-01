@@ -1,9 +1,14 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GuardianNodeReplPolicy;
 
 impl ContextualUserFragment for GuardianNodeReplPolicy {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("guardian.node_repl_policy".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }
@@ -17,6 +22,6 @@ impl ContextualUserFragment for GuardianNodeReplPolicy {
     }
 
     fn body(&self) -> String {
-        include_str!("../guardian/node_repl_policy.md").to_string()
+        include_str!("../../assets/guardian/node_repl_policy.md").to_string()
     }
 }

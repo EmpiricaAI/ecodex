@@ -17,8 +17,8 @@ use serde::Serialize;
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart, SessionEnd, UserPromptSubmit, SubagentStart, SubagentStop, Stop,
-        // ecodex divergence: 2 events upstream lacks (SessionEnd converged upstream).
+        PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart, SessionEnd, UserPromptSubmit, SubagentStart, SubagentStop, Stop, Interrupt,
+        // ecodex divergence: 2 events upstream lacks.
         TaskCompleted, PostToolUseFailure
     }
 );

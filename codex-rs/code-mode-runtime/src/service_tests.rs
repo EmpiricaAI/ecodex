@@ -80,6 +80,7 @@ async fn execute_waits_for_nested_tool_during_yield_grace() {
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
@@ -118,6 +119,7 @@ async fn execute_and_wait_clamp_yield_grace_without_stopping_the_cell() {
     assert_eq!(
         initial_response.await.unwrap().unwrap(),
         RuntimeResponse::Yielded {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         }
@@ -136,6 +138,7 @@ async fn execute_and_wait_clamp_yield_grace_without_stopping_the_cell() {
     assert_eq!(
         wait_response.await.unwrap().unwrap(),
         WaitOutcome::LiveCell(RuntimeResponse::Yielded {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -153,6 +156,7 @@ async fn execute_and_wait_clamp_yield_grace_without_stopping_the_cell() {
     assert_eq!(
         completion.await.unwrap().unwrap(),
         WaitOutcome::LiveCell(RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
@@ -198,6 +202,7 @@ async fn wait_waits_for_nested_tool_during_yield_grace() {
     assert_eq!(
         response.unwrap(),
         WaitOutcome::LiveCell(RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
@@ -242,6 +247,7 @@ async fn zero_yield_limit_is_immediate_and_scoped_to_its_session() {
     assert_eq!(
         zero_response.await.unwrap().unwrap(),
         RuntimeResponse::Yielded {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         }
@@ -258,6 +264,7 @@ async fn zero_yield_limit_is_immediate_and_scoped_to_its_session() {
     assert_eq!(
         zero_wait.await.unwrap().unwrap(),
         WaitOutcome::LiveCell(RuntimeResponse::Yielded {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -268,6 +275,7 @@ async fn zero_yield_limit_is_immediate_and_scoped_to_its_session() {
     assert_eq!(
         limited_response.await.unwrap().unwrap(),
         RuntimeResponse::Yielded {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         }
@@ -389,6 +397,7 @@ async fn synchronous_exit_returns_successfully() {
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "before".to_string(),
@@ -435,6 +444,7 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
     assert_eq!(
         write_response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
             error_text: None,
@@ -443,6 +453,7 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
     assert_eq!(
         same_session,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("2"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "visible".to_string(),
@@ -453,6 +464,7 @@ async fn stored_values_are_shared_between_cells_but_not_sessions() {
     assert_eq!(
         other_session,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "undefined".to_string(),
@@ -476,6 +488,7 @@ async fn shutdown_interrupts_cpu_bound_cells() {
     assert_eq!(
         cell.initial_response().await.unwrap(),
         RuntimeResponse::Yielded {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         }
@@ -517,6 +530,7 @@ async fn execute_to_pending_returns_completed_for_synchronous_results() {
     assert_eq!(
         response,
         ExecuteToPendingOutcome::Completed(RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
@@ -558,6 +572,7 @@ async fn execute_to_pending_returns_once_the_runtime_is_quiescent() {
     assert_eq!(
         termination,
         WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -598,6 +613,7 @@ await Promise.all([
     assert_eq!(
         termination,
         WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -662,6 +678,7 @@ await Promise.all([
     assert_eq!(
         termination,
         WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -725,6 +742,7 @@ await new Promise(() => {});
     assert_eq!(
         termination,
         WaitOutcome::LiveCell(RuntimeResponse::Terminated {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
         })
@@ -775,6 +793,7 @@ text("done");
         resumed_response,
         WaitToPendingOutcome::LiveCell(ExecuteToPendingOutcome::Completed(
             RuntimeResponse::Result {
+                code_mode_host_duration: None,
                 cell_id: cell_id("1"),
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "done".to_string(),
@@ -783,6 +802,124 @@ text("done");
             }
         ))
     );
+}
+
+#[tokio::test]
+async fn global_scope_contains_only_allowed_items() {
+    let service = InProcessCodeModeSession::new();
+
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            source: "text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));"
+                .to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    let RuntimeResponse::Result {
+        content_items,
+        error_text: None,
+        ..
+    } = response
+    else {
+        panic!("global scope inspection failed unexpectedly: {response:?}");
+    };
+    let [FunctionCallOutputContentItem::InputText { text }] = content_items.as_slice() else {
+        panic!("global scope inspection returned unexpected output: {content_items:?}");
+    };
+    let globals = serde_json::from_str::<Vec<String>>(text)
+        .expect("global scope inspection should return a JSON array");
+    let expected = [
+        "AggregateError",
+        "ALL_TOOLS",
+        "Array",
+        "ArrayBuffer",
+        "AsyncDisposableStack",
+        "BigInt",
+        "BigInt64Array",
+        "BigUint64Array",
+        "Boolean",
+        "clearTimeout",
+        "DataView",
+        "Date",
+        "DisposableStack",
+        "Error",
+        "EvalError",
+        "FinalizationRegistry",
+        "Float16Array",
+        "Float32Array",
+        "Float64Array",
+        "Function",
+        "Infinity",
+        "Int16Array",
+        "Int32Array",
+        "Int8Array",
+        "Intl",
+        "Iterator",
+        "JSON",
+        "Map",
+        "Math",
+        "NaN",
+        "Number",
+        "Object",
+        "Promise",
+        "Proxy",
+        "RangeError",
+        "ReferenceError",
+        "Reflect",
+        "RegExp",
+        "Set",
+        "String",
+        "SuppressedError",
+        "Symbol",
+        "SyntaxError",
+        "Temporal",
+        "TypeError",
+        "URIError",
+        "Uint16Array",
+        "Uint32Array",
+        "Uint8Array",
+        "Uint8ClampedArray",
+        "WeakMap",
+        "WeakRef",
+        "WeakSet",
+        "__codexContentItems",
+        "add_content",
+        "audio",
+        "decodeURI",
+        "decodeURIComponent",
+        "encodeURI",
+        "encodeURIComponent",
+        "escape",
+        "exit",
+        "eval",
+        "generatedImage",
+        "globalThis",
+        "image",
+        "isFinite",
+        "isNaN",
+        "load",
+        "notify",
+        "parseFloat",
+        "parseInt",
+        "setTimeout",
+        "store",
+        "text",
+        "tools",
+        "undefined",
+        "unescape",
+        "yield_control",
+    ];
+    for global in &globals {
+        assert!(
+            expected.contains(&global.as_str()),
+            "unexpected global {global} in {globals:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -802,6 +939,7 @@ async fn v8_console_is_not_exposed_on_global_this() {
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "false".to_string(),
@@ -842,6 +980,7 @@ text(value);
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "jeudi 2 janvier \u{e0} 03:04:05".to_string(),
@@ -881,6 +1020,7 @@ text(formatter.format(new Date("2025-01-02T03:04:05Z")));
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "jeudi 2 janvier \u{e0} 03:04:05".to_string(),
@@ -916,6 +1056,7 @@ text(JSON.stringify(returnsUndefined));
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![
                 FunctionCallOutputContentItem::InputText {
@@ -932,6 +1073,33 @@ text(JSON.stringify(returnsUndefined));
                     text: "[true,true,true,true]".to_string(),
                 },
             ],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn text_helper_serializes_objects() {
+    let service = InProcessCodeModeSession::new();
+
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            source: "text({ json: true });".to_string(),
+            yield_time_ms: None,
+            ..execute_request("")
+        },
+    )
+    .await;
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            code_mode_host_duration: None,
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: r#"{"json":true}"#.to_string(),
+            }],
             error_text: None,
         }
     );
@@ -971,6 +1139,7 @@ text(circular);
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
             error_text: Some(error_text),
@@ -1005,6 +1174,7 @@ audio({
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![
                 FunctionCallOutputContentItem::InputAudio {
@@ -1040,6 +1210,7 @@ async fn audio_helper_rejects_non_data_urls() {
         assert_eq!(
             response,
             RuntimeResponse::Result {
+                code_mode_host_duration: None,
                 cell_id: cell_id("1"),
                 content_items: Vec::new(),
                 error_text: Some(
@@ -1076,6 +1247,7 @@ image({
     assert_eq!(
             response,
             RuntimeResponse::Result {
+                code_mode_host_duration: None,
                 cell_id: cell_id("1"),
                 content_items: vec![FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
@@ -1109,6 +1281,7 @@ generatedImage({
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![
                 FunctionCallOutputContentItem::InputImage {
@@ -1150,6 +1323,7 @@ image(
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
@@ -1188,6 +1362,7 @@ image(
     assert_eq!(
             response,
             RuntimeResponse::Result {
+                code_mode_host_duration: None,
                 cell_id: cell_id("1"),
                 content_items: vec![FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
@@ -1221,6 +1396,7 @@ image({
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
@@ -1256,6 +1432,7 @@ async fn image_helpers_reject_remote_urls() {
             assert_eq!(
                     response,
                     RuntimeResponse::Result {
+                        code_mode_host_duration: None,
                         cell_id: cell_id("1"),
                         content_items: Vec::new(),
                         error_text: Some(
@@ -1290,6 +1467,7 @@ async fn image_helpers_reject_invalid_image_outputs() {
         assert_eq!(
             response,
             RuntimeResponse::Result {
+                code_mode_host_duration: None,
                 cell_id: cell_id("1"),
                 content_items: Vec::new(),
                 error_text: Some(
@@ -1324,6 +1502,7 @@ image({
     assert_eq!(
         response,
         RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
             error_text: Some("image detail must be one of: auto, low, high, original".to_string()),
@@ -1361,6 +1540,7 @@ image({
     assert_eq!(
             response,
             RuntimeResponse::Result {
+                code_mode_host_duration: None,
                 cell_id: cell_id("1"),
                 content_items: Vec::new(),
                 error_text: Some(
@@ -1385,6 +1565,7 @@ async fn wait_reports_missing_cell_separately_from_runtime_results() {
     assert_eq!(
         response,
         WaitOutcome::MissingCell(RuntimeResponse::Result {
+            code_mode_host_duration: None,
             cell_id: cell_id("missing"),
             content_items: Vec::new(),
             error_text: Some("exec cell missing not found".to_string()),

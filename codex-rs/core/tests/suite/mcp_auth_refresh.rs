@@ -108,7 +108,7 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
         codex_apps_tools_cache_key: codex_mcp::codex_apps_tools_cache_key(Some(&expected_auth)),
         client_mcp_extensions: ClientMcpExtensions::default(),
         auth: Some(expected_auth.clone()),
-        codex_apps_auth_manager: Some(Arc::clone(&auth_manager)),
+        auth_manager: Some(Arc::clone(&auth_manager)),
         elicitation_reviewer: None,
         elicitation_lifecycle: None,
     })
@@ -133,6 +133,7 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
         .latest_call_tool(
             CODEX_APPS_MCP_SERVER_NAME,
             "calendar_create_event",
+            /*environment_id*/ None,
             Some(json!({
                 "title": "Lunch",
                 "starts_at": "2026-06-18T12:00:00Z",

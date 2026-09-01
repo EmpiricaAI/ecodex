@@ -36,6 +36,8 @@ const SUBAGENT_STOP_INPUT_FIXTURE: &str = "subagent-stop.command.input.schema.js
 const SUBAGENT_STOP_OUTPUT_FIXTURE: &str = "subagent-stop.command.output.schema.json";
 const STOP_INPUT_FIXTURE: &str = "stop.command.input.schema.json";
 const STOP_OUTPUT_FIXTURE: &str = "stop.command.output.schema.json";
+const INTERRUPT_INPUT_FIXTURE: &str = "interrupt.command.input.schema.json";
+const INTERRUPT_OUTPUT_FIXTURE: &str = "interrupt.command.output.schema.json";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
@@ -118,6 +120,8 @@ pub(crate) enum HookEventNameWire {
     SubagentStop,
     #[serde(rename = "Stop")]
     Stop,
+    #[serde(rename = "Interrupt")]
+    Interrupt,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -474,6 +478,15 @@ pub(crate) struct SubagentStopCommandOutputWire {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "interrupt.command.output")]
+pub(crate) struct InterruptCommandOutputWire {
+    #[serde(default)]
+    pub system_message: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub(crate) enum BlockDecisionWire {
     #[serde(rename = "block")]
@@ -648,6 +661,22 @@ pub(crate) struct PostToolUseFailureCommandInput {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "interrupt.command.input")]
+pub(crate) struct InterruptCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "interrupt_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+}
+
 pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     let generated_dir = schema_root.join(GENERATED_DIR);
     ensure_empty_dir(&generated_dir)?;
@@ -735,6 +764,14 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     write_schema(
         &generated_dir.join(STOP_OUTPUT_FIXTURE),
         schema_json::<StopCommandOutputWire>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(INTERRUPT_INPUT_FIXTURE),
+        schema_json::<InterruptCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(INTERRUPT_OUTPUT_FIXTURE),
+        schema_json::<InterruptCommandOutputWire>()?,
     )?;
 
     Ok(())
@@ -847,6 +884,10 @@ fn post_tool_use_failure_hook_event_name_schema(_gen: &mut SchemaGenerator) -> S
     string_const_schema("PostToolUseFailure")
 }
 
+fn interrupt_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("Interrupt")
+}
+
 fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_enum_schema(&[
         "default",
@@ -894,6 +935,9 @@ fn default_continue() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::INTERRUPT_INPUT_FIXTURE;
+    use super::INTERRUPT_OUTPUT_FIXTURE;
+    use super::InterruptCommandInput;
     use super::NullableString;
     use super::PERMISSION_REQUEST_INPUT_FIXTURE;
     use super::PERMISSION_REQUEST_OUTPUT_FIXTURE;
@@ -1006,6 +1050,12 @@ mod tests {
             STOP_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/stop.command.output.schema.json")
             }
+            INTERRUPT_INPUT_FIXTURE => {
+                include_str!("../schema/generated/interrupt.command.input.schema.json")
+            }
+            INTERRUPT_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/interrupt.command.output.schema.json")
+            }
             _ => panic!("unexpected fixture name: {name}"),
         }
     }
@@ -1056,6 +1106,8 @@ mod tests {
             SUBAGENT_STOP_OUTPUT_FIXTURE,
             STOP_INPUT_FIXTURE,
             STOP_OUTPUT_FIXTURE,
+            INTERRUPT_INPUT_FIXTURE,
+            INTERRUPT_OUTPUT_FIXTURE,
         ] {
             let expected = normalize_newlines(expected_fixture(fixture));
             let actual = std::fs::read_to_string(schema_root.join("generated").join(fixture))
@@ -1138,6 +1190,10 @@ mod tests {
             &schema_json::<StopCommandInput>().expect("serialize stop input schema"),
         )
         .expect("parse stop input schema");
+        let interrupt: Value = serde_json::from_slice(
+            &schema_json::<InterruptCommandInput>().expect("serialize interrupt input schema"),
+        )
+        .expect("parse interrupt input schema");
 
         for schema in [
             &pre_tool_use,
@@ -1149,6 +1205,7 @@ mod tests {
             &subagent_start,
             &subagent_stop,
             &stop,
+            &interrupt,
         ] {
             assert_eq!(schema["properties"]["turn_id"]["type"], "string");
             assert!(

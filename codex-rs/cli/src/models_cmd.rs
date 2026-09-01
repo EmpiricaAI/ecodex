@@ -146,7 +146,9 @@ async fn run_refresh(overrides: Vec<(String, toml::Value)>, args: RefreshArgs) -
         }
         if let Some(headers) = &provider.http_headers {
             for (k, v) in headers {
-                req = req.header(k, v);
+                // upstream wraps header values in RedactedString; deref to &str
+                // for the HeaderValue conversion.
+                req = req.header(k, v.as_str());
             }
         }
 

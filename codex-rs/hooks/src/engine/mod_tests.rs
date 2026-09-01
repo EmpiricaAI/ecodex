@@ -20,10 +20,12 @@ use codex_config::MatcherGroup;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::TomlValue;
+use codex_plugin::ExecutorPluginHookSource;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
@@ -34,14 +36,19 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
+use tokio::sync::Notify;
 
 use super::ClaudeHooksEngine;
 use super::CommandHookRuntime;
 use super::CommandShell;
 use super::ConfiguredHandler;
 use super::ConfiguredHandlerKind;
+use super::HandlerSourcePath;
 use super::HookListEntryHandler;
+use crate::events::interrupt::InterruptRequest;
 use crate::events::pre_tool_use::PreToolUseRequest;
+use crate::events::stop::StopHookTarget;
+use crate::events::stop::StopRequest;
 use crate::mcp::HookMcpCall;
 use crate::mcp::HookMcpExecutor;
 
@@ -63,6 +70,7 @@ pub(crate) fn mcp_executor() -> Arc<dyn HookMcpExecutor> {
     Arc::new(StaticMcpExecutor {
         calls: Arc::new(Mutex::new(Vec::new())),
         output: String::new(),
+        outputs_by_tool: HashMap::new(),
     })
 }
 
@@ -87,7 +95,7 @@ fn permission_request_timeout_only_counts_synchronous_handlers() {
         timeout_sec: 5,
         status_message: None,
         additional_context_limit: Default::default(),
-        source_path: cwd().join("hooks.json"),
+        source_path: cwd().join("hooks.json").into(),
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::Command {
@@ -1128,7 +1136,9 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
     );
     assert_eq!(
         engine.handlers[0].source_path,
-        AbsolutePathBuf::try_from(missing_dir).expect("absolute missing dir")
+        AbsolutePathBuf::try_from(missing_dir)
+            .expect("absolute missing dir")
+            .into()
     );
 }
 
@@ -2063,16 +2073,446 @@ fn unlisted_plugin_hooks_remain_untrusted_without_config_state() {
 struct StaticMcpExecutor {
     calls: Arc<Mutex<Vec<HookMcpCall>>>,
     output: String,
+    outputs_by_tool: HashMap<String, String>,
 }
 
 impl HookMcpExecutor for StaticMcpExecutor {
     fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<String>> {
         async move {
+            let output = self
+                .outputs_by_tool
+                .get(&call.tool)
+                .unwrap_or(&self.output)
+                .clone();
             self.calls.lock().expect("lock MCP calls").push(call);
-            Ok(self.output.clone())
+            Ok(output)
         }
         .boxed()
     }
+}
+
+fn executor_stop_hook_fixture() -> (
+    ClaudeHooksEngine,
+    Arc<Mutex<Vec<HookMcpCall>>>,
+    StopRequest,
+    HookMcpCall,
+    ExecutorPluginHookSource,
+) {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let executor = Arc::new(StaticMcpExecutor {
+        calls: Arc::clone(&calls),
+        output: r#"{"decision":"block","reason":"keep going"}"#.to_string(),
+        outputs_by_tool: HashMap::from([(
+            "terminate".to_string(),
+            r#"{"continue":false,"stopReason":"done"}"#.to_string(),
+        )]),
+    });
+    let mut engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
+        /*config_layer_stack*/ None,
+        Vec::new(),
+        Vec::new(),
+        command_runtime(CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        }),
+        executor,
+    );
+    let source = ExecutorPluginHookSource {
+        plugin_id: PluginId::parse("computer-use@openai-bundled").expect("valid plugin ID"),
+        environment_id: "executor-a".to_string(),
+        mcp_environment_id: None,
+        mcp_metadata: None,
+        plugin_root: "file:///plugins/computer-use"
+            .parse()
+            .expect("valid plugin root URI"),
+        manifest_path: "file:///plugins/computer-use/.codex-plugin/plugin.json"
+            .parse()
+            .expect("valid plugin manifest URI"),
+        source_relative_path: ".codex-plugin/plugin.json#hooks[0]".to_string(),
+        hooks: HookEventsToml {
+            stop: vec![MatcherGroup {
+                matcher: None,
+                hooks: vec![HookHandlerConfig::McpTool {
+                    server: "node_repl".to_string(),
+                    tool: "turn_ended".to_string(),
+                    input: serde_json::from_value(serde_json::json!({
+                        "turn_id": "${turn_id}",
+                    }))
+                    .expect("executor hook input"),
+                    timeout_sec: None,
+                    status_message: None,
+                }],
+            }],
+            ..Default::default()
+        },
+    };
+    engine.set_executor_hooks(vec![source.clone()]);
+    assert_eq!(
+        engine.handlers,
+        vec![ConfiguredHandler {
+            event_name: HookEventName::Stop,
+            matcher: None,
+            timeout_sec: 5,
+            status_message: None,
+            additional_context_limit: Default::default(),
+            source_path: HandlerSourcePath::ExecutorScoped {
+                plugin_id: PluginId::parse("computer-use@openai-bundled").expect("valid plugin ID"),
+                environment_id: "executor-a".to_string(),
+                mcp_environment_id: None,
+                mcp_metadata: None,
+                manifest_path: "file:///plugins/computer-use/.codex-plugin/plugin.json"
+                    .parse()
+                    .expect("valid plugin manifest URI"),
+                source_relative_path: ".codex-plugin/plugin.json#hooks[0]".to_string(),
+            },
+            source: HookSource::Plugin,
+            display_order: 0,
+            kind: ConfiguredHandlerKind::McpTool {
+                server: "node_repl".to_string(),
+                tool: "turn_ended".to_string(),
+                input: serde_json::from_value(serde_json::json!({
+                    "turn_id": "${turn_id}",
+                }))
+                .expect("executor hook input"),
+            },
+        }]
+    );
+    assert_eq!(
+        engine.handlers[0].execution_mode(),
+        HookExecutionMode::Async
+    );
+    assert!(!engine.handlers[0].can_apply_control_effects());
+    let request_metadata = Some(serde_json::Map::from_iter([(
+        "x-codex-turn-metadata".to_string(),
+        serde_json::json!({ "turn_id": "turn-1" }),
+    )]));
+    let request = StopRequest {
+        session_id: ThreadId::new(),
+        turn_id: "turn-1".to_string(),
+        cwd: cwd(),
+        transcript_path: None,
+        model: "test-model".to_string(),
+        permission_mode: "default".to_string(),
+        request_metadata: request_metadata.clone(),
+        stop_hook_active: false,
+        last_assistant_message: None,
+        target: StopHookTarget::Stop,
+    };
+
+    let expected_executor_call = HookMcpCall {
+        server: "node_repl".to_string(),
+        tool: "turn_ended".to_string(),
+        environment_id: Some("executor-a".to_string()),
+        metadata: request_metadata,
+        input: serde_json::from_value(serde_json::json!({ "turn_id": "turn-1" }))
+            .expect("expanded executor hook input"),
+        timeout: Duration::from_secs(5),
+    };
+
+    (engine, calls, request, expected_executor_call, source)
+}
+
+async fn wait_for_mcp_calls(calls: &Arc<Mutex<Vec<HookMcpCall>>>, count: usize) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while calls.lock().expect("lock MCP calls").len() < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("executor hook should complete in the background");
+}
+
+#[tokio::test]
+async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
+    let (mut engine, calls, request, expected_executor_call, _source) =
+        executor_stop_hook_fixture();
+
+    assert_eq!(engine.preview_stop(&request), Vec::new());
+    let outcome = engine.run_stop(request.clone()).await;
+    wait_for_mcp_calls(&calls, /*count*/ 1).await;
+    assert!(!outcome.should_block);
+    assert!(outcome.hook_events.is_empty());
+    assert_eq!(
+        *calls.lock().expect("lock MCP calls"),
+        vec![expected_executor_call.clone()]
+    );
+
+    engine.handlers.push(ConfiguredHandler {
+        event_name: HookEventName::Stop,
+        matcher: None,
+        timeout_sec: 30,
+        status_message: None,
+        additional_context_limit: Default::default(),
+        source_path: cwd().join("hooks.json").into(),
+        source: HookSource::User,
+        display_order: 0,
+        kind: ConfiguredHandlerKind::McpTool {
+            server: "security".to_string(),
+            tool: "check".to_string(),
+            input: Default::default(),
+        },
+    });
+
+    let outcome = engine.run_stop(request.clone()).await;
+    assert!(outcome.should_block);
+    assert_eq!(outcome.hook_events.len(), 1);
+    assert_eq!(
+        *calls.lock().expect("lock MCP calls"),
+        vec![
+            expected_executor_call.clone(),
+            HookMcpCall {
+                server: "security".to_string(),
+                tool: "check".to_string(),
+                environment_id: None,
+                metadata: None,
+                input: Default::default(),
+                timeout: Duration::from_secs(30),
+            },
+        ]
+    );
+
+    engine.handlers.push(ConfiguredHandler {
+        event_name: HookEventName::Stop,
+        matcher: None,
+        timeout_sec: 30,
+        status_message: None,
+        additional_context_limit: Default::default(),
+        source_path: cwd().join("hooks.json").into(),
+        source: HookSource::User,
+        display_order: 1,
+        kind: ConfiguredHandlerKind::McpTool {
+            server: "security".to_string(),
+            tool: "terminate".to_string(),
+            input: Default::default(),
+        },
+    });
+
+    let outcome = engine.run_stop(request).await;
+    wait_for_mcp_calls(&calls, /*count*/ 5).await;
+    assert!(outcome.should_stop);
+    assert!(!outcome.should_block);
+    assert_eq!(outcome.hook_events.len(), 2);
+    assert_eq!(
+        *calls.lock().expect("lock MCP calls"),
+        vec![
+            expected_executor_call.clone(),
+            HookMcpCall {
+                server: "security".to_string(),
+                tool: "check".to_string(),
+                environment_id: None,
+                metadata: None,
+                input: Default::default(),
+                timeout: Duration::from_secs(30),
+            },
+            HookMcpCall {
+                server: "security".to_string(),
+                tool: "check".to_string(),
+                environment_id: None,
+                metadata: None,
+                input: Default::default(),
+                timeout: Duration::from_secs(30),
+            },
+            HookMcpCall {
+                server: "security".to_string(),
+                tool: "terminate".to_string(),
+                environment_id: None,
+                metadata: None,
+                input: Default::default(),
+                timeout: Duration::from_secs(30),
+            },
+            expected_executor_call,
+        ]
+    );
+}
+
+#[test]
+fn executor_stop_hooks_register_each_target_environment_once() {
+    let (mut engine, _, _, _, first_source) = executor_stop_hook_fixture();
+    let mut expected_handlers = engine.handlers.clone();
+    let mut duplicate_target = first_source.clone();
+    duplicate_target.plugin_id = PluginId::parse("chrome@openai-bundled").expect("valid plugin ID");
+    let mut second_source = first_source.clone();
+    second_source.environment_id = "executor-b".to_string();
+    let mut second_handler = expected_handlers[0].clone();
+    second_handler.display_order = 1;
+    let HandlerSourcePath::ExecutorScoped { environment_id, .. } = &mut second_handler.source_path
+    else {
+        panic!("executor Stop handler should have an executor source");
+    };
+    *environment_id = second_source.environment_id.clone();
+    expected_handlers.push(second_handler);
+    engine.set_executor_hooks(vec![first_source, duplicate_target, second_source]);
+
+    assert_eq!(engine.handlers, expected_handlers);
+}
+
+#[tokio::test]
+async fn executor_interrupt_hooks_register_and_run() {
+    let (mut engine, calls, stop_request, expected_stop_call, mut source) =
+        executor_stop_hook_fixture();
+    source.hooks.subagent_stop = source.hooks.stop.clone();
+    source.hooks.interrupt = source.hooks.stop.clone();
+    engine.set_executor_hooks(vec![source]);
+
+    assert_eq!(
+        engine
+            .handlers
+            .iter()
+            .map(|handler| handler.event_name)
+            .collect::<Vec<_>>(),
+        vec![
+            HookEventName::SubagentStop,
+            HookEventName::Stop,
+            HookEventName::Interrupt,
+        ]
+    );
+    assert_eq!(engine.preview_interrupt(), Vec::new());
+
+    let outcome = engine
+        .run_interrupt(InterruptRequest {
+            session_id: stop_request.session_id,
+            turn_id: stop_request.turn_id,
+            cwd: stop_request.cwd,
+            transcript_path: stop_request.transcript_path,
+            model: stop_request.model,
+            permission_mode: stop_request.permission_mode,
+            request_metadata: stop_request.request_metadata,
+        })
+        .await;
+    wait_for_mcp_calls(&calls, /*count*/ 1).await;
+
+    assert!(outcome.hook_events.is_empty());
+    assert_eq!(
+        *calls.lock().expect("lock MCP calls"),
+        vec![expected_stop_call]
+    );
+}
+
+#[test]
+fn executor_hooks_register_events_from_each_environment() {
+    let (mut engine, _, _, _, mut first_source) = executor_stop_hook_fixture();
+    first_source.hooks.interrupt = std::mem::take(&mut first_source.hooks.stop);
+    engine.set_executor_hooks(vec![first_source.clone()]);
+    let mut expected_handlers = engine.handlers.clone();
+    let mut second_source = first_source.clone();
+    second_source.environment_id = "executor-b".to_string();
+    second_source.hooks.stop = std::mem::take(&mut second_source.hooks.interrupt);
+    let mut second_handler = expected_handlers[0].clone();
+    second_handler.event_name = HookEventName::Stop;
+    second_handler.display_order = 1;
+    let HandlerSourcePath::ExecutorScoped { environment_id, .. } = &mut second_handler.source_path
+    else {
+        panic!("executor Stop handler should have an executor source");
+    };
+    *environment_id = second_source.environment_id.clone();
+    expected_handlers.push(second_handler);
+
+    engine.set_executor_hooks(vec![first_source, second_source]);
+
+    assert_eq!(engine.handlers, expected_handlers);
+}
+
+#[tokio::test]
+async fn executor_stop_hooks_use_an_admitted_mcp_environment() {
+    let (mut engine, calls, request, mut expected_call, mut source) = executor_stop_hook_fixture();
+    source.mcp_environment_id = Some("local".to_string());
+    engine.set_executor_hooks(vec![source]);
+
+    engine.run_stop(request).await;
+    wait_for_mcp_calls(&calls, /*count*/ 1).await;
+
+    expected_call.environment_id = Some("local".to_string());
+    assert_eq!(*calls.lock().expect("lock MCP calls"), vec![expected_call]);
+}
+
+#[tokio::test]
+async fn memory_consolidation_stop_preserves_policy_and_executor_cleanup() {
+    for (source, runs_policy) in [
+        (HookSource::User, false),
+        (HookSource::Project, false),
+        (HookSource::SessionFlags, false),
+        (HookSource::Plugin, false),
+        (HookSource::System, true),
+        (HookSource::Mdm, true),
+        (HookSource::CloudRequirements, true),
+        (HookSource::CloudManagedConfig, true),
+        (HookSource::LegacyManagedConfigFile, true),
+        (HookSource::LegacyManagedConfigMdm, true),
+        (HookSource::Unknown, true),
+    ] {
+        let (mut engine, calls, mut request, expected_executor_call, _source) =
+            executor_stop_hook_fixture();
+        request.target = StopHookTarget::MemoryConsolidation;
+        let policy_call = HookMcpCall {
+            server: "security".to_string(),
+            tool: "check".to_string(),
+            environment_id: None,
+            metadata: None,
+            input: Default::default(),
+            timeout: Duration::from_secs(5),
+        };
+        let mut handler = engine.handlers[0].clone();
+        handler.source_path = cwd().join("hooks.json").into();
+        handler.source = source;
+        handler.kind = ConfiguredHandlerKind::McpTool {
+            server: policy_call.server.clone(),
+            tool: policy_call.tool.clone(),
+            input: policy_call.input.clone(),
+        };
+        engine.handlers.push(handler);
+        assert_eq!(
+            engine.preview_stop(&request).len(),
+            usize::from(runs_policy)
+        );
+
+        let outcome = engine.run_stop(request).await;
+        let expected_calls = if runs_policy {
+            vec![policy_call, expected_executor_call]
+        } else {
+            vec![expected_executor_call]
+        };
+        wait_for_mcp_calls(&calls, expected_calls.len()).await;
+        assert_eq!(*calls.lock().expect("lock MCP calls"), expected_calls);
+        assert_eq!(outcome.should_block, runs_policy);
+    }
+}
+
+#[tokio::test]
+async fn executor_stop_hooks_do_not_delay_stop_completion() {
+    struct BlockingMcpExecutor {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    impl HookMcpExecutor for BlockingMcpExecutor {
+        fn execute(&self, _call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<String>> {
+            async move {
+                self.started.notify_one();
+                self.release.notified().await;
+                Ok(String::new())
+            }
+            .boxed()
+        }
+    }
+
+    let (mut engine, _, request, _, _) = executor_stop_hook_fixture();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    engine.mcp_executor = Arc::new(BlockingMcpExecutor {
+        started: Arc::clone(&started),
+        release: Arc::clone(&release),
+    });
+
+    let outcome = tokio::time::timeout(Duration::from_millis(100), engine.run_stop(request))
+        .await
+        .expect("executor hook must not delay Stop completion");
+    assert!(!outcome.should_block);
+    tokio::time::timeout(Duration::from_secs(1), started.notified())
+        .await
+        .expect("executor hook should start in the background");
+    release.notify_one();
 }
 
 #[tokio::test]
@@ -2136,6 +2576,7 @@ async fn mcp_tool_hooks_expand_event_input_and_apply_pre_tool_decisions() {
             },
         })
         .to_string(),
+        outputs_by_tool: HashMap::new(),
     };
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
@@ -2169,11 +2610,117 @@ async fn mcp_tool_hooks_expand_event_input_and_apply_pre_tool_decisions() {
         vec![HookMcpCall {
             server: "security".to_string(),
             tool: "scan".to_string(),
+            environment_id: None,
+            metadata: None,
             input: serde_json::from_value(serde_json::json!({
                 "command": "rm important.txt",
             }))
             .expect("object input"),
             timeout: Duration::from_secs(20),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn mcp_interrupt_hooks_expand_event_input_and_bound_timeout() {
+    let temp = tempdir().expect("create temp dir");
+    let config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    fs::write(
+        temp.path().join("hooks.json"),
+        serde_json::json!({
+            "hooks": {
+                "Interrupt": [{
+                    "hooks": [{
+                        "type": "mcp_tool",
+                        "server": "security",
+                        "tool": "notify",
+                        "input": {
+                            "event": "${hook_event_name}",
+                            "turn_id": "${turn_id}",
+                            "permission_mode": "${permission_mode}",
+                        },
+                        "timeout": 20,
+                    }],
+                }],
+            },
+        })
+        .to_string(),
+    )
+    .expect("write MCP Interrupt hooks.json");
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
+            TomlValue::Table(Default::default()),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let executor = StaticMcpExecutor {
+        calls: Arc::clone(&calls),
+        output: serde_json::json!({
+            "systemMessage": "interrupt observed",
+        })
+        .to_string(),
+        outputs_by_tool: HashMap::new(),
+    };
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        command_runtime(CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        }),
+        Arc::new(executor),
+    );
+    let outcome = engine
+        .run_interrupt(InterruptRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            cwd: cwd(),
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+            request_metadata: None,
+        })
+        .await;
+
+    assert_eq!(outcome.hook_events.len(), 1);
+    assert_eq!(
+        outcome.hook_events[0].run.handler_type,
+        HookHandlerType::McpTool
+    );
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Completed);
+    assert_eq!(
+        outcome.hook_events[0].run.entries,
+        vec![HookOutputEntry {
+            kind: HookOutputEntryKind::Warning,
+            text: "interrupt observed".to_string(),
+        }]
+    );
+    assert_eq!(
+        *calls.lock().expect("lock MCP calls"),
+        vec![HookMcpCall {
+            server: "security".to_string(),
+            tool: "notify".to_string(),
+            environment_id: None,
+            metadata: None,
+            input: serde_json::from_value(serde_json::json!({
+                "event": "Interrupt",
+                "turn_id": "turn-1",
+                "permission_mode": "default",
+            }))
+            .expect("object input"),
+            timeout: Duration::from_secs(3),
         }]
     );
 }
