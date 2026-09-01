@@ -9,28 +9,28 @@
 class Ecodex < Formula
   desc "Empirica-native fork of OpenAI Codex — calibrated agentic coding CLI"
   homepage "https://github.com/EmpiricaAI/ecodex"
-  version "0.149.0"
+  version "0.152.0"
   license "Apache-2.0"
 
   on_macos do
     on_arm do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-aarch64-apple-darwin.tar.gz"
-      sha256 "cb60f455bb594101f24cc71156688ec7224d9d5ded07e877b4f2c501a015149a"
+      sha256 "27c3a1ebdcbb6a4f7fc272bcad8a95b0d7d0194ea9b36b1d24fe156ddf67f854"
     end
     on_intel do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-x86_64-apple-darwin.tar.gz"
-      sha256 "1ed65a8868d61b0e4c1435f682c4ff334c0d95ba2ca4f5c50c5e8c2355ff194a"
+      sha256 "406edd156974ff19dec2fb3966e6d894fb31f8ad901c4f4013c9d364bb0ff5bb"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "c6018c6494a4685c4a06899b9e0069b130d324caf3cee2a60841f23b944350ca"
+      sha256 "91c342dc2bd4ca021584509e9d8494d228953d0a267a713ed298240b06737567"
     end
     on_intel do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "eeace7c548d594c40c3ccc45e2bbe2ce017098ab7f7b97bd8a2ea3fd675dfd8c"
+      sha256 "2bede7a9da2bf144cf70f0a0979bae20cfc8f90576e1863a349d78588ae44604"
     end
   end
 
