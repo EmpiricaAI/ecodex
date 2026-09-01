@@ -49,6 +49,6 @@ class Ecodex < Formula
   end
 
   test do
-    assert_match "codex-cli", shell_output("#{bin}/ecodex --version")
+    assert_match "ecodex", shell_output("#{bin}/ecodex --version")
   end
 end

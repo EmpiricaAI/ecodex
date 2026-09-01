@@ -713,7 +713,7 @@ def create_package_release(
     (package_dir / "codex-package.json").write_text("{}\n", encoding="utf-8")
     write_executable(
         package_dir / "bin" / "codex",
-        f"#!/bin/sh\nprintf 'codex-cli {VERSION}\\n'\n",
+        f"#!/bin/sh\nprintf 'ecodex {VERSION}\\n'\n",
     )
     write_executable(
         package_dir / "bin" / "codex-code-mode-host",
@@ -754,7 +754,7 @@ def create_legacy_release(root: Path) -> tuple[Path, str]:
     (vendor_dir / "path").mkdir()
     write_executable(
         vendor_dir / "codex" / "codex",
-        f"#!/bin/sh\nprintf 'codex-cli {VERSION}\\n'\n",
+        f"#!/bin/sh\nprintf 'ecodex {VERSION}\\n'\n",
     )
     write_executable(vendor_dir / "path" / "rg", "#!/bin/sh\nexit 0\n")
 

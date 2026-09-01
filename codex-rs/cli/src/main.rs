@@ -112,6 +112,12 @@ use codex_terminal_detection::TerminalName;
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
     // the generic `ecodex` command name that users run.
     bin_name = "ecodex",
+    // `--version` prints clap's display_name, which defaults to the CRATE
+    // name (`codex-cli`) — override so the installed binary identifies as
+    // ecodex. The version NUMBER stays the upstream-base-tracking workspace
+    // version (that number, not this label, is what provider version gates
+    // see via the API client headers).
+    display_name = "ecodex",
     override_usage = "ecodex [OPTIONS] [PROMPT]\n       ecodex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {

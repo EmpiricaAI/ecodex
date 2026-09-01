@@ -57,10 +57,11 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
 
 // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
 // ecodex: point the update check at ecodex's OWN release channel, not openai/codex.
-// codex compares CODEX_CLI_VERSION (ecodex's 0.2.x) against this, and openai/codex
-// is on 0.14x — so the upstream URL produced a false "update available -> 0.144.6"
-// banner on every launch. (No formulae.brew.sh cask for the ecodex tap; that path
-// 404s and yields no false banner.)
+// codex compares CODEX_CLI_VERSION (ecodex's workspace version) against this;
+// before the channel was repointed, the upstream URL produced a false
+// "update available" banner on every launch whenever upstream's latest differed
+// from ours. (No formulae.brew.sh cask for the ecodex tap; that path 404s and
+// yields no false banner.)
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/ecodex.json";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/EmpiricaAI/ecodex/releases/latest";
 
