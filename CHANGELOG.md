@@ -8,6 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Upstream sync to rust-v0.152.0** (456 commits from openai/codex, one
+  hop from 0.149.0; 29 conflicted files resolved by code read). Upstream
+  highlights ecodex users see: new `Interrupt` hook event, restructured
+  per-step settings (`StepSettings`), code-mode startup prewarm, richer
+  mailbox turn-start options.
+- **Hook surface now 14 events**: upstream's new `Interrupt` joins
+  ecodex's `TaskCompleted` / `PostToolUseFailure` across the engine,
+  schemas, TUI hooks browser, and analytics labels.
+- **`ecodex --version` identifies as `ecodex`** (was `codex-cli`, the
+  crate name); homebrew formula test and installer fakes updated in
+  lockstep.
+
+### Fixed
+- **Provider tool-filter re-woven** into upstream's rebuilt
+  responses-lite request block — upstream's version shipped unfiltered,
+  which would have re-broken local llama.cpp/vLLM providers that hard-400
+  on OpenAI built-in tool types.
+- Preserved ecodex behaviors re-woven onto restructured upstream paths:
+  T78 provider hot-swap (single commit path via `update_settings_if`;
+  the turn-context duplicate swap removed), mesh wake on the new
+  mailbox `TurnStartOptions` API, silent recording of hook-injected
+  additionalContext, SessionEnd-clamp warning suppression for the
+  bundled plugin, `monitor` tool on the new `ToolOutput` trait.
+- Removed the dormant `Op::UserInputWithTurnContext` protocol variant
+  (zero consumers; its own comment marked it pending cleanup).
+- `Cargo.lock` regenerated with security floors re-pinned (third sync
+  running the wholesale-lock regression appeared): quinn-proto 0.11.16,
+  openssl 0.10.81, serde_with 3.21.0; gix kept at 0.83.
+- Vendored `session-monitor-arm.py` re-synced from empirica@develop.
+
 ## [0.149.0] - 2026-08-25
 
 ### Changed
