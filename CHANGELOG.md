@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Dependencies
+- Post-0.152.0 Dependabot triage (cargo subset only — npm alerts are
+  upstream's JS tooling lockfile, per standing scope): actix-http
+  3.11.2 -> 3.13.1 and cmov 0.5.3 -> 0.5.4 fixed within compatible
+  ranges (neither reachable from the shipped binaries; fixed as
+  hygiene). Two advisories are REAL but blocked on upstream and remain
+  open: hickory-proto NSEC3 unbounded-loop (high, reachable via the
+  rama DNS stack — rama's alpha pins hickory 0.25 with no fixed
+  release) and opentelemetry_sdk W3C-baggage unbounded allocation
+  (medium — the fixed 0.32 line requires the reqwest 0.13 migration
+  the upstream workspace hasn't made). Both re-checked at next sync.
+
 ## [0.152.0] - 2026-09-01
 
 ### Changed
