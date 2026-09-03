@@ -142,6 +142,26 @@ def prepare(slug: str, *, base: str = "main") -> None:
                     f"treatment prior not keyed to arm project {arm_project} — "
                     "injection failed; refusing to mark the arm prepared"
                 )
+            # Lane 2 (semantic): the prior must also be embedded in the arm's
+            # uuid-keyed Qdrant eidetic collection — PREFLIGHT pattern recall
+            # reads the embedding lane, and a sessions.db row alone is not
+            # sufficient for the actor to see it (verified live).
+            import json as _json
+            import urllib.request as _url
+            qurl = os.environ.get("EMPIRICA_QDRANT_URL", "http://localhost:6333")
+            coll = f"project_{arm_project}_eidetic"
+            body = _json.dumps({"limit": 50, "with_payload": True}).encode()
+            r = _url.Request(
+                f"{qurl}/collections/{coll}/points/scroll",
+                data=body, headers={"Content-Type": "application/json"},
+            )
+            pts = _json.load(_url.urlopen(r))["result"]["points"]
+            marker = spec["prior"].strip()[:40]
+            if not any(marker in _json.dumps(pt.get("payload", {})) for pt in pts):
+                raise RuntimeError(
+                    f"treatment prior not embedded in {coll} — semantic lane "
+                    "missing; the actor's PREFLIGHT recall would not surface it"
+                )
 
         row = {
             "subject": slug,
