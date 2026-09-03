@@ -173,9 +173,11 @@ def launch_command(slug: str, arm: str, *, model: str | None) -> tuple[list[str]
         "-C", str(wt),
         "-s", "workspace-write",
         "-c", "sandbox_workspace_write.writable_git=true",
+        # The box's config.toml default (model_provider=mistral -> translator)
+        # cannot serve the lab default model headless; pin the working route.
+        "-c", "model_provider=openai",
     ]
-    if model:
-        cmd += ["-m", model]
+    cmd += ["-m", model or "gpt-5.6-sol"]
     cmd.append(
         "Read TASK.md in this worktree and complete the task. Work in this "
         "worktree only and follow your normal engineering discipline."
@@ -191,7 +193,13 @@ def launch(slug: str, arm: str, *, model: str | None, execute: bool) -> None:
     print(f"{printable} {shlex.join(cmd)}")
     if execute:
         _stamp_launch(slug, arm)
-        raise SystemExit(subprocess.run(cmd, env=env, check=False).returncode)
+        # stdin MUST be closed: `ecodex exec` reads additional prompt input
+        # from a non-tty stdin and blocks forever under nohup (observed live).
+        raise SystemExit(
+            subprocess.run(
+                cmd, env=env, check=False, stdin=subprocess.DEVNULL
+            ).returncode
+        )
 
 
 def _stamp_launch(slug: str, arm: str) -> None:
