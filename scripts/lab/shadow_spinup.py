@@ -82,11 +82,15 @@ def load_subject(slug: str) -> dict:
 
 
 def arm_ai_id(slug: str, arm: str) -> str:
-    return f"shadow-{slug}-{arm}"
+    # Must equal the worktree dir basename: empirica project-init registers the
+    # practice under the basename regardless of EMPIRICA_AI_ID (verified live —
+    # the first prepare run registered ecodex-shadow-* while the manifest said
+    # shadow-*, and the prior landed orphaned under the unregistered name).
+    return f"ecodex-shadow-{slug}-{arm}"
 
 
 def worktree_path(slug: str, arm: str) -> Path:
-    return REPO_ROOT.parent / f"ecodex-{arm_ai_id(slug, arm)}"
+    return REPO_ROOT.parent / arm_ai_id(slug, arm)
 
 
 def prepare(slug: str, *, base: str = "main") -> None:
@@ -107,8 +111,11 @@ def prepare(slug: str, *, base: str = "main") -> None:
 
         if arm == "t":
             # Treatment prior lands BEFORE the actor's first PREFLIGHT, as an
-            # ordinary finding in the fresh practice — the same surface a real
-            # practice's recall would present.
+            # ordinary finding in the fresh practice. MUST use --project-id
+            # with the REGISTERED name (== worktree basename): a name that
+            # fails to resolve falls back silently and strands the row under
+            # an unregistered key, and a naked finding-log resolves to the
+            # CALLING session's active project, not cwd (both observed live).
             _run(
                 [
                     "empirica", "finding-log",
@@ -118,6 +125,23 @@ def prepare(slug: str, *, base: str = "main") -> None:
                 ],
                 cwd=wt,
             )
+            # Positive control: assert the row is keyed to THIS arm's
+            # project_id before calling the arm prepared.
+            import yaml as _yaml
+            arm_project = _yaml.safe_load((wt / ".empirica" / "project.yaml").read_text())[
+                "project_id"
+            ]
+            import sqlite3 as _sq
+            db = REPO_ROOT / ".empirica" / "sessions" / "sessions.db"
+            hits = _sq.connect(db).execute(
+                "SELECT count(*) FROM project_findings WHERE project_id=? AND finding LIKE ?",
+                (arm_project, spec["prior"].strip()[:40] + "%"),
+            ).fetchone()[0]
+            if not hits:
+                raise RuntimeError(
+                    f"treatment prior not keyed to arm project {arm_project} — "
+                    "injection failed; refusing to mark the arm prepared"
+                )
 
         row = {
             "subject": slug,
