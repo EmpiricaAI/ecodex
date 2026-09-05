@@ -94,6 +94,18 @@ unknown, not assuming).
 
 ## 4. Open questions — SER agenda, not decided here
 
+> **Q2 REVISED 2026-09-05 (David's structural call).** The "fresh practice per
+> subject" recommendation below (which core converged on) is superseded: the
+> pilot's first run implemented it by minting per-arm top-level practices
+> launched from the ecodex main session, which polluted the registry and
+> switched the orchestrator's own practice binding. The corrected model runs
+> arms **within the `ecodex-lab` practice**, isolated by worktree + fresh
+> session rather than by a new practice per arm, with ecodex orchestrating over
+> the mesh and never switching practice. This reintroduces the crossover
+> contamination the row below warns about; that trade-off is accepted
+> deliberately and is on record with core (Q2-revision collab). See
+> `exp-shadow-corpus-scoping.md` §2 for the corrected mechanics.
+
 | # | Question (from spec §6) | ecodex-specific data point | Recommendation (non-binding) |
 |---|---|---|---|
 | Q1 | Window W per outcome family | ecodex tasks complete in ~10-60 min (round 1 gpt-5.6-sol timing: 10m06s wall, per this practice's logged findings), not the spec's default 30-day production window. A 30-day W doesn't fit a worktree-per-round corpus model. | Use **task-completion + N follow-on rounds touching the same `pattern_key`** as W, not calendar time — but this is a real deviation from the spec's default and needs research's sign-off, not a unilateral swap. |

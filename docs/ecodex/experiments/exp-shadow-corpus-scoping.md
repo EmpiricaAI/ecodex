@@ -45,27 +45,51 @@ families represented; no pattern_key appears more than twice.
 
 ## 2. Arm mechanics per subject
 
-1. `git worktree add` pair: `experiment/shadow-<slug>-t` (treatment) and
-   `experiment/shadow-<slug>-c` (control), identical `TASK.md`.
-2. **Fresh practice per arm** (Q2): `empirica project-init` inside each
-   worktree with a unique `ai_id` (`shadow-<slug>-t|c`) — no shared artifact
-   history, which is the contamination the design doc demonstrated is real.
-3. **Treatment prior injection:** `empirica finding-log --project-id
-   shadow-<slug>-t` with the pattern's catalog disambiguator BEFORE the
-   actor's first PREFLIGHT — it arrives as ordinary recalled context, the
-   same surface a real practice would have.
-4. **Control seat:** launch env carries `EMPIRICA_PREVENTION_SHADOW=1`; no
-   prior logged. Everything else identical.
-5. Actor: same model on both arms (per-subject constant; model choice is a
-   corpus-level decision, pilot default = the current lab configured model),
-   launched via the lab's `ecodex exec` harness under full transaction
-   discipline (Sentinel vendored + firing — verified live previously).
-6. `window_s` (Q1, pre-registered per corpus BEFORE emission): pilot uses
-   **wall-clock session cap = 3600s per subject arm**, so
-   `window_s = 3600` on every row. Rationale: ecodex lab tasks complete in
-   10–60 min; a window equal to the session cap makes "prevented within the
-   window" mean "prevented within the subject's whole run", which is the
-   only observable scope a worktree-per-subject corpus has.
+> **CORRECTED 2026-09-05 (David).** The pilot's first attempt spun each arm
+> up as its own top-level registered practice (`ecodex-shadow-*`) launched by
+> detached `ecodex exec` from the ecodex main session. That was wrong twice
+> over: it polluted the workspace registry with per-arm practices, and running
+> `empirica` from inside an arm worktree **switched the orchestrating harness's
+> own practice binding** away from `ecodex` — the root cause of the whole
+> cross-project-write mess. The correct model: **ecodex orchestrates and never
+> switches practice; the arms run within the `ecodex-lab` practice** (the
+> existing live lab harness), guided over the mesh. This supersedes the
+> design doc's Q2 (`fresh practice per subject`), which was converged with core
+> — see the Q2-revision note routed to core.
+
+1. `git worktree add` pair under the `ecodex-lab` practice:
+   `experiment/shadow-<slug>-t` (treatment) and `-c` (control), identical
+   `TASK.md`. Both worktrees resolve to the **`ecodex-lab`** practice — no new
+   per-arm practice is minted.
+2. **Isolation via worktree + fresh session, not fresh practice** (revised Q2):
+   each arm is a distinct `ecodex-lab` session in its own worktree; the
+   per-session context is the isolation boundary. **Contamination tension,
+   stated not hidden:** running treatment then control as sequential sessions
+   of one `ecodex-lab` practice means they share the lab's accumulated
+   trajectory — the exact crossover risk the original Q2 avoided. David's
+   structural call accepts this in exchange for not polluting the registry and
+   not switching the orchestrator; the mitigation (subject ordering, or
+   resetting lab trajectory between arms) is an open corpus-design detail for
+   the rework, and the change is on record with core.
+3. **Orchestration is ecodex over the mesh, never in-session cd.** ecodex (this
+   practice) prepares worktrees + `TASK.md` and guides via `cortex_collab`/
+   proposal to the live `ecodex-lab` session (ntfy doorbell wake). The
+   orchestrator **must not** run `empirica` from inside an arm worktree — that
+   is what repoints the harness binding.
+4. **Treatment prior injection:** logged to the `ecodex-lab` practice's own
+   store from the orchestrator via `finding-log --project-id ecodex-lab` (now
+   that cross-project routing is fixed at ae5191bc0, both lanes land in the
+   target), verified present in both the sessions.db row and the eidetic
+   collection before the arm session runs.
+5. **Control seat:** the `ecodex-lab` arm session launches with
+   `EMPIRICA_PREVENTION_SHADOW=1`; no prior present. Everything else identical.
+6. Actor: same model on both arms (per-subject constant; pilot default =
+   the lab configured model via the working `-c model_provider=openai -m
+   gpt-5.6-sol` route), under full transaction discipline.
+7. `window_s` (Q1, pre-registered per corpus BEFORE emission): pilot uses
+   **wall-clock session cap = 3600s per subject arm**, so `window_s = 3600` on
+   every row — a window equal to the session cap means "prevented within the
+   subject's whole run", the only observable scope this corpus has.
 
 ## 3. Spin-up automation (the actual build item)
 
@@ -83,11 +107,24 @@ prior: |
 window_s: 3600
 ```
 
-Responsibilities: worktree-pair creation, `TASK.md` write, per-arm
-`project-init` (+ `EMPIRICA_AI_ID`), treatment-prior injection, control-seat
-env, actor launch, stall monitoring (reuse `lab_stall_monitor.py`), and an
-end-of-run manifest row (subject, arm, session_id, commit, wall time) so the
-corpus is joinable against core's `prevention_events` without reconstruction.
+> **NEEDS REWORK (2026-09-05).** The committed `shadow_spinup.py` implements
+> the superseded per-arm-practice model (it calls `project-init` per worktree
+> and launches detached `ecodex exec` with `EMPIRICA_AI_ID=ecodex-shadow-*`).
+> Under the corrected within-`ecodex-lab` model it must NOT mint practices or
+> switch bindings. The rework is gated on studying the lab's live-session /
+> ntfy-doorbell orchestration mechanism (how the existing lab is woken and
+> guided over the mesh) and is tracked as its own task, not done in the
+> teardown pass.
+
+Responsibilities (corrected model): worktree-pair creation under `ecodex-lab`,
+`TASK.md` write, treatment-prior injection into the `ecodex-lab` store via
+`--project-id ecodex-lab` with both-lane read-back verify, control-seat env
+(`EMPIRICA_PREVENTION_SHADOW=1`), guiding the live `ecodex-lab` session over
+the mesh to run the arm (no `project-init`, no detached exec that switches the
+orchestrator binding), stall monitoring (reuse `lab_stall_monitor.py`), a
+post-run actor-resolution guard (assert the actor's own artifacts keyed to the
+`ecodex-lab` project, not an md5 collection — see the md5-fallback finding),
+and an end-of-run manifest row joinable against core's `prevention_events`.
 
 Explicitly NOT automated in the pilot: task grading (landing review stays
 manual + adversarial, as in lab rounds) and ATE math (research-side per the
