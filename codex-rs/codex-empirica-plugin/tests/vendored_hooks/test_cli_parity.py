@@ -119,7 +119,17 @@ def _python_invocations(path: Path) -> list[Invocation]:
         else:
             target.tokens.extend(_string_literals(fragment))
 
-    return invocations
+    # Drop invocations whose subcommand never resolved statically — e.g.
+    # `" ".join(["empirica", *parts[i:]])` in a flag-stripping/normalizing
+    # helper, where the subcommand comes from a splat, not a literal. These
+    # are string reconstructions, not fixed subprocess argv, and the real
+    # spawn sites elsewhere carry literal subcommands the guard still checks.
+    # Mirrors the Rust discovery's len==1 skip (below): this guard is a lower
+    # bound by design — a false negative is far cheaper than a false positive.
+    # The incremental-append recovery above runs first, so genuine
+    # `cmd = ["empirica"]; cmd.append("finding-log")` cases already have their
+    # subcommand by now and are retained.
+    return [invocation for invocation in invocations if len(invocation.tokens) > 1]
 
 
 def _rust_invocations(path: Path) -> list[Invocation]:

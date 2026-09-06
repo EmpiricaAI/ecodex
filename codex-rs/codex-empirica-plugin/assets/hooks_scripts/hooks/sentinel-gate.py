@@ -75,7 +75,27 @@ NOETIC_MCP_CHROME = {
 }
 # Praxic Chrome MCP tools (require CHECK): form_input, javascript_tool, computer
 
-# Cortex MCP tools (all read-only search/investigate)
+# Cortex MCP tools that flow free. NOT all read-only — and the header used to say
+# they were, which is the expensive kind of wrong: this set is what someone auditing
+# the noetic firewall reads, and a reader who believes the label stops looking.
+#
+# Three kinds live here, and only the first is inert:
+#
+#   1. PURE READS — investigate, search_knowledge, get_entity_context, cortex_stats,
+#      session_init, the *_poll family, get_proposal. Noetic by effect.
+#   2. WRITES ADMITTED BY POLICY — the *_log family, goal_create, log_artifacts,
+#      ingest_file/ingest_batch, the bus family, cortex_collab. These DO mutate
+#      cortex-side state. They are here because they are the epistemic workflow
+#      itself: gating the act of recording what you learned behind a CHECK would
+#      make the measurement layer cost more than the work it measures.
+#   3. SOFT FLIPS ON YOUR OWN VIEW — archive_proposal (hide-from-my-view),
+#      complete_proposal (the closing bracket of a wake→act→ack loop already
+#      authorized by the accepted proposal).
+#
+# Membership here is a DECISION, not an observation about read-onlyness. Anything
+# added must say which of the three it is, in its own comment — a bare entry under a
+# blanket label is how a praxic tool joins a noetic set without anyone deciding to
+# admit it. `cortex_propose` and `cortex_publish` are deliberately absent.
 NOETIC_MCP_CORTEX = {
     "mcp__cortex__investigate",  # Query knowledge base
     "mcp__cortex__search_knowledge",  # Semantic search
@@ -898,6 +918,48 @@ def _is_single_statement(command: str) -> bool:
     return True  # unterminated heredoc: the body runs to the end, nothing follows
 
 
+# empirica's global options, which argparse requires BEFORE the subcommand
+# (cli_core.py: usage="empirica [--version] [--verbose] <command> [args]").
+# All three are value-less — `--version` is action="version", `--verbose`/`-v`
+# are store_true — so removing them can never swallow a following token the way
+# stripping a value-taking flag would.
+EMPIRICA_GLOBAL_FLAGS = ("--version", "--verbose", "-v")
+
+
+def _strip_empirica_global_flags(command: str) -> str:
+    """Normalize `empirica --verbose <verb> …` to `empirica <verb> …`.
+
+    The tier lists below are literal prefixes (`"empirica preflight-submit"`),
+    matched with `str.startswith`. A legal global flag between the binary and the
+    verb therefore fails EVERY prefix, and the command is judged unrecognized.
+
+    That is not a cosmetic miss. Measured while the firewall was wedged:
+
+        empirica --verbose preflight-submit -   → DENIED
+        empirica preflight-submit -             → ALLOWED   (identical payload)
+
+    The deny that fires in that state *names* `empirica preflight-submit -` as
+    the remedy, so the gate was refusing its own escape hatch — and `--verbose`
+    is precisely what someone adds when a command is behaving strangely, so the
+    failure selected against the person debugging it. Broccoli
+    *gate-gates-its-own-escape*: a recovery action must be reachable BEFORE the
+    gate, not only in its unadorned spelling.
+
+    Only the three known global flags are removed, and only in the leading run
+    before the verb. An unknown `--foo` is left in place, so this cannot be used
+    to smuggle an unrecognized option past the tier match.
+    """
+    parts = command.split()
+    if not parts or parts[0] != "empirica":
+        return command
+    i = 1
+    while i < len(parts) and parts[i] in EMPIRICA_GLOBAL_FLAGS:
+        i += 1
+    if i == 1:
+        return command  # nothing stripped — preserve original spacing exactly
+    return " ".join(["empirica", *parts[i:]])
+
+
 def is_safe_empirica_command(command: str) -> bool:
     """Tiered whitelist for empirica CLI commands.
 
@@ -907,8 +969,8 @@ def is_safe_empirica_command(command: str) -> bool:
     Toggle operations are NOT whitelisted here - they use self-exemption
     in the main gate logic to prevent prompt injection bypass.
     """
-    cmd = command.lstrip()
-    if not cmd.startswith("empirica "):
+    raw = command.lstrip()
+    if not raw.startswith("empirica"):
         return False
 
     # NOTE: this answers "is this VERB safe?", not "is this whole command safe?".
@@ -923,14 +985,31 @@ def is_safe_empirica_command(command: str) -> bool:
     # quoted argument (e.g. `goals-archive --apply --reason "see --help"`) is part
     # of a larger token and does NOT false-match — that would wave a mutating
     # command through. On malformed quoting, skip this shortcut and fall through.
+    #
+    # ORDER MATTERS: this runs on the RAW command, before global-flag stripping.
+    # The first cut of the stripper ran first and ate `--version` out of the bare
+    # `empirica --version`, leaving `empirica` with no trailing space — so the
+    # version query, inert by definition, was DENIED. The token check must see
+    # what the user typed; the stripper exists only for the prefix tiers below.
     import shlex as _shlex
 
     try:
-        _toks = _shlex.split(cmd)
+        _toks = _shlex.split(raw)
     except ValueError:
         _toks = []
-    if {"--help", "-h", "--version"} & set(_toks):
+    # First token must be exactly `empirica` — the loose startswith above admits
+    # `empiricafoo`, and running the token check on that would bless a different
+    # binary's --version. The old order got this for free from the trailing-space
+    # prefix; the reorder has to say it explicitly.
+    if _toks and _toks[0] == "empirica" and {"--help", "-h", "--version"} & set(_toks):
         return True
+
+    # Prefix tiers match `empirica <verb> ...` literally, so normalize the legal
+    # global flags (`--verbose`, `-v`) out of the way first — see
+    # `_strip_empirica_global_flags` for the wedge this prevents.
+    cmd = _strip_empirica_global_flags(raw)
+    if not cmd.startswith("empirica "):
+        return False
 
     # Tier 1: Read-only - always safe
     for prefix in EMPIRICA_TIER1_PREFIXES:
