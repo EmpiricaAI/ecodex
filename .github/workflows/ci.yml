@@ -92,9 +92,7 @@ jobs:
       # fetches a mismatched codex-code-mode-host (the 0.149-merge near-miss:
       # tag stayed 0.147 while main went 0.149). Pure file inspection.
       - name: Check UPSTREAM_SYNC_TAG tracks workspace version
-        run: |
-          python3 scripts/check_upstream_sync_tag.py
-          python3 -m pytest scripts/test_check_upstream_sync_tag.py -q
+        run: python3 scripts/check_upstream_sync_tag.py
 
       - name: Run hermetic vendored-hook tests
         run: |
@@ -110,3 +108,7 @@ jobs:
           PATH="$RUNNER_TEMP/vendored-hooks-venv/bin:$PATH" \
             "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
             codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -v
+          # sync-tag guard self-test runs here (venv has pytest); the guard
+          # itself is the bare CI gate above.
+          "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
+            scripts/test_check_upstream_sync_tag.py -q
