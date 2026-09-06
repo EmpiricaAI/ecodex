@@ -88,6 +88,14 @@ jobs:
       - name: Check vendored firewall invariants
         run: python3 scripts/check_vendored_firewall.py
 
+      # UPSTREAM_SYNC_TAG must track the merged upstream base, or release CI
+      # fetches a mismatched codex-code-mode-host (the 0.149-merge near-miss:
+      # tag stayed 0.147 while main went 0.149). Pure file inspection.
+      - name: Check UPSTREAM_SYNC_TAG tracks workspace version
+        run: |
+          python3 scripts/check_upstream_sync_tag.py
+          python3 -m pytest scripts/test_check_upstream_sync_tag.py -q
+
       - name: Run hermetic vendored-hook tests
         run: |
           python3 -m venv "$RUNNER_TEMP/vendored-hooks-venv"
