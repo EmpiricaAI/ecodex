@@ -25,9 +25,16 @@ extend-exclude = [
     "codex-cli",
     "scripts",
     "tools",
+    # Upstream codex skills crate — Python installer/creator tests are
+    # upstream's (all commits are openai PRs); reformatted by upstream
+    # #42109 to a style ecodex's isort config rejects. Not ours to fix.
+    "codex-rs/skills",
 
-    # Third-party vendored code (e.g. bubblewrap sandbox)
+    # Third-party vendored code (bubblewrap sandbox, plus the whole
+    # third_party/ tree: powershell, v8, voice, wezterm, wine — upstream's
+    # native-host build/packaging Python, arrived via the 0.153 sync).
     "codex-rs/vendor",
+    "third_party",
 
     # Upstream codex Rust crates with bundled Python smoketests
     "codex-rs/windows-sandbox-rs",
