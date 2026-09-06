@@ -436,10 +436,11 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 
 fn update_action_label(context: &InstallContext) -> &'static str {
     match &context.method {
-        // ecodex ships no npm/bun/pnpm package -- these install methods have
+        // ecodex ships no npm/bun/pnpm/vp package -- these install methods have
         // no ecodex update action (see tui/src/update_action.rs).
         InstallMethod::Npm => "no ecodex npm distribution -- update manually",
         InstallMethod::Bun => "no ecodex bun distribution -- update manually",
+        InstallMethod::VitePlus => "no ecodex vp distribution -- update manually",
         InstallMethod::Pnpm => "no ecodex pnpm distribution -- update manually",
         InstallMethod::Brew => "brew upgrade EmpiricaAI/tap/ecodex",
         InstallMethod::Standalone { .. } => "ecodex standalone installer",
@@ -452,6 +453,7 @@ fn fetch_latest_version(context: &InstallContext) -> Result<String, String> {
         InstallMethod::Brew => fetch_homebrew_cask_version(),
         InstallMethod::Npm
         | InstallMethod::Bun
+        | InstallMethod::VitePlus
         | InstallMethod::Pnpm
         | InstallMethod::Standalone { .. }
         | InstallMethod::Other => fetch_latest_github_release_version(),

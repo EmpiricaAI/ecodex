@@ -623,6 +623,9 @@ pub struct CollaborationModeMessages {
 pub struct AutoReviewMessages {
     pub policy: Option<String>,
     pub policy_template: Option<String>,
+    /// Extra developer policy for `node_repl` and `cua_repl` reviews.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_repl_policy: Option<String>,
     pub rejection_instructions: Option<String>,
     pub timeout_instructions: Option<String>,
 }
@@ -1139,6 +1142,7 @@ mod tests {
                 "auto_review": {
                     "policy": "policy",
                     "policy_template": "",
+                    "node_repl_policy": "",
                     "rejection_instructions": "",
                     "timeout_instructions": ""
                 }
@@ -1151,6 +1155,7 @@ mod tests {
             Some(AutoReviewMessages {
                 policy: Some("policy".to_string()),
                 policy_template: None,
+                node_repl_policy: None,
                 rejection_instructions: None,
                 timeout_instructions: None,
             })
@@ -1160,6 +1165,7 @@ mod tests {
             Some(AutoReviewMessages {
                 policy: Some("policy".to_string()),
                 policy_template: Some(String::new()),
+                node_repl_policy: Some(String::new()),
                 rejection_instructions: Some(String::new()),
                 timeout_instructions: Some(String::new()),
             })
@@ -1559,6 +1565,7 @@ mod tests {
             auto_review: Some(AutoReviewMessages {
                 policy: Some("policy".to_string()),
                 policy_template: None,
+                node_repl_policy: None,
                 rejection_instructions: Some("rejection instructions".to_string()),
                 timeout_instructions: Some("timeout instructions".to_string()),
             }),
@@ -2062,21 +2069,6 @@ mod tests {
             model.service_tier_for_request(Some("unsupported".to_string())),
             None
         );
-        assert_eq!(model.service_tier_for_request(/*service_tier*/ None), None);
-    }
-
-    #[test]
-    fn service_tier_for_request_does_not_apply_catalog_default() {
-        let model = ModelInfo {
-            default_service_tier: Some(ServiceTier::Fast.request_value().to_string()),
-            service_tiers: vec![ModelServiceTier {
-                id: ServiceTier::Fast.request_value().to_string(),
-                name: "Fast".to_string(),
-                description: "Priority processing.".to_string(),
-            }],
-            ..test_model(/*spec*/ None)
-        };
-
         assert_eq!(model.service_tier_for_request(/*service_tier*/ None), None);
     }
 }

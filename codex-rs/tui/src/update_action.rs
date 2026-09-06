@@ -34,6 +34,7 @@ impl UpdateAction {
             // a different product (or one that doesn't exist for ecodex).
             InstallMethod::Npm
             | InstallMethod::Bun
+            | InstallMethod::VitePlus
             | InstallMethod::Pnpm
             | InstallMethod::Standalone {
                 platform: StandalonePlatform::Windows,
@@ -100,6 +101,13 @@ mod tests {
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
                 method: InstallMethod::Bun,
+                package_layout: None,
+            }),
+            None
+        );
+        assert_eq!(
+            UpdateAction::from_install_context(&InstallContext {
+                method: InstallMethod::VitePlus,
                 package_layout: None,
             }),
             None
