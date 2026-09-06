@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.153.4] - 2026-09-06
+
 ### Dependencies
 - Post-0.152.0 Dependabot triage (cargo subset only — npm alerts are
   upstream's JS tooling lockfile, per standing scope): actix-http
@@ -603,7 +605,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.152.0...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.153.4...HEAD
+[0.153.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.153.4...v0.153.4
 [0.152.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.152.0...v0.152.0
 [0.149.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.149.0...v0.149.0
 [0.147.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.147.1...v0.147.2
