@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Upstream sync to rust-v0.154.0** (249 commits from openai/codex, one hop
+  from 0.153.4; 21 conflicts + 3 auto-merge integration fixes resolved by code
+  read). Upstream highlights ecodex users see: fork-aware token-budget startup
+  and per-model experimental-context gating, a reworked Guardian V2 async
+  scorer, richer model-selection collaboration modes, and Vim redo in the TUI
+  composer. ecodex features preserved through the merge: the EMPIRICA_INSTANCE_ID
+  sandbox-shell injection, cross-provider model-selection persistence, curated
+  model presets, and the worktree-aware sandbox protection.
+- **Re-vendored empirica hooks to 1.13.47** — sentinel-gate firewall hardening
+  (multi-statement chains now require every segment safe; a closed-transaction
+  recovery path), mailbox-poll truncation-blindness fix, and OAuth-or-api_key
+  credential resolution in the session hooks.
+
+### Added
+- `scripts/broccoli.sh` — the deterministic half of the eat-the-broccoli quality
+  sweep wired for ecodex's Rust stack, fork-scoped to owned crates.
+
 ## [0.153.4] - 2026-09-06
 
 ### Dependencies
