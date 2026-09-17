@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.154.0] - 2026-09-17
+
 ### Changed
 - **Upstream sync to rust-v0.154.0** (249 commits from openai/codex, one hop
   from 0.153.4; 21 conflicts + 3 auto-merge integration fixes resolved by code
@@ -623,7 +625,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.153.4...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.154.0...HEAD
+[0.154.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.154.0...v0.154.0
 [0.153.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.153.4...v0.153.4
 [0.152.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.152.0...v0.152.0
 [0.149.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.149.0...v0.149.0
