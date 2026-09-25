@@ -696,6 +696,8 @@ pub enum PluginDisabledReason {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginSummary {
+    #[serde(default)]
+    pub extensions: Option<super::PluginExtensions>,
     pub id: String,
     /// Backend remote plugin identifier when available.
     pub remote_plugin_id: Option<String>,
@@ -761,6 +763,9 @@ pub struct PluginDetail {
     pub share_url: Option<String>,
     pub description: Option<String>,
     pub skills: Vec<SkillSummary>,
+    /// The declared onboarding skill, when the plugin and visible skill are enabled.
+    #[serde(default)]
+    pub onboarding_skill: Option<SkillSummary>,
     pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppSummary>,
     pub app_templates: Vec<AppTemplateSummary>,

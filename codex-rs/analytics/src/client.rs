@@ -13,11 +13,13 @@ use crate::facts::ArtifactOperation;
 use crate::facts::ArtifactOperationInput;
 use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::ElicitationType;
 use crate::facts::ExternalAgentConfigImportCompletedInput;
 use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::ImagePreparationFact;
+use crate::facts::McpToolCallElicitation;
 use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginInstallRequested;
 use crate::facts::PluginInstallRequestedInput;
@@ -59,7 +61,6 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::item_event_to_server_notification;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::default_client::create_client;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::ThreadId;
@@ -444,7 +445,12 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
+    pub fn track_app_used(
+        &self,
+        tracking: TrackEventsContext,
+        app: AppInvocation,
+        elicitation_type: Option<ElicitationType>,
+    ) {
         let Some(queue) = self.queue.as_ref() else {
             return;
         };
@@ -452,8 +458,18 @@ impl AnalyticsEventsClient {
             return;
         }
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(
-            AppUsedInput { tracking, app },
+            AppUsedInput {
+                tracking,
+                app,
+                elicitation_type,
+            },
         )));
+    }
+
+    pub fn track_mcp_tool_call_elicitation(&self, input: McpToolCallElicitation) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::McpToolCallElicitation(input),
+        ));
     }
 
     pub fn track_hook_run(&self, tracking: TrackEventsContext, hook: HookRunFact) {
@@ -722,11 +738,23 @@ impl AnalyticsEventsClient {
 
     /// Records analytics-relevant notifications without cloning ignored variants.
     pub fn track_notification(&self, notification: &ServerNotification) {
+        if let ServerNotification::ThreadRealtimeItemAdded(handoff) = notification {
+            if handoff.item.get("type").and_then(serde_json::Value::as_str)
+                == Some("handoff_request")
+            {
+                self.record_fact(AnalyticsFact::RealtimeHandoffRequested {
+                    thread_id: handoff.thread_id.clone(),
+                });
+            }
+            return;
+        }
         if !matches!(
             notification,
             ServerNotification::ThreadArchived(_)
                 | ServerNotification::ThreadClosed(_)
                 | ServerNotification::ThreadUnarchived(_)
+                | ServerNotification::ThreadRealtimeStarted(_)
+                | ServerNotification::ThreadRealtimeClosed(_)
                 | ServerNotification::TurnStarted(_)
                 | ServerNotification::TurnCompleted(_)
                 | ServerNotification::TurnDiffUpdated(_)
@@ -838,7 +866,8 @@ async fn send_track_events(
         return;
     }
 
-    let Some(auth) = auth_manager.auth().await else {
+    let Some((auth, http_client_factory)) = auth_manager.auth_with_http_client_factory().await
+    else {
         return;
     };
     if auth.is_api_key_auth() {
@@ -851,7 +880,7 @@ async fn send_track_events(
     }
 
     for events in track_event_request_batches(events) {
-        send_track_events_request(&auth, destination, events).await;
+        send_track_events_request(&auth, destination, events, &http_client_factory).await;
     }
 }
 
@@ -882,6 +911,7 @@ async fn send_track_events_request(
     auth: &CodexAuth,
     destination: &AnalyticsEventsDestination,
     events: Vec<TrackEventRequest>,
+    http_client_factory: &codex_http_client::HttpClientFactory,
 ) {
     if events.is_empty() {
         return;
@@ -899,7 +929,21 @@ async fn send_track_events_request(
         #[cfg(debug_assertions)]
         AnalyticsEventsDestination::CaptureFile { .. } => return,
     };
-    let response = create_client()
+    let client = match codex_login::default_client::create_client_for_route_async(
+        http_client_factory.clone(),
+        url.clone(),
+        codex_http_client::ClientRouteClass::Api,
+        codex_login::default_client::ClientRedirectPolicy::Default,
+    )
+    .await
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "failed to build events client");
+            return;
+        }
+    };
+    let response = client
         .post(url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
         .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())

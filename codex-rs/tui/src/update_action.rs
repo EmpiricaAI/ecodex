@@ -14,6 +14,8 @@ use codex_install_context::StandalonePlatform;
 /// offering a command that would install/update the wrong product.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
+    /// Replace the local daemon after restoring the terminal.
+    Daemon(DaemonUpdateSource),
     /// Update via `brew upgrade EmpiricaAI/tap/ecodex`.
     BrewUpgrade,
     /// Update via `curl -fsSL .../scripts/install.sh | bash` (re-run, idempotent).
@@ -47,6 +49,9 @@ impl UpdateAction {
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
+            // Display only: run_update_action executes the daemon update through the
+            // launching CLI's own path, not this program name.
+            UpdateAction::Daemon(source) => ("ecodex", source.command_args()),
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "EmpiricaAI/tap/ecodex"]),
             UpdateAction::StandaloneUnix => (
                 "sh",
@@ -171,5 +176,21 @@ mod tests {
             UpdateAction::BrewUpgrade.command_args(),
             ("brew", &["upgrade", "EmpiricaAI/tap/ecodex"][..])
         );
+    }
+}
+
+/// Package source explicitly selected by the user in the daemon menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonUpdateSource {
+    PublicStable,
+    ThisCli,
+}
+
+impl DaemonUpdateSource {
+    pub fn command_args(self) -> &'static [&'static str] {
+        match self {
+            Self::PublicStable => &["app-server", "daemon", "update"],
+            Self::ThisCli => &["app-server", "daemon", "update", "--from-cli", "--yes"],
+        }
     }
 }

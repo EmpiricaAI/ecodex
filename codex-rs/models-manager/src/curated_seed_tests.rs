@@ -66,7 +66,7 @@ fn curated_entry_inherits_runtime_template_fields() {
     // build_fallback_model_info (BASE_INSTRUCTIONS const), i.e. non-empty.
     let info = model_info_from_slug("moonshotai/kimi-k2.6");
     assert!(
-        !info.get_model_instructions(None).is_empty(),
+        !codex_prompts::render_model_instructions(&info).is_empty(),
         "curated entry must inherit base_instructions from the runtime template"
     );
     assert_eq!(info.context_window, Some(262_144));

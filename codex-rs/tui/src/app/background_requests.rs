@@ -30,9 +30,7 @@ use crate::hooks_rpc::write_hook_trust;
 use crate::hooks_rpc::write_hook_trusts;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-const TOKEN_ACTIVITY_FETCH_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(/*secs*/ 15);
-const THREAD_USAGE_FETCH_TIMEOUT: std::time::Duration =
+pub(super) const THREAD_USAGE_FETCH_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 65);
 const RATE_LIMIT_RESET_REQUEST_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 15);
@@ -77,7 +75,7 @@ impl App {
     /// Recovery requests are coalesced and bounded by the reset-request timeout. The origin
     /// also identifies command-specific completion work, such as finalizing a `/status` card,
     /// without confusing sparse inference notifications with authoritative usage responses.
-    pub(super) fn refresh_rate_limits(
+    pub(crate) fn refresh_rate_limits(
         &mut self,
         app_server: &AppServerSession,
         origin: RateLimitRefreshOrigin,
@@ -95,6 +93,7 @@ impl App {
         else {
             return;
         };
+        self.chat_widget.start_usage_notice_read(request_id);
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
@@ -121,25 +120,6 @@ impl App {
                 hard_stop_generation,
                 result,
             });
-        });
-    }
-
-    pub(super) fn refresh_token_activity(
-        &mut self,
-        app_server: &AppServerSession,
-        request_id: u64,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                TOKEN_ACTIVITY_FETCH_TIMEOUT,
-                fetch_account_token_activity(request_handle),
-            )
-            .await
-            .map_err(|_| "account/usage/read timed out in TUI".to_string())
-            .and_then(|result| result.map_err(|err| err.to_string()));
-            app_event_tx.send(AppEvent::TokenActivityLoaded { request_id, result });
         });
     }
 
@@ -794,6 +774,7 @@ impl App {
         };
 
         self.transcript_cells.remove(index);
+        self.native_history.retain(&self.transcript_cells);
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.transcript_cells.clone());
         }
@@ -866,20 +847,7 @@ pub(super) async fn fetch_account_rate_limits(
     result.wrap_err("account/rateLimits/read failed in TUI")
 }
 
-pub(super) async fn fetch_account_token_activity(
-    request_handle: AppServerRequestHandle,
-) -> Result<codex_app_server_protocol::GetAccountTokenUsageResponse> {
-    let request_id = RequestId::String(format!("account-token-usage-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::GetAccountTokenUsage {
-            request_id,
-            params: None,
-        })
-        .await
-        .wrap_err("account/usage/read failed in TUI")
-}
-
-async fn fetch_thread_usage(
+pub(super) async fn fetch_thread_usage(
     request_handle: AppServerRequestHandle,
     thread_id: ThreadId,
 ) -> Result<ThreadUsageOutcome> {
@@ -1064,24 +1032,24 @@ fn plugin_remote_section_error_message(label: &str, err: &str) -> String {
 fn plugin_remote_section_error_next_step(label: &str, err: &str) -> &'static str {
     let err = err.to_ascii_lowercase();
     if err.contains("api key auth is not supported") {
-        "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs."
+        "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs"
     } else if err.contains("authentication required")
         || err.contains("not signed in")
         || err.contains("not logged in")
     {
-        "Sign in to ChatGPT, then try loading this section again."
+        "Sign in to ChatGPT, then try loading this section again"
     } else if err.contains("codex plugins are disabled")
         || err.contains("plugin sharing is disabled")
         || err.contains("plugin sharing is not enabled")
         || err.contains("feature disabled")
     {
-        "Ask a workspace admin to enable Codex plugins or plugin sharing."
+        "Ask a workspace admin to enable Codex plugins or plugin sharing"
     } else if err.contains("workspace") && (err.contains("access") || err.contains("mismatch")) {
-        "Switch to the matching workspace or ask the sharer for access."
+        "Switch to the matching workspace or ask the sharer for access"
     } else if err.contains("not found") || err.contains("status 404") {
-        "Check that you are signed in to the correct workspace and still have access."
+        "Check that you are signed in to the correct workspace and still have access"
     } else if err.contains("old build") || err.contains("update codex") || err.contains("stale") {
-        "Update Codex, then try opening the shared plugin again."
+        "Update Codex, then try opening the shared plugin again"
     } else if err.contains("service unavailable")
         || err.contains("temporarily unavailable")
         || err.contains("status 503")
@@ -1089,11 +1057,11 @@ fn plugin_remote_section_error_next_step(label: &str, err: &str) -> &'static str
         || err.contains("request")
         || err.contains("status")
     {
-        "Try again later; local plugin functionality is still available."
+        "Try again later; local plugin functionality is still available"
     } else if err.contains("disabled by admin") || err.contains("admin disabled") {
-        "Ask a workspace admin to confirm plugin access."
+        "Ask a workspace admin to confirm plugin access"
     } else if label == "Shared with me" && err.contains("plugin") && err.contains("disabled") {
-        "Ask the sharer or a workspace admin to confirm plugin access."
+        "Ask the sharer or a workspace admin to confirm plugin access"
     } else {
         ""
     }
@@ -1103,7 +1071,7 @@ fn plugin_sharing_disabled_remote_section_error() -> PluginRemoteSectionError {
     PluginRemoteSectionError {
         section_id: "shared-with-me".to_string(),
         label: "Shared with me".to_string(),
-        message: "Plugin sharing is disabled for this Codex session. Enable plugin sharing to load shared plugins.".to_string(),
+        message: "Enable plugin sharing for this Codex session to load shared plugins".to_string(),
     }
 }
 
@@ -1416,16 +1384,32 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         let thread_id = ThreadId::new();
         app.config.chatgpt_base_url = server.uri();
+        app.cli_kv_overrides = vec![(
+            "chatgpt_base_url".to_string(),
+            toml::Value::String(server.uri()),
+        )];
         app.config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/codex/config/bundle"))
+            .respond_with(wiremock::ResponseTemplate::new(/*s*/ 200).set_body_string("{}"))
+            .mount(&server)
+            .await;
         write_chatgpt_auth(
             app.config.codex_home.as_path(),
             ChatGptAuthFixture::new("chatgpt-token").account_id("account-123"),
             AuthCredentialsStoreMode::File,
         )
         .expect("write ChatGPT authentication");
-        let app_server = crate::start_embedded_app_server_for_picker(&app.config)
-            .await
-            .expect("start authenticated embedded app server");
+        let app_server = crate::start_app_server_for_picker(
+            &app.config,
+            &crate::AppServerTarget::Embedded,
+            app.cli_kv_overrides.clone(),
+            app.loader_overrides.clone(),
+            /*state_db*/ None,
+            app.environment_manager.clone(),
+        )
+        .await
+        .expect("start authenticated embedded app server");
         write_chatgpt_auth(
             app.config.codex_home.as_path(),
             ChatGptAuthFixture::new("different-token").account_id("different-account"),
@@ -1563,42 +1547,42 @@ mod tests {
             (
                 "Workspace",
                 "chatgpt authentication required for remote plugin catalog",
-                "Sign in to ChatGPT, then try loading this section again.",
+                "Sign in to ChatGPT, then try loading this section again",
             ),
             (
                 "OpenAI Curated",
                 "chatgpt authentication required for remote plugin catalog; api key auth is not supported",
-                "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs.",
+                "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs",
             ),
             (
                 "Shared with me",
                 "remote plugin catalog request failed with status 404: missing",
-                "Check that you are signed in to the correct workspace and still have access.",
+                "Check that you are signed in to the correct workspace and still have access",
             ),
             (
                 "Shared with me",
                 "workspace access mismatch",
-                "Switch to the matching workspace or ask the sharer for access.",
+                "Switch to the matching workspace or ask the sharer for access",
             ),
             (
                 "Shared with me",
                 "old build fallback",
-                "Update Codex, then try opening the shared plugin again.",
+                "Update Codex, then try opening the shared plugin again",
             ),
             (
                 "Shared with me",
                 "remote service unavailable",
-                "Try again later; local plugin functionality is still available.",
+                "Try again later; local plugin functionality is still available",
             ),
             (
                 "Workspace",
                 "plugin disabled by admin",
-                "Ask a workspace admin to confirm plugin access.",
+                "Ask a workspace admin to confirm plugin access",
             ),
             (
                 "Shared with me",
                 "plugin sharing is not enabled",
-                "Ask a workspace admin to enable Codex plugins or plugin sharing.",
+                "Ask a workspace admin to enable Codex plugins or plugin sharing",
             ),
         ];
 
@@ -1617,7 +1601,8 @@ mod tests {
             PluginRemoteSectionError {
                 section_id: "shared-with-me".to_string(),
                 label: "Shared with me".to_string(),
-                message: "Plugin sharing is disabled for this Codex session. Enable plugin sharing to load shared plugins.".to_string(),
+                message: "Enable plugin sharing for this Codex session to load shared plugins"
+                    .to_string(),
             }
         );
     }
@@ -1626,10 +1611,12 @@ mod tests {
     fn mcp_inventory_maps_prefix_tool_names_by_server() {
         let statuses = vec![
             McpServerStatus {
+                server_capabilities: None,
                 tools_error: None,
                 name: "docs".to_string(),
                 runtime_status: None,
                 plugin_id: None,
+                http_origin: None,
                 server_info: None,
                 tools: HashMap::from([(
                     "list".to_string(),
@@ -1649,10 +1636,12 @@ mod tests {
                 auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
             },
             McpServerStatus {
+                server_capabilities: None,
                 tools_error: None,
                 name: "disabled".to_string(),
                 runtime_status: None,
                 plugin_id: None,
+                http_origin: None,
                 server_info: None,
                 tools: HashMap::new(),
                 resources: Vec::new(),

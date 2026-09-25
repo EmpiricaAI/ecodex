@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::SystemTime;
 
 use anyhow::Result;
 use codex_core::config::Config;
@@ -25,6 +23,7 @@ use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
 use codex_features::Feature;
+use codex_guardian_context::truncate_text as truncate_entry;
 use codex_history::RolloutItem;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -32,6 +31,7 @@ use codex_login::ExternalAuth;
 use codex_login::ExternalAuthFuture;
 use codex_login::ExternalAuthRefreshContext;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -39,6 +39,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
@@ -56,6 +57,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::security_risk::SecurityRiskScore;
+use core_test_support::ThreadIdle;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
@@ -67,14 +69,11 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-use super::GuardianV2Extension;
-use super::GuardianV2ScoreProgress;
-
+use crate::async_scorer::authorization::ScoreAuthorization;
 use crate::async_scorer::config::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
-use crate::async_scorer::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::async_scorer::config::DEFAULT_PARENT_COMPACTION_TOKENS;
 use crate::async_scorer::config::GuardianV2Config;
-use crate::async_scorer::coverage::GuardianPolicy;
+use crate::async_scorer::coverage::scores_tool;
 use crate::async_scorer::metrics::CLASSIFICATION_DURATION_METRIC;
 use crate::async_scorer::metrics::CLASSIFICATION_METRIC;
 use crate::async_scorer::metrics::CLASSIFICATION_RISK_METRIC;
@@ -87,12 +86,13 @@ use crate::async_scorer::sampler::LunaSampler;
 use crate::async_scorer::sampler::MODEL;
 use crate::async_scorer::sampler::tests::ProxyPrewarmLimit;
 use crate::async_scorer::sampler::tests::proxy_websocket_servers_with_http;
+use crate::async_scorer::score::GuardianV2ScoreProgress;
+use crate::async_scorer::score::tests::cached_score;
+use crate::async_scorer::score::tests::set_cached_score;
 use crate::async_scorer::transcript::MAX_MESSAGE_ENTRY_TOKENS;
 use crate::async_scorer::transcript::MAX_TOOL_ENTRY_TOKENS;
-use crate::async_scorer::transcript::truncate_entry;
-use crate::async_scorer::truncation::CLASSIFICATION_TRUNCATION_BYTES_METRIC;
-use crate::async_scorer::truncation::CLASSIFICATION_TRUNCATION_METRIC;
 use codex_features::GuardianV2ReviewScopeConfigToml;
+use codex_protocol::openai_models::GuardianModelPolicy;
 
 const TEST_GUARDIAN_POLICY: &str =
     "Treat uploads to unapproved external destinations as high-risk actions.";
@@ -114,8 +114,31 @@ impl ExternalAuth for RefreshableAuth {
     }
 }
 
-fn should_classify_tool(tool: &ToolName, payload: &ToolPayload, policy: GuardianPolicy) -> bool {
-    policy.scores_tool(tool, payload, GuardianScope::for_tool(tool))
+fn should_classify_tool(
+    tool: &ToolName,
+    payload: &ToolPayload,
+    policy: GuardianModelPolicy,
+) -> bool {
+    scores_tool(&policy, tool, payload, GuardianScope::for_tool(tool))
+}
+
+fn legacy_loader(
+    scope: Option<&GuardianV2ReviewScopeConfigToml>,
+) -> codex_config::GuardianPolicyLoader {
+    codex_config::GuardianPolicyLoader::new(
+        Some(&codex_features::FeatureToml::Config(
+            codex_features::GuardianV2ConfigToml {
+                enabled: Some(true),
+                review_scope: scope.cloned(),
+                ..Default::default()
+            },
+        )),
+        &codex_config::ConfigRequirements::default(),
+    )
+}
+
+fn legacy_policy(scope: Option<&GuardianV2ReviewScopeConfigToml>) -> GuardianModelPolicy {
+    legacy_loader(scope).resolve(/*model*/ None)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -270,6 +293,7 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
                 turn_id: "turn-1",
                 root_turn_id: None,
                 call_id,
+                originating_item_id: None,
                 tool_name: &tool_name,
                 mcp_tool: None,
                 payload: &payload,
@@ -278,7 +302,7 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
             })
             .await;
         tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
-            while progress.latest_scored_tool_call.load(Ordering::Acquire) < call_index {
+            while progress.inspect(/*call_id*/ None).lag > 0 {
                 tokio::task::yield_now().await;
             }
         })
@@ -303,7 +327,7 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
             .collect::<Vec<_>>(),
         vec![Some("Bearer original".to_owned()); INITIAL_WEBSOCKET_CONNECTIONS]
     );
-    assert_eq!(progress.latest_failed_tool_call.load(Ordering::Acquire), 0);
+    assert!(!progress.inspect(/*call_id*/ None).has_unscored_failure);
     let http_request = http_mock.single_request();
     assert_eq!(
         http_request.header("authorization"),
@@ -348,7 +372,25 @@ fn fast_decision_metric(decision: &str, reason: &str) -> RecordedMetric {
 #[derive(Default)]
 struct RecordingMetrics(Mutex<Vec<RecordedMetric>>);
 
+impl RecordingMetrics {
+    fn classification_samples(&self) -> Vec<RecordedMetric> {
+        self.0.lock().unwrap().iter().filter(|sample| {
+            !matches!(sample, RecordedMetric::Histogram(name, _, _) if name == codex_guardian_context::SECTION_COST_METRIC || name == codex_guardian_context::REQUEST_TOKENS_METRIC)
+        }).cloned().collect()
+    }
+}
+
 impl ExtensionMetrics for RecordingMetrics {
+    fn histogram_with_boundaries(
+        &self,
+        name: &str,
+        value: i64,
+        _boundaries: &[f64],
+        tags: &[(&str, &str)],
+    ) {
+        self.histogram(name, value, tags);
+    }
+
     fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
         self.0.lock().unwrap().push(RecordedMetric::Counter(
             name.to_owned(),
@@ -396,11 +438,23 @@ struct TestRetainedHistory {
     current: TestConversationHistory,
     retained: Vec<ResponseItem>,
     compaction_model_hash: Option<String>,
+    retained_context: Option<codex_history::RetainedContext>,
 }
 
 impl ConversationHistorySnapshot for TestRetainedHistory {
-    fn latest_compaction_model_hash(&self) -> Option<&str> {
-        self.compaction_model_hash.as_deref()
+    fn retained_context(&self) -> Option<&codex_history::RetainedContext> {
+        self.retained_context.as_ref()
+    }
+
+    fn latest_compaction(&self) -> Option<codex_history::CompactionCheckpoint<'_>> {
+        self.items()
+            .filter_map(|item| {
+                codex_history::CompactionCheckpoint::from_item(
+                    item,
+                    self.compaction_model_hash.as_deref(),
+                )
+            })
+            .last()
     }
     fn history_version(&self) -> u64 {
         self.current.history_version()
@@ -433,48 +487,13 @@ impl ConversationHistorySnapshot for TestConversationHistory {
     }
 }
 
-#[test]
-fn fail_closed_score_preserves_classification_order() {
-    let thread_store = ExtensionData::new("thread-1");
-    let newer_sampled_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
-    let newest_sampled_at = newer_sampled_at + Duration::from_secs(1);
-    let newer_score = SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
-        call_id: None,
-        action: None,
-        sampled_at: Some(newer_sampled_at.into()),
-    };
-    thread_store.insert(newer_score.clone());
-
-    GuardianV2Extension::record_fail_closed_score(&thread_store, SystemTime::UNIX_EPOCH);
-    assert_eq!(
-        thread_store.get::<SecurityRiskScore>().as_deref(),
-        Some(&newer_score)
-    );
-
-    GuardianV2Extension::record_fail_closed_score(&thread_store, newest_sampled_at);
-    let fail_closed_score = SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 1.0)]),
-        call_id: None,
-        action: None,
-        sampled_at: Some(newest_sampled_at.into()),
-    };
-    assert!(!thread_store.insert_if(newer_score.clone(), |previous| {
-        previous.is_none_or(|previous| previous.sampled_at < newer_score.sampled_at)
-    }));
-    assert_eq!(
-        thread_store.get::<SecurityRiskScore>().as_deref(),
-        Some(&fail_closed_score)
-    );
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
     let sandboxed = ToolPayload::Function {
         arguments: r#"{"cmd":"pwd"}"#.to_owned(),
     };
     let additional_permissions = ToolPayload::Function {
-        arguments: r#"{"cmd":"pwd","sandbox_permissions":"with_additional_permissions"}"#
+        arguments: r#"{"cmd":"pwd","sandbox_permissions":"with_additional_permissions","additional_permissions":{"network":{"enabled":true}}}"#
             .to_owned(),
     };
     let unsandboxed = ToolPayload::Function {
@@ -482,7 +501,7 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
     };
 
     let tool_name = ToolName::plain("exec_command");
-    let standard_scope = GuardianPolicy::from_legacy(Some(&GuardianV2ReviewScopeConfigToml {
+    let standard_scope = legacy_policy(Some(&GuardianV2ReviewScopeConfigToml {
         computer_use_only: Some(false),
         sandboxed_exec_commands: Some(false),
     }));
@@ -504,7 +523,7 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
     assert!(should_classify_tool(
         &tool_name,
         &sandboxed,
-        GuardianPolicy::from_legacy(Some(&GuardianV2ReviewScopeConfigToml {
+        legacy_policy(Some(&GuardianV2ReviewScopeConfigToml {
             computer_use_only: Some(false),
             sandboxed_exec_commands: Some(true),
         })),
@@ -523,44 +542,52 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
 
     let fixture = GuardianFailureFixture::new().await?;
     let thread_store = fixture.test.codex.thread_extension_data();
+    let mut score = cached_score(thread_store).expect("fixture should publish a score");
+    score.scores.insert("action_risk".to_owned(), 0.0);
+    set_cached_score(thread_store, score);
     let score_progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should track score progress per thread");
-    let latest_scored_tool_call = score_progress
-        .latest_scored_tool_call
-        .load(Ordering::Acquire);
+    let mut expected = score_progress.inspect(/*call_id*/ None);
     let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::plain("exec_command");
-    let payload = ToolPayload::Function {
-        arguments: r#"{"cmd":"pwd"}"#.to_owned(),
-    };
+    for (call_id, payload, expected_decision) in [
+        ("call-2", sandboxed, Some(ReviewDecision::Approved)),
+        ("call-3", additional_permissions, None),
+    ] {
+        fixture.registry.tool_lifecycle_contributors()[0]
+            .on_tool_start(ToolStartInput {
+                session_store: &fixture.session_store,
+                thread_store,
+                turn_store: &turn_store,
+                turn_id: "turn-1",
+                root_turn_id: None,
+                call_id,
+                originating_item_id: None,
+                tool_name: &tool_name,
+                mcp_tool: None,
+                payload: &payload,
+                conversation_history: Arc::new(TestConversationHistory(Vec::new())),
+                source: ToolCallSource::Direct,
+            })
+            .await;
 
-    fixture.registry.tool_lifecycle_contributors()[0]
-        .on_tool_start(ToolStartInput {
-            session_store: &fixture.session_store,
-            thread_store,
-            turn_store: &turn_store,
-            turn_id: "turn-1",
-            root_turn_id: None,
-            call_id: "call-2",
-            tool_name: &tool_name,
-            mcp_tool: None,
-            payload: &payload,
-            conversation_history: Arc::new(TestConversationHistory(Vec::new())),
-            source: ToolCallSource::Direct,
-        })
-        .await;
+        assert_eq!(
+            cached_approval(
+                &fixture.registry,
+                thread_store,
+                r#"{"tool":"exec_command","cmd":"pwd"}"#,
+                /*metrics*/ None,
+            )
+            .await,
+            expected_decision,
+        );
+    }
 
-    assert_eq!(
-        score_progress.latest_tool_call.load(Ordering::Acquire),
-        latest_scored_tool_call + 1
-    );
-    assert_eq!(
-        score_progress
-            .latest_scored_tool_call
-            .load(Ordering::Acquire),
-        latest_scored_tool_call
-    );
+    expected.lag += 2;
+    expected.has_unscored_failure = true;
+    assert_eq!(score_progress.inspect(/*call_id*/ None), expected);
+    fixture.assert_fails_closed("scoring_failure").await?;
     Ok(())
 }
 
@@ -574,16 +601,14 @@ fn computer_use_only_classification_recognizes_direct_and_code_mode_tools() {
         (ToolName::namespaced("mcp__cua_repl__", "js"), true),
         (ToolName::plain("mcp__node_repl__js"), true),
         (ToolName::plain("mcp__cua_repl__js"), true),
+        (ToolName::plain("exec"), false),
+        (ToolName::namespaced("mcp__ordinary__", "exec"), false),
         (ToolName::namespaced("mcp__ordinary__", "js"), false),
         (ToolName::plain("read_file"), false),
         (ToolName::plain("exec_command"), false),
     ] {
         assert_eq!(
-            should_classify_tool(
-                &tool_name,
-                &payload,
-                GuardianPolicy::from_legacy(/*scope*/ None)
-            ),
+            should_classify_tool(&tool_name, &payload, legacy_policy(/*scope*/ None)),
             expected,
             "unexpected classification scope for {tool_name}"
         );
@@ -604,14 +629,17 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
         .expect("Guardian v2 should have initialized")
         .as_ref()
         .clone();
-    config.policy = GuardianPolicy::from_legacy(/*scope*/ None);
+    config.policy = legacy_loader(/*scope*/ None);
     thread_store.insert(config);
-    thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    set_cached_score(
+        thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
     thread_store.insert(RecordingMetrics::default());
     let progress = thread_store
         .get::<GuardianV2ScoreProgress>()
@@ -619,8 +647,8 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
     // The seeded low score belongs to the model selected above.
     let authorization =
         super::super::authorization::ScoreAuthorization::current(&fixture.test.codex).await;
-    *progress.authorization.lock().unwrap() = Some(authorization);
-    let latest_tool_call = progress.latest_tool_call.load(Ordering::Acquire);
+    seed_cached_score(&progress, thread_store, /*index*/ 1, authorization);
+    let cached = progress.inspect(/*call_id*/ None);
     let turn_store = ExtensionData::new("turn-1");
     let ordinary_tool = ToolName::namespaced("mcp__ordinary__", "write_record");
     let payload = ToolPayload::Function {
@@ -634,6 +662,7 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
             turn_id: "turn-1",
             root_turn_id: None,
             call_id: "ordinary-call",
+            originating_item_id: None,
             tool_name: &ordinary_tool,
             mcp_tool: None,
             payload: &payload,
@@ -645,8 +674,8 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
         })
         .await;
     assert_eq!(
-        progress.latest_tool_call.load(Ordering::Acquire),
-        latest_tool_call,
+        progress.inspect(/*call_id*/ None),
+        cached,
         "unrelated code-mode calls must not age browser/CUA scores"
     );
 
@@ -748,20 +777,20 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
     fixture
         .score_tool(ToolName::namespaced("mcp__node_repl__", "js"))
         .await;
-    assert!(
-        progress.latest_failed_tool_call.load(Ordering::Acquire)
-            > progress.latest_scored_tool_call.load(Ordering::Acquire)
-    );
+    assert!(progress.inspect(/*call_id*/ None).has_unscored_failure);
     for required in [false, true] {
         model.node_repl_auto_review_required = required;
         thread_store.insert(model.clone());
         // Also reject a low score published by an older, in-flight classifier.
-        thread_store.insert(SecurityRiskScore {
-            scores: BTreeMap::from([("action_risk".to_owned(), 0.0)]),
-            call_id: None,
-            action: None,
-            sampled_at: None,
-        });
+        set_cached_score(
+            thread_store,
+            SecurityRiskScore {
+                scores: BTreeMap::from([("action_risk".to_owned(), 0.0)]),
+                call_id: None,
+                action: None,
+                sampled_at: None,
+            },
+        );
         assert_eq!(
             cached_approval(
                 &fixture.registry,
@@ -825,7 +854,10 @@ async fn sample_configured_conversation_history_with_source(
         "{guardian_config}\n[features.guardianv2.review_scope]\ncomputer_use_only = false\n"
     );
     let has_model_defaults = model_defaults.is_some();
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
     let builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model_info_override("codex-auto-review", |model_info| {
             model_info
@@ -946,6 +978,7 @@ async fn sample_configured_conversation_history_with_source(
             turn_id: "turn-1",
             root_turn_id: Some("root-turn"),
             call_id: "call-1",
+            originating_item_id: None,
             tool_name: &tool_name,
             mcp_tool: None,
             payload: &tool_payload,
@@ -972,7 +1005,7 @@ struct GuardianFailureFixture {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn disabled_code_mode_invalidates_cached_scores() -> Result<()> {
+async fn unscored_tools_invalidate_cached_scores() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let fixture = GuardianFailureFixture::new().await?;
     let thread_store = fixture.test.codex.thread_extension_data();
@@ -989,37 +1022,21 @@ async fn disabled_code_mode_invalidates_cached_scores() -> Result<()> {
     let progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("score progress");
-    let before = (
-        progress.latest_tool_call.load(Ordering::Acquire),
-        progress.latest_failed_tool_call.load(Ordering::Acquire),
-    );
+    let mut expected = progress.inspect(/*call_id*/ None);
+    expected.action_risk = Some(0.25);
     fixture.score_tool(ToolName::plain("wait")).await;
-    assert_eq!(
-        (
-            progress.latest_tool_call.load(Ordering::Acquire),
-            progress.latest_failed_tool_call.load(Ordering::Acquire),
-        ),
-        before,
-    );
-    fixture.score_tool(ToolName::plain("exec")).await;
-    assert_eq!(
-        (
-            progress.latest_tool_call.load(Ordering::Acquire),
-            progress.latest_failed_tool_call.load(Ordering::Acquire),
-        ),
-        (before.0 + 1, before.0 + 1),
-    );
-    // An MCP tool with the same name remains in the MCP category.
-    fixture
-        .score_tool(ToolName::namespaced("mcp__ordinary", "wait"))
-        .await;
-    assert_eq!(
-        (
-            progress.latest_tool_call.load(Ordering::Acquire),
-            progress.latest_failed_tool_call.load(Ordering::Acquire),
-        ),
-        (before.0 + 2, before.0 + 2),
-    );
+    assert_eq!(progress.inspect(/*call_id*/ None), expected);
+    // A dynamic function named exec is not a Code Mode wrapper. An MCP tool
+    // named wait is not a Code Mode poll. Both invalidate earlier scores.
+    for tool in [
+        ToolName::plain("exec"),
+        ToolName::namespaced("mcp__ordinary", "wait"),
+    ] {
+        fixture.score_tool(tool).await;
+        expected.lag += 1;
+        expected.has_unscored_failure = true;
+        assert_eq!(progress.inspect(/*call_id*/ None), expected);
+    }
     Ok(())
 }
 
@@ -1042,11 +1059,8 @@ impl GuardianFailureFixture {
             .get::<GuardianV2ScoreProgress>()
             .expect("Guardian v2 should track score progress per thread");
         tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
-            while thread_store.get::<SecurityRiskScore>().is_none()
-                || score_progress
-                    .latest_scored_tool_call
-                    .load(Ordering::Acquire)
-                    < score_progress.latest_tool_call.load(Ordering::Acquire)
+            while cached_score(thread_store).is_none()
+                || score_progress.inspect(/*call_id*/ None).lag > 0
             {
                 tokio::task::yield_now().await;
             }
@@ -1062,12 +1076,15 @@ impl GuardianFailureFixture {
 
     async fn score_tool(&self, tool_name: ToolName) {
         let thread_store = self.test.codex.thread_extension_data();
-        thread_store.insert(SecurityRiskScore {
-            scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
-            call_id: None,
-            action: None,
-            sampled_at: None,
-        });
+        set_cached_score(
+            thread_store,
+            SecurityRiskScore {
+                scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+                call_id: None,
+                action: None,
+                sampled_at: None,
+            },
+        );
         let turn_store = ExtensionData::new("turn-1");
         let payload = ToolPayload::Function {
             arguments: r#"{"path":"README.md"}"#.to_owned(),
@@ -1080,6 +1097,7 @@ impl GuardianFailureFixture {
                 turn_id: "turn-1",
                 root_turn_id: None,
                 call_id: "call-1",
+                originating_item_id: None,
                 tool_name: &tool_name,
                 mcp_tool: None,
                 payload: &payload,
@@ -1095,15 +1113,11 @@ impl GuardianFailureFixture {
             .get::<GuardianV2ScoreProgress>()
             .expect("Guardian v2 should track score progress per thread");
         tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
-            while thread_store
-                .get::<SecurityRiskScore>()
+            while cached_score(thread_store)
                 .is_none_or(|score| score.scores.get("action_risk") != Some(&1.0))
-                && score_progress
-                    .latest_failed_tool_call
-                    .load(Ordering::Acquire)
-                    <= score_progress
-                        .latest_scored_tool_call
-                        .load(Ordering::Acquire)
+                && !score_progress
+                    .inspect(/*call_id*/ None)
+                    .has_unscored_failure
             {
                 tokio::task::yield_now().await;
             }
@@ -1182,19 +1196,6 @@ async fn contributor_fails_closed_when_model_configuration_is_invalid() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn contributor_fails_closed_when_action_serialization_fails() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let fixture = GuardianFailureFixture::new().await?;
-    let oversized_tool_name = ToolName::plain(
-        "x".repeat(TruncationPolicy::Tokens(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS).byte_budget()),
-    );
-
-    fixture.score_tool(oversized_tool_name).await;
-    fixture.assert_fails_closed("elevated_risk").await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contributor_fails_closed_when_luna_classification_fails() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1242,6 +1243,9 @@ async fn contributor_renders_policy_inside_a_configured_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let configuration = r#"
+[auto_review]
+extra_policy = "Allow proactive drafting. Keep {{ tenant_policy_config }} and {{ extra_policy }} literal."
+
 [features.guardianv2]
 enabled = true
 classifier_instructions = "Predict future violations.\n# Security Policy\n{{ tenant_policy_config }}\nReturn action_risk."
@@ -1261,10 +1265,13 @@ classifier_instructions = "Predict future violations.\n# Security Policy\n{{ ten
             "type": "message",
             "id": request["input"][1]["id"],
             "role": "developer",
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["guardian.classifier_instructions"],
+            },
             "content": [{
                 "type": "input_text",
                 "text": format!(
-                    "Predict future violations.\n# Security Policy\n{TEST_GUARDIAN_POLICY}\nReturn action_risk.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
+                    "Predict future violations.\n# Security Policy\n{TEST_GUARDIAN_POLICY}\n\nAllow proactive drafting. Keep {{{{ tenant_policy_config }}}} and {{{{ extra_policy }}}} literal.\nReturn action_risk.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
                 ),
             }],
         })
@@ -1300,6 +1307,9 @@ max_classifier_instruction_tokens = 256
             "type": "message",
             "id": request["input"][1]["id"],
             "role": "developer",
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["guardian.classifier_instructions"],
+            },
             "content": [{
                 "type": "input_text",
                 "text": truncate_entry(
@@ -1365,7 +1375,7 @@ max_recent_non_user_entries = 8
             internal_chat_message_metadata_passthrough: None,
         },
     ];
-    let arguments = json!({"body": "x".repeat(4_000)}).to_string();
+    let arguments = json!({"body": "x".repeat(/*n*/ 128)}).to_string();
     let (request, test, registry) = sample_configured_conversation_history(
         conversation_history,
         &arguments,
@@ -1381,6 +1391,9 @@ max_recent_non_user_entries = 8
             "type": "message",
             "id": request["input"][1]["id"],
             "role": "developer",
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["guardian.classifier_instructions"],
+            },
             "content": [{
                 "type": "input_text",
                 "text": format!(
@@ -1410,16 +1423,11 @@ max_recent_non_user_entries = 8
         .as_str()
         .expect("planned action should be a text item");
     assert!(action.len() <= TruncationPolicy::Tokens(/*limit*/ 128).byte_budget());
-    let original_action_bytes = i64::try_from(
-        serde_json::to_string_pretty(&json!({
-            "body": "x".repeat(4_000),
-            "tool": "read_file",
-        }))?
-        .len(),
-    )?;
     let action: serde_json::Value = serde_json::from_str(action)?;
-    let retained_action_bytes = i64::try_from(serde_json::to_string_pretty(&action)?.len())?;
-    assert_eq!(action["tool"], "read_file");
+    assert_eq!(
+        action,
+        json!({"body": "x".repeat(/*n*/ 128), "tool": "read_file"})
+    );
 
     let thread_store = test.codex.thread_extension_data();
     let score_progress = thread_store
@@ -1428,21 +1436,34 @@ max_recent_non_user_entries = 8
     let metrics = thread_store.get::<RecordingMetrics>().unwrap();
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         while score_progress
-            .latest_scored_tool_call
-            .load(Ordering::Acquire)
-            == 0
-            || metrics.0.lock().unwrap().len() < 14
+            .inspect(/*call_id*/ None)
+            .authorization
+            .is_none()
+            || metrics.classification_samples().len() < 10
         {
             tokio::task::yield_now().await;
         }
     })
     .await?;
-    thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 0.65)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    assert!(metrics.0.lock().unwrap().iter().any(|sample| {
+        matches!(sample, RecordedMetric::Histogram(name, value, tags)
+        if name == codex_guardian_context::SECTION_COST_METRIC
+            && *value > 0
+            && tags == &[
+                ("target".to_owned(), "async".to_owned()),
+                ("section".to_owned(), "conversation_transcript".to_owned()),
+                ("measurement".to_owned(), "text_bytes".to_owned()),
+            ])
+    }));
+    set_cached_score(
+        thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 0.65)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
     assert_eq!(
         cached_approval(
             &registry,
@@ -1455,12 +1476,15 @@ max_recent_non_user_entries = 8
         .await,
         None
     );
-    thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 0.55)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    set_cached_score(
+        thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 0.55)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
     assert_eq!(
         cached_approval(
             &registry,
@@ -1474,15 +1498,35 @@ max_recent_non_user_entries = 8
         Some(ReviewDecision::Approved)
     );
 
-    assert_eq!(
-        score_progress
-            .latest_scored_tool_call
-            .load(Ordering::Acquire),
-        1
-    );
-    score_progress
-        .latest_tool_call
-        .store(/*val*/ 3, Ordering::Release);
+    // A small scored call does not cover expanded elicitation arguments or an
+    // intercepted exec with no tool-call ID. Both must still fit the action budget.
+    for (argument, expected) in [
+        ("small".to_owned(), Some(ReviewDecision::Approved)),
+        ("expanded argument ".repeat(/*n*/ 128), None),
+    ] {
+        for action in [
+            json!({
+                "tool": "mcp_tool_call", "server": "example", "id": "call-1",
+                "arguments": {"body": argument},
+                "tool_description": "optional metadata ".repeat(/*n*/ 128),
+            }),
+            json!({"tool": "exec_command", "program": "example", "argv": [argument]}),
+        ] {
+            assert_eq!(
+                cached_approval(
+                    &registry,
+                    thread_store,
+                    &action.to_string(),
+                    /*metrics*/ None
+                )
+                .await,
+                expected
+            );
+        }
+    }
+
+    let first_unscored = observe_unscored_call(&score_progress, thread_store);
+    observe_unscored_call(&score_progress, thread_store);
     assert_eq!(
         cached_approval(
             &registry,
@@ -1498,9 +1542,7 @@ max_recent_non_user_entries = 8
 
     let initial_metrics = thread_store.get::<RecordingMetrics>().unwrap();
     thread_store.insert(RecordingMetrics::default());
-    score_progress
-        .latest_tool_call
-        .store(/*val*/ 4, Ordering::Release);
+    observe_unscored_call(&score_progress, thread_store);
     assert_eq!(
         cached_approval(
             &registry,
@@ -1514,9 +1556,12 @@ max_recent_non_user_entries = 8
         None
     );
 
-    score_progress
-        .latest_scored_tool_call
-        .store(/*val*/ 2, Ordering::Release);
+    seed_cached_score(
+        &score_progress,
+        thread_store,
+        first_unscored,
+        ScoreAuthorization::current(&test.codex).await,
+    );
     assert_eq!(
         cached_approval(
             &registry,
@@ -1530,7 +1575,7 @@ max_recent_non_user_entries = 8
         Some(ReviewDecision::Approved)
     );
 
-    let samples = initial_metrics.0.lock().unwrap();
+    let samples = initial_metrics.classification_samples();
     let classification_duration_ms = match &samples[9] {
         RecordedMetric::Histogram(name, duration_ms, _)
             if name == CLASSIFICATION_DURATION_METRIC =>
@@ -1540,7 +1585,7 @@ max_recent_non_user_entries = 8
         sample => panic!("expected classification duration metric, got {sample:?}"),
     };
     assert_eq!(
-        *samples,
+        samples,
         [
             ("total", 150),
             ("input", 120),
@@ -1574,34 +1619,7 @@ max_recent_non_user_entries = 8
                 classification_duration_ms,
                 vec![("outcome".to_owned(), "success".to_owned())],
             ),
-            RecordedMetric::Counter(
-                CLASSIFICATION_TRUNCATION_METRIC.to_owned(),
-                1,
-                vec![
-                    ("component".to_owned(), "action".to_owned()),
-                    ("disposition".to_owned(), "truncated".to_owned()),
-                ],
-            ),
         ])
-        .chain(
-            [
-                ("original", original_action_bytes),
-                ("retained", retained_action_bytes),
-                ("omitted", original_action_bytes - retained_action_bytes),
-            ]
-            .into_iter()
-            .map(|(measurement, bytes)| {
-                RecordedMetric::Histogram(
-                    CLASSIFICATION_TRUNCATION_BYTES_METRIC.to_owned(),
-                    bytes,
-                    vec![
-                        ("component".to_owned(), "action".to_owned()),
-                        ("disposition".to_owned(), "truncated".to_owned()),
-                        ("measurement".to_owned(), measurement.to_owned()),
-                    ],
-                )
-            }),
-        )
         .chain([
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
             fast_decision_metric("deferred", "elevated_risk"),
@@ -1637,6 +1655,8 @@ async fn contributor_includes_transcript_images_by_default() -> Result<()> {
 
     let user_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGPgEpEDAABoAD1UCKP3AAAAAElFTkSuQmCC";
     let tool_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGOQE+ECAACQAD304kFaAAAAAElFTkSuQmCC";
+    let user_file_id = "file_user";
+    let tool_file_id = "file_tool";
     let history = vec![
         ResponseItem::Message {
             id: None,
@@ -1646,7 +1666,15 @@ async fn contributor_includes_transcript_images_by_default() -> Result<()> {
                     text: "Review what is shown on screen.".to_owned(),
                 },
                 ContentItem::InputImage {
-                    image_url: user_image.to_owned(),
+                    image: ImageReference::Inline {
+                        image_url: user_image.to_owned(),
+                    },
+                    detail: Some(ImageDetail::High),
+                },
+                ContentItem::InputImage {
+                    image: ImageReference::File {
+                        file_id: user_file_id.to_owned(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
             ],
@@ -1672,7 +1700,15 @@ async fn contributor_includes_transcript_images_by_default() -> Result<()> {
                     text: "Screenshot captured.".to_owned(),
                 },
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: tool_image.to_owned(),
+                    image: ImageReference::Inline {
+                        image_url: tool_image.to_owned(),
+                    },
+                    detail: Some(ImageDetail::High),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image: ImageReference::File {
+                        file_id: tool_file_id.to_owned(),
+                    },
                     detail: Some(ImageDetail::High),
                 },
             ]),
@@ -1696,7 +1732,7 @@ enabled = true
         .expect("Luna user content should be an array");
 
     assert_eq!(
-        content[content.len() - 2..],
+        content[content.len() - 4..],
         [
             json!({
                 "type": "input_image",
@@ -1704,7 +1740,15 @@ enabled = true
             }),
             json!({
                 "type": "input_image",
+                "file_id": user_file_id,
+            }),
+            json!({
+                "type": "input_image",
                 "image_url": tool_image,
+            }),
+            json!({
+                "type": "input_image",
+                "file_id": tool_file_id,
             }),
         ]
     );
@@ -1754,7 +1798,7 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
             internal_chat_message_metadata_passthrough: None,
         },
     ];
-    let arguments = json!({"body": "x".repeat(4_000)}).to_string();
+    let arguments = json!({"body": "x".repeat(/*n*/ 128)}).to_string();
     let local_config = "[features.guardianv2]\nenabled = true\nreview_threshold = 0.70\n";
     let (request, test, registry) = sample_configured_conversation_history(
         conversation_history,
@@ -1771,6 +1815,9 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
             "type": "message",
             "id": request["input"][1]["id"],
             "role": "developer",
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["guardian.classifier_instructions"],
+            },
             "content": [{
                 "type": "input_text",
                 "text": format!(
@@ -1810,7 +1857,7 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
     assert!(thread_store.get::<NodeReplReviewEvidence>().is_some());
     let score = tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         loop {
-            if let Some(score) = thread_store.get::<SecurityRiskScore>() {
+            if let Some(score) = cached_score(thread_store) {
                 return score;
             }
             tokio::task::yield_now().await;
@@ -1821,12 +1868,15 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
         score.action,
         Some(serde_json::from_str::<serde_json::Value>(action)?)
     );
-    thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 0.65)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    set_cached_score(
+        thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 0.65)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
     assert_eq!(
         cached_approval(
             &registry,
@@ -1925,6 +1975,7 @@ async fn assert_luna_pool_context(thread_context_enabled: bool) -> Result<()> {
             "parent_turn_id": "turn-1",
             "root_turn_id": "root-turn",
             "thread_source": "guardian_classifier",
+            "turn_trigger": "guardian_classifier",
         })
     );
     assert_eq!(request["client_metadata"]["x-openai-subagent"], "guardian");
@@ -1943,9 +1994,12 @@ async fn assert_luna_pool_context(thread_context_enabled: bool) -> Result<()> {
             "type": "message",
             "id": request["input"][1]["id"],
             "role": "developer",
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["guardian.classifier_instructions"],
+            },
             "content": [{
                 "type": "input_text",
-                "text": crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS.replace(
+                "text": ResolvedModelMessages::bundled().guardian_classifier_instructions().replace(
                     "{{ tenant_policy_config }}",
                     TEST_GUARDIAN_POLICY,
                 ),
@@ -1983,7 +2037,7 @@ async fn assert_luna_pool_context(thread_context_enabled: bool) -> Result<()> {
     assert_eq!(request["input"][2]["content"], expected_content);
     let score = tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         loop {
-            if let Some(score) = thread_store.get::<SecurityRiskScore>() {
+            if let Some(score) = cached_score(thread_store) {
                 return score;
             }
             tokio::task::yield_now().await;
@@ -1991,7 +2045,7 @@ async fn assert_luna_pool_context(thread_context_enabled: bool) -> Result<()> {
     })
     .await?;
     assert_eq!(
-        score.as_ref(),
+        &score,
         &SecurityRiskScore {
             scores: BTreeMap::from([("action_risk".to_string(), 1.0)]),
             call_id: Some("call-1".to_owned()),
@@ -2021,12 +2075,15 @@ async fn assert_luna_pool_context(thread_context_enabled: bool) -> Result<()> {
         .await,
         None
     );
-    thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_string(), 0.5)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    set_cached_score(
+        thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_string(), 0.5)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
     assert_eq!(
         cached_approval(
             &registry,
@@ -2038,12 +2095,15 @@ async fn assert_luna_pool_context(thread_context_enabled: bool) -> Result<()> {
         None
     );
 
-    thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_string(), 0.49)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    set_cached_score(
+        thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_string(), 0.49)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
     assert_eq!(
         cached_approval(
             &registry,
@@ -2056,12 +2116,15 @@ async fn assert_luna_pool_context(thread_context_enabled: bool) -> Result<()> {
     );
 
     let disabled_thread_store = ExtensionData::new("disabled-thread");
-    disabled_thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_string(), 0.25)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    set_cached_score(
+        &disabled_thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_string(), 0.25)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
     assert_eq!(
         cached_approval(
             &registry,
@@ -2194,7 +2257,7 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
         .expect("Guardian v2 should have initialized")
         .as_ref()
         .clone();
-    guardian_config.policy = GuardianPolicy::from_legacy(Some(&GuardianV2ReviewScopeConfigToml {
+    guardian_config.policy = legacy_loader(Some(&GuardianV2ReviewScopeConfigToml {
         computer_use_only: Some(false),
         sandboxed_exec_commands: Some(false),
     }));
@@ -2207,17 +2270,22 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
         .await;
     model_info.slug = "protected-model".to_owned();
     thread_store.insert(model_info);
-    let authorization = super::ScoreAuthorization::current(&test.codex).await;
+    // A late prewarm preview must leave the active model's review requirements intact.
+    let _ = codex_core::guardian_review::prepare_review_prewarm(&test.codex).await?;
+    let authorization = ScoreAuthorization::current(&test.codex).await;
     let progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should track score progress per thread");
-    *progress.authorization.lock().unwrap() = Some(authorization);
-    thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    seed_cached_score(&progress, thread_store, /*index*/ 0, authorization);
+    set_cached_score(
+        thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
     assert_eq!(
         cached_approval(
             &registry,
@@ -2248,6 +2316,7 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
             turn_id: "turn-1",
             root_turn_id: None,
             call_id: "protected.md",
+            originating_item_id: None,
             tool_name: &tool_name,
             mcp_tool: None,
             payload: &payload,
@@ -2257,7 +2326,7 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
         .await;
 
     assert!(
-        thread_store.get::<SecurityRiskScore>().is_none(),
+        cached_score(thread_store).is_none(),
         "protected models must not receive Guardian v2 fail-closed scores"
     );
     assert!(
@@ -2283,17 +2352,20 @@ async fn cached_score_survives_compaction_and_internal_context_but_not_user_inpu
     let thread_store = test.codex.thread_extension_data();
     let progress = thread_store.get::<GuardianV2ScoreProgress>().unwrap();
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
-        while progress.latest_scored_tool_call.load(Ordering::Acquire) == 0 {
+        while progress.inspect(/*call_id*/ None).authorization.is_none() {
             tokio::task::yield_now().await;
         }
     })
     .await?;
-    thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    set_cached_score(
+        thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
 
     test.codex
         .inject_response_items(vec![ContextualUserFragment::into(
@@ -2308,6 +2380,8 @@ async fn cached_score_survives_compaction_and_internal_context_but_not_user_inpu
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    // TurnComplete precedes active-turn cleanup; wait before injecting user input.
+    ThreadIdle::wait(&test.codex).await;
     assert_eq!(
         cached_approval(
             &registry,
@@ -2362,12 +2436,15 @@ async fn assert_compaction_approval_policy(thread_context_enabled: bool) -> Resu
     ))
     .await?;
     let thread_store = fixture.test.codex.thread_extension_data();
-    thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 0.0)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    set_cached_score(
+        thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 0.0)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
     assert_eq!(
         cached_approval(
             &fixture.registry,
@@ -2401,13 +2478,16 @@ async fn assert_compaction_approval_policy(thread_context_enabled: bool) -> Resu
         fixture.test.codex.guardian_authorization_version().await,
         authorization
     );
-    let score_authorization = super::ScoreAuthorization::current(&fixture.test.codex).await;
-    *thread_store
+    let score_authorization = ScoreAuthorization::current(&fixture.test.codex).await;
+    let progress = thread_store
         .get::<GuardianV2ScoreProgress>()
-        .expect("score progress")
-        .authorization
-        .lock()
-        .unwrap() = Some(score_authorization);
+        .expect("score progress");
+    seed_cached_score(
+        &progress,
+        thread_store,
+        /*index*/ 1,
+        score_authorization,
+    );
     // No new sample runs: only the enabled path rejects cached and initial-call approvals.
     for (computer_use_only, prompt) in [
         (false, "review action"),
@@ -2420,16 +2500,14 @@ async fn assert_compaction_approval_policy(thread_context_enabled: bool) -> Resu
             .get::<GuardianV2Config>()
             .expect("Guardian configuration"))
         .clone();
-        config.policy = GuardianPolicy::from_legacy(Some(&GuardianV2ReviewScopeConfigToml {
+        config.policy = legacy_loader(Some(&GuardianV2ReviewScopeConfigToml {
             computer_use_only: Some(computer_use_only),
             sandboxed_exec_commands: Some(true),
         }));
         thread_store.insert(config);
-        thread_store
-            .get::<GuardianV2ScoreProgress>()
-            .expect("score progress")
-            .js_executions
-            .store(/*val*/ 1, Ordering::Release);
+        if computer_use_only {
+            progress.observe_js_execution();
+        }
         assert_eq!(
             cached_approval(
                 &fixture.registry,
@@ -2463,20 +2541,23 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
         .expect("Guardian v2 should track score progress per thread");
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         while score_progress
-            .latest_scored_tool_call
-            .load(Ordering::Acquire)
-            == 0
+            .inspect(/*call_id*/ None)
+            .authorization
+            .is_none()
         {
             tokio::task::yield_now().await;
         }
     })
     .await?;
-    thread_store.insert(SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
-        call_id: None,
-        action: None,
-        sampled_at: None,
-    });
+    set_cached_score(
+        thread_store,
+        SecurityRiskScore {
+            scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+            call_id: None,
+            action: None,
+            sampled_at: None,
+        },
+    );
     assert_eq!(
         cached_approval(
             &registry,
@@ -2505,6 +2586,7 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
             turn_id: "turn-1",
             root_turn_id: None,
             call_id: "missing.md",
+            originating_item_id: None,
             tool_name: &tool_name,
             mcp_tool: None,
             payload: &payload,
@@ -2513,7 +2595,7 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
         })
         .await;
 
-    assert_eq!(score_progress.latest_tool_call.load(Ordering::Acquire), 2);
+    assert_eq!(score_progress.inspect(/*call_id*/ None).lag, 1);
     assert_eq!(
         cached_approval(
             &registry,
@@ -2545,9 +2627,12 @@ async fn contributor_uses_catalog_policy_without_a_configured_override() -> Resu
             "type": "message",
             "id": request["input"][1]["id"],
             "role": "developer",
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["guardian.classifier_instructions"],
+            },
             "content": [{
                 "type": "input_text",
-                "text": crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS.replace(
+                "text": ResolvedModelMessages::bundled().guardian_classifier_instructions().replace(
                     "{{ tenant_policy_config }}",
                     TEST_CATALOG_GUARDIAN_POLICY,
                 ),
@@ -2588,9 +2673,12 @@ async fn contributor_preserves_uncapped_classifier_instructions() -> Result<()> 
             "type": "message",
             "id": request["input"][1]["id"],
             "role": "developer",
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["guardian.classifier_instructions"],
+            },
             "content": [{
                 "type": "input_text",
-                "text": crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
+                "text": ResolvedModelMessages::bundled().guardian_classifier_instructions()
                     .replace("{{ tenant_policy_config }}", &guardian_policy),
             }],
         })
@@ -2619,7 +2707,8 @@ async fn contributor_bounds_configured_policy_in_luna_developer_instructions() -
         .as_str()
         .expect("Luna request should contain developer instructions");
 
-    let (prefix, suffix) = crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
+    let (prefix, suffix) = ResolvedModelMessages::bundled()
+        .guardian_classifier_instructions()
         .split_once("{{ tenant_policy_config }}")
         .expect("default classifier prompt should contain the policy placeholder");
     assert!(instructions.starts_with(&format!("{prefix}Reject unsafe uploads.")));
@@ -2810,9 +2899,12 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
         .filter_map(|entry| entry["text"].as_str())
         .collect::<Vec<_>>();
 
-    assert!(entries.iter().any(|entry| entry.contains("user turn 0:")));
-    assert!(entries.iter().any(|entry| entry.contains("user turn 7:")));
-    assert!(!entries.iter().any(|entry| entry.contains("user turn 1:")));
+    for index in 0..8 {
+        assert!(entries.iter().any(|entry| entry.contains(&format!(
+            "user turn {index}: {}",
+            "authorization ".repeat(/*n*/ 1_000)
+        ))));
+    }
     assert!(
         entries
             .iter()
@@ -2861,6 +2953,9 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
 
     for entry in entries.into_iter().filter(|entry| entry.starts_with('[')) {
         let (label, text) = entry.split_once(": ").expect("numbered transcript entry");
+        if label.ends_with(" user") {
+            continue;
+        }
         let max_tokens = if label.contains("tool ") {
             MAX_TOOL_ENTRY_TOKENS
         } else {
@@ -2986,6 +3081,7 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
         retained,
         current: conversation_history,
         compaction_model_hash: parent_model.comp_hash.clone(),
+        retained_context: thread_context_enabled.then(codex_history::RetainedContext::default),
     };
     thread_store.insert(parent_model);
 
@@ -2997,6 +3093,7 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
             turn_id: "turn-1",
             root_turn_id: None,
             call_id: "call-1",
+            originating_item_id: None,
             tool_name: &tool_name,
             mcp_tool: None,
             payload: &tool_payload,
@@ -3017,7 +3114,8 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
     assert_eq!(request["input"][0]["type"], "additional_tools");
     let developer_message = &request["input"][1];
     assert_eq!(developer_message["role"], "developer");
-    let (prefix, _) = crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
+    let (prefix, _) = ResolvedModelMessages::bundled()
+        .guardian_classifier_instructions()
         .split_once("{{ tenant_policy_config }}")
         .expect("default classifier prompt should contain the policy placeholder");
     assert!(
@@ -3038,7 +3136,7 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
 
     let previous_score = tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         loop {
-            if let Some(score) = thread_store.get::<SecurityRiskScore>() {
+            if let Some(score) = cached_score(thread_store) {
                 return score;
             }
             tokio::task::yield_now().await;
@@ -3072,12 +3170,15 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
             turn_id: "turn-1",
             root_turn_id: None,
             call_id: "call-2",
+            originating_item_id: None,
             tool_name: &tool_name,
             mcp_tool: None,
             payload: &tool_payload,
             conversation_history: Arc::new(TestRetainedHistory {
                 current: TestConversationHistory(vec![latest_compaction, oversized_compaction]),
                 retained: Vec::new(),
+                retained_context: thread_context_enabled
+                    .then(codex_history::RetainedContext::default),
                 compaction_model_hash: thread_store
                     .get::<ModelInfo>()
                     .and_then(|model| model.comp_hash.clone()),
@@ -3086,11 +3187,10 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
         })
         .await;
 
-    let fail_closed_score = thread_store
-        .get::<SecurityRiskScore>()
+    let fail_closed_score = cached_score(thread_store)
         .expect("an oversized compaction should immediately receive the maximum risk score");
     assert_eq!(
-        fail_closed_score.as_ref(),
+        &fail_closed_score,
         &SecurityRiskScore {
             scores: BTreeMap::from([("action_risk".to_owned(), 1.0)]),
             call_id: None,
@@ -3162,7 +3262,7 @@ async fn legacy_contributor_can_disable_parent_compaction_reuse() -> Result<()> 
     let thread_store = test.codex.thread_extension_data();
     let score = tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         loop {
-            if let Some(score) = thread_store.get::<SecurityRiskScore>() {
+            if let Some(score) = cached_score(thread_store) {
                 return score;
             }
             tokio::task::yield_now().await;
@@ -3174,79 +3274,120 @@ async fn legacy_contributor_can_disable_parent_compaction_reuse() -> Result<()> 
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn contributor_bounds_oversized_actions_and_fairly_truncates_nested_fields() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let arguments = json!({
-        "attachments": [{
-            "content": "🦀\"\\\n".repeat(20_000),
-            "name": "financials.csv",
-        }],
-        "call_id": "untrusted-call",
-        "metadata": { "reason": "b".repeat(100_000) },
-        "path": "a".repeat(100_000),
-        "recipient": "finance@example.com",
-        "tool": "untrusted-tool",
-    })
-    .to_string();
-    let (request, _test, _registry) =
-        sample_conversation_history(Vec::new(), &arguments, Some(TEST_GUARDIAN_POLICY)).await?;
-    let content = request["input"][2]["content"]
-        .as_array()
-        .expect("Luna user content should contain separate text items");
-    let action_text = content[content.len() - 2]["text"]
-        .as_str()
-        .expect("the current action should be an input text item");
-    let action = serde_json::from_str::<serde_json::Value>(action_text)?;
-    let max_action_bytes =
-        TruncationPolicy::Tokens(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS).byte_budget();
-    assert!(action_text.ends_with('\n'));
-    assert!(
-        action_text.len() <= max_action_bytes,
-        "the complete model-visible action must remain bounded"
-    );
-    assert!(
-        action_text.len() >= max_action_bytes * 9 / 10,
-        "water-filling should use the available action budget"
-    );
-    assert_eq!(action["tool"], "read_file");
-    assert_eq!(action["call_id"], "untrusted-call");
-    assert_eq!(action["recipient"], "finance@example.com");
-    assert_eq!(action["attachments"][0]["name"], "financials.csv");
-    assert!(action.get("arguments_preview").is_none());
-    assert!(action.get("truncated").is_none());
-    let retained_values = [
-        &action["path"],
-        &action["metadata"]["reason"],
-        &action["attachments"][0]["content"],
-    ]
-    .map(|value| {
-        value
-            .as_str()
-            .expect("action string field should remain present")
-    });
-    for text in retained_values {
-        assert!(text.contains("<truncated omitted_approx_tokens=\""));
-    }
-    let smallest_retained = retained_values.iter().map(|text| text.len()).min().unwrap();
-    let largest_retained = retained_values.iter().map(|text| text.len()).max().unwrap();
-    assert!(
-        largest_retained.saturating_sub(smallest_retained) <= 16,
-        "long nested strings should receive comparable shares of the action budget"
-    );
-
-    Ok(())
-}
-
 struct CacheMiss;
 impl codex_extension_api::SynchronousApprovalReviewer for CacheMiss {
     fn review(
         &self,
         _reason: codex_protocol::approvals::GuardianReviewReason,
-    ) -> codex_extension_api::ExtensionFuture<'_, ReviewDecision> {
-        Box::pin(async { ReviewDecision::denied("cache miss") })
+    ) -> codex_extension_api::ExtensionFuture<'_, Option<ReviewDecision>> {
+        Box::pin(async { Some(ReviewDecision::denied("cache miss")) })
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cached_approval_discounts_only_its_own_unscored_wrapper() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let fixture = GuardianFailureFixture::new().await?;
+    let store = fixture.test.codex.thread_extension_data();
+    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let mut score = cached_score(store).unwrap();
+    score.scores.insert("action_risk".to_owned(), 0.0);
+    set_cached_score(store, score);
+    // Hold the cached score fixed while advancing real tool-start metadata.
+    let start = |call_id: &str, origin: &ResponseItemId, source: ToolCallSource| {
+        let tool_name = match source {
+            ToolCallSource::Direct => ToolName::plain("exec"),
+            ToolCallSource::CodeMode { .. } => ToolName::namespaced("mcp__example", "read"),
+        };
+        let payload = match source {
+            ToolCallSource::Direct => ToolPayload::Custom {
+                input: String::new(),
+            },
+            ToolCallSource::CodeMode { .. } => ToolPayload::Function {
+                arguments: "{}".to_owned(),
+            },
+        };
+        progress.observe(&ToolStartInput {
+            session_store: &fixture.session_store,
+            thread_store: store,
+            turn_store: &fixture.session_store,
+            turn_id: "turn",
+            root_turn_id: None,
+            call_id,
+            originating_item_id: Some(origin),
+            tool_name: &tool_name,
+            mcp_tool: None,
+            payload: &payload,
+            conversation_history: Arc::new(TestConversationHistory(Vec::new())),
+            source,
+        })
+    };
+    let approve = async |call_id: &str| {
+        cached_approval(
+            &fixture.registry,
+            store,
+            &json!({"tool": "mcp_tool_call", "server": "example", "id": call_id}).to_string(),
+            /*metrics*/ None,
+        )
+        .await
+    };
+    let nested = ToolCallSource::CodeMode {
+        cell_id: "cell".to_owned(),
+        runtime_tool_call_id: "nested".to_owned(),
+    };
+    let origin = ResponseItemId::from_server("wrapper".to_owned());
+    let wrapper = start("wrapper", &origin, ToolCallSource::Direct);
+    for (call_id, expected) in [
+        ("first", Some(ReviewDecision::Approved)),
+        ("second", Some(ReviewDecision::Approved)),
+        ("third", None),
+    ] {
+        start(call_id, &origin, nested.clone());
+        assert_eq!(approve(call_id).await, expected);
+    }
+    // A score covering the wrapper must not receive another discount.
+    seed_cached_score(
+        &progress,
+        store,
+        wrapper,
+        ScoreAuthorization::current(&fixture.test.codex).await,
+    );
+    assert_eq!(approve("third").await, None);
+    seed_cached_score(
+        &progress,
+        store,
+        wrapper + 3,
+        ScoreAuthorization::current(&fixture.test.codex).await,
+    );
+    let output = start("output-only", &origin, ToolCallSource::Direct);
+    let other = ResponseItemId::from_server("other-wrapper".to_owned());
+    start("other-wrapper", &other, ToolCallSource::Direct);
+    start("other-first", &other, nested.clone());
+    assert_eq!(approve("other-first").await, Some(ReviewDecision::Approved));
+    assert_eq!(approve("unknown").await, None);
+    start("other-second", &other, nested.clone());
+    assert_eq!(approve("other-second").await, None);
+    // Covering a different wrapper still leaves this call's parent in its lag.
+    seed_cached_score(
+        &progress,
+        store,
+        output,
+        ScoreAuthorization::current(&fixture.test.codex).await,
+    );
+    assert_eq!(
+        approve("other-second").await,
+        Some(ReviewDecision::Approved)
+    );
+    // Evicted provenance falls back to the full lag.
+    for _ in 0..300 {
+        start("output-only", &origin, ToolCallSource::Direct);
+    }
+    start("late-child", &other, nested);
+    assert_eq!(
+        progress.inspect(Some("late-child")).lag,
+        progress.inspect(/*call_id*/ None).lag
+    );
+    Ok(())
 }
 
 /// Exercises decision routing; a fresh review is observed as a cache miss.
@@ -3259,7 +3400,10 @@ async fn cached_approval(
     let action = serde_json::from_str(action).unwrap_or(serde_json::Value::Null);
     let category = match review_scope(&action) {
         Some(category) => category,
-        None if store.get::<super::GuardianV2Config>()?.policy.other_tools
+        None if store
+            .get::<super::GuardianV2Config>()?
+            .policy_for_model(store.get::<ModelInfo>().as_deref())
+            .other_tools
             == codex_protocol::openai_models::GuardianReviewMode::Adaptive =>
         {
             codex_protocol::openai_models::GuardianScope::Shell
@@ -3275,6 +3419,7 @@ async fn cached_approval(
     };
     let input = codex_extension_api::ApprovalDecisionInput {
         approval_id: "cache-probe",
+        tool_call_id: action.get("id").and_then(serde_json::Value::as_str),
         action: &action,
         thread_id: codex_protocol::ThreadId::from_string(store.level_id()).unwrap(),
         thread_store: store,
@@ -3302,4 +3447,92 @@ fn review_scope(action: &serde_json::Value) -> Option<GuardianScope> {
         "network_access" => Some(GuardianScope::Network),
         tool => GuardianScope::for_tool(&ToolName::plain(tool)),
     }
+}
+
+#[path = "budget_tests.rs"]
+mod budget;
+
+fn seed_cached_score(
+    progress: &GuardianV2ScoreProgress,
+    store: &ExtensionData,
+    index: usize,
+    authorization: ScoreAuthorization,
+) {
+    let mut score = cached_score(store).unwrap_or(SecurityRiskScore {
+        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+        call_id: None,
+        action: None,
+        sampled_at: None,
+    });
+    score.sampled_at = Some(std::time::SystemTime::now().into());
+    assert!(progress.publish(score, authorization, index));
+}
+
+fn observe_unscored_call(progress: &GuardianV2ScoreProgress, store: &ExtensionData) -> usize {
+    progress.observe(&ToolStartInput {
+        session_store: store,
+        thread_store: store,
+        turn_store: store,
+        turn_id: "turn-1",
+        root_turn_id: None,
+        call_id: "unscored",
+        originating_item_id: None,
+        tool_name: &ToolName::plain("read_file"),
+        mcp_tool: None,
+        payload: &ToolPayload::Function {
+            arguments: "{}".to_owned(),
+        },
+        conversation_history: Arc::new(TestConversationHistory(Vec::new())),
+        source: ToolCallSource::Direct,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cached_score_publication_rejects_delayed_results_without_changing_coverage() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    let fixture = GuardianFailureFixture::new().await?;
+    let store = fixture.test.codex.thread_extension_data();
+    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let authorization = ScoreAuthorization::current(&fixture.test.codex).await;
+    seed_cached_score(&progress, store, /*index*/ 1, authorization.clone());
+    let score = cached_score(store).unwrap();
+    observe_unscored_call(&progress, store);
+    observe_unscored_call(&progress, store);
+    let cached = progress.inspect(/*call_id*/ None);
+    let mut outdated_authorization = authorization.clone();
+    outdated_authorization.local.user_message_revision += 1;
+    // Even a result for a higher call index cannot overwrite an equally old sample.
+    assert!(!progress.publish(score.clone(), outdated_authorization, /*index*/ 2));
+    assert_eq!(progress.inspect(/*call_id*/ None), cached);
+    assert_eq!(cached_score(store).as_ref(), Some(&score));
+
+    let failed_at = std::time::SystemTime::now() + Duration::from_secs(1);
+    progress.fail_closed(failed_at);
+    let mut delayed_score = score;
+    delayed_score.sampled_at = Some(failed_at.into());
+    assert!(!progress.publish(
+        delayed_score.clone(),
+        authorization.clone(),
+        /*index*/ 2
+    ));
+
+    delayed_score.sampled_at = Some((failed_at + Duration::from_secs(1)).into());
+    delayed_score.scores.insert("action_risk".to_owned(), 0.0);
+    progress.mark_oversized("active-overflow", /*index*/ 2);
+    assert!(progress.publish(
+        delayed_score.clone(),
+        authorization.clone(),
+        /*index*/ 3
+    ));
+    assert_eq!(cached_score(store).as_ref(), Some(&delayed_score));
+    let mut expected = cached;
+    expected.lag = 0;
+    expected.action_risk = Some(0.0);
+    expected.authorization = Some(authorization);
+    assert_eq!(progress.inspect(/*call_id*/ None), expected);
+    assert!(progress.inspect(Some("active-overflow")).oversized);
+    progress.finish("active-overflow");
+    assert!(!progress.inspect(Some("active-overflow")).oversized);
+    Ok(())
 }

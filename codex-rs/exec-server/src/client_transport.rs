@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::OwnedSemaphorePermit;
@@ -50,6 +51,7 @@ use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::harness_connection_from_websocket;
 use crate::trace_context::current_rendezvous_headers;
 
+const MAX_STDIO_STDERR_LOG_LINE_LEN: u64 = 8 * 1024;
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 const INITIAL_REGISTRY_MAX_RETRIES: u32 = 4;
 const INITIAL_REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
@@ -174,6 +176,7 @@ pub(crate) struct ReconnectAttempt {
 }
 
 struct OpenNoiseRendezvousConnection {
+    executor_registration_id: String,
     connection: JsonRpcConnection,
     options: ExecServerClientConnectOptions,
     handshake_ready: tokio::sync::oneshot::Receiver<()>,
@@ -254,7 +257,7 @@ pub(crate) enum ExecServerReconnectStrategy {
         http_headers: HeaderMap,
     },
     NoiseRendezvous {
-        // The executor that created the session, not the latest recovery lookup.
+        // Registration can renew; recovery still pins the executor's Noise identity.
         executor_public_key: crate::NoiseChannelPublicKey,
         provider: Arc<dyn NoiseRendezvousConnectProvider>,
         identity: NoiseChannelIdentity,
@@ -280,7 +283,7 @@ impl ExecServerReconnectStrategy {
                 Ok(ReconnectAttempt::new(connection, args.into()))
             }
             Self::NoiseRendezvous {
-                executor_public_key: _,
+                executor_public_key,
                 provider,
                 identity,
                 client_name,
@@ -289,6 +292,13 @@ impl ExecServerReconnectStrategy {
                 http_client_factory,
             } => {
                 let bundle = provider.connect_bundle(identity.public_key()).await?;
+                if &bundle.executor_public_key != executor_public_key {
+                    return Err(ExecServerError::Protocol(
+                        "executor key changed during session recovery".to_string(),
+                    ));
+                }
+                // An expired rendezvous URL can make the same executor register again.
+                // Initialization must still resume the original session on that executor.
                 let opened = ExecServerClient::open_noise_rendezvous_connection(
                     NoiseRendezvousConnectArgs {
                         bundle,
@@ -660,13 +670,14 @@ impl ExecServerClient {
             NoiseHarnessConnectionArgs {
                 connection_label,
                 environment_id,
-                executor_registration_id,
+                executor_registration_id: executor_registration_id.clone(),
                 identity: harness_identity,
                 responder_public_key: executor_public_key,
                 harness_key_authorization,
             },
         );
         Ok(OpenNoiseRendezvousConnection {
+            executor_registration_id,
             connection: connection.connection,
             options: ExecServerClientConnectOptions {
                 client_name,
@@ -710,6 +721,7 @@ impl ExecServerClient {
         // startup parent while making its two child operations visible.
         let initialize_timeout = connection.options.initialize_timeout;
         let noise_context = NoiseInitializeContext {
+            executor_registration_id: connection.executor_registration_id,
             span: tracing::info_span!(
                 "codex.exec_server.request",
                 otel.kind = "client",
@@ -763,11 +775,22 @@ impl ExecServerClient {
         })?;
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
+                let mut reader = BufReader::new(stderr);
+                let mut line = Vec::new();
                 loop {
-                    match lines.next_line().await {
-                        Ok(Some(line)) => debug!("exec-server stdio stderr: {line}"),
-                        Ok(None) => break,
+                    line.clear();
+                    match (&mut reader)
+                        .take(MAX_STDIO_STDERR_LOG_LINE_LEN)
+                        .read_until(b'\n', &mut line)
+                        .await
+                    {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            let line = line.strip_suffix(b"\n").unwrap_or(&line);
+                            let line = line.strip_suffix(b"\r").unwrap_or(line);
+                            let line = String::from_utf8_lossy(line);
+                            debug!("exec-server stdio stderr: {line}");
+                        }
                         Err(err) => {
                             warn!("failed to read exec-server stdio stderr: {err}");
                             break;
@@ -778,8 +801,12 @@ impl ExecServerClient {
         }
 
         Self::connect(
-            JsonRpcConnection::from_stdio(stdout, stdin, "exec-server stdio command".to_string())
-                .with_child_process(child),
+            JsonRpcConnection::client_from_stdio(
+                stdout,
+                stdin,
+                "exec-server stdio command".to_string(),
+            )
+            .with_child_process(child),
             args.into(),
         )
         .await

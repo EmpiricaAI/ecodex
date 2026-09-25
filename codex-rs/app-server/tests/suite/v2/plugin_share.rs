@@ -164,6 +164,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
         PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
+                    extensions: None,
                     id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: Some("plugins_123".to_string()),
                     version: Some("0.1.0".to_string()),
@@ -389,7 +390,8 @@ plugin_sharing = false
             .received_requests()
             .await
             .expect("wiremock should record requests")
-            .is_empty()
+            .iter()
+            .all(|request| request.url.path() == "/backend-api/wham/accounts/check")
     );
     Ok(())
 }
@@ -584,6 +586,7 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
         PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
+                    extensions: None,
                     id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: Some("plugins_123".to_string()),
                     version: Some("0.1.0".to_string()),
@@ -1247,6 +1250,7 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
         PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
+                    extensions: None,
                     id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: Some("plugins_123".to_string()),
                     version: Some("0.1.0".to_string()),

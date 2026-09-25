@@ -92,6 +92,8 @@ struct RawPluginManifest {
     writable_roots: Option<Vec<String>>,
     #[serde(default)]
     interface: Option<RawPluginManifestInterface>,
+    #[serde(default)]
+    extensions: JsonValue,
 }
 
 #[derive(Deserialize)]
@@ -331,6 +333,7 @@ fn resolve_raw_plugin_manifest(
         statusline,
         writable_roots,
         interface,
+        extensions,
     } = raw;
     let name = plugin_root
         .basename()
@@ -423,6 +426,10 @@ fn resolve_raw_plugin_manifest(
         keywords,
         paths: codex_plugin::manifest::PluginManifestPaths {
             skills: resolve_manifest_paths(plugin_root, "skills", skills.as_ref()),
+            onboarding_skill: resolve_openai_onboarding_skill(
+                plugin_root,
+                extensions.get("com.openai"),
+            ),
             mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
             apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
             hooks: resolve_manifest_hooks(plugin_root, hooks),
@@ -592,6 +599,22 @@ fn resolve_default_prompt_str(manifest_path: &str, field: &str, prompt: &str) ->
 
 fn warn_invalid_default_prompt(manifest_path: &str, field: &str, message: &str) {
     tracing::warn!(path = %manifest_path, "ignoring {field}: {message}");
+}
+
+fn resolve_openai_onboarding_skill(
+    plugin_root: &PathUri,
+    extension: Option<&JsonValue>,
+) -> Option<PathUri> {
+    let path = extension
+        .and_then(|extension| extension.get("onboardingSkill"))
+        .and_then(JsonValue::as_str)?;
+    // This extension accepts relative paths with or without the legacy `./` prefix.
+    let path = format!("./{}", path.strip_prefix("./").unwrap_or(path));
+    resolve_manifest_path(
+        plugin_root,
+        "extensions[\"com.openai\"].onboardingSkill",
+        Some(&path),
+    )
 }
 
 fn json_value_type(value: &JsonValue) -> &'static str {
@@ -777,7 +800,6 @@ mod tests {
     use super::load_plugin_manifest;
     use codex_exec_server::EnvironmentManager;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
-    use codex_plugin::PluginProvider;
     use codex_plugin::ResolvedPlugin;
     use codex_plugin::manifest::PluginManifest as GenericPluginManifest;
     use codex_plugin::manifest::PluginManifestHooks;
@@ -1282,7 +1304,7 @@ mod tests {
         };
 
         let executor_plugin = provider
-            .resolve(&selected_root)
+            .resolve_bound(&selected_root)
             .await
             .expect("resolve executor plugin")
             .expect("plugin descriptor");
@@ -1303,7 +1325,7 @@ mod tests {
         )
         .expect("valid expected descriptor");
 
-        assert_eq!(executor_plugin, expected_plugin);
+        assert_eq!(executor_plugin.plugin(), &expected_plugin);
     }
 
     #[test]
@@ -1338,6 +1360,7 @@ mod tests {
                 description: None,
                 keywords: Vec::new(),
                 paths: PluginManifestPaths {
+                    onboarding_skill: None,
                     skills: vec![plugin_root.join("skills").expect("skills URI")],
                     mcp_servers: Some(PluginManifestMcpServers::Path(
                         plugin_root.join(".mcp.json").expect("MCP URI"),

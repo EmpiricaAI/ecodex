@@ -7,6 +7,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum TransportError {
+    #[error(transparent)]
+    Policy(#[from] crate::NetworkPolicyDenied),
     #[error("http {status}: {body:?}")]
     Http {
         status: StatusCode,
@@ -24,6 +26,8 @@ pub enum TransportError {
     Network(String),
     #[error("request build error: {0}")]
     Build(String),
+    #[error("response body exceeds the {max_bytes} byte limit")]
+    ResponseTooLarge { max_bytes: usize },
 }
 
 #[derive(Debug, Error)]
