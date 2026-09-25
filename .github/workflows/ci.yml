@@ -75,7 +75,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: EmpiricaAI/empirica
-          ref: c5bf53a4ac7f2b3d5d21208964ea08338f99c107
+          ref: 13b58943d89e8ea68f0f6c5db778255a5ab869a7  # v1.14.3, matches empiricaVendorCommit
           path: empirica-core
           persist-credentials: false
 
