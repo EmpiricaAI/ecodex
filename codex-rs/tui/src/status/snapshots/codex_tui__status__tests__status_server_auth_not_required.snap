@@ -1,11 +1,12 @@
 ---
 source: tui/src/status/tests.rs
+assertion_line: 816
 expression: rendered
 ---
 /status
 
 ╭─────────────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.0.0)                                                   │
+│  ∴ ecodex (v0.157.0)  ·  turtles all the way down                           │
 │                                                                             │
 │  Model:            gpt-5.6-sol (reasoning none, summaries auto)             │
 │  Model provider:   server-ollama                                            │

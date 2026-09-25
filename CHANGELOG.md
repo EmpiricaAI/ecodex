@@ -8,6 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Upstream sync to rust-v0.157.0** (865 commits from openai/codex across three
+  releases; 43 conflicts resolved by code read). ecodex features carried through the
+  merge: mid-session provider swap, silent hook-context recording, cross-provider
+  model-selection persistence, plugin statuslines, curated models, the `writable_git`
+  sandbox opt-in (the auto-merge had dropped it from upstream's new settings struct),
+  ecodex update commands and release URLs. Upstream's new logo renderer now draws the
+  Empirica "E" mark on the welcome screen and fresh conversations.
+- **Re-vendored empirica hooks to 1.14.1** — the silent-failure fix class
+  (transaction-open predicate, hook counters read from the right file, claim lookups
+  that fail no longer deny), `ran` claims that certify only with scope and count, and
+  CHECK thresholds keyed on the practitioner.
+- **The model-facing empirica prompts were rewritten for empirica 1.14**: the base
+  instructions and the `AGENTS.md` reminder now teach the claims contract, falsifiers,
+  the artifact types and retraction, and use ecodex's own tool names.
+- **All eight bundled empirica skills rewritten from 1.14.1 for ecodex** — including
+  the three framework skills — with ecodex's tools (`spawn_agent`,
+  `request_user_input`, `apply_patch`) in place of Claude Code's.
+- **Docs**: README, `cross-ai-mesh.md` (now built around the native mesh listener),
+  `monitor.md` and `model-notes.md` (GPT-6, a Claude row, caching as the second deciding
+  question) rewritten.
+
+### Fixed
+- The `monitor` tool is no longer offered in environment-less requests (such as
+  recap generation), which must carry no tools.
+- A server-wide MCP session approval is now scoped to the plugin that provides the
+  server, matching upstream's plugin-scoped approvals.
+- `setup-codex.py` stamps the vendored empirica commit, not the annotated tag object.
+- UI tests that waited for the upstream "OpenAI Codex" header now look for the ecodex
+  header.
+
 ## [0.154.0] - 2026-09-17
 
 ### Changed

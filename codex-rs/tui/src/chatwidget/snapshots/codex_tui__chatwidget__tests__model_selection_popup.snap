@@ -1,16 +1,31 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-expression: popup
+assertion_line: 3549
+expression: "render_bottom_popup(&chat, 80)"
 ---
   Select Model and Effort
 
-
-  1. GPT-6-Astra (default)  Frontier intelligence for the most demanding work.
-  2. GPT-6-Sol              Workhorse model for coding and everyday work.
-  3. GPT-6-Luna             Fast and affordable model for easier tasks.
-  4. GPT-5.6-Sol            Older coding model for complex work.
-  5. GPT-5.6-Terra          Older balanced model for straightforward work.
-  6. GPT-5.6-Luna           Older fast and efficient model.
-› 7. GPT-5.5 (current)      Legacy coding model.
+↑
+  12. Cloud — router (catchall) — Gemini 2.5 Pro (via … Google's flagship
+                                                        general model, 1M
+                                                        context. Strong on long-
+                                                        document analysis. Reach
+                                                        Gemini without separate
+                                                        Google Cloud setup.
+  13. GPT-6-Astra (default)                             Frontier intelligence
+                                                        for the most demanding
+                                                        work.
+  14. GPT-6-Sol                                         Workhorse model for
+                                                        coding and everyday
+                                                        work.
+  15. GPT-6-Luna                                        Fast and affordable
+                                                        model for easier tasks.
+  16. GPT-5.6-Sol                                       Older coding model for
+                                                        complex work.
+  17. GPT-5.6-Terra                                     Older balanced model for
+                                                        straightforward work.
+  18. GPT-5.6-Luna                                      Older fast and efficient
+                                                        model.
+› 19. GPT-5.5 (current)                                 Legacy coding model.
 
   enter select · esc back

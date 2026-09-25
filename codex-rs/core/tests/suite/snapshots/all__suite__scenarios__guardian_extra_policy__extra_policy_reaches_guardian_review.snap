@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios_guardian_extra_policy.rs
+assertion_line: 123
 expression: snapshot
 ---
 Scenario: Guardian reviews an escalated command with separate tenant and additional policies, denies it, and the parent continues.
@@ -32,9 +33,10 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (7; hash=9ca29162272b7d54):
+  tools (8; hash=ecb034d5d766e267):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/monitor: Arm a watch on a background subprocess. On each line matching the regex `pattern`, a <task-notifi...; args=[action, command, cwd, monitor_id, pattern, persistent, stream]; hash=dea435ba6609ae7c
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
     - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e

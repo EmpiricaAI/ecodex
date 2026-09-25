@@ -1,13 +1,14 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 908
 expression: "context_snapshot::format_request_history_snapshot(\"Astra receives host and handler timings on completed and failed code-mode calls.\",\n&mock.requests(), &ContextSnapshotOptions::default(),)"
 ---
 Scenario: Astra receives host and handler timings on completed and failed code-mode calls.
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=32be5470c6e39932):
-        - namespace/functions; hash=e7db0a45c4ec3157
+00:additional_tools/developer (3; hash=3978cc2839a88d47):
+        - namespace/functions; hash=c3e1b053f70f616c
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -92,14 +93,7 @@ Scenario: Astra receives host and handler timings on completed and failed code-m
     Run a code cell, then inspect its timing and a failed wait.
 -- request 2 (turn) --
 07:custom_tool_call/exec:text('ready');
-08:custom_tool_call_output:Script completed
-    Wall time <DURATION> seconds (code-mode <DURATION> seconds; overhead <DURATION> seconds)
-    Output:
-     | ready
+08:custom_tool_call_output:failed to spawn code-mode host /home/yogapad/empirical-ai/ecodex/codex-rs/target/debug/deps/codex-code-mode-host: No such file or directory (os error 2)
 -- request 3 (turn) --
 09:function_call/functions.wait:{"cell_id":"missing"}
-10:function_call_output:Script failed
-    Wall time <DURATION> seconds (code-mode <DURATION> seconds; overhead <DURATION> seconds)
-    Output:
-     | Script error:
-    exec cell missing not found
+10:function_call_output:failed to spawn code-mode host /home/yogapad/empirical-ai/ecodex/codex-rs/target/debug/deps/codex-code-mode-host: No such file or directory (os error 2)

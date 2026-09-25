@@ -1,14 +1,14 @@
 ---
 source: tui/src/app/tests.rs
-assertion_line: 6350
+assertion_line: 6534
 expression: rendered
 ---
-╭────────────────────────────────────────╮
-│ >_ OpenAI Codex (v0.0.0)               │
-│                                        │
-│ model:     gpt-test   /model to change │
+╭──────────────────────────────────────────────────╮
+│ ∴ ecodex (v0.157.0)  ·  turtles all the way down │
+│                                                  │
+│ model:     gpt-test   /model to change           │
 │ directory: <thread cwd>                │
-╰────────────────────────────────────────╯
+╰──────────────────────────────────────────────────╯
 
 
 › Next thread prompt

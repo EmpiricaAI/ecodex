@@ -1,12 +1,12 @@
 ---
 source: tui/src/status/tests.rs
-assertion_line: 1025
+assertion_line: 1155
 expression: sanitized
 ---
 /status
 
 ╭────────────────────────────────────────────╮
-│  ∴ ecodex (v0.1.0)  ·  turtles all the way │
+│  ∴ ecodex (v0.157.0)  ·  turtles all the w │
 │                                            │
 │ Visit                                      │
 │ https://chatgpt.com/codex/settings/usage   │

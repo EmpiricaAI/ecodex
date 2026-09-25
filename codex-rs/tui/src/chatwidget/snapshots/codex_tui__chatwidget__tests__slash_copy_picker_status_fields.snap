@@ -1,11 +1,12 @@
 ---
 source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 1817
 expression: "render_bottom_popup(&chat,\n100).replace(&directory,\n\"[[workspace]]\").replace(crate::version::CODEX_CLI_VERSION, \"VERSION\")"
 ---
   Copy to clipboard
 
 
-› 1. Whole status  >_ OpenAI Codex (vVERSION)
+› 1. Whole status  ∴ ecodex (vVERSION)  ·  turtles all the way down
   2. Model         gpt-5.5
   3. Directory     [[workspace]]
   4. Thread name   Clipboard example

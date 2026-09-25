@@ -1105,9 +1105,13 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     if turn_context.config.update_plan_enabled {
         registry.add(PlanHandler);
     }
-    // ecodex addition: Monitor tool registered unconditionally so all ecodex
-    // sessions can arm background-subprocess watches for cross-AI mesh wake.
-    registry.add(MonitorHandler);
+    // ecodex addition: the Monitor tool spawns a local subprocess, so it is
+    // registered wherever the turn has an execution environment — and kept out
+    // of environment-less requests (e.g. structured recap generation), which
+    // must carry no tools.
+    if environment_mode.has_environment() {
+        registry.add(MonitorHandler);
+    }
 
     if features.enabled(Feature::DeferredExecutor) {
         registry.add(

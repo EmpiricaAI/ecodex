@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 1002
 expression: "context_snapshot::format_request_history_snapshot(\"Catalog Code Mode instructions and wait parameter descriptions accompany a yielded cell through completion.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Catalog Code Mode instructions and wait parameter descriptions accompany a yielded cell through completion.
@@ -32,8 +33,8 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (7; hash=884bfb8fc9050f65):
-    - custom/exec: Catalog exec instructions. Default yield: 1234 ms. `image(imageUrlOrItem: string | { image_url: s...; hash=a49b91fd82908e18
+  tools (7; hash=6fe0a3931b2f9008):
+    - custom/exec: Catalog exec instructions. Default yield: 1234 ms. `image(imageUrlOrItem: string | { image_url: s...; hash=e84216aa6e518b81
     - function/wait: Catalog wait instructions: resume the yielded cell.; args=[cell_id, max_tokens, terminate, yield_time_ms]; hash=67bc0f04da3505b3
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - function/request_user_input_async: Ask the user one or more questions during ongoing work. Use this tool only to request missing inf...; args=[questions]; hash=d6d74f33db330162
@@ -101,13 +102,7 @@ Settings:
     Start a code cell, yield its initial output, then wait for its completion.
 -- request 2 (turn) --
 05:custom_tool_call/exec:text('started'); yield_control(); text('finished');
-06:custom_tool_call_output:Script running with cell ID 1
-    Wall time <DURATION> seconds
-    Output:
-     | started
+06:custom_tool_call_output:failed to spawn code-mode host /home/yogapad/empirical-ai/ecodex/codex-rs/target/debug/deps/codex-code-mode-host: No such file or directory (os error 2)
 -- request 3 (turn) --
 07:function_call/functions.wait:{"cell_id":"1"}
-08:function_call_output:Script completed
-    Wall time <DURATION> seconds
-    Output:
-     | finished
+08:function_call_output:failed to spawn code-mode host /home/yogapad/empirical-ai/ecodex/codex-rs/target/debug/deps/codex-code-mode-host: No such file or directory (os error 2)

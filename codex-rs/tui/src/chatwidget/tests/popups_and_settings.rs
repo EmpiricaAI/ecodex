@@ -3385,8 +3385,10 @@ async fn model_picker_refreshes_startup_catalog() {
 
         apply_model_list_response(&mut chat, refreshed.clone());
         if hidden_startup {
-            assert!(chat.no_modal_or_popup_active());
-            chat.open_model_popup();
+            // ecodex: curated presets are always merged into the catalog, so
+            // hiding the startup model never leaves the picker empty — it stays
+            // open instead of closing as it does upstream.
+            assert!(!chat.no_modal_or_popup_active());
         }
 
         assert_eq!(chat.model_catalog.try_list_models().unwrap(), refreshed);

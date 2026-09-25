@@ -1,14 +1,15 @@
 ---
 source: tui/src/startup_draft_tests.rs
+assertion_line: 128
 expression: "snapshots.join(\"\\n---\\n\")"
 ---
 empty (48 columns):
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+╭──────────────────────────────────────────────╮
+│ ∴ ecodex (v<VERSION>)  ·  turtles all the way… │
+│                                              │
+│ model:     loading   /model to change        │
+│ directory: loading                           │
+╰──────────────────────────────────────────────╯
 
 
 › Ask Codex to do anything
@@ -16,12 +17,12 @@ empty (48 columns):
   ? for shortcuts
 ---
 resuming (48 columns):
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+╭──────────────────────────────────────────────╮
+│ ∴ ecodex (v<VERSION>)  ·  turtles all the way… │
+│                                              │
+│ model:     loading   /model to change        │
+│ directory: loading                           │
+╰──────────────────────────────────────────────╯
   Resuming session…
 
 › Ask Codex to do anything
@@ -29,12 +30,12 @@ resuming (48 columns):
   ? for shortcuts
 ---
 forking (48 columns):
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+╭──────────────────────────────────────────────╮
+│ ∴ ecodex (v<VERSION>)  ·  turtles all the way… │
+│                                              │
+│ model:     loading   /model to change        │
+│ directory: loading                           │
+╰──────────────────────────────────────────────╯
   Forking session…
 
 › draft while loading
@@ -42,12 +43,12 @@ forking (48 columns):
 
 ---
 multiline (48 columns):
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+╭──────────────────────────────────────────────╮
+│ ∴ ecodex (v<VERSION>)  ·  turtles all the way… │
+│                                              │
+│ model:     loading   /model to change        │
+│ directory: loading                           │
+╰──────────────────────────────────────────────╯
 
 
 › first startup line
@@ -57,7 +58,7 @@ multiline (48 columns):
 ---
 narrow (18 columns):
 ╭────────────────╮
-│ >_ OpenAI Cod… │
+│ ∴ ecodex (v0.… │
 │                │
 │ model:     lo… │
 │ directory: …ng │

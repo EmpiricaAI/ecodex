@@ -5,7 +5,51 @@ expression: "render_bottom_popup(&chat, 80)"
 ---
   Select Model and Effort
 
-
-› 1. GPT-5.6 Luna (current)  Custom provider model
+↑
+  6. Local — open-weights — DeepSeek-R1 32B (local)     Distilled reasoning
+                                                        model, 128K context,
+                                                        strong on chain-of-
+                                                        thought tasks. Local
+                                                        inference via Ollama.
+  7. Local — open-weights — Llama 3.1 70B (local)       128K context, generalist
+                                                        baseline. Local
+                                                        inference; weaker at
+                                                        agent-loop coding than
+                                                        qwen3-coder, included as
+                                                        a control.
+  8. Cloud — router (catchall) — OpenRouter — auto (be… OpenRouter's auto-
+                                                        routing — sends each
+                                                        request to whichever
+                                                        frontier model wins for
+                                                        the prompt. Single key,
+                                                        many models. Pay-as-you-
+                                                        go, mark-up over direct
+                                                        provider rates.
+  9. Cloud — router (catchall) — Claude Opus 4.7 (via … Anthropic's frontier
+                                                        Opus tier — strongest
+                                                        reasoning + agent
+                                                        calibration. 1M context.
+                                                        Reach Opus without
+                                                        separate Anthropic API
+                                                        key/billing.
+  10. Cloud — router (catchall) — GPT-5.2 Codex (via O… OpenAI's codex-tuned
+                                                        tier — purpose-built for
+                                                        coding agents, 400K
+                                                        context. Reach GPT-5
+                                                        family without OpenAI
+                                                        direct provider setup.
+  11. Cloud — router (catchall) — Grok Code Fast 1 (vi… xAI's fast coding tier —
+                                                        high throughput, 256K
+                                                        context, competitive on
+                                                        tool-use. The cheap-and-
+                                                        fast option when latency
+                                                        dominates quality.
+  12. Cloud — router (catchall) — Gemini 2.5 Pro (via … Google's flagship
+                                                        general model, 1M
+                                                        context. Strong on long-
+                                                        document analysis. Reach
+                                                        Gemini without separate
+                                                        Google Cloud setup.
+› 13. GPT-5.6 Luna (current)                            Custom provider model
 
   enter select · esc back

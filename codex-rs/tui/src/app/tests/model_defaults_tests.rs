@@ -193,8 +193,11 @@ async fn model_default_saves_report_server_outcomes_and_target_server_profile() 
         } else {
             assert_eq!(
                 toml::from_str::<toml::Value>(&persisted)?,
+                // ecodex: a bare OpenAI model routes to the `openai` provider,
+                // and the routed provider is persisted with the model.
                 toml::Value::Table(toml::toml! {
                     model = "gpt-5.5"
+                    model_provider = "openai"
                     model_reasoning_effort = "medium"
                     plan_mode_reasoning_effort = "high"
                     service_tier = "fast"
