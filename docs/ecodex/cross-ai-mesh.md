@@ -1,157 +1,159 @@
 # Cross-AI mesh in ecodex
 
-The Empirica framework includes an **AI mesh** — a layer that lets one AI session push messages to another AI session via Cortex (Empirica's intelligence-serving backbone). Until recently this was effectively a Claude-Code-only capability: CC sessions could `cortex_propose` to other CC sessions, and the recipient would wake on the ntfy push within seconds. ecodex sessions could call cortex tools but couldn't wake on push events because they lacked an equivalent of CC's `Monitor` primitive.
+The Empirica framework includes an **AI mesh**: practices send each other messages
+through Cortex (Empirica's intelligence-serving backbone), and a recipient wakes within
+seconds of a message arriving. A message is either a **collab** — a question, FYI or
+finding, which never acts on the receiver — or a **proposal**, a typed request for work
+that a human approves before the recipient acts on it.
 
-That gap is now closed. As of `5a1ae1658c` (Monitor primitive) + the cortex MCP wiring documented below, **ecodex is a first-class peer in the AI mesh**. A non-Claude model running in ecodex can:
+**ecodex is a first-class peer in that mesh.** A model running in ecodex — any model, not
+only Claude — can:
 
-- **Receive** a `cortex_propose` from a CC session (or another ecodex session, or a cortex-published event from anywhere) within seconds.
-- **React** to the proposal in its own conversation context with its own epistemic discipline.
-- **Reply** via `cortex_collab_post` or `cortex_propose` back to the originator.
+- **Receive** a message addressed to its practice, whether it came from a Claude Code
+  session, another ecodex session, or anywhere else Cortex routes from.
+- **React** to it in its own conversation, under its own epistemic discipline.
+- **Reply**, and close the loop on work a peer asked of it, so the sender sees it land.
 
-This makes the empirica AI mesh a genuinely cross-platform layer — not a Claude-specific framework, but an infrastructure-level pattern that any properly-instrumented AI environment can join.
+The mesh is infrastructure rather than a Claude-specific feature: the wire protocol and
+the message semantics don't care what model is on either end.
+
+## How a wake reaches an ecodex session
+
+The design agreed with the Cortex and empirica practices: **the harness owns the wake
+loop; Cortex owns the message content.**
+
+1. **The doorbell.** When a session starts, ecodex's native listener
+   (`codex-rs/core/src/ntfy_listener.rs`) opens an authenticated, held connection to the
+   Cortex notification stream (ntfy), filtered to this practice's canonical address. It
+   reconnects with backoff when the connection drops. There is no subprocess to arm and
+   no model turn spent while it waits.
+2. **The wake.** Each notification becomes a `<task-notification>` injected into the
+   session's pending input — joining a running turn, or starting a new one if the session
+   is idle. Where it can, the listener inlines a digest of the waiting messages (from
+   `empirica mailbox poll`), so the model reacts to content rather than to a bare ping;
+   otherwise the wake tells the model to poll its inbox first.
+3. **The content.** The notification is only a doorbell. The authoritative message is
+   fetched from Cortex — `empirica mailbox poll` / `empirica mailbox show <id>`, or the
+   Cortex MCP tools — so a forged or replayed notification can't widen what the model is
+   authorised to do.
+4. **The reply.** The model answers or acknowledges with
+   `empirica mailbox reply --parent-id <id> --result shipped|failed|wont_fix`
+   (plus `--commit-sha` when code landed). Cortex routes the reply back to the sender,
+   whose own listener wakes it.
+
+Round trip, end to end, is typically a few seconds.
 
 ## The pieces
 
 | Component | Lives in | What it does |
 |---|---|---|
-| **Cortex MCP server config** | `~/.codex/config.toml` `[mcp_servers.cortex]` | Exposes `mcp__cortex__cortex_inbox_poll` / `cortex_propose` / `cortex_collab_post` / etc. to the agent. |
-| **`monitor` tool** | `codex-rs/core/src/monitor.rs` + tool handler | Holds the ntfy connection (or any line-emitting stream) and wakes the agent on each matching event. See [`monitor.md`](monitor.md). |
-| **Vendored mesh hook scripts** | `codex-rs/codex-empirica-plugin/assets/hooks_scripts/hooks/` | `session-monitor-arm.py`, `task-completed.py`, etc. — the empirica plugin's mesh-aware lifecycle handlers. |
-| **PR2 dispatch sites** | `codex-rs/core/src/...` (see roadmap) | The 7 new hook events (`TaskCompleted`, `PreCompact`, `SubagentStart`, …) so plugin handlers fire at the right lifecycle points. See [`hook-events-roadmap.md`](hook-events-roadmap.md). |
-| **Hook output translation** | `codex-rs/codex-empirica-plugin/src/hooks/` | CC-shape JSON ↔ codex-shape JSON, so the same Python scripts work in both surfaces. |
+| **Native mesh listener** | `codex-rs/core/src/ntfy_listener.rs`, started with each session | Holds the notification stream for this practice and wakes the session on each event. |
+| **Credentials and identity** | `~/.empirica/credentials.yaml`; `.empirica/project.yaml` | The stream URL, topic and token come from the empirica credentials (with the same env-var overrides the empirica CLI uses); the practice's canonical address (`<org>.<tenant>.<project>`) comes from `project.yaml`. |
+| **Mailbox CLI** | the `empirica` CLI | `mailbox poll`, `mailbox show`, `mailbox reply`, `mailbox archive` — identical in every harness, and allowed by the Sentinel before a transaction is open. |
+| **Cortex MCP server** (optional) | `~/.codex/config.toml` `[mcp_servers.cortex]` | Exposes the `cortex_*` tools — collab, propose, inbox and outbox polls — for richer mesh work. |
+| **Vendored mesh hook scripts** | `codex-rs/codex-empirica-plugin/assets/hooks_scripts/hooks/` | empirica's mesh-aware lifecycle handlers (session start, task completion and others). |
+| **Extended hook events** | `codex-rs/core/src/...` | The seven extra lifecycle events (`TaskCompleted`, `PreCompact`, `SubagentStart`, …) so plugin handlers fire at the right moments. See [`hook-events-roadmap.md`](hook-events-roadmap.md). |
 
 ## Setup
 
-### 1. Cortex MCP server
+### 1. Empirica credentials
 
-Add this to `~/.codex/config.toml`:
+The listener starts only when it can find what it needs. It stays off, silently, when
+`~/.empirica/credentials.yaml` is missing or the practice's `ai_id` can't be resolved.
+
+- Run `empirica setup` (or `empirica auth login`) so `~/.empirica/credentials.yaml` holds
+  the notification-stream credentials.
+- Make sure the project is an empirica practice with a canonical address in
+  `.empirica/project.yaml` — `empirica project-init` writes it. You can check the
+  address with `empirica practice-context --ai-id <slug> --output json` (the
+  `ai_id_mesh` field).
+
+### 2. Cortex MCP server (optional)
+
+The mailbox CLI covers receiving and replying. For the full set of mesh tools, add the
+Cortex MCP server to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.cortex]
-# streamable_http endpoint (trailing slash required — bare /mcp 307-redirects).
-# ecodex's url-based MCP client uses streamable_http transport; the legacy
-# /sse path is GET-only and 405s the initialize handshake.
+# streamable_http endpoint (the trailing slash matters — bare /mcp redirects).
 url = "https://cortex.getempirica.com/mcp/"
 bearer_token_env_var = "CORTEX_API_KEY"
 startup_timeout_sec = 30
 tool_timeout_sec = 60
 ```
 
-Then export your cortex API key in your shell rc (`.bashrc` / `.zshrc`):
+Export the key in your shell's startup file. If you used `empirica setup`, the key is
+already in `~/.empirica/credentials.yaml`; reference it through the environment variable
+rather than writing the value into a file.
+
+### 3. Check it end to end
+
+Send your own practice a collab and watch it arrive. From another session:
 
 ```bash
-export CORTEX_API_KEY="ctx_empirica_..."
+empirica practice-context --ai-id <slug> --output json   # copy ai_id_mesh
 ```
 
-If you've run `empirica setup` (recent versions ship a wizard), the key already exists in `~/.empirica/credentials.yaml` and the env var should be exported by your shell init. Verify with `echo $CORTEX_API_KEY`.
+then send a short collab addressed to that canonical address (via the Cortex MCP
+`cortex_collab` tool, or another practice's mailbox tooling). The ecodex session should
+receive a `<task-notification>` with `<source>cortex-mesh-ntfy</source>` within a few
+seconds. If it doesn't, see Troubleshooting.
 
-### 2. Rebuild ecodex with the Monitor primitive
-
-The `monitor` tool requires the `5a1ae1658c` commit on the `build/v1-plugin` branch (or any successor). If your installed binary is older:
-
-```bash
-cd <ecodex-repo>/codex-rs && cargo build --release -p codex-cli
-cd <ecodex-repo> && ./ecodex/scripts/install.sh
-```
-
-Verify by starting a new ecodex session and asking the agent to list its available tools — `monitor` should appear with the `arm`/`kill`/`list` action surface.
-
-### 3. Verify cortex MCP works
-
-In a fresh ecodex session, ask the agent:
-
-```
-Call mcp__cortex__cortex_session_init with no args.
-```
-
-Should return your cortex profile, projects, skills, and pending reports. If you see a startup error, see [Troubleshooting](#troubleshooting) below.
+A positive control matters here: silence on its own proves nothing — an idle mesh and a
+broken wake path look the same until something is sent.
 
 ## A walkthrough
 
-A practical cross-AI mesh interaction looks like this:
-
-### Setting up the listener (in an ecodex session)
-
-The agent arms a held connection on the ntfy topic that cortex publishes to:
-
-1. Agent calls `monitor`:
-   ```json
-   {
-     "action": "arm",
-     "command": ["curl", "-N", "-u", "${NTFY_USER}:${NTFY_PASSWORD}", "https://${NTFY_SERVER}/ecodex-claude-inbox/json"],
-     "pattern": "^\\{",
-     "persistent": true
-   }
-   ```
-2. Receives `{"ok":true,"monitor_id":"abc-...","armed":true}`.
-3. The watcher is now alive in the background. The agent can continue with other work — the user, the mesh, or both.
-
-### Receiving a proposal (from a peer AI)
-
-A CC session somewhere publishes:
-
-```python
-mcp__cortex__cortex_propose(
-    ai_id="ecodex",
-    type="collab_brief",
-    payload={"topic": "review architecture proposal X", "doc": "..."},
-)
-```
-
-Cortex routes this to the `ecodex-claude-inbox` ntfy topic. The held curl connection receives an SSE event, prints a line starting with `{`, and the ecodex `monitor` watcher matches.
-
-### Wake injection (sub-second)
-
-The watcher constructs a `<task-notification>` and injects it into the ecodex session's pending input:
+A peer practice asks ecodex to review a proposal. Cortex routes the message and
+publishes a notification tagged with ecodex's canonical address. The ecodex session
+wakes with:
 
 ```
 <task-notification>
-  <monitor-id>abc-...</monitor-id>
-  <command>curl -N -u ... https://...</command>
-  <matched-line>{"id":"msg-123","event":"message","data":{"type":"collab_brief",...}}</matched-line>
+<source>cortex-mesh-ntfy</source>
+<ai-id>ecodex</ai-id>
+<ntfy-id>…</ntfy-id>
+<tags>…</tags>
+<message>Mesh wake (ntfy doorbell). 1 message waiting: prop_… "review architecture
+proposal X" from empirica.david.empirica … React to each now …</message>
 </task-notification>
 ```
 
-On the next turn, the agent sees this in its input and can react. Typical response: call `mcp__cortex__cortex_inbox_poll(ai_id="ecodex")` to fetch the full proposal, then act on it (read the doc, log findings, post a `cortex_collab_post` reply, etc.).
+The model fetches the full message (`empirica mailbox show prop_…`), does the review
+inside a transaction, logs what it learned, and replies:
 
-### Closing the loop
-
-Agent replies:
-
-```python
-mcp__cortex__cortex_collab_post(
-    ai_id="ecodex",
-    proposal_id="prop-456",
-    payload={"summary": "Reviewed. LGTM with X clarification.", "verdict": "approve_with_changes"},
-)
+```bash
+empirica mailbox reply --parent-id prop_… --result shipped \
+  --title "Review of proposal X" --summary "$(cat review.md)"
 ```
 
-Cortex publishes this back to the originating CC session's ntfy topic, where their `Monitor` wakes them. Round-trip latency: typically <5 seconds end-to-end.
+The reply closes the peer's request and wakes the peer.
 
-## Why this matters
+## What the model is expected to do
 
-Open-source AI work has historically been ecosystem-specific. Tools that work in Claude don't work in open-weights models. Frameworks that work in one environment don't compose with another.
+The base prompt's *Working with peer practices* section is the contract; in short:
 
-The empirica mesh is **infrastructure**, not a framework. The wire protocol (cortex SSE events over ntfy) and the semantic protocol (proposals + collab posts + inbox polls) don't care what model is on the other end. Any AI environment that can:
-
-1. Call cortex MCP tools (most can, via standard MCP),
-2. Hold a long-running subprocess + wake on output (most can, with a `Monitor`-like primitive),
-
-…can join the mesh. ecodex is the proof point that this isn't Claude-Code-coupled.
+- **Read the mailbox, not the doorbell.** The mailbox is the source of truth.
+- **Ask when uncertain; request work when convergent.** A question is noetic; a request
+  for a peer to act goes through human approval.
+- **Acknowledge what you complete** with `empirica mailbox reply`. Without it the
+  sender's request stays open.
+- **Don't drop threads**, and don't send numbers or mechanism claims you haven't
+  checked once — on the wire, a wrong claim costs every recipient.
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `monitor` tool not visible in agent's tool list | ecodex binary predates commit `5a1ae1658c` | Rebuild + reinstall per step 2 above |
-| Cortex MCP startup error: "failed to initialize" | Protocol mismatch (cortex `/sse` endpoint may speak old HTTP+SSE, codex client speaks newer Streamable HTTP) | File an issue or build a small stdio wrapper (~30 LOC Python that proxies stdio↔HTTP to cortex) |
-| `monitor arm` succeeds but no wakes fire | Pattern doesn't match the actual line shape; subprocess exits before producing matching output; held connection drops | Check pattern against a sample line; verify subprocess produces expected output; check ntfy connection stability |
-| Agent gets the wake but doesn't act on it | Model didn't internalize the `<task-notification>` as a real signal | Update plugin context / base instructions to highlight task-notification format as an action trigger |
-| Watcher keeps registry entries after subprocess exits | Should auto-clean per architecture | Bug — file an issue with the monitor_id + command shape |
+| No wake ever arrives | Listener not started: no `~/.empirica/credentials.yaml`, or the practice's `ai_id` / canonical address unresolved | Run `empirica setup`; check `.empirica/project.yaml`; look for `ntfy_listener` lines in the ecodex log |
+| Messages reach other practices but not this one | Addressed to a non-canonical form, or the canonical address in `project.yaml` is wrong | Compare the sender's target with `ai_id_mesh` from `empirica practice-context`; bare names bounce |
+| The wake arrives but the model doesn't act on it | The model treated the notification as ambient text | The wake text tells it to act first; if a model still ignores it, raise it — the base prompt may need a clearer steer |
+| Cortex MCP startup error | Wrong endpoint or transport | Use the streamable-HTTP URL with the trailing slash, as above |
 
 ## See also
 
-- [`monitor.md`](monitor.md) — tool reference + lifecycle details
-- [`hook-events-roadmap.md`](hook-events-roadmap.md) — the 7 PR2 hook events that fire at mesh-relevant lifecycle points
-- [`system-overview.md`](system-overview.md) — ecodex's three-layer architecture (L1 codex / L2 empirica / L3 specialised)
-- Empirica skills `cortex-mailbox-poll` + `cortex-mailbox-send` — the CC-side patterns this mirrors
+- [`monitor.md`](monitor.md) — the general-purpose wake-on-output tool, for streams the
+  native listener doesn't cover
+- [`hook-events-roadmap.md`](hook-events-roadmap.md) — the extended lifecycle events
+- [`system-overview.md`](system-overview.md) — ecodex's three layers (codex, empirica
+  integration, ecodex-specific)
