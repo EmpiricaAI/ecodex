@@ -465,19 +465,22 @@ though it were current.
 related lessons have their confidence reduced (with a 0.3 floor —
 lessons never fully die). Fresh evidence wins over stale knowledge.
 
-**Skills across compaction.** Skills are `SKILL.md` files listed in
-`<available_skills>` at every turn. Two classes:
+**Skills across compaction.** Skills are `SKILL.md` files; the
+skills catalog lists each one's name, description and path every
+turn, but no skill body is injected automatically. Two classes:
 
-- **Framework skills** (`pinned: true` in their frontmatter) have
-  their full body re-injected at session start *and after every
-  compaction*. The empirica constitution, the transaction lifecycle
-  and the persistence protocol are pinned because they govern how you
-  reason. Rely on their content being present without re-reading.
-- **Progressive-disclosure skills** (the default) list only their
-  description; the body loads when explicitly mentioned (`$SkillName`
-  in input) and is dropped on compaction. After a compaction, if you
-  decide to use an unpinned skill and its body isn't visible in recent
-  turns, read its `SKILL.md` from the listed path before acting.
+- **Framework skills** (`pinned: true` in their frontmatter) are
+  standing policy for the whole session: the empirica constitution,
+  the transaction lifecycle and the persistence protocol. Read their
+  `SKILL.md` early, before the first related action, and read them
+  again after a compaction — they are not in your context until you
+  do. What must always be present rides in the `AGENTS.md` reminder
+  instead.
+- **Task skills** (the default) are read when the task calls for
+  them, or when the user mentions one (`$SkillName`). After a
+  compaction, if you are about to follow a skill whose body isn't
+  visible in recent turns, read its `SKILL.md` from the listed path
+  first — don't work from memory of it.
 
 ---
 

@@ -1,27 +1,38 @@
 # `monitor` tool
 
-The `monitor` tool arms a watch on a background subprocess. On each line of subprocess output matching the supplied regex pattern, a `<task-notification>` message is injected into the agent's pending input — giving the conversation a sub-second wake on background events.
-
-Parity with Claude Code's `Monitor` tool. Closes the wake-on-event gap that previously prevented non-Claude models running in ecodex from participating fully in the Empirica AI mesh.
+The `monitor` tool starts a background subprocess and watches its output. On each line
+that matches the supplied regex, a `<task-notification>` message is injected into the
+agent's pending input — a sub-second wake on background events, whether or not a turn
+is running.
 
 ## What it's for
 
-- **Cross-AI mesh participation**: hold an ntfy SSE connection, wake on each push from a peer AI's `cortex_propose`.
-- **Long-running build/test watching**: arm on `cargo test --watch` or `npm test --watch`, wake on the first FAIL line.
-- **Log tailing for incidents**: arm on `journalctl -f`, wake on a specific error pattern.
-- **Queue listeners**: arm on any line-emitting daemon, wake on the events you care about.
+- **Long-running build or test watching**: arm on a watch-mode test runner, wake on the
+  first failure line.
+- **Log tailing during an incident**: arm on `journalctl -f` or `tail -F`, wake on a
+  specific error pattern.
+- **Queue and stream listeners**: arm on any line-emitting daemon or held HTTP stream,
+  wake only on the events you care about.
+- **Detecting a stalled practitioner** (below).
 
-The general shape: a background process produces output as a stream; you only want the agent to engage when something specific shows up in that stream.
+The shape is always the same: a background process produces a stream, and you want the
+agent to engage only when something specific appears in it.
+
+**Mesh events don't need it.** ecodex receives Empirica mesh events natively — an
+in-process listener holds the Cortex notification stream and wakes the session when a
+proposal arrives (see [`cross-ai-mesh.md`](cross-ai-mesh.md)). `monitor` remains the
+general-purpose primitive for everything else, and a fallback for custom topics the
+native listener doesn't subscribe to.
 
 ### Detect an Empirica lab stall
 
-`lab_stall_monitor.py` polls Empirica's real transaction activity signal rather
-than rollout or translator file mtimes. It emits a single JSON event when an
-open transaction's `updated_at` has not advanced for the threshold and the
-matching practitioner is still alive. Progress resets the detector, allowing a
-later stall to emit a new event.
+`lab_stall_monitor.py` (shipped with the plugin's hook scripts) polls Empirica's real
+transaction-activity signal rather than rollout or translator file times. It emits one
+JSON event when an open transaction's `updated_at` has not advanced for the threshold
+and the matching practitioner is still alive. Progress resets the detector, so a later
+stall emits a new event.
 
-Arm it from an orchestrating ecodex session with the existing `monitor` tool:
+Arm it from an orchestrating ecodex session:
 
 ```json
 {
@@ -42,30 +53,29 @@ Arm it from an orchestrating ecodex session with the existing `monitor` tool:
 }
 ```
 
-Use `--instance <id>` when more than one practitioner inhabits the practice.
-The id can be the transaction filename suffix, Codex/Claude session id, or
-Empirica session id. The emitted event includes transaction identity,
-`tool_call_count`, frozen duration, and the latest PREFLIGHT/CHECK/POSTFLIGHT
-phase. Phase comes from the project's `reflexes` table because it is not stored
-in `active_transaction*.json` itself.
+Use `--instance <id>` when more than one practitioner inhabits the practice; the id can
+be the transaction filename suffix, the harness session id, or the Empirica session id.
+The event carries the transaction identity, `tool_call_count`, how long it has been
+frozen, and the latest PREFLIGHT/CHECK/POSTFLIGHT phase (read from the project's
+`reflexes` table, because the active-transaction file doesn't store it).
 
-The live-process check rejects abandoned open transaction files. It accepts a
-live tmux pane that is still running a worker command (not a shell prompt), or a
-signal-0-live presence PID. In containers where PID and tmux namespaces make
-both checks impossible, `--allow-unverified-process` is an explicit escape
-hatch; using it weakens the detector and can report dead sessions.
+The live-process check rejects abandoned transaction files: it accepts a live tmux pane
+still running a worker command (not a shell prompt), or a live presence PID. In
+containers where PID and tmux namespaces make both checks impossible,
+`--allow-unverified-process` is an explicit escape hatch — it weakens the detector and
+can report dead sessions.
 
 ## API
 
-The tool takes a single `action` argument that selects the operation. All examples are JSON shapes the model emits to the tool.
+The tool takes an `action` field that selects the operation.
 
-### `arm` — start a new watch
+### `arm` — start a watch
 
 ```json
 {
   "action": "arm",
-  "command": ["curl", "-N", "-u", "user:pass", "https://ntfy.example/cortex-topic/json"],
-  "pattern": "^\\{",
+  "command": ["tail", "-F", "/var/log/app.log"],
+  "pattern": "ERROR|panicked",
   "persistent": true,
   "stream": "stdout",
   "cwd": "/optional/working/directory"
@@ -74,34 +84,34 @@ The tool takes a single `action` argument that selects the operation. All exampl
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `action` | yes | — | Must be `"arm"`. |
-| `command` | yes | — | Argv to spawn. First element is the program, rest are args. Spawn happens via `tokio::Command`; child has `kill_on_drop = true` so child dies when the watcher does. |
-| `pattern` | yes | — | Regex (regex_lite syntax — no look-around). Matched line-by-line against the subprocess stream. |
-| `persistent` | no | `false` | When `true`, the watch stays armed after each match and continues firing notifications. When `false`, the watch disarms itself after the first match. |
-| `stream` | no | `"stdout"` | Which stream to watch: `"stdout"`, `"stderr"`, or `"both"`. |
+| `action` | yes | — | `"arm"`. |
+| `command` | yes | — | Argv to spawn: program first, then arguments. The child is killed when the watcher is dropped. |
+| `pattern` | yes | — | Regex in `regex_lite` syntax (no look-around), matched line by line. |
+| `persistent` | no | `false` | `true` keeps the watch armed after each match; `false` disarms it after the first match. |
+| `stream` | no | `"stdout"` | `"stdout"`, `"stderr"` or `"both"`. |
 | `cwd` | no | inherited | Working directory for the spawned command. |
 
-**Returns:**
+Returns `{"ok": true, "monitor_id": "…", "armed": true}`. The `monitor_id` is the handle
+for `kill`.
 
-```json
-{"ok": true, "monitor_id": "abc-123-...", "armed": true}
-```
-
-The `monitor_id` is the handle for later `kill` operations.
+Arming is praxic: it starts a process. Do it inside an open transaction.
 
 ### Wake injection
 
-On each matching line, the agent's pending input receives a user-role message with this body:
+On each matching line the agent's pending input receives a user-role message:
 
 ```
 <task-notification>
   <monitor-id>abc-123-...</monitor-id>
-  <command>curl -N -u user:pass https://ntfy.example/cortex-topic/json</command>
-  <matched-line>{"event":"cortex_propose","payload":{...}}</matched-line>
+  <command>tail -F /var/log/app.log</command>
+  <matched-line>2026-09-25T10:14:03 ERROR upstream timed out</matched-line>
 </task-notification>
 ```
 
-If a turn is active, the notification attaches to that turn's pending input. If no turn is active, the wake starts one — delivery rides upstream's mailbox mechanism (`Session::inject_response_items` enqueues the item as a mailbox communication and lets the shared pending-work scheduler either attach it to the active turn or wake the idle session).
+If a turn is running, the notification joins that turn's pending input. If the session
+is idle, it starts a new turn: delivery rides upstream's mailbox mechanism, so the
+shared pending-work scheduler either attaches it to the active turn or wakes the idle
+session.
 
 ### `kill` — disarm a watch
 
@@ -109,82 +119,72 @@ If a turn is active, the notification attaches to that turn's pending input. If 
 {"action": "kill", "monitor_id": "abc-123-..."}
 ```
 
-**Returns:**
+Returns `{"ok": true, "killed": true, "monitor_id": "…"}`. `killed: false` means the id
+matched no armed monitor (already disarmed, or never existed).
 
-```json
-{"ok": true, "killed": true, "monitor_id": "abc-123-..."}
-```
-
-`killed: false` means the id did not match any armed monitor (already disarmed or never existed).
-
-### `list` — introspect armed monitors
+### `list` — what is armed
 
 ```json
 {"action": "list"}
 ```
 
-**Returns:**
-
-```json
-{
-  "ok": true,
-  "count": 2,
-  "monitors": [
-    {
-      "monitor_id": "abc-123-...",
-      "command": ["curl", "-N", "-u", "...", "https://ntfy.example/cortex-topic/json"],
-      "pattern": "^\\{",
-      "persistent": true
-    },
-    {
-      "monitor_id": "def-456-...",
-      "command": ["cargo", "test", "--watch"],
-      "pattern": "^FAIL",
-      "persistent": false
-    }
-  ]
-}
-```
+Returns the armed monitors with their `monitor_id`, `command`, `pattern` and
+`persistent` flag, plus a `count`.
 
 ## Lifecycle
 
-- **Spawn**: ecodex spawns the subprocess via `tokio::Command` with `stdout` + `stderr` piped and `kill_on_drop = true`.
-- **Read loop**: a background `tokio::spawn` task reads the chosen stream line-by-line. The regex is compiled once at arm time.
-- **Wake**: on each match, the watcher constructs a `ResponseInputItem::Message` (user role) and calls `Session::inject_response_items`, which wraps the item as a synthetic `InterAgentCommunication` (`trigger_turn = true`) on upstream's mailbox API: an active turn picks it up as pending input, an idle session is woken into a new turn by the shared pending-work scheduler.
+- **Spawn**: the subprocess starts with stdout and stderr piped; the child is tied to the
+  watcher so it can't outlive it.
+- **Read loop**: a background task reads the chosen stream line by line; the regex is
+  compiled once, at arm time.
+- **Wake**: each match becomes a user-role message injected through the session's
+  mailbox, with the turn-triggering flag set, so it is delivered whether or not a turn
+  is running.
 - **Disarm**:
-  - **`persistent = false`** + match → watcher self-disarms after the first wake.
-  - **`persistent = true`** → watcher stays in the read loop indefinitely.
-  - Explicit `kill` → ecodex aborts the watcher task; `kill_on_drop` reaps the child.
-  - **Session shutdown** → `Session::services.monitor_registry.abort_all()` runs at the start of `shutdown()` (before `abort_all_tasks`); all watchers + children are terminated cleanly.
-- **Subprocess exits naturally** (stream EOF or child dies) → watcher removes itself from the registry; `list` / `len` stay accurate.
+  - `persistent: false` → the watcher disarms after its first wake.
+  - `persistent: true` → it stays in the read loop until killed or the stream ends.
+  - `kill` → the watcher task is aborted and the child reaped.
+  - **Session shutdown** → every watcher and child is terminated at the start of
+    shutdown, before other tasks are aborted.
+- **Natural exit** (end of stream, or the child dies) → the watcher removes itself from
+  the registry, so `list` stays accurate.
 
 ## Architecture
 
-- **Module**: `codex-rs/core/src/monitor.rs` — runtime types, `MonitorRegistry`, `MonitorEntry`, `ArmMonitorOptions`, `spawn_monitor`.
-- **Tool handler**: `codex-rs/core/src/tools/handlers/monitor.rs` — `MonitorHandler` implementing `ToolHandler`, dispatches `arm` / `kill` / `list`.
-- **Session integration**: `codex-rs/core/src/state/service.rs` adds `monitor_registry: Arc<MonitorRegistry>` to `SessionServices`. `session/session.rs` initializes it at session construction. `session/handlers.rs:shutdown()` calls `abort_all`.
-- **Tool spec**: `codex-rs/core/src/tools/spec.rs` builds the JSON-schema spec and registers the handler unconditionally at the tail of the registry-build function.
+- **Runtime**: `codex-rs/core/src/monitor.rs` — `MonitorRegistry`, `MonitorEntry`,
+  `ArmMonitorOptions`, `spawn_monitor`.
+- **Tool handler**: `codex-rs/core/src/tools/handlers/monitor.rs` — `MonitorHandler`,
+  dispatching `arm` / `kill` / `list`.
+- **Registration**: `codex-rs/core/src/tools/spec_plan.rs` registers `MonitorHandler`
+  unconditionally when the tool registry is built.
+- **Session integration**: `codex-rs/core/src/state/service.rs` holds
+  `monitor_registry: Arc<MonitorRegistry>` on the session services;
+  `session/session.rs` creates it; `session/handlers.rs` aborts every watcher at
+  shutdown.
 
-## Comparison to Claude Code's `Monitor`
+## Compared with Claude Code's `Monitor`
 
 | Aspect | Claude Code `Monitor` | ecodex `monitor` |
 |---|---|---|
-| Watches existing task | Yes (takes `task_id` from prior `Bash` w/ `run_in_background: true`) | No (bundles spawn + watch in one call) |
-| Pattern matching | Regex on stream | Regex on stream (identical) |
-| Wake mechanism | Harness injects into conversation | `Session::inject_response_items` → pending input |
-| Persistent mode | Yes | Yes |
-| Disarm | `TaskStop` on the underlying task | `{"action":"kill","monitor_id":"..."}` |
-| Per-session cleanup | Harness handles | `monitor_registry.abort_all()` in `shutdown()` |
+| What it watches | a shell command it starts (or a WebSocket) | a command it starts (argv) |
+| Pattern matching | filtering is done in the command itself (`grep --line-buffered`) | a regex argument on the tool |
+| Lifetime | expires after at most 30 minutes; the agent re-arms it | `persistent: true` stays armed until killed or the stream ends |
+| Wake mechanism | the harness injects a notification into the conversation | mailbox injection into pending input |
+| Disarm | `TaskStop` | `{"action": "kill", "monitor_id": "…"}` |
+| Session cleanup | the harness | `abort_all()` at shutdown |
 
-The bundled spawn+watch is a deliberate divergence: codex's `shell` tool is synchronous and has no native `run_in_background` flag. Bundling keeps the API atomic for the common use case (held connection) without requiring a separate background-shell primitive. If codex later gains a background-shell tool, this can be split.
+The lifetime row is the one that matters for long watches: an ecodex watch costs nothing
+while it waits, whereas a capped watch has to be re-armed by a model turn each time it
+expires.
 
 ## Smoke test
 
-Once ecodex is rebuilt + reinstalled, an agent can verify the round trip:
+After rebuilding and reinstalling ecodex, an agent can check the round trip:
 
 ```
-Arm a monitor on `seq 1 5 | tr ' ' '\n' && sleep 60`,
-with pattern `^3$`, persistent=false.
+Arm a monitor on `sh -c 'seq 1 5; sleep 60'` with pattern `^3$` and persistent false.
 ```
 
-The watcher will see lines `1`, `2`, `3` (match → wake → disarm), then the child stays alive but the watcher has exited. The agent should receive a `<task-notification>` containing `<matched-line>3</matched-line>` within a few hundred milliseconds.
+The watcher sees `1`, `2`, `3` (match → wake → disarm), and `list` no longer shows it.
+The agent should receive a `<task-notification>` containing
+`<matched-line>3</matched-line>` within a few hundred milliseconds.
