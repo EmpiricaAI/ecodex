@@ -16,10 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   sandbox opt-in (the auto-merge had dropped it from upstream's new settings struct),
   ecodex update commands and release URLs. Upstream's new logo renderer now draws the
   Empirica "E" mark on the welcome screen and fresh conversations.
-- **Re-vendored empirica hooks to 1.14.1** — the silent-failure fix class
-  (transaction-open predicate, hook counters read from the right file, claim lookups
-  that fail no longer deny), `ran` claims that certify only with scope and count, and
-  CHECK thresholds keyed on the practitioner.
+- **Re-vendored empirica hooks to 1.14.3** — the silent-failure fix class
+  (transaction-open predicate, hook counters read from and kept beside the right
+  transaction, claim lookups that fail no longer deny, the Sentinel says when it cannot
+  run instead of silently allowing), `ran` claims that certify only with scope and
+  count, CHECK thresholds keyed on the practitioner, and a pre-compact snapshot of the
+  transaction the Sentinel would actually find.
 - **The model-facing empirica prompts were rewritten for empirica 1.14**: the base
   instructions and the `AGENTS.md` reminder now teach the claims contract, falsifiers,
   the artifact types and retraction, and use ecodex's own tool names.
