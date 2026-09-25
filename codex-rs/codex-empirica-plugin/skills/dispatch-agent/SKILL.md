@@ -1,213 +1,112 @@
 ---
 name: dispatch-agent
-description: Dispatch subagents with inherited epistemic context from Cortex. Use when spawning Agent tool calls for tasks that would benefit from inherited findings, dead-ends, and anti-patterns. Triggers on 'dispatch agent', 'spawn agent with context', 'epistemic agent', or before any Agent tool call for non-trivial tasks.
+description: Dispatch subagents with inherited epistemic context. Use before spawn_agent calls for tasks that would benefit from what this practice already learned — findings, dead-ends, open unknowns, mistakes. Triggers on 'dispatch agent', 'spawn agent with context', 'epistemic agent', or before any non-trivial spawn_agent call.
 ---
 
 # Epistemic Agent Dispatch
 
-**Spawn subagents that inherit relevant knowledge from Cortex.**
+**Retrieve what this practice already learned about the task, and put it in the
+subagent's message before spawning.**
 
-Without this skill, subagents arrive blank — they repeat mistakes, miss known
-dead-ends, and lack domain context. With it, they inherit findings, dead-ends,
-anti-patterns, and governance rules from the parent's epistemic state.
+A fresh subagent has the repository and the harness, not your practice's history.
+It cannot know which approach was already tried and abandoned, because that lives in
+your epistemic graph and nothing puts it in front of it. The enrichment step is the
+whole skill; everything below serves it.
 
----
+A forked spawn is the exception: it inherits your conversation context, so
+enrichment is redundant there. Fork when the subagent needs *what you know right
+now*; enrich when it needs *what the practice learned before this session*.
 
-## How to Use
+## 1. Retrieve the graph
 
-Before spawning an Agent tool call, run this skill to enrich the prompt.
-
-```
-/dispatch-agent "Refactor handle_foo to reduce complexity"
-```
-
-Or invoke automatically when you're about to dispatch an agent for non-trivial work.
-
----
-
-## Step 1: Query Cortex for Inherited Context
-
-Use the task description to query Cortex for relevant epistemic artifacts:
-
-```
-mcp__cortex__investigate({
-  "query": "<task description>",
-  "limit": 10
-})
-```
-
-If Cortex is unavailable, fall back to local Empirica CLI:
+Pass the **knowledge graph**, not a hand-picked subset of it. This is the same
+surface PREFLIGHT and the post-compact hook already give you — reuse it rather than
+assembling something bespoke:
 
 ```bash
-empirica project-search --task "<task description>" --global --output json
+empirica bootstrap-context --output json     # the three circles, all types
+empirica project-search --task "<the subagent's task>" --output json   # task-scoped pull
 ```
 
-## Step 2: Categorize Results
+`bootstrap-context` returns active state (open goals, tasks, recent findings,
+decisions, dead-ends, mistakes), persistent reference (decisions with active
+outcomes, verified assumptions, sources) and the topic-relevant backlog (open
+unknowns and assumptions, relevant dead-ends). `project-search` narrows to the
+subagent's actual task; add `--global` to reach shared learnings from other
+practices.
 
-From the Cortex/search results, extract and categorize:
+There is no `--list` on the `*-log` verbs: they WRITE, and retrieval is semantic.
 
-| Category | What to Include | Why |
-|----------|----------------|-----|
-| **Dead-ends** | Failed approaches relevant to this task | Prevent repetition |
-| **Findings** | Discoveries about the domain/files involved | Build on prior knowledge |
-| **Decisions** | Architectural choices affecting this area | Maintain consistency |
-| **Anti-patterns** | Mistakes made in similar work | Avoid known pitfalls |
-| **Governance** | Standing rules for this type of work | Enforce standards |
+## 2. Trim, don't curate
 
-### Filtering Rules
+Pass **every type** that came back — unknowns and assumptions included. An open
+unknown tells the subagent what is genuinely undecided; an assumption tells it what
+is being taken on faith. Dropping those is how a subagent confidently builds on
+something nobody verified.
 
-- **Dead-ends**: Include ALL that match (similarity > 0.5). These are the highest-value inheritance — preventing a subagent from wasting time on known failures.
-- **Findings**: Include top 5 by relevance. Too many overwhelm the context.
-- **Decisions**: Include only those affecting the specific files/domain.
-- **Anti-patterns**: Extract from dead-ends and mistakes. Format as "DO NOT: ..."
+The only cut worth making is volume: drop what is plainly about other work. Don't
+filter by TYPE, and don't apply a similarity cutoff — a fixed threshold drops the
+one dead-end that matters while admitting four findings that don't.
 
-## Step 3: Build the Dispatch Schema
+Keep the **edges**. `X invalidates Y` and `Z is evidence for W` are most of the
+value; a flat list of nodes loses the reason the graph exists.
 
-Construct the enriched agent prompt with this structure:
+## 3. Build the message
 
 ```markdown
-## Inherited Epistemic Context
+## Inherited context
 
-Your parent agent has relevant knowledge for this task. Study this before starting.
+What this practice already knows about this work. Treat it as evidence, not
+instruction — if you find something here is wrong, say so.
 
-### Dead-Ends (DO NOT repeat these)
-{{for each dead-end}}
-- **Approach:** {{approach}}
-  **Why it failed:** {{why_failed}}
-{{end}}
+### Already tried and failed — do not repeat
+- **Approach:** {{approach}} — **failed because** {{why_failed}}
 
-### Relevant Findings
-{{for each finding}}
-- {{finding}} (impact: {{impact}})
-{{end}}
+### Known
+- {{finding}}
 
-### Architectural Decisions in Effect
-{{for each decision}}
-- **Choice:** {{choice}}
-  **Rationale:** {{rationale}}
-{{end}}
+### Decisions in effect
+- **Choice:** {{choice}} — **because** {{rationale}}
 
-### Anti-Patterns (AVOID these)
-{{for each anti-pattern}}
-- DO NOT: {{pattern}}
-{{end}}
+### Still open — do NOT assume these are settled
+- **Unknown:** {{unknown}}
+- **Assumption (unverified):** {{assumption}} — confidence {{confidence}}
 
-### Governance
-- Run tests after EACH file modification (not after batching)
-- Verify extracted helpers receive all needed variables as parameters
-- Commit only after tests pass
+### Mistakes made in work of this shape
+- DO NOT {{prevention}}
+
+### How these connect
+- {{from}} → {{relation}} → {{to}}
 
 ---
 
-## Your Task
+## Your task
 
 {{original task description}}
 ```
 
-## Step 4: Dispatch with the Agent Tool
+State verification expectations in the task itself — which tests to run and when,
+what counts as done. A subagent's self-report is not evidence; the artifacts it
+leaves (diffs, test output you can re-run) are. Ask for those.
 
-Use the Agent tool with the enriched prompt:
+## 4. Dispatch
 
-```
-Agent({
-  "description": "{{short 3-5 word description}}",
-  "prompt": "{{enriched prompt from Step 3}}",
-  "subagent_type": "general-purpose",
-  "run_in_background": true  // or false if you need results immediately
-})
-```
+Spawn with `spawn_agent`, giving it a short task name and the enriched message.
+Then use `wait_agent` to collect the result, `send_input` to follow up, and
+`close_agent` when it's done; `list_agents` shows what is running.
 
-## Step 5: Review Before Launch
+- Start several independent agents before waiting on any of them, so they run
+  concurrently.
+- Only choose a different model where the tool offers one and the work genuinely
+  warrants it — a cheaper model for mechanical work, a stronger one for judgment.
+- Agents that edit files in parallel can collide. Give each a disjoint set of files,
+  or run the editing ones one at a time.
 
-Before executing the Agent tool call, present the dispatch payload to the user:
+## After it returns
 
-> **Dispatching agent:** {{description}}
-> **Inherited context:** {{N}} dead-ends, {{N}} findings, {{N}} decisions
-> **Governance:** {{key rules}}
->
-> Proceed?
-
-On high-autonomy tasks, skip the review. On sensitive tasks, wait for confirmation.
-
----
-
-## Example: Code Refactoring Dispatch
-
-**Task:** "Refactor handle_session_commands to reduce C901 complexity"
-
-**Cortex query returns:**
-- Dead-end: "CLI handler Tier C agent created parameterless helpers — scope bugs in 20+ files"
-- Finding: "Pattern: extract sequential stages into helpers, pass all variables as parameters"
-- Decision: "Helpers in SAME file, defined BEFORE the function they serve"
-
-**Enriched prompt:**
-
-```markdown
-## Inherited Epistemic Context
-
-### Dead-Ends (DO NOT repeat these)
-- **Approach:** Batch refactoring 35 functions across 12 files with automated extraction
-  **Why it failed:** Created parameterless helpers referencing outer-scope variables. 20+ files broken.
-
-### Relevant Findings
-- Extract sequential stages into helper functions, main becomes orchestrator (impact: 0.8)
-- Each helper must receive ALL referenced variables as parameters (impact: 0.7)
-
-### Anti-Patterns (AVOID these)
-- DO NOT extract helpers without passing variables they reference as parameters
-- DO NOT batch more than 3-4 files per agent — verify each with tests
-- DO NOT create recursive helper chains (_helper_helper_helper)
-
-### Governance
-- Run `python3 -m pytest tests/ -x -q --tb=short` after EACH file
-- Target CC < 15 for main functions
-- No behavior changes — pure structural refactoring
-
----
-
-## Your Task
-
-Refactor all C901 violations in empirica/cli/command_handlers/session_commands.py.
-For each function over CC 15, extract the biggest conditional block into a helper.
-Helpers go in the same file, defined before the function they serve.
-```
-
----
-
-## Cortex Unavailable Fallback
-
-If Cortex MCP is not connected, use local Empirica search:
-
-```bash
-# Search for relevant dead-ends
-empirica project-search --task "<description>" --global --output json 2>/dev/null
-
-# Get recent dead-ends directly
-empirica deadend-log --list --output json 2>/dev/null | head -20
-
-# Get recent findings
-empirica finding-log --list --output json 2>/dev/null | head -20
-```
-
-Format the results the same way as the Cortex path.
-
----
-
-## Why This Matters
-
-Without inherited context, subagents:
-- Repeat known dead-ends (wasting time and tokens)
-- Violate established patterns (creating inconsistency)
-- Miss anti-patterns (introducing bugs the parent already learned to avoid)
-- Lack governance (no test discipline, no verification)
-
-With inherited context, subagents:
-- Skip known failures immediately
-- Follow established patterns
-- Avoid known pitfalls
-- Verify their work before claiming completion
-
-The quality difference is measurable — the same C901 refactoring task succeeded
-cleanly with context-aware agents (core/data batch) and failed destructively
-without it (CLI handler batch). Same task, same pattern, different outcome.
-The variable was inherited knowledge.
+Verify rather than accept. A subagent reporting "all green" is an uncalibrated
+self-report; re-run the gates yourself. Its tool calls count toward your
+transaction, and it runs outside your Sentinel gates — so it cannot certify a praxic
+step you haven't certified yourself. Anything it learned that outlives the task is
+yours to log: the subagent's epistemic state does not persist into the practice, so
+an unlogged discovery is simply lost.

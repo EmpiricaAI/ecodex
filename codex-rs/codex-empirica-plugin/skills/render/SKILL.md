@@ -209,13 +209,13 @@ line immediately before the opening ` ``` ` fence of the code block.
 **Important:** The ASCII art stays unchanged. The spec comment is metadata that tells
 mdview how to render it. Humans still see the ASCII art in their editor.
 
-Use the Edit tool to insert the comment line before each code block that needs one.
+Insert the comment line before each code block that needs one with `apply_patch`.
 
 ---
 
 ## Phase 4: Render
 
-After embedding all specs, render via mdview:
+After embedding all specs, render via mdview. If `mdview` is not on your `PATH`, stop here and tell the user the specs are embedded but nothing was rendered — don't report a render that did not happen.
 
 ```bash
 # Render to HTML
@@ -272,18 +272,9 @@ Total: 1/7 ASCII blocks have embedded DiagramSpec (14%)
 
 ---
 
-## Design Philosophy
+## Why the spec is worth embedding
 
-The heuristic routing in mdview (`routing.py`, `boxrender.py`, etc.) exists for non-AI
-scenarios — humans pasting ASCII art without spec metadata. It's a best-effort fallback.
-
-In AI-assisted workflows (which is the primary use case), the AI **always knows** what
-it's drawing. This skill ensures that knowledge gets persisted as DiagramSpec JSON
-alongside the content. Once embedded:
-
-- Any future render (by any tool, any user) produces the same high-quality output
-- No network calls to kroki.io or mermaid.ink for ASCII diagrams
-- Themed SVG with dark/light mode support via asciisvg
-- The ASCII art in the markdown is still human-readable in any editor
-
-**The AI's intelligence gets persisted, not thrown away.**
+mdview's heuristic routing exists for ASCII art that arrives without a spec. When you
+drew the diagram, you already know its structure; embedding that as DiagramSpec means
+every later render — by any tool or user — produces the same themed SVG, with no
+network calls, while the ASCII stays readable in any editor.
