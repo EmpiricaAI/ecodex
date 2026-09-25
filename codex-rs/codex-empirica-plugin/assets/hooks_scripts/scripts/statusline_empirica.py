@@ -411,8 +411,17 @@ def get_dynamic_threshold(db) -> tuple:
         from empirica.core.post_test.dynamic_thresholds import compute_dynamic_thresholds
         from empirica.utils.session_resolver import InstanceResolver as R
 
-        # Per-practice Brier thresholds — resolve the canonical ai_id.
-        dt = compute_dynamic_thresholds(ai_id=R.ai_id() or "claude-code", db=db)
+        # The SAME basis the gate enforces. Without the model the statusline
+        # showed the practice-wide threshold while sentinel-gate.py enforced the
+        # practitioner's own, and those diverge as soon as a model has enough
+        # points of its own — a number on screen that is not the number in force.
+        try:
+            from empirica.utils.practitioner_model import practitioner_model_now
+
+            _model = practitioner_model_now()
+        except Exception:
+            _model = None
+        dt = compute_dynamic_thresholds(ai_id=R.ai_id() or "claude-code", db=db, practitioner_model=_model)
         if dt.get("source") == "dynamic":
             noetic = dt.get("noetic", {})
             if noetic.get("brier_score") is not None:
@@ -620,8 +629,50 @@ def _read_project_path_from_json(file_path: Path, key: str = "project_path") -> 
     return None
 
 
+def _prefer_cwd(mapped: str, cwd_root: str | None) -> str:
+    """The stale-mapping guard: a checkout you are standing in beats a mapping.
+
+    Same rule as `InstanceResolver.get_active_project_path`, which already does
+    this and says so in a log line nobody reading a statusline will ever see.
+    """
+    if not cwd_root:
+        return mapped
+    try:
+        if Path(mapped).resolve() != Path(cwd_root).resolve():
+            return cwd_root
+    except OSError:
+        pass
+    return mapped
+
+
+def _cwd_project_root() -> str | None:
+    """The cwd, when it is itself a project ROOT with its own store.
+
+    Not a walk-up: standing in a subdirectory is not the same claim as standing
+    in the checkout, and walking up would pick a parent practice for a worktree.
+    """
+    here = Path.cwd()
+    if (here / ".empirica" / "project.yaml").is_file() and (here / ".empirica" / "sessions" / "sessions.db").exists():
+        return str(here)
+    return None
+
+
 def _resolve_project_path(stdin_claude_session_id=None) -> str | None:
-    """Resolve project path via 6-tier priority chain. Returns path or None."""
+    """Resolve project path via 6-tier priority chain. Returns path or None.
+
+    The cwd wins over a mapping that points somewhere else, for the reason
+    `InstanceResolver.get_active_project_path` already applies its stale-mapping
+    guard: a mapping records where some earlier command ran, and standing in a
+    checkout is a present fact about which practice this is.
+
+    Two resolvers, one guarded, was the defect — the library one corrected the
+    path and logged that it had, while this one silently opened the other store,
+    found no session for this practice in it, and rendered `[empirica:inactive]`.
+    A scratch `session-create` elsewhere on the box was enough to blank a working
+    practitioner's statusline, twice in one afternoon.
+    """
+    cwd_root = _cwd_project_root()
+
     # Priority 0: instance_projects
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
@@ -630,7 +681,7 @@ def _resolve_project_path(stdin_claude_session_id=None) -> str | None:
         if inst_id:
             result = _read_project_path_from_json(Path.home() / ".empirica" / "instance_projects" / f"{inst_id}.json")
             if result:
-                return result
+                return _prefer_cwd(result, cwd_root)
     except Exception:
         pass
 
@@ -638,7 +689,7 @@ def _resolve_project_path(stdin_claude_session_id=None) -> str | None:
     if stdin_claude_session_id:
         result = _read_project_path_from_json(Path.home() / ".empirica" / f"active_work_{stdin_claude_session_id}.json")
         if result:
-            return result
+            return _prefer_cwd(result, cwd_root)
 
     # Priority 2: env var
     env_path = os.getenv("EMPIRICA_PROJECT_PATH")

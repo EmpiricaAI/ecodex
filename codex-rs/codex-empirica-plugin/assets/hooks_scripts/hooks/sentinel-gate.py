@@ -165,6 +165,23 @@ SAFE_BASH_PREFIXES = (
     "file ",
     "stat ",
     "wc ",
+    # Hashing — read-only, and the gate was actively discouraging the safer move.
+    # A bare `sha256sum <path>` was denied as praxic during mesh patch intake: one
+    # command, no redirect, no chain, while `rg` and Read on the same file flowed.
+    # Hashing is THE integrity check for bytes a peer sent, so gating it pushes the
+    # practitioner toward trusting the SENDER instead of the bytes — the gate
+    # discouraged the safer behaviour.
+    #
+    # None of these has a write mode, so unlike find/sort/sed they need no entry in
+    # the write-flag inspection below: there is no --output form to guard. They read
+    # a file (or stdin) and print a digest.
+    "sha256sum ",
+    "sha1sum ",
+    "sha512sum ",
+    "md5sum ",
+    "b2sum ",
+    "cksum ",
+    "shasum ",
     "find ",
     "locate ",
     "which ",
@@ -564,6 +581,12 @@ UNCERTAINTY_THRESHOLD = 0.35
 MAX_CHECK_AGE_MINUTES = 30
 
 
+# The Claude session id of the hook invocation, set once in main(). Read by
+# _get_dynamic_thresholds to find the practitioner's model without threading the
+# id through every gate that asks for thresholds.
+_hook_claude_session_id: str | None = None
+
+
 def _get_dynamic_thresholds(db) -> tuple:
     """Read Brier-based dynamic thresholds. Returns (know_threshold, unc_threshold).
 
@@ -592,7 +615,18 @@ def _get_dynamic_thresholds(db) -> tuple:
 
         # Brier thresholds are per-practice — resolve the canonical ai_id so a
         # multi-practice machine doesn't read 'claude-code' calibration for all.
-        dt_result = compute_dynamic_thresholds(ai_id=R.ai_id() or "claude-code", db=db, base_thresholds=_cal_base)
+        # Within the practice, the practitioner's own trajectory when it has
+        # enough points (David, 2026-09-21); the practice's otherwise.
+        _model = None
+        try:
+            from empirica.utils.practitioner_model import practitioner_model_now
+
+            _model = practitioner_model_now(_hook_claude_session_id)
+        except Exception:
+            _model = None
+        dt_result = compute_dynamic_thresholds(
+            ai_id=R.ai_id() or "claude-code", db=db, base_thresholds=_cal_base, practitioner_model=_model
+        )
         if dt_result.get("source") == "dynamic":
             noetic = dt_result.get("noetic", {})
             if noetic.get("brier_score") is not None:
@@ -1163,6 +1197,41 @@ def is_toggle_command(command: str) -> str | None:
     return None
 
 
+# Consumers a heredoc trailer may pipe into BETWEEN TRANSACTIONS. Deliberately NOT
+# SAFE_PIPE_TARGETS: that list serves the noetic-read context and includes
+# `python3 -c`, `awk`, `sed` and `xargs echo` — arbitrary execution, `system()`,
+# `w file`. A must-stay-denied test caught the first draft of the helper below
+# waving `| python3 -c` through on the strength of that list. Nothing here can
+# execute or write: no `sort` (-o), no `uniq` (output operand), no interpreters.
+_INERT_TRAILER_TARGETS = ("head", "tail", "wc", "grep", "rg", "cut", "tr", "cat", "jq")
+
+
+def _heredoc_trailer_is_inert(trailer: str) -> bool:
+    """Is the text after a heredoc delimiter, on the same line, provably harmless?
+
+    `empirica preflight-submit - << 'EOF' 2>&1 | tail -2` carries a trailer of
+    `2>&1 | tail -2`. That is the everyday way to read a JSON response and must be
+    allowed; `| python3 -c "..."` and `> /etc/hosts` must not, because a trailer is
+    a place a second command can ride in on a transition command's coat-tails.
+
+    Inert means: after removing the known-safe stderr/null redirects, nothing is
+    left but pipes into the strict consumers in _INERT_TRAILER_TARGETS. Any other
+    redirect, any chain operator, any substitution → not inert. Deliberately an
+    allowlist: an unrecognised trailer is refused, not guessed at.
+    """
+    rest = SAFE_REDIRECT_PATTERN.sub(" ", trailer).strip()
+    if not rest:
+        return True
+    if any(tok in rest for tok in (";", "&&", "||", "`", "$(", ">", "<")) or re.search(r"(?<!\|)&(?!&)", rest):
+        return False
+    if not rest.startswith("|"):
+        return False
+    stages = [s.strip() for s in rest.split("|")[1:]]
+    if not stages or any(not s for s in stages):
+        return False
+    return all(any(s == t or s.startswith(t + " ") for t in _INERT_TRAILER_TARGETS) for s in stages)
+
+
 def is_transition_command(command: str) -> bool:
     """Check if command is a transition command (allowed after POSTFLIGHT).
 
@@ -1209,12 +1278,29 @@ def is_transition_command(command: str) -> bool:
         # text is where a second command hides.
         head_part, _, rest = cmd.partition("<<")
         delim_line, _, body = rest.partition("\n")
-        delim = delim_line.strip().lstrip("-").strip("'\"")
+        # The delimiter is the FIRST TOKEN after `<<`, not the rest of the line.
+        # This used to take the whole remainder, so `<< 'EOF' 2>&1 | tail -2` parsed
+        # its delimiter as `EOF' 2>&1 | tail -2`, never found a terminator, and
+        # DENIED — while the single-statement branch above accepted the identical
+        # trailer. `cd /x && empirica preflight-submit - << 'EOF'` was allowed and
+        # the same command with `| tail -2` was not, and the deny told the operator
+        # to run the command they were already running.
+        tokens = delim_line.strip().split(None, 1)
+        if not tokens:
+            return False
+        delim = tokens[0].lstrip("-").strip("'\"")
+        trailer = tokens[1] if len(tokens) > 1 else ""
         if not delim:
             return False
         body_lines = body.split("\n")
         terminator = next((i for i, ln in enumerate(body_lines) if ln.strip() == delim), None)
         if terminator is None or "\n".join(body_lines[terminator + 1 :]).strip():
+            return False
+        # What rides the heredoc line after the delimiter must be INERT: safe
+        # stderr/null redirects, and pipes into read-only consumers only. A pipe
+        # into `python3 -c` or a redirect to a real file is a second command, which
+        # is exactly what this branch exists to refuse.
+        if trailer and not _heredoc_trailer_is_inert(trailer):
             return False
         cmd = head_part
 
@@ -1372,9 +1458,17 @@ def _is_recovery_or_measurement_action(tool_name: str, tool_input: dict | None) 
 
 _autonomy_nudge = ""  # Module-level: set during increment, read by respond
 _goalless_nudge = ""  # Module-level: set when no goals detected, read by respond
-_reread_nudge = ""  # Module-level: set when Read tool targets already-read file
+# The tool-call count this invocation just wrote (None: not a counted parent
+# session, or the increment failed). The goalless check reads THIS, not a
+# second lookup of the file: a reader with its own locator resolved a
+# different transaction file on some calls and read 0 (mesh-support, 2026-09-18).
+_tool_call_count: int | None = None
+# The transaction the tracker just counted against: its id, PREFLIGHT time and
+# store. The goalless check runs from these, beside the autonomy nudge, BEFORE
+# main()'s early exits - it lived inside the authorization pipeline, which the
+# noetic fast path skips, so it never ran on read-only calls (the 3-of-6 misses).
+_counted_tx: dict | None = None
 _file_relevance_nudge = ""  # Module-level: set when artifacts reference an Edit/Write target
-_last_read_count = 0  # Module-level: how many times current file was read this tx
 
 
 def _find_transaction_file(
@@ -1531,17 +1625,12 @@ def _track_edited_files(counters: dict, tool_name: str, tool_input: dict | None)
             counters["edited_files"] = edited
 
 
-def _track_read_files(counters: dict, tool_name: str, tool_input: dict | None) -> None:
-    """Track read file paths for re-read advisory. Sets global _last_read_count."""
-    global _last_read_count
-    if tool_name != "Read" or not tool_input:
-        return
-    fp = tool_input.get("file_path", "")
-    if fp:
-        read_counts = counters.get("read_files", {})
-        read_counts[fp] = read_counts.get(fp, 0) + 1
-        counters["read_files"] = read_counts
-        _last_read_count = read_counts[fp]
+# RETIRED 2026-09-18 (David's ruling, goal d6559f6e): the re-read nudge and
+# read-file tracking. Both acted only on tool_name == "Read", and Sentinel is
+# registered for Bash and Edit|Write only, so neither ever ran. Hooking Read
+# would cost ~75 ms on the most frequent call (measured 73-77 ms). Deleted
+# rather than left dormant: a dormant nudge is indistinguishable from a working
+# one with nothing to say.
 
 
 def _extract_trace_target(tool_name: str, tool_input: dict | None) -> str:
@@ -1632,6 +1721,18 @@ def _stamp_blocked_presence(claude_session_id: str | None, tool_input: dict | No
         pass
 
 
+def _hook_counters_path(tx_path: Path, suffix: str) -> Path:
+    """Where the hook-owned counters live: beside the transaction file, never in it.
+
+    The transaction file is workflow-owned (PREFLIGHT/POSTFLIGHT write it) and
+    the counters were split out to give each file a single writer. Readers that
+    looked for tool_call_count in the transaction file got 0 forever - the
+    goalless nudge (fixed 2026-09-18) and task-completed's POSTFLIGHT prompt.
+    One function for the path so a reader cannot drift from the writer again.
+    """
+    return tx_path.parent / f"hook_counters{suffix}.json"
+
+
 def _try_increment_tool_count(
     claude_session_id: str | None = None, tool_name: str | None = None, tool_input: dict | None = None
 ) -> tuple:
@@ -1658,10 +1759,16 @@ def _try_increment_tool_count(
         if tx.get("status") != "open":
             return 0, 0
 
+        global _counted_tx
+        _counted_tx = {
+            "transaction_id": tx.get("transaction_id"),
+            "preflight_timestamp": tx.get("preflight_timestamp"),
+            "db_path": tx_path.parent / "sessions" / "sessions.db",
+        }
         avg = tx.get("avg_turns", 0)
 
         # Read existing counters
-        counters_path = tx_path.parent / f"hook_counters{suffix}.json"
+        counters_path = _hook_counters_path(tx_path, suffix)
         counters = {}
         if counters_path.exists():
             try:
@@ -1681,7 +1788,6 @@ def _try_increment_tool_count(
 
         if tool_name:
             _track_edited_files(counters, tool_name, tool_input)
-            _track_read_files(counters, tool_name, tool_input)
 
         if tool_name == "AskUserQuestion":
             counters["pending_user_response"] = True
@@ -1727,23 +1833,17 @@ def _compute_nudge(count: int, avg: int) -> str:
 
 def respond(decision: str, reason: str = "") -> None:
     """Output in Claude Code's expected format. Appends nudges on allow."""
-    global _autonomy_nudge, _goalless_nudge, _reread_nudge, _remote_ops_nudge, _worktype_nudge, _file_relevance_nudge
+    global _autonomy_nudge, _goalless_nudge, _remote_ops_nudge, _worktype_nudge, _file_relevance_nudge
     full_reason = reason
     show_nudge = False
     if decision == "allow" and (
-        _autonomy_nudge
-        or _goalless_nudge
-        or _reread_nudge
-        or _remote_ops_nudge
-        or _worktype_nudge
-        or _file_relevance_nudge
+        _autonomy_nudge or _goalless_nudge or _remote_ops_nudge or _worktype_nudge or _file_relevance_nudge
     ):
         nudges = " | ".join(
             n
             for n in [
                 _autonomy_nudge,
                 _goalless_nudge,
-                _reread_nudge,
                 _remote_ops_nudge,
                 _worktype_nudge,
                 _file_relevance_nudge,
@@ -1760,6 +1860,13 @@ def respond(decision: str, reason: str = "") -> None:
             "permissionDecisionReason": full_reason,
         }
     }
+    if show_nudge:
+        # The nudges must ride additionalContext. On "allow", Claude Code discards
+        # permissionDecisionReason before the model sees it — measured 2026-09-18
+        # with a headless run and a positive control (the hook ran, its reason
+        # never arrived; additionalContext in the same response did). Every nudge
+        # below was written for a channel nobody read until this line.
+        output["hookSpecificOutput"]["additionalContext"] = f"Sentinel: {nudges}"
     # Suppress output for "allow" UNLESS there's a nudge to show Claude
     if decision == "allow" and not show_nudge:
         output["suppressOutput"] = True
@@ -3615,6 +3722,23 @@ def _check_postflight_loop_closed(
                 if is_safe_empirica_statement(command):
                     return ("allow", "Empirica command between transactions (artifact lifecycle / read-only)")
 
+                # The refused command CONTAINS a transition command. Telling this
+                # operator to "run preflight-submit" prescribes the command they
+                # just ran — there is no path out, and a verbatim retry fails
+                # identically. A peer hit exactly that three times and then tried a
+                # fresh session. Say what is actually wrong instead: the preflight
+                # shares its call with something the gate will not wave through.
+                if any(p in command for p in TRANSITION_COMMANDS if p.startswith("empirica ")):
+                    return (
+                        "deny",
+                        "Epistemic loop closed, and this call was refused even though it contains a "
+                        "transition command — because it ALSO contains something else. Between "
+                        "transactions a PREFLIGHT must be the only thing in its Bash call: nothing "
+                        "after the heredoc terminator, no chained command, and only an inert "
+                        "trailer on the heredoc line (2>&1, then pipes into head/tail/wc/grep/jq "
+                        "only). Re-run `empirica preflight-submit -` ALONE, then run the rest.",
+                    )
+
             return (
                 "deny",
                 "Epistemic loop closed (POSTFLIGHT completed). Run new PREFLIGHT to start next goal. Command: empirica preflight-submit - (JSON with vectors on stdin)",
@@ -3635,6 +3759,11 @@ def _check_postflight_loop_closed(
 RUSH_GUARD_EXEMPT_WORK_TYPES = frozenset({"remote-ops"})
 
 
+#: Why the last grounded-claims lookup could not answer, or None. Read by the
+#: deny that follows a False, so "lookup failed" never renders as "declared nothing".
+_claims_lookup_error: str | None = None
+
+
 def _has_grounded_claims(cursor, session_id, current_transaction_id) -> bool:
     """True when PREFLIGHT declared at least one claim grounded by `read` or `ran`.
 
@@ -3642,7 +3771,8 @@ def _has_grounded_claims(cursor, session_id, current_transaction_id) -> bool:
     queries `transaction_claims` directly on the cursor already in hand — the same
     way the rush guard reads project_findings/project_unknowns.
 
-    Only `read` and `ran` certify. `retrieved` and `assumed` deliberately do not:
+    Only `read`, and `ran` with a scope AND a count, certify - the same rule as
+    empirica.core.claims.certifies (hooks cannot import it; a test pins both). `retrieved` and `assumed` deliberately do not:
     our own prior artifacts are testimony rather than observation, and `assumed`
     is by definition the absence of grounding. That asymmetry is what stops this
     from becoming a new rubber stamp — you cannot certify by declaring confidence,
@@ -3651,23 +3781,66 @@ def _has_grounded_claims(cursor, session_id, current_transaction_id) -> bool:
     Fail-CLOSED: any error returns False, so a missing table or a query problem
     means "not certified" and the normal CHECK path applies. A gate that fails
     open is worse than one that occasionally asks for a CHECK you did not need.
+
+    But a failure must not READ as "you declared nothing": the deny that
+    follows told the practitioner to re-run PREFLIGHT with claims, which is the
+    one remedy that cannot work when the lookup itself is broken (a pre-071
+    database, a missing column). The cause is kept in `_claims_lookup_error`
+    for the deny message to name. Return type stays bool — this is a seam.
     """
+    global _claims_lookup_error
+    _claims_lookup_error = None
     try:
         if current_transaction_id:
             cursor.execute(
                 "SELECT COUNT(*) FROM transaction_claims "
-                "WHERE session_id = ? AND transaction_id = ? AND grounding IN ('read','ran')",
+                "WHERE session_id = ? AND transaction_id = ? AND (grounding = 'read' OR (grounding = 'ran' AND TRIM(COALESCE(scope,'')) <> '' AND measured_count IS NOT NULL))",
                 (session_id, current_transaction_id),
             )
         else:
             cursor.execute(
-                "SELECT COUNT(*) FROM transaction_claims WHERE session_id = ? AND grounding IN ('read','ran')",
+                "SELECT COUNT(*) FROM transaction_claims WHERE session_id = ? AND (grounding = 'read' OR (grounding = 'ran' AND TRIM(COALESCE(scope,'')) <> '' AND measured_count IS NOT NULL))",
                 (session_id,),
             )
         row = cursor.fetchone()
         return bool(row and row[0])
-    except Exception:
+    except Exception as e:
+        _claims_lookup_error = f"{type(e).__name__}: {str(e)[:160]}"
         return False
+
+
+def _deny_no_check_no_claims() -> tuple[str, str]:
+    """The deny for a praxic tool with no CHECK and no certifying claim.
+
+    Two different facts end here and they need different remedies: the lookup
+    found nothing (declare claims or CHECK), or the lookup could not run
+    (re-declaring cannot help; the store needs attention). The old message
+    only ever said the first.
+    """
+    if _claims_lookup_error:
+        return (
+            "deny",
+            "No CHECK, and the grounded-claims lookup FAILED so declared claims cannot be seen "
+            f"({_claims_lookup_error}).\n"
+            "  → This is not 'you declared nothing'. Run `empirica doctor` (schema / migrations), "
+            "or submit CHECK to proceed the normal way.",
+        )
+    # Praxic tools: deny — but name BOTH legitimate paths. The old message
+    # said only "Run CHECK", which is why skipping read as omission: the one
+    # moment the practitioner is definitely reading, we told them the
+    # ceremony was the only way through.
+    return (
+        "deny",
+        "No CHECK, and no grounded claims declared at PREFLIGHT — nothing yet records "
+        "what this work rests on.\n"
+        "  → If you still need to investigate: do that, then submit CHECK.\n"
+        "  → If you were ALREADY grounded before opening (you read the files first — "
+        "the normal order), re-run PREFLIGHT with `claims`: 2-3 load-bearing claims, "
+        "each with grounding read|ran|retrieved|assumed. One grounded by read, or by ran "
+        "WITH a scope and a count (what you measured over, what it returned), "
+        "certifies the transaction and praxic proceeds — no CHECK needed.\n"
+        "  Skipping CHECK when genuinely grounded is the CORRECT path, not a shortcut.",
+    )
 
 
 def _validate_check_record(
@@ -3762,22 +3935,7 @@ def _validate_check_record(
         # certification while still refusing an all-`assumed` declaration.
         if _has_grounded_claims(cursor, session_id, current_transaction_id):
             return None
-
-        # Praxic tools: deny — but name BOTH legitimate paths. The old message
-        # said only "Run CHECK", which is why skipping read as omission: the one
-        # moment the practitioner is definitely reading, we told them the
-        # ceremony was the only way through.
-        return (
-            "deny",
-            "No CHECK, and no grounded claims declared at PREFLIGHT — nothing yet records "
-            "what this work rests on.\n"
-            "  → If you still need to investigate: do that, then submit CHECK.\n"
-            "  → If you were ALREADY grounded before opening (you read the files first — "
-            "the normal order), re-run PREFLIGHT with `claims`: 2-3 load-bearing claims, "
-            "each with grounding read|ran|retrieved|assumed. One grounded by read or ran "
-            "certifies the transaction and praxic proceeds — no CHECK needed.\n"
-            "  Skipping CHECK when genuinely grounded is the CORRECT path, not a shortcut.",
-        )
+        return _deny_no_check_no_claims()
 
     know, uncertainty, reflex_data, check_timestamp = check_row
 
@@ -3909,50 +4067,97 @@ def _check_prior_investigate(
     return ("ask", "Previous CHECK returned INVESTIGATE. Consider running CHECK with proceed before praxic actions.")
 
 
-def _check_goalless_work(
-    cursor, session_id: str, preflight_project_id, claude_session_id, empirica_root, suffix
-) -> str:
-    """Check if transaction has tool calls but no goals. Returns nudge string or empty."""
-    try:
-        _gl_count = 0
-        if empirica_root:
-            _gl_tx_file = _find_transaction_file(empirica_root, suffix, _resolve_empirica_session_id(claude_session_id))
-            if _gl_tx_file:
-                with open(_gl_tx_file) as _gl_f:
-                    _gl_count = json.load(_gl_f).get("tool_call_count", 0)
+def _goalless_from_counted_tx() -> str:
+    """Run the goalless check for the transaction the tracker just counted.
 
-        if _gl_count < 5:
+    Cheap on the hot path: nothing below 5 calls, and a read-only sqlite3
+    connection rather than SessionDatabase (whose init is heavy).
+    """
+    tx = _counted_tx
+    if not tx or (_tool_call_count or 0) < 5 or not tx.get("transaction_id"):
+        return ""
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{tx['db_path']}?mode=ro", uri=True, timeout=2)
+    except Exception as e:
+        return (
+            f"goalless check could not run ({type(e).__name__}: {e}) - whether this transaction has a goal is UNKNOWN"
+        )
+    try:
+        return _check_goalless_work(conn.cursor(), "", tx["transaction_id"], tx.get("preflight_timestamp"))
+    finally:
+        conn.close()
+
+
+def _check_goalless_work(cursor, session_id: str, transaction_id, preflight_timestamp) -> str:
+    """Nudge when THIS transaction has done >=5 gated tool calls with no goal in play.
+
+    "Gated" means the calls Sentinel sees: Bash and Edit|Write. Read, Grep and
+    Glob are not counted (ruled 2026-09-18, goal d6559f6e), so the effective
+    threshold is later for a practice that reads with those tools than for one
+    that reads through Bash - the same number means different volumes of work.
+
+    "A goal in play" means any of: a goal created in this transaction
+    (goals.transaction_id), a task created or completed since PREFLIGHT (the
+    usual way work proceeds on an older goal), or a finding logged in this
+    transaction against a goal.
+
+    It used to ask whether the whole PROJECT had zero in_progress goals. Any
+    practice with live multi-week work always has one, so the nudge was off
+    everywhere that mattered - measured 2026-09-18: autonomy 18, core 3,
+    cortex 3, outreach 1 open goals, extension 0; every suppressing goal was
+    live work, so tidying goals could not have fixed it.
+    """
+    try:
+        count = _tool_call_count or 0
+        if count < 5 or not transaction_id:
             return ""
 
-        _gl_project_id = preflight_project_id
-        if not _gl_project_id:
-            cursor.execute("SELECT project_id FROM sessions WHERE session_id = ?", (session_id,))
-            _gl_row = cursor.fetchone()
-            _gl_project_id = _gl_row[0] if _gl_row else None
-
-        if _gl_project_id:
+        cursor.execute("SELECT 1 FROM goals WHERE transaction_id = ? LIMIT 1", (transaction_id,))
+        if cursor.fetchone():
+            return ""
+        if preflight_timestamp:
+            # typeof guard: legacy rows hold TEXT timestamps ('2025-12-31 18:24:03'),
+            # and SQLite ranks any TEXT above any number, so a bare >= was true
+            # for them forever and silenced this nudge on every transaction in
+            # any store that has one (5 such rows in core's, 2026-09-18).
             cursor.execute(
-                """
-                SELECT COUNT(*) FROM goals
-                WHERE project_id = ? AND status = 'in_progress'
-            """,
-                (_gl_project_id,),
+                "SELECT 1 FROM subtasks WHERE "
+                "(typeof(created_timestamp) IN ('real','integer') AND created_timestamp >= ?) OR "
+                "(typeof(completed_timestamp) IN ('real','integer') AND completed_timestamp >= ?) LIMIT 1",
+                (preflight_timestamp, preflight_timestamp),
             )
-            if cursor.fetchone()[0] == 0:
-                if _gl_count >= 10:
-                    return (
-                        f"DISCIPLINE: {_gl_count} tool calls with NO GOALS. "
-                        f"Create goals now: empirica goals-create --objective '...'. "
-                        f"Tell the user: 'We should create goals before continuing — "
-                        f"work without goals produces unmeasurable transactions.'"
-                    )
-                return (
-                    f"DISCIPLINE: {_gl_count} tool calls with no goals for this project. "
-                    f"Consider creating goals: empirica goals-create --objective '...'"
-                )
-    except Exception:
-        pass
-    return ""
+            if cursor.fetchone():
+                return ""
+        cursor.execute(
+            "SELECT 1 FROM project_findings WHERE transaction_id = ? AND goal_id IS NOT NULL LIMIT 1",
+            (transaction_id,),
+        )
+        if cursor.fetchone():
+            return ""
+
+        if count >= 10:
+            return (
+                f"DISCIPLINE: {count} gated tool calls in this transaction and NO GOAL in play. "
+                f"Create or claim one now: empirica goals-create --objective '...' "
+                f"(or add/complete a task on the goal you are working). "
+                f"Tell the user: 'We should goal this before continuing — "
+                f"work without a goal produces unmeasurable transactions.'"
+            )
+        return (
+            f"DISCIPLINE: {count} gated tool calls in this transaction and no goal in play. "
+            f"Consider: empirica goals-create --objective '...' or goals-add-task on the goal you are working."
+        )
+    except Exception as e:
+        # Advisory only, so never fatal - but a failing check must not read as
+        # "no nudge needed". Hook stderr reaches no file anyone reads (mesh-support
+        # searched, 2026-09-18), so per the standing sentinel-gate decision the
+        # cause rides the text the practitioner reads: this nudge channel, which
+        # reaches the model since 593acacfc.
+        return (
+            f"goalless check could not run ({type(e).__name__}: {e}) - whether this transaction has a goal is UNKNOWN"
+        )
 
 
 def _check_project_context(cursor, db, session_id: str, preflight_project_id) -> "tuple | None":
@@ -4116,7 +4321,7 @@ def _track_tool_usage(hook_input: dict, tool_name: str, tool_input: dict) -> Non
     Nudge thresholds are informational — Claude decides when to POSTFLIGHT.
     Also sets re-read advisory when Read tool targets already-read file.
     """
-    global _autonomy_nudge, _reread_nudge
+    global _autonomy_nudge, _tool_call_count, _goalless_nudge
     try:
         _claude_sid = hook_input.get("session_id")
         # Only increment for sessions with active_work (parent sessions).
@@ -4125,16 +4330,11 @@ def _track_tool_usage(hook_input: dict, tool_name: str, tool_input: dict) -> Non
         _aw_check = Path.home() / ".empirica" / f"active_work_{_claude_sid}.json"
         if _claude_sid and _aw_check.exists():
             _count, _avg = _try_increment_tool_count(_claude_sid, tool_name, tool_input)
+            _tool_call_count = _count
             _autonomy_nudge = _compute_nudge(_count, _avg)
+            _goalless_nudge = _goalless_from_counted_tx()
     except Exception:
         pass  # Counter failure is non-fatal
-
-    # _try_increment_tool_count sets _last_read_count when tracking Read tool calls.
-    # Advisory only — never blocks. Helps AI conserve context window.
-    if tool_name == "Read" and _last_read_count > 1:
-        _rd_fp = (tool_input or {}).get("file_path", "")
-        _short = Path(_rd_fp).name if _rd_fp else "file"
-        _reread_nudge = f"Re-reading {_short} ({_last_read_count}x this tx). Consider using cached knowledge."
 
 
 def _set_file_relevance_nudge(tool_name: str, tool_input: dict | None, claude_session_id: str | None) -> None:
@@ -4572,12 +4772,6 @@ def _run_authorization_pipeline(hook_input: dict, tool_name: str, tool_input: di
 
         preflight_know, preflight_uncertainty, preflight_timestamp, preflight_project_id = preflight_row
 
-        # Goalless-work advisory nudge
-        global _goalless_nudge
-        _goalless_nudge = _check_goalless_work(
-            cursor, session_id, preflight_project_id, claude_session_id, empirica_root, suffix
-        )
-
         # Sequential pre-CHECK validations
         for check in (
             _check_project_context(cursor, db, session_id, preflight_project_id),
@@ -4706,6 +4900,9 @@ def main():
     # `mcp__cortex__<op>` at this single entry point, so every downstream
     # classification works regardless of how the harness dispatches.
     tool_name = _normalize_aggregated_cortex_tool(tool_name, tool_input)
+
+    global _hook_claude_session_id
+    _hook_claude_session_id = hook_input.get("session_id")
 
     _track_tool_usage(hook_input, tool_name, tool_input)
     _set_file_relevance_nudge(tool_name, tool_input, hook_input.get("session_id"))

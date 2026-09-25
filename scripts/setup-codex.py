@@ -361,7 +361,7 @@ def stamp_vendor_vintage(emp: Path, ref: str) -> None:
             if line.strip().startswith("version =")
         )
         commit = subprocess.run(
-            ["git", "rev-parse", ref], cwd=emp,
+            ["git", "rev-parse", f"{ref}^{{commit}}"], cwd=emp,
             capture_output=True, text=True, check=True,
         ).stdout.strip()
     except (subprocess.CalledProcessError, StopIteration, IndexError) as exc:

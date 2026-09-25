@@ -1046,8 +1046,17 @@ def _adopt_orphaned_transaction(project_root: Path) -> dict:
                 f"Adopted orphaned transaction {tx_data.get('transaction_id', '?')[:8]}... -> new instance",
                 file=sys.stderr,
             )
-        except Exception:
-            pass  # Adoption failure is non-fatal
+        except Exception as e:
+            # Non-fatal, but not silent: the banner above already said
+            # "Adopted", and without this line a failed move leaves the
+            # transaction under the OLD suffix while the new instance is told
+            # it holds one - partial success reported as success. stderr is the
+            # channel the human reads at session start.
+            print(
+                f"  adoption of that transaction FAILED ({type(e).__name__}: {e}) - "
+                f"it stays at {tx_file.name}; CHECK/POSTFLIGHT may not find it under this instance",
+                file=sys.stderr,
+            )
     return {"session_id": session_id, "source": "orphaned_transaction"}
 
 
@@ -1185,21 +1194,6 @@ def _run_stale_cleanup(claude_session_id: str) -> int:
         return 0
 
 
-def _check_version_drift() -> str:
-    """Compare plugin VERSION with CLI version. Returns warning string or empty."""
-    try:
-        plugin_version_file = Path(__file__).parent.parent / "VERSION"
-        if plugin_version_file.exists():
-            plugin_ver = plugin_version_file.read_text().strip()
-            from empirica import __version__ as cli_ver
-
-            if plugin_ver != cli_ver:
-                return f"Plugin v{plugin_ver} != CLI v{cli_ver}. Run: empirica setup --force"
-    except Exception:
-        pass
-    return ""
-
-
 def _bootstrap_for_existing_session(session_id: str, project_root: Path) -> bool:
     """Run project-bootstrap for an existing/adopted session. Returns success."""
     try:
@@ -1231,30 +1225,41 @@ def _write_practitioner_presence(claude_session_id: str, ai_id: str, empirica_se
     """
     if not claude_session_id:
         return
+    base = [
+        "empirica",
+        "practitioner",
+        "write",
+        "--session",
+        claude_session_id,
+        "--ai-id",
+        ai_id,
+        "--empirica-session",
+        empirica_session_id,
+        "--session-pid",
+        str(os.getppid()),
+        "--output",
+        "json",
+    ]
+    # The session records what IT is running; the daemon forwards it.
     try:
-        subprocess.run(
-            [
-                "empirica",
-                "practitioner",
-                "write",
-                "--session",
-                claude_session_id,
-                "--ai-id",
-                ai_id,
-                "--empirica-session",
-                empirica_session_id,
-                "--session-pid",
-                str(os.getppid()),
-                "--output",
-                "json",
-            ],
+        done = subprocess.run(
+            [*base, "--record-build"],
             capture_output=True,
             text=True,
             timeout=10,
             stdin=subprocess.DEVNULL,
         )
-    except Exception:
-        pass
+        # The plugin is shared and user-global while each practice upgrades its
+        # own CLI, so a plugin NEWER than the installed empirica is routine. An
+        # older CLI exits 2 on the unknown flag, and with the result unread the
+        # whole presence write was lost — taking the liveness anchor with it, so
+        # the session would read as dead to the fleet over a build field.
+        if done.returncode != 0 and "unrecognized arguments" in (done.stderr or ""):
+            done = subprocess.run(base, capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+        if done.returncode != 0:
+            print(f"presence write failed: {(done.stderr or '').strip()[:200]}", file=sys.stderr)
+    except Exception as exc:
+        print(f"presence write skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
 
 
 def _handle_resume_path(claude_session_id: str, project_root: Path, ai_id: str) -> bool:
@@ -1585,6 +1590,23 @@ def _harness() -> str:
     return (os.environ.get("EMPIRICA_HARNESS") or "claude-code").strip() or "claude-code"
 
 
+def _deploy_gap_block(project_root: Path) -> str:
+    """The cached deploy-gap verdict for this box, or a line saying why there
+    is none. Never runs the detector (2.1 s); reads a cache and spawns a
+    detached refresh when it is missing, stale, failed or old. See
+    ``lib/deploy_gap_cache.py``.
+
+    An import or read failure is reported, not swallowed: silence is what a
+    clean fresh verdict looks like, so a broken reader must not look clean.
+    """
+    try:
+        from deploy_gap_cache import session_start_block
+
+        return session_start_block(project_root)
+    except Exception as e:
+        return f"Deploy gaps: verdict unreadable ({type(e).__name__}: {e}). Run `empirica doctor --deploy-gaps`."
+
+
 def _auto_sync_plugin():
     """Best-effort: heal a stale installed CC plugin so hook fixes from a pip
     upgrade reach this session. Shells out to `empirica plugin-sync` (a no-op
@@ -1663,7 +1685,6 @@ def main():
     # Housekeeping
     _run_stale_cleanup(claude_session_id)
     archived_plans = archive_stale_plans()
-    version_drift_warning = _check_version_drift()
 
     # RESUME PATH
     if is_resume:
@@ -1704,6 +1725,13 @@ def main():
     context_text = format_context(result.get("project_context"))
     prompt = _build_preflight_prompt(session_id, context_text)
 
+    # Deploy-gap verdict (cached; the detector never runs on this path). Goes
+    # into the injected context so the model sees it, and into the stderr
+    # banner so the human does. Empty only when fresh and clean.
+    deploy_gap_text = _deploy_gap_block(project_root)
+    if deploy_gap_text:
+        prompt = f"{prompt}\n\n{deploy_gap_text}\n"
+
     output = {
         "ok": True,
         "session_id": session_id,
@@ -1717,7 +1745,13 @@ def main():
     if budget_summary and not budget_summary.get("error"):
         budget_msg = f"\nBudget: {budget_summary.get('tokens_used', 0):,}t used / {budget_summary.get('tokens_available', 0):,}t avail ({budget_summary.get('utilization_pct', 0)}%)"
     dash_msg = f"\n{dashboard_status}" if dashboard_status else ""
-    drift_msg = f"\n{version_drift_warning}" if version_drift_warning else ""
+    # One staleness detector: the deploy-gap block. The VERSION-string compare
+    # that used to sit beside it told practitioners to run `setup --force`,
+    # which must not run on a shared box (retired 2026-09-18, David's ruling).
+    drift_msg = ""
+    if deploy_gap_text:
+        # First line only on the banner; the full block is in the injected context.
+        drift_msg += f"\n{deploy_gap_text.splitlines()[0].lstrip('# ')}"
     loops_msg = (
         f"\nQueued {canonical_loops_installed} canonical loop(s) for install — "
         f"will surface on your next /loop invocation"
