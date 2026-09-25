@@ -50,8 +50,8 @@ your discipline commands.
 The Sentinel judges each action by its effect: *can this invocation
 change state?*
 
-- **Noetic** (reading and searching — `rg`, `cat`, `git log`, empirica
-  reads): allowed in any phase.
+- **Noetic** (reading and searching — `rg`, `cat`, `git log`, and
+  read-only commands such as `empirica goals-list`): allowed in any phase.
 - **Praxic** (`apply_patch`, file writes, state-mutating shell,
   commits, and write flags like `sed -i`): needs an open, certified
   transaction.

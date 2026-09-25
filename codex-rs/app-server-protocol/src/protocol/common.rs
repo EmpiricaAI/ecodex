@@ -225,6 +225,10 @@ macro_rules! client_request_definitions {
     ) => {
         /// Request from the client to the server.
         #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+        // ecodex: TurnStartParams carries the extra `model_provider` override
+        // (T78), which tips this enum over clippy's variant-size threshold. Same
+        // allowance upstream applies to ClientResponse and the other request enums.
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ClientRequest {
             $(
