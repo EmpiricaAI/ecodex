@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.157.1] - 2026-09-28
+
 ### Fixed
 - **`ecodex update` now works for ecodex's own install channels.** Before, it only
   recognised Homebrew on macOS and openai/codex's `~/.codex/packages` layout, so the
@@ -677,7 +679,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.0...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.1...HEAD
+[0.157.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.0...v0.157.1
 [0.157.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.0...v0.157.0
 [0.154.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.154.0...v0.154.0
 [0.153.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.153.4...v0.153.4
