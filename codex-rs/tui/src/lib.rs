@@ -235,6 +235,7 @@ mod unarchive_prompt;
 pub(crate) mod update_action;
 mod worktree_startup;
 pub use update_action::DaemonUpdateSource;
+pub use update_action::INSTALL_DIR_ENV_VAR;
 pub use update_action::UpdateAction;
 #[cfg(not(debug_assertions))]
 pub use update_action::get_update_action;

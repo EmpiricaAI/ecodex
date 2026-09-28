@@ -55,24 +55,18 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     })
 }
 
-// We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
 // ecodex: point the update check at ecodex's OWN release channel, not openai/codex.
 // codex compares CODEX_CLI_VERSION (ecodex's workspace version) against this;
 // before the channel was repointed, the upstream URL produced a false
 // "update available" banner on every launch whenever upstream's latest differed
-// from ours. (No formulae.brew.sh cask for the ecodex tap; that path 404s and
-// yields no false banner.)
-const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/ecodex.json";
+// from ours. Every channel reads it, Homebrew included: upstream reads a
+// formulae.brew.sh cask, which does not exist for the EmpiricaAI tap, and the
+// tap formula is refreshed from these same GitHub releases.
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/EmpiricaAI/ecodex/releases/latest";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
     tag_name: String,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-struct HomebrewCaskInfo {
-    version: String,
 }
 
 async fn check_for_update(
@@ -87,20 +81,10 @@ async fn check_for_update(
     .with_legacy_custom_ca_fallback();
     let latest_version = match action {
         Some(UpdateAction::Daemon(_)) => return Ok(()),
-        Some(UpdateAction::BrewUpgrade) => {
-            let HomebrewCaskInfo { version } = client_pool
-                .get(HOMEBREW_CASK_API_URL)
-                .headers(default_headers())
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<HomebrewCaskInfo>()
-                .await?;
-            version
-        }
-        Some(UpdateAction::StandaloneUnix) | None => {
-            fetch_latest_github_release_version(&client_pool).await?
-        }
+        Some(
+            UpdateAction::BrewUpgrade | UpdateAction::CargoInstall | UpdateAction::StandaloneUnix,
+        )
+        | None => fetch_latest_github_release_version(&client_pool).await?,
     };
 
     // Preserve any previously dismissed version if present.

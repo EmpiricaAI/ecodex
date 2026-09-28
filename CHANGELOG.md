@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **`ecodex update` now works for ecodex's own install channels.** Before, it only
+  recognised Homebrew on macOS and openai/codex's `~/.codex/packages` layout, so the
+  install script, Homebrew on Linux and `cargo install` all failed with "Could not
+  detect the Codex installation method" and a link to OpenAI's docs. It now detects
+  them from where the binary lives:
+  - A Homebrew `Cellar` path, on macOS or Linux, runs `brew upgrade EmpiricaAI/tap/ecodex`.
+  - `$CARGO_HOME/bin` re-runs `cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli`.
+  - The install-script layout re-runs `install.sh` into the same directory, so a custom
+    `--prefix` install is replaced in place.
+
+  A layout it cannot identify, such as a source build, gets the update command for
+  each channel instead of OpenAI's URL.
+- **The update-available check now works for Homebrew installs.** It used to query a
+  formulae.brew.sh cask that doesn't exist for the EmpiricaAI tap; every channel now
+  reads ecodex's GitHub releases.
+
 ## [0.157.0] - 2026-09-25
 
 ### Changed

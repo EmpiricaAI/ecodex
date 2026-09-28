@@ -801,7 +801,7 @@ fn run_update_action(
     }
     println!();
     let cmd_str = action.command_str();
-    println!("Updating Codex via `{cmd_str}`...");
+    println!("Updating ecodex via `{cmd_str}`...");
     let status = {
         #[cfg(windows)]
         {
@@ -831,15 +831,25 @@ fn run_update_action(
                 .iter()
                 .map(crate::wsl_paths::normalize_for_wsl)
                 .collect();
-            std::process::Command::new(&command_path)
-                .args(&normalized_args)
-                .status()?
+            let mut command = std::process::Command::new(&command_path);
+            command.args(&normalized_args);
+            // install.sh installs wherever ECODEX_INSTALL_DIR points; aim it at
+            // the directory this binary runs from so a custom `--prefix`
+            // install is replaced in place rather than duplicated in ~/.local/bin.
+            if action == UpdateAction::StandaloneUnix
+                && let Some(exe_dir) = std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+            {
+                command.env(codex_tui::INSTALL_DIR_ENV_VAR, exe_dir);
+            }
+            command.status()?
         }
     };
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }
-    println!("\n🎉 Update ran successfully! Please restart Codex.");
+    println!("\n🎉 Update ran successfully! Please restart ecodex.");
     Ok(())
 }
 
@@ -872,7 +882,11 @@ fn run_update_command() -> anyhow::Result<()> {
     {
         let Some(action) = codex_tui::get_update_action() else {
             anyhow::bail!(
-                "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
+                "Could not detect how ecodex was installed. Update it the way you installed it:\n  \
+                 install script: curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh | bash\n  \
+                 Homebrew:       brew upgrade EmpiricaAI/tap/ecodex\n  \
+                 cargo:          cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli\n  \
+                 source build:   git pull && ./ecodex/scripts/install.sh"
             );
         };
         run_update_action(action, /*cli_executable*/ None)
