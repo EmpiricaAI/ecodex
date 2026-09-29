@@ -1,13 +1,14 @@
 ---
 name: ewm-interview
-description: "Use when the user says '/ewm-interview', 'run EWM interview', 'create workflow protocol', 'set up my workflow', 'interview me for EWM', or wants to create a personalized AI collaboration protocol. Guided multiple-choice interview that produces workflow-protocol.yaml, summarises it as a readable working agreement, and offers to provision the practices it implies."
-version: 0.2.0
+description: "Use when the user says '/ewm-interview', 'run EWM interview', 'create workflow protocol', 'set up my workflow', 'interview me for EWM', or wants to create a personalized AI collaboration protocol. Guided multiple-choice interview that produces workflow-protocol.yaml, summarises it as a readable working agreement, provisions the practices it implies, and lays them out as ecodex instances in an empirica cockpit."
+version: 0.3.0
 ---
 
 # EWM Interview — Epistemic Workflow Manager
 
 Produce a **workflow-protocol.yaml** describing how this person wants to work with
-AI — then actually set up what it implies.
+AI — then actually set up what it implies: the practices their work needs, and a
+cockpit that opens one ecodex in each.
 
 ## The rule that governs the whole interview
 
@@ -34,7 +35,7 @@ Three rules for the options you write:
   plain-text form, or become a narrower question with the three likeliest options —
   "Other" still catches the rest.
 
-Batch related questions. Five or six calls cover the whole interview.
+Batch related questions. Six or seven calls cover the whole interview.
 
 ---
 
@@ -120,10 +121,19 @@ From Phases 1–3, propose the practices their answers imply — a separate prac
 distinct domain of work, which is the model Empirica is built on (a practice is an
 epistemic specialization, not a folder).
 
+**Decide where they live before proposing them.** `provision-practice` creates
+practices under `~/empirica` unless told otherwise. Look at the current practice's
+parent directory: if its siblings are practices too (they have a `.empirica/`
+folder), that is where this person keeps practices, and new ones belong beside them.
+
+> Where should the new practices live? · Beside this one, in `<parent dir>`
+> (Recommended when the siblings are practices) · `~/empirica` (provision-practice's
+> default)
+
 **Always dry-run first, and show the output before doing anything:**
 
 ```bash
-empirica provision-practice <name> --dry-run --output json
+empirica provision-practice <name> [--base-path <dir>] --dry-run --output json
 ```
 
 Then ask — with options, like everything else:
@@ -136,22 +146,126 @@ Only on an affirmative:
 ```bash
 empirica provision-practice <name> \
   --tenant <tenant> --org <org> \
+  [--base-path <dir>] \
   [--forgejo-owner <owner> --forgejo-host <ssh-url>] \
   [--no-cortex]
 ```
 
-Where the flags come from Phase 3:
+Where the flags come from the answers:
 
-| Phase 3 answer | Flag |
+| Answer | Flag |
 |---|---|
+| Practices live beside this one | `--base-path <parent dir>` |
+| Practices live in `~/empirica` | omit `--base-path` |
 | Code lives on Forgejo | `--forgejo-owner` + `--forgejo-host` (ask for both — they are not guessable) |
 | Code lives on GitHub / GitLab / local | omit the Forgejo flags |
 | Not on the mesh / standalone | `--no-cortex` |
 | On the mesh | omit `--no-cortex`; `--tenant` / `--org` default from the current directory's project.yaml |
 
+These commands write outside the workspace, so ecodex asks for approval before each
+one runs. Say that before the first one, so the prompt is expected.
+
+**Keep each practice's `proj_dir`** from the JSON output. It is the directory the
+practice was actually created in, and Phase 7 uses it as-is.
+
 **Report per practice what actually happened** — provisioned, already existed, or
 failed and why. A rollup "done!" over a partial failure is the shape this whole
 system exists to prevent.
+
+---
+
+## Phase 7 — Open one ecodex per practice
+
+A provisioned practice is a folder. To work in it the user needs an ecodex running
+there, one per practice, each with its own history and calibration. The empirica
+cockpit does that in one command: it opens a terminal layout with one pane per
+practice, each starting ecodex in its own directory.
+
+Skip this phase when Phase 6 left no practices (none provisioned and none already
+existed), or when `empirica cockpit --help` fails: that empirica has no cockpit.
+
+**Detect before asking.**
+
+- **Existing profiles:** `ls ~/.empirica/cockpit/config*.yaml`. A profile is one
+  `config-NAME.yaml`, launched with `--profile NAME`. Never overwrite one. Propose a
+  name that is free (`ecodex-<slug of their primary goal>`); if they want to replace
+  an existing profile, show what it holds first.
+- **Terminal:** `command -v ghostty`, then `command -v alacritty`. Either one gives
+  the layout its own window, which they can pin to a taskbar slot. Without both,
+  the surface is `tmux` and the layout opens in the terminal they launch it from.
+
+Then ask:
+
+> Open these practices as ecodex instances? — profile `ecodex-launch`, 2 practices,
+> one ghostty window · Yes, write the profile (Recommended) · Change the name or
+> layout · Not now
+
+**The draft.** A cockpit profile is short, so show it in full before writing:
+
+```yaml
+# ~/.empirica/cockpit/config-<profile>.yaml — written by the EWM interview
+session_name: cockpit-<profile>      # unique per profile
+surface: ghostty                     # detected: ghostty | alacritty | tmux
+attach_on_launch: true               # only matters for the tmux surface
+
+projects:
+  - name: <ai_id>
+    path: <proj_dir from Phase 6>
+    launch: bash -ic 'ecodex; exec bash'
+  - name: <ai_id 2>
+    path: <proj_dir from Phase 6>
+    launch: bash -ic 'ecodex; exec bash'
+
+groups:
+  - name: <domain>
+    split: horizontal                # side by side; vertical stacks them
+    panes:
+      - {project: <ai_id>}
+      - {project: <ai_id 2>}
+```
+
+What each choice is for:
+
+- **One project per practice, with `path` copied from `proj_dir`.** Never rebuild
+  the path from the name; a practice that was already there may live elsewhere.
+- **`launch: bash -ic 'ecodex; exec bash'`.** `-i` loads the user's shell profile,
+  which is usually what puts `empirica` on `PATH`. `exec bash` leaves a shell behind
+  when ecodex exits, so the pane stays open; `ecodex resume --last` picks the
+  session back up in place.
+- **No `instance_id:`.** ecodex sets its own practitioner identity, its thread id,
+  for every shell and hook it runs, so an id bound by the cockpit would be replaced
+  anyway.
+- **Two panes per group.** Each group is one window or tab. With more than four
+  practices, make more groups and name each after the domain it holds.
+
+**Write only on a yes**, to `~/.empirica/cockpit/config-<profile>.yaml`. The file
+lives outside the workspace, so the write asks for approval. Then check that the
+cockpit can read what you wrote. This parses the profile without launching
+anything:
+
+```bash
+empirica cockpit status --profile <profile> --output json
+```
+
+`configured_projects` must list every practice with the right path. If the command
+errors, or a practice is missing, show the error and fix the draft. Don't report
+success over it.
+
+That check covers `projects:` only. `status` does not look inside `groups:`, so a
+pane naming a project that isn't listed passes here and fails only at launch. Read
+the file back and match every `{project: …}` pane against a `name:` under
+`projects:`.
+
+**Hand the launch to the user.** Launching opens a new window or takes over a
+terminal, and the user should be the one to do that. Give them the commands:
+
+```bash
+empirica cockpit launch --profile <profile>   # bring it up (attaches if it is already running)
+empirica cockpit kill   --profile <profile>   # tear it down
+```
+
+The rest (refresh, surfaces, recovering after a crash) is in empirica's
+`docs/guides/COCKPIT.md`.
 
 ---
 
@@ -180,7 +294,7 @@ shadowed** before writing.
 
 ```yaml
 # Epistemic Workflow Protocol
-# Generated by EWM Interview v0.2.0 — {date}
+# Generated by EWM Interview v0.3.0 — {date}
 
 user_profile:
   name: "{name}"
@@ -213,8 +327,14 @@ mesh:                          # Phase 3 — omit the block entirely if standalo
 
 practices:                     # Phase 6 — what was actually provisioned
   - name: "{ai_id}"
+    path: "{proj_dir}"
     provisioned: true
     domain: "{domain}"
+
+cockpit:                       # Phase 7 — omit the block if no profile was written
+  profile: "{profile}"
+  config: "~/.empirica/cockpit/config-{profile}.yaml"
+  surface: "{ghostty|alacritty|tmux}"
 
 work_preferences:
   ai_autonomy_level: "{autonomous|collaborative_with_checkpoints|assistant_mode}"
@@ -235,8 +355,8 @@ modules:
   available: []
 ```
 
-Omit blocks with nothing in them. An empty `mesh:` block is a claim that the mesh
-was considered and configured, which would be false.
+Omit blocks with nothing in them. An empty `mesh:` or `cockpit:` block is a claim
+that the step was performed, which would be false.
 
 ### Show it as a working agreement, not raw YAML
 
@@ -255,11 +375,14 @@ Then ask for corrections **before** writing the file, with options:
 ## After saving
 
 1. **Save** to the location chosen above.
-2. **Report** what was provisioned in Phase 6, per practice, honestly.
+2. **Report**, per practice, what Phase 6 provisioned and where, and which cockpit
+   profile Phase 7 wrote. Say plainly if a step was skipped or failed.
 3. **Log it** — `empirica finding-log` with what the protocol covers (N goals,
-   N domains, N practices provisioned).
+   N domains, N practices provisioned, cockpit profile written or not).
 4. **Say how to change it** — run the interview again, or edit the YAML directly; it
-   is theirs and it is plain text.
+   is theirs and it is plain text. The cockpit profile is plain YAML too.
+5. **End with the launch command** from Phase 7, when a profile was written. It is
+   the next thing they will do.
 
 ---
 
@@ -268,7 +391,8 @@ Then ask for corrections **before** writing the file, with options:
 - **5–10 minutes, not 30.** If you are on your eighth round of questions, you are
   interviewing rather than helping.
 - **Infer before asking.** Repository languages, configured MCP servers, an existing
-  `project.yaml` — every one of those is a question you don't have to ask.
+  `project.yaml`, existing cockpit profiles, the terminals on `PATH` — every one of
+  those is a question you don't have to ask.
 - **Never ask what you can detect.** Confirming is cheap; recalling is not.
 - **Hedging is a signal, not an answer.** "It's complicated", "kind of", "I guess"
   is CONTEXTUAL pushback — ask a narrower question with narrower options rather than
@@ -282,7 +406,8 @@ Then ask for corrections **before** writing the file, with options:
 
 1. **Options over blanks** — the option list teaches the field.
 2. **Detect over ask** — inference is the friction reduction that matters.
-3. **Provision, don't describe** — Phase 6 is why this exists.
+3. **Provision, don't describe** — Phases 6 and 7 are why this exists: the interview
+   ends with practices on disk and a cockpit ready to open them.
 4. **Transparent** — they see it, own it, and can edit it as plain text.
-5. **Evolvable** — re-runnable, and `provision-practice` is idempotent so re-running
-   is safe.
+5. **Evolvable** — re-runnable. `provision-practice` is idempotent, and Phase 7 never
+   overwrites an existing profile, so re-running is safe.

@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+- **The onboarding interview now opens one ecodex per practice.** The bundled
+  `ewm-interview` skill used to stop after provisioning practices. Its new Phase 7
+  drafts an empirica cockpit profile with one ecodex pane per practice, in the
+  directory each practice was created in. It shows the draft and asks before writing
+  it, never overwrites an existing profile, and checks that the cockpit can read the
+  profile. It then gives `empirica cockpit launch --profile <name>` to run.
+  Phase 6 now also asks where new practices should live, offering the folder beside
+  the current practice when that is where the others are.
+
 ## [0.157.1] - 2026-09-28
 
 ### Fixed
