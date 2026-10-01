@@ -249,7 +249,7 @@ fn append_managed_requirement_handlers(
 ///
 /// Adding a plugin here is a deliberate ecosystem-trust decision; do not extend
 /// without an explicit policy review.
-const ECODEX_AUTO_TRUSTED_PLUGIN_IDS: &[&str] = &["empirica@nubaeon"];
+const ECODEX_AUTO_TRUSTED_PLUGIN_IDS: &[&str] = &["empirica@empiricaAI"];
 
 fn append_plugin_hook_sources(
     handlers: &mut Vec<ConfiguredHandler>,
@@ -778,7 +778,7 @@ fn normalize_command_hook(
                         .components()
                         .zip(source_path.components().skip(1))
                         .any(|(publisher, plugin)| {
-                            publisher.as_os_str() == "nubaeon" && plugin.as_os_str() == "empirica"
+                            publisher.as_os_str() == "empiricaAI" && plugin.as_os_str() == "empirica"
                         });
                 if is_bundled_empirica_hook {
                     tracing::debug!("{msg}");
@@ -1444,7 +1444,7 @@ mod tests {
         // path shape (path-component match, not substring -- so it's correct
         // regardless of platform path separator).
         let source_path =
-            test_path_buf("/home/test/.codex/plugins/cache/nubaeon/empirica/0.1.0/hooks.json")
+            test_path_buf("/home/test/.codex/plugins/cache/empiricaAI/empirica/0.1.0/hooks.json")
                 .abs();
         let mut warnings = Vec::new();
 

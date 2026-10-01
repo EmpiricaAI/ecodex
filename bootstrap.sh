@@ -14,7 +14,7 @@
 #   3. Runs ecodex/scripts/install.sh which copies the binary, wrapper,
 #      plugin cache, hooks_scripts/, agents/, and statusline script into
 #      the right locations + ensures ~/.codex/config.toml has the
-#      plugins."empirica@nubaeon" enable line.
+#      plugins."empirica@empiricaAI" enable line.
 #   4. Verifies the install end-to-end (binaries executable, plugin
 #      manifest declares statusline, statusline script runs, etc.).
 #   5. Prints next steps.

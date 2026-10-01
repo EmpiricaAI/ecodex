@@ -309,7 +309,7 @@ def main() -> int:
 
     # ── deploy ──
     if args.apply and args.deploy:
-        cache = Path.home() / ".codex" / "plugins" / "cache" / "nubaeon" / "empirica"
+        cache = Path.home() / ".codex" / "plugins" / "cache" / "empiricaAI" / "empirica"
         vers = sorted([d for d in cache.glob("*/") if d.is_dir()]) if cache.exists() else []
         if vers:
             cdir = vers[-1] / "hooks_scripts"

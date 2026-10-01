@@ -40,7 +40,7 @@ ECODEX_BINARY="${ECODEX_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/ecodex
 PLUGIN_BINARY="${PLUGIN_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/codex-empirica-plugin}"
 PLUGIN_SRC="${WORKSPACE_ROOT}/codex-rs/codex-empirica-plugin"
 PLUGIN_VERSION="0.1.0"
-PLUGIN_KEY="empirica@nubaeon"   # codex requires <plugin>@<marketplace> format
+PLUGIN_KEY="empirica@empiricaAI"   # codex requires <plugin>@<marketplace> format
 
 # ─── Parse args ──────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -221,7 +221,7 @@ rm -f "${WRAPPER_DEST}.bak"
 
 # ─── Install empirica plugin (cache + plugin binary on PATH) ─────────
 # Codex cache layout: ~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/
-PLUGIN_MARKETPLACE="${PLUGIN_KEY##*@}"   # "nubaeon"
+PLUGIN_MARKETPLACE="${PLUGIN_KEY##*@}"   # "empiricaAI"
 PLUGIN_NAME_ONLY="${PLUGIN_KEY%@*}"      # "empirica"
 PLUGIN_DEST_DIR="${HOME}/.codex/plugins/cache/${PLUGIN_MARKETPLACE}/${PLUGIN_NAME_ONLY}/${PLUGIN_VERSION}"
 PLUGIN_BIN_DEST="$(dirname "$WRAPPER_DEST")/codex-empirica-plugin"
@@ -292,7 +292,7 @@ verify "plugin manifest declares statusline"  "grep -q '\"statusline\"' \"${PLUG
 verify "bundled hooks_scripts/ present"  "[[ -d \"${PLUGIN_DEST_DIR}/hooks_scripts\" ]]"
 verify "bundled agents/ present"          "[[ -d \"${PLUGIN_DEST_DIR}/agents\" ]]"
 verify "statusline script executable"    "[[ -x \"${PLUGIN_DEST_DIR}/hooks_scripts/scripts/statusline_empirica.py\" ]]"
-verify "config.toml has plugins.${PLUGIN_KEY} enabled"  "grep -E '^\\[plugins\\.\"empirica@nubaeon\"\\]' \"$CODEX_CONFIG\""
+verify "config.toml has plugins.${PLUGIN_KEY} enabled"  "grep -E '^\\[plugins\\.\"empirica@empiricaAI\"\\]' \"$CODEX_CONFIG\""
 if [[ "$verify_failures" -gt 0 ]]; then
   echo ""
   echo "✗ Install completed with $verify_failures verification failure(s) above. Inspect before running ecodex." >&2
@@ -307,7 +307,7 @@ echo "  • wrapper:       $WRAPPER_DEST  (this is what users invoke as 'ecodex'
 echo "  • plugin cache:  $PLUGIN_DEST_DIR/  (manifest+hooks+mcp+skills+statusline)"
 echo "  • plugin binary: $PLUGIN_BIN_DEST  (codex's hooks invoke this)"
 if [[ -n "$REQUIREMENTS_PATH" ]]; then
-  echo "  • lock:          $REQUIREMENTS_PATH  (pins empirica@nubaeon enabled — system-enforced)"
+  echo "  • lock:          $REQUIREMENTS_PATH  (pins empirica@empiricaAI enabled — system-enforced)"
 else
   echo "  • lock:          (skipped — per-user install; cannot enforce on Linux)"
 fi

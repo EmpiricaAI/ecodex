@@ -2230,7 +2230,7 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
     assert_eq!(engine.warnings(), &["failed plugin hook".to_string()]);
 }
 
-/// ecodex Tx-AT regression: empirica@nubaeon plugin hooks must be classified
+/// ecodex Tx-AT regression: empirica@empiricaAI plugin hooks must be classified
 /// as `Managed` (not `Untrusted`) without any prior `trusted_hash` entry in
 /// `config.toml`. The auto-trust allowlist in `discovery::append_plugin_hook_sources`
 /// is what restores first-install runnability after upstream PR #20321 introduced
@@ -2246,7 +2246,7 @@ fn empirica_plugin_hooks_are_auto_trusted_without_config_state() {
     fs::create_dir_all(plugin_root.join("hooks")).expect("create hooks dir");
     let source_path = plugin_root.join("hooks/hooks.json");
 
-    let plugin_id = PluginId::parse("empirica@nubaeon").expect("plugin id");
+    let plugin_id = PluginId::parse("empirica@empiricaAI").expect("plugin id");
     let plugin_hook_sources = vec![PluginHookSource {
         plugin_id,
         plugin_root,
@@ -2283,15 +2283,15 @@ fn empirica_plugin_hooks_are_auto_trusted_without_config_state() {
     assert_eq!(listed.hooks.len(), 1, "one hook entry expected");
     assert_eq!(
         listed.hooks[0].plugin_id.as_deref(),
-        Some("empirica@nubaeon")
+        Some("empirica@empiricaAI")
     );
     assert!(
         listed.hooks[0].is_managed,
-        "empirica@nubaeon hooks must be marked managed via the auto-trust allowlist",
+        "empirica@empiricaAI hooks must be marked managed via the auto-trust allowlist",
     );
     assert!(
         matches!(listed.hooks[0].trust_status, HookTrustStatus::Managed),
-        "empirica@nubaeon hooks must report Managed trust status without config.toml hook_states; got {:?}",
+        "empirica@empiricaAI hooks must report Managed trust status without config.toml hook_states; got {:?}",
         listed.hooks[0].trust_status,
     );
 }
