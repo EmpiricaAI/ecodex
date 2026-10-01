@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.157.2] - 2026-10-01
+
 ### Added
 - **The onboarding interview now opens one ecodex per practice.** The bundled
   `ewm-interview` skill used to stop after provisioning practices. Its new Phase 7
@@ -719,7 +721,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.1...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.2...HEAD
+[0.157.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.1...v0.157.2
 [0.157.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.0...v0.157.1
 [0.157.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.0...v0.157.0
 [0.154.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.154.0...v0.154.0
