@@ -36,7 +36,7 @@ jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120   # cold-cache release build incl. codex-code-mode-host's v8 dep is slow on 2-core runners
+    timeout-minutes: 180   # cold-cache release build incl. codex-code-mode-host's v8 dep is slow on 2-core runners; aarch64-apple-darwin needed >120 for v0.157.2
     strategy:
       fail-fast: false
       matrix:
