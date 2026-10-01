@@ -18,6 +18,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Phase 6 now also asks where new practices should live, offering the folder beside
   the current practice when that is where the others are.
 
+### Fixed
+- **Every install channel now gets the empirica plugin.** The install script,
+  Homebrew, the release tarball and `cargo install` used to put binaries on disk and
+  nothing else. Only the source build installed the plugin and the config, so most
+  installs ran ecodex as plain codex: no Sentinel, no hooks, no skills. The plugin is
+  now built into ecodex. The first session (`ecodex`, `exec`, `resume`, `fork`):
+  - writes the plugin to `~/.codex/plugins/cache/empiricaAI/empirica/`;
+  - creates a curated `~/.codex/config.toml` when there is none;
+  - enables the plugin in an existing config that lacks it, while an explicit
+    `enabled = false` is respected.
+
+  Each upgrade refreshes the plugin. A `cargo install` that lacks the
+  `codex-empirica-plugin` binary gets a warning saying how to add it.
+- **Mistral works from a prebuilt install.** `codex-empirica-translator` now runs with
+  no flags: it reads `~/.codex/translator-upstreams.toml`, which ecodex writes with
+  the Devstral, Codestral and Mistral routes, and takes the key from
+  `~/.empirica/credentials.yaml` (`mistral.api_key`) when `MISTRAL_API_KEY` is unset.
+  The setup used to depend on an `ecodex-translator` script that only existed in a
+  source checkout.
+
+### Changed
+- **The plugin is now `empirica@empiricaAI`** (was `empirica@nubaeon`). Existing
+  configs are migrated on the first session with their settings intact. The old cache
+  directory is left in place for sessions still running from it, and can be deleted
+  once they have exited.
+- **The default config no longer carries a private LAN provider.** The three local
+  models in the `/model` picker now use codex's built-in Ollama provider
+  (`localhost:11434`).
+- **The install, update and Mistral docs are rewritten** for the new behaviour.
+
 ## [0.157.1] - 2026-09-28
 
 ### Fixed
