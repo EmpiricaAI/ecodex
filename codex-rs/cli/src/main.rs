@@ -1061,6 +1061,28 @@ async fn cli_main(
         .clone()
         .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok());
     reject_unsupported_worktree_for_subcommand(interactive.shared.worktree, &subcommand)?;
+    // ecodex: install or refresh the bundled empirica plugin before a session
+    // starts. The prebuilt channels ship binaries only, so without this an
+    // install runs as plain codex. Session-starting commands only, so admin
+    // commands (`mcp list`, `login`, ...) see the config as it is. Never fatal.
+    if matches!(
+        subcommand,
+        None | Some(Subcommand::Exec(_) | Subcommand::Resume(_) | Subcommand::Fork(_))
+    ) {
+        match find_codex_home()
+            .and_then(|codex_home| codex_empirica_plugin::provision(codex_home.as_path()))
+        {
+            Ok(report)
+                if report.plugin_written && which::which("codex-empirica-plugin").is_err() =>
+            {
+                eprintln!(
+                    "WARNING: the empirica plugin is installed, but `codex-empirica-plugin` is not on PATH, so its hooks cannot run. Install it next to ecodex: cargo install codex-empirica-plugin"
+                );
+            }
+            Ok(_) => {}
+            Err(err) => eprintln!("WARNING: could not install the empirica plugin: {err}"),
+        }
+    }
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
