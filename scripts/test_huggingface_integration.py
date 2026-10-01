@@ -13,10 +13,10 @@ SPEC.loader.exec_module(check)
 
 def _fixture(parent: Path) -> Path:
     repo = parent / "repo"
-    ecodex = repo / "ecodex"
-    ecodex.mkdir(parents=True)
-    shutil.copy2(check.DEFAULT_CONFIG, ecodex / "config.toml.default")
-    shutil.copy2(check.PROFILE_CONFIG, ecodex / "huggingface.config.toml")
+    config_dir = repo / check.CONFIG_DIR
+    config_dir.mkdir(parents=True)
+    shutil.copy2(check.DEFAULT_CONFIG, config_dir / "config.toml.default")
+    shutil.copy2(check.PROFILE_CONFIG, config_dir / "huggingface.config.toml")
     return repo
 
 
@@ -32,7 +32,7 @@ class HuggingFaceIntegrationContractTests(unittest.TestCase):
         self.assertEqual(check.check_repo_contract(self.repo), [])
 
     def test_chat_wire_api_cannot_manufacture_a_valid_provider(self) -> None:
-        config = self.repo / "ecodex" / "config.toml.default"
+        config = self.repo / check.CONFIG_DIR / "config.toml.default"
         text = config.read_text(encoding="utf-8")
         anchor = '[model_providers.huggingface]\nname = "Hugging Face Inference Providers"'
         start = text.index(anchor)
@@ -49,7 +49,7 @@ class HuggingFaceIntegrationContractTests(unittest.TestCase):
         )
 
     def test_literal_token_cannot_replace_env_reference(self) -> None:
-        profile = self.repo / "ecodex" / "huggingface.config.toml"
+        profile = self.repo / check.CONFIG_DIR / "huggingface.config.toml"
         text = profile.read_text(encoding="utf-8")
         profile.write_text(
             text.replace('env_key = "HF_TOKEN"', 'experimental_bearer_token = "secret"'),
@@ -61,7 +61,7 @@ class HuggingFaceIntegrationContractTests(unittest.TestCase):
         self.assertTrue(any("provider must match" in item for item in failures))
 
     def test_reserved_openai_override_cannot_pass(self) -> None:
-        config = self.repo / "ecodex" / "config.toml.default"
+        config = self.repo / check.CONFIG_DIR / "config.toml.default"
         with config.open("a", encoding="utf-8") as handle:
             handle.write('\n[model_providers.openai]\nname = "OpenAI"\n')
 

@@ -3090,9 +3090,13 @@ name = "codex-empirica-plugin"
 version = "0.157.1"
 dependencies = [
  "anyhow",
+ "include_dir",
+ "pretty_assertions",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
+ "toml_edit 0.24.0+spec-1.1.0",
 ]
 
 [[package]]

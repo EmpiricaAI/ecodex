@@ -12,8 +12,10 @@ import tomllib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = REPO / "ecodex" / "config.toml.default"
-PROFILE_CONFIG = REPO / "ecodex" / "huggingface.config.toml"
+# The default configs ship inside the plugin crate, which embeds them in ecodex.
+CONFIG_DIR = Path("codex-rs") / "codex-empirica-plugin" / "assets" / "config"
+DEFAULT_CONFIG = REPO / CONFIG_DIR / "config.toml.default"
+PROFILE_CONFIG = REPO / CONFIG_DIR / "huggingface.config.toml"
 EXPECTED_PROVIDER = {
     "name": "Hugging Face Inference Providers",
     "base_url": "https://router.huggingface.co/v1",
@@ -33,8 +35,8 @@ def _load_toml(path: Path) -> dict:
 
 def check_repo_contract(repo: Path = REPO) -> list[str]:
     failures = []
-    default_path = repo / "ecodex" / "config.toml.default"
-    profile_path = repo / "ecodex" / "huggingface.config.toml"
+    default_path = repo / CONFIG_DIR / "config.toml.default"
+    profile_path = repo / CONFIG_DIR / "huggingface.config.toml"
     for path in (default_path, profile_path):
         if not path.is_file():
             failures.append(f"missing integration config: {path}")

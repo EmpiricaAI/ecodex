@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ─── Strict-mode empirica env vars (E layer of A+B+E discipline) ─────
 # These tighten the calibration loop. See comments in
-# ecodex/config.toml.default for details on each.
+# codex-rs/codex-empirica-plugin/assets/config/config.toml.default for details on each.
 
 export EMPIRICA_SENTINEL_REQUIRE_BOOTSTRAP="${EMPIRICA_SENTINEL_REQUIRE_BOOTSTRAP:-true}"
 export EMPIRICA_SENTINEL_COMPACT_INVALIDATION="${EMPIRICA_SENTINEL_COMPACT_INVALIDATION:-true}"

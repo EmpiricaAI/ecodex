@@ -14,10 +14,18 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[lib]
+name = "codex_empirica_plugin"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = { workspace = true }
+include_dir = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+toml_edit = { workspace = true }
 
 [dev-dependencies]
+pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

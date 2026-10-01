@@ -47,7 +47,7 @@
 //!    `[model_providers.<id>]` block users would configure), and
 //!    `category`.
 //! 2. Add the corresponding `[model_providers.<id>]` block to
-//!    `ecodex/config.toml.default` so users get a working starting
+//!    `codex-empirica-plugin/assets/config/config.toml.default` so users get a working starting
 //!    point on install.
 //! 3. Document the rationale + any link to a benchmark or transcript
 //!    that demonstrates the epistemic strength.

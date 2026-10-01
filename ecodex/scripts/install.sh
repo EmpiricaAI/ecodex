@@ -148,10 +148,10 @@ fi
 mkdir -p "${HOME}/.codex"
 if [[ -f "$CODEX_CONFIG" ]]; then
   echo "→ ~/.codex/config.toml already exists — leaving it alone"
-  echo "  Suggested overrides are in: ${ECODEX_ROOT}/config.toml.default"
+  echo "  Suggested overrides are in: ${PLUGIN_SRC}/assets/config/config.toml.default"
 else
   echo "→ Installing default config to $CODEX_CONFIG"
-  cp "${ECODEX_ROOT}/config.toml.default" "$CODEX_CONFIG"
+  cp "${PLUGIN_SRC}/assets/config/config.toml.default" "$CODEX_CONFIG"
 fi
 
 # Profile-v2 uses a separate `$CODEX_HOME/<name>.config.toml` file rather than
@@ -161,7 +161,7 @@ if [[ -f "$HUGGINGFACE_PROFILE" ]]; then
   echo "→ ~/.codex/huggingface.config.toml already exists — leaving it alone"
 else
   echo "→ Installing Hugging Face profile to $HUGGINGFACE_PROFILE"
-  cp "${ECODEX_ROOT}/huggingface.config.toml" "$HUGGINGFACE_PROFILE"
+  cp "${PLUGIN_SRC}/assets/config/huggingface.config.toml" "$HUGGINGFACE_PROFILE"
 fi
 
 # ─── Idempotent feature-flag patch (A — unlocks plugin host) ─────────
