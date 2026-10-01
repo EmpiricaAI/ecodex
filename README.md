@@ -52,15 +52,17 @@ What users notice that vanilla codex doesn't do:
 |---|---|---|
 | **Install script** (Mac/Linux) | `curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh \| bash` | No — prebuilt |
 | **Homebrew** (Mac/Linux) | `brew install EmpiricaAI/tap/ecodex` | No — prebuilt |
-| **Direct binary** | Download `ecodex-<target>.tar.gz` from [Releases](https://github.com/EmpiricaAI/ecodex/releases/latest) | No — prebuilt |
+| **Release tarball** | Download `ecodex-<target>.tar.gz` from [Releases](https://github.com/EmpiricaAI/ecodex/releases/latest) | No — prebuilt |
 | **Cargo** (Rust devs) | `cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli` | Yes (source) |
 | **Build from source** | `git clone … && cd ecodex && ./ecodex/scripts/install.sh` | Yes (source) |
 
-The first three paths download prebuilt, stripped binaries for macOS (arm64/x64) and Linux (arm64/x64) — **no Rust toolchain, no compile**. Non-developers should use the install script or Homebrew. The cargo and source-build paths compile the workspace (10–25 min) and are for developers.
+Every channel ends up the same. You put the binaries on your `PATH`, and the first session sets up the rest: the empirica plugin (the Sentinel, the hooks and the bundled skills) and a curated `~/.codex/config.toml`. Each upgrade refreshes the plugin, and `ecodex update` upgrades through whichever channel you used.
 
-The empirica CLI must also be on `PATH` — install it from [`EmpiricaAI/empirica`](https://github.com/EmpiricaAI/empirica). Without it the plugin's hooks fail quietly and the discipline goes dark.
+Non-developers should use the install script or Homebrew: prebuilt binaries for macOS and Linux, no Rust toolchain. The cargo and source-build channels compile the workspace (10–25 min). With cargo, also run `cargo install codex-empirica-plugin` so the hooks can run.
 
-See [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) for `--user` vs `--system` installs, prerequisites, provider configuration and troubleshooting.
+The empirica CLI must also be on `PATH`; install it from [`EmpiricaAI/empirica`](https://github.com/EmpiricaAI/empirica). Without it the plugin's hooks fail quietly and the discipline goes dark.
+
+[`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) covers what the first session writes, updating, uninstalling and troubleshooting.
 
 ## Run
 
@@ -68,7 +70,7 @@ See [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) for `--user` vs `--system
 ecodex
 ```
 
-The first run uses the curated `config.toml` defaults. Add your API keys (per-provider environment variables are documented in the seeded config), pick a model with `/model`, and start a session. Switch provider mid-session through `/model` — no restart needed.
+If you have no `~/.codex/config.toml`, the first session writes the curated one; its starting model is DeepSeek. Export the key for the provider you want (each provider entry in the config names its variable), pick a model with `/model`, and start. You can switch provider mid-session through `/model` without restarting. For Mistral, start `codex-empirica-translator` first; see [`docs/ecodex/MISTRAL_SOVEREIGN.md`](docs/ecodex/MISTRAL_SOVEREIGN.md).
 
 ## Glossary
 

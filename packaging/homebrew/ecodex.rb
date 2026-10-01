@@ -41,10 +41,12 @@ class Ecodex < Formula
 
   def caveats
     <<~EOS
-      ecodex's epistemic plugin needs the empirica CLI on PATH:
+      The first `ecodex` session installs the empirica plugin and a curated
+      ~/.codex/config.toml. The plugin's hooks need the empirica CLI on PATH:
         https://github.com/EmpiricaAI/empirica
-      Chat providers (Mistral/Devstral, etc.) route through the translator:
-        run `codex-empirica-translator` before launching ecodex.
+      Mistral/Devstral route through the translator: store the key under
+      mistral.api_key in ~/.empirica/credentials.yaml, then run
+      `codex-empirica-translator`.
     EOS
   end
 

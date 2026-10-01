@@ -107,9 +107,10 @@ esac
 cat <<'EOF'
 
 Next steps:
-  • ecodex --version            # confirm the install
-  • The empirica CLI is a separate dependency for the epistemic plugin:
-      https://github.com/EmpiricaAI/empirica   (without it the plugin fails quiet)
-  • Chat providers (Mistral/Devstral, etc.) route through the translator:
-      run  ecodex-translator  (or scripts/ecodex-translator.sh) before launching.
+  • Install the empirica CLI if you don't have it (the plugin's hooks need it):
+      https://github.com/EmpiricaAI/empirica
+  • Run  ecodex  — the first session installs the empirica plugin and a curated
+      ~/.codex/config.toml. Later upgrades:  ecodex update
+  • Mistral / Devstral: store the key under mistral.api_key in
+      ~/.empirica/credentials.yaml, then run  codex-empirica-translator
 EOF
