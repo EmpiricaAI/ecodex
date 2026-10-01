@@ -81,7 +81,7 @@ pub(crate) enum EcodexModelCategory {
     CloudCoding,
     /// Cloud-hosted, reasoning-tuned, frontier capability.
     CloudReasoning,
-    /// Local open-weights served via Ollama / vLLM / empirica-server.
+    /// Local open-weights served via Ollama, vLLM or llama.cpp.
     LocalOpenWeights,
     /// Cloud router (OpenRouter etc.) — single key, many models behind.
     CloudRouter,
@@ -133,26 +133,26 @@ pub(crate) fn curated_models() -> Vec<EcodexCuratedModel> {
             provider: "deepseek",
             category: EcodexModelCategory::CloudReasoning,
         },
-        // ── LocalOpenWeights (via empirica-server / Ollama) ──
+        // ── LocalOpenWeights (codex's built-in `ollama` provider, localhost:11434) ──
         EcodexCuratedModel {
             slug: "qwen3-coder:latest",
             display_name: "Qwen3-Coder 30B-A3B (local)",
             description: "256K native context, MoE arch (~3B active), purpose-built for coding agents. Excellent for codebase work that exceeds cloud context budgets.",
-            provider: "empirica-local",
+            provider: "ollama",
             category: EcodexModelCategory::LocalOpenWeights,
         },
         EcodexCuratedModel {
             slug: "deepseek-r1:32b",
             display_name: "DeepSeek-R1 32B (local)",
             description: "Distilled reasoning model, 128K context, strong on chain-of-thought tasks. Local inference via Ollama.",
-            provider: "empirica-local",
+            provider: "ollama",
             category: EcodexModelCategory::LocalOpenWeights,
         },
         EcodexCuratedModel {
             slug: "llama3.1:70b",
             display_name: "Llama 3.1 70B (local)",
             description: "128K context, generalist baseline. Local inference; weaker at agent-loop coding than qwen3-coder, included as a control.",
-            provider: "empirica-local",
+            provider: "ollama",
             category: EcodexModelCategory::LocalOpenWeights,
         },
         // ── CloudRouter ──
@@ -273,10 +273,7 @@ mod tests {
     #[test]
     fn provider_for_slug_resolves_curated_entries() {
         assert_eq!(provider_for_slug("kimi-for-coding"), Some("kimi"));
-        assert_eq!(
-            provider_for_slug("qwen3-coder:latest"),
-            Some("empirica-local")
-        );
+        assert_eq!(provider_for_slug("qwen3-coder:latest"), Some("ollama"));
         assert_eq!(provider_for_slug("openrouter/auto"), Some("openrouter"));
         assert_eq!(provider_for_slug("devstral-latest"), Some("mistral"));
         assert_eq!(provider_for_slug("not-in-curated"), None);

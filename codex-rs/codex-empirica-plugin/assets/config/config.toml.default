@@ -103,23 +103,8 @@ name = "Mistral (EU — Paris) via translator :18080"
 base_url = "http://localhost:18080/v1"
 wire_api = "responses"
 
-[model_providers.empirica-local]
-name = "empirica-server (local LAN: Strix Halo, 128GB unified mem)"
-# Verified live 2026-05-02: 192.168.1.68 = empirica-server (via /etc/hosts).
-# Three OpenAI-compat endpoints active:
-#   :11434  Ollama       — qwen3.5:latest, qwen3.5:4b, qwopus:27b-q4,
-#                          huihui_ai/mirothinker1-abliterated:30b-Q4_K_M, …
-#   :8080   llama.cpp    — Qwen3-30B-A3B-Q4_K_M.gguf
-#   :8081   llama.cpp    — Qwen3-30B-A3B-Q4_K_M.gguf (alt instance)
-# Default to Ollama (broadest model selection); switch to :8080 if you want
-# llama.cpp directly (typically lower latency on Strix Halo iGPU via ROCm).
-base_url = "http://empirica-server:11434/v1"
-env_key_instructions = "Local LAN endpoint — no auth required by default. If empirica-server adds auth, set EMPIRICA_LOCAL_API_KEY."
-# env_key = "EMPIRICA_LOCAL_API_KEY"
-wire_api = "responses"
-
 # ─── Local serving backends ──────────────────────────────────────────
-# `oss` (Ollama, :11434) and `lmstudio` (:1234) are BUILT-IN providers —
+# `ollama` (:11434) and `lmstudio` (:1234) are BUILT-IN providers —
 # codex auto-discovers them on the standard local ports; no config needed
 # unless overriding the port/host. llama.cpp and vLLM are NOT built-in —
 # add them explicitly as below. All four expose an OpenAI-compatible
