@@ -44,4 +44,4 @@ pub mod upstreams;
 
 pub use server::{ServerConfig, UpstreamProtocol, run};
 pub use tap::{EventEmitter, JsonlFileEmitter, NoopEmitter, TapEvent};
-pub use upstreams::{Upstream, UpstreamRouter};
+pub use upstreams::{KeyStore, Upstream, UpstreamRouter};

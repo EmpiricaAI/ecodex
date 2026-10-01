@@ -1,0 +1,33 @@
+# Routes for codex-empirica-translator, which serves ecodex's Responses API on
+# 127.0.0.1:18080 and forwards to providers that speak only Chat Completions.
+# Start it with `codex-empirica-translator` (no flags needed).
+#
+# Keys come from the environment variable named in api_key_env, or from the
+# empirica key store ~/.empirica/credentials.yaml, where MISTRAL_API_KEY reads
+#   mistral:
+#     api_key: <your key>
+# Never put a key in this file.
+#
+# ecodex writes this file only when it is missing, so your edits are kept.
+# First match wins: put specific patterns before any catch-all.
+
+[[upstream]]
+name        = "mistral-devstral"
+model_match = "devstral-*"
+base_url    = "https://api.mistral.ai/v1"
+protocol    = "chat"
+api_key_env = "MISTRAL_API_KEY"
+
+[[upstream]]
+name        = "mistral-codestral"
+model_match = "codestral-*"
+base_url    = "https://api.mistral.ai/v1"
+protocol    = "chat"
+api_key_env = "MISTRAL_API_KEY"
+
+[[upstream]]
+name        = "mistral"
+model_match = "mistral-*"
+base_url    = "https://api.mistral.ai/v1"
+protocol    = "chat"
+api_key_env = "MISTRAL_API_KEY"

@@ -1,18 +1,19 @@
 //! ecodex chat-completions ↔ Responses API translator (binary entrypoint).
 //!
 //! Usage:
-//!   codex-empirica-translator \
-//!     --upstream-base-url https://api.deepseek.com/v1 \
-//!     --upstream-api-key-env DEEPSEEK_API_KEY \
-//!     --bind 127.0.0.1:18080
+//!   codex-empirica-translator
 //!
-//! Then point ecodex's provider config at `http://127.0.0.1:18080/v1`.
+//! With no flags it reads the routes in `$CODEX_HOME/translator-upstreams.toml`
+//! (ecodex writes a Mistral default there), takes provider keys from the
+//! environment or the empirica key store (`~/.empirica/credentials.yaml`), and
+//! listens on `127.0.0.1:18080`. Point ecodex's provider config at
+//! `http://127.0.0.1:18080/v1`.
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use codex_empirica_translator::{
-    EventEmitter, JsonlFileEmitter, NoopEmitter, ServerConfig, Upstream, UpstreamProtocol,
-    UpstreamRouter, run,
+    EventEmitter, JsonlFileEmitter, KeyStore, NoopEmitter, ServerConfig, Upstream,
+    UpstreamProtocol, UpstreamRouter, run,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +28,8 @@ struct Args {
     /// translator routes per-request based on the incoming `model` field
     /// (first-match-wins glob against each upstream's `model_match`).
     /// Mutually exclusive with the single-upstream `--upstream-*` flags.
+    /// Defaults to `$CODEX_HOME/translator-upstreams.toml` (`~/.codex/...`)
+    /// when that file exists and no `--upstream-base-url` is given.
     /// See `docs/ecodex/integrations/translator-multiplex.md` for the
     /// schema and worked Kimi+DeepSeek example.
     #[arg(long, env = "ECODEX_TRANSLATOR_UPSTREAMS_CONFIG")]
@@ -85,12 +88,28 @@ fn main() -> Result<()> {
     //   1. --upstreams-config <path>       → multi-upstream router from TOML
     //   2. --upstream-base-url ... (legacy) → single-upstream router with
     //                                         catch-all glob (backwards compat)
-    let router = match &args.upstreams_config {
-        Some(path) => UpstreamRouter::from_toml_file(path)?,
+    let upstreams_config = args.upstreams_config.clone().or_else(|| {
+        let codex_home = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))?;
+        let default = codex_home.join("translator-upstreams.toml");
+        (args.upstream_base_url.is_none() && default.is_file()).then_some(default)
+    });
+    let router = match &upstreams_config {
+        Some(path) => {
+            let key_store_path = std::env::var_os("EMPIRICA_CREDENTIALS")
+                .map(PathBuf::from)
+                .or_else(|| dirs::home_dir().map(|home| home.join(".empirica/credentials.yaml")));
+            let key_store = match key_store_path {
+                Some(key_store_path) => KeyStore::load(&key_store_path)?,
+                None => KeyStore::default(),
+            };
+            UpstreamRouter::from_toml_file(path, &key_store)?
+        }
         None => {
             let base_url = args.upstream_base_url.clone().ok_or_else(|| {
                 anyhow::anyhow!(
-                    "either --upstreams-config <path> or --upstream-base-url <url> must be provided"
+                    "no upstreams: create $CODEX_HOME/translator-upstreams.toml (ecodex writes a Mistral default on first run), or pass --upstreams-config <path> or --upstream-base-url <url>"
                 )
             })?;
             let protocol = UpstreamProtocol::parse(&args.upstream_protocol)?;

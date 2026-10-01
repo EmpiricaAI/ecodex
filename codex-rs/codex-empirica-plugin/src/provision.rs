@@ -8,8 +8,8 @@
 //!   installed copy does not match the bundle, as recorded by a fingerprint
 //!   marker. Every ecodex upgrade therefore refreshes the plugin.
 //! - **Config.** A missing `config.toml` is created from the bundled default
-//!   (curated providers, plugin enabled), and a missing Hugging Face profile is
-//!   added. An existing config gains the plugin entry when it has none. An entry
+//!   (curated providers, plugin enabled). A missing Hugging Face profile and a
+//!   missing translator route file (Mistral) are added. An existing config gains the plugin entry when it has none. An entry
 //!   the user wrote, including `enabled = false`, is left alone.
 //! - **Migration.** A `[plugins."empirica@nubaeon"]` entry from before the
 //!   marketplace rename becomes `[plugins."empirica@empiricaAI"]` with its
@@ -44,6 +44,7 @@ const HOOKS: &str = include_str!("../hooks.json");
 const MCP_SERVERS: &str = include_str!("../mcp_servers.json");
 const DEFAULT_CONFIG: &str = include_str!("../assets/config/config.toml.default");
 const HUGGINGFACE_PROFILE: &str = include_str!("../assets/config/huggingface.config.toml");
+const TRANSLATOR_UPSTREAMS: &str = include_str!("../assets/config/translator-upstreams.toml");
 static SKILLS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/skills");
 static HOOK_SCRIPTS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/hooks_scripts");
 static AGENTS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/agents");
@@ -211,9 +212,14 @@ fn prune_stale_files(plugin_dir: &Path, dir: &Path, expected: &HashSet<&Path>) -
 }
 
 fn ensure_config(codex_home: &Path, report: &mut ProvisionReport) -> io::Result<()> {
-    let profile = codex_home.join("huggingface.config.toml");
-    if !profile.exists() {
-        write_atomically(&profile, HUGGINGFACE_PROFILE.as_bytes())?;
+    for (name, contents) in [
+        ("huggingface.config.toml", HUGGINGFACE_PROFILE),
+        ("translator-upstreams.toml", TRANSLATOR_UPSTREAMS),
+    ] {
+        let path = codex_home.join(name);
+        if !path.exists() {
+            write_atomically(&path, contents.as_bytes())?;
+        }
     }
 
     let config_path = codex_home.join("config.toml");

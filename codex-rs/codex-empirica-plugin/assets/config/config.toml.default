@@ -94,10 +94,10 @@ wire_api = "responses"
 [model_providers.mistral]
 name = "Mistral (EU — Paris) via translator :18080"
 # base_url points at the TRANSLATOR, not api.mistral.ai — codex is Responses-only.
-# Setup: (1) put the key in ~/.empirica/credentials.yaml under `mistral.api_key`;
-# (2) add a route to ~/.codex/translator-upstreams.toml (model_match "devstral-*"
-#     -> base_url https://api.mistral.ai/v1, protocol "chat", api_key_env
-#     "MISTRAL_API_KEY"); (3) start it: `ecodex-translator`.
+# Setup: (1) put the key in ~/.empirica/credentials.yaml under `mistral.api_key`
+#     (or export MISTRAL_API_KEY); (2) start the translator:
+#     `codex-empirica-translator`. Its Mistral routes are in
+#     ~/.codex/translator-upstreams.toml, which ecodex writes on first run.
 # Then set model = "devstral-latest" (256K ctx). NB: "devstral-2-latest" is NOT a
 # valid Mistral id — use devstral-latest / devstral-2512 / devstral-medium-latest.
 base_url = "http://localhost:18080/v1"

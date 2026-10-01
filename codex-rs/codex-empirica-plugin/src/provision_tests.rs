@@ -33,8 +33,14 @@ fn fresh_home_gets_the_plugin_and_the_default_config() -> io::Result<()> {
         DEFAULT_CONFIG
     );
     assert_eq!(
-        fs::read_to_string(home.path().join("huggingface.config.toml"))?,
-        HUGGINGFACE_PROFILE
+        (
+            fs::read_to_string(home.path().join("huggingface.config.toml"))?,
+            fs::read_to_string(home.path().join("translator-upstreams.toml"))?,
+        ),
+        (
+            HUGGINGFACE_PROFILE.to_string(),
+            TRANSLATOR_UPSTREAMS.to_string()
+        )
     );
     #[cfg(unix)]
     {
