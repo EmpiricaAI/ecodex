@@ -87,8 +87,11 @@ OpenAI, Hugging Face or local Responses-speaking servers.
 
 ## The harness boundary
 
-Enforcement lives in the **vendored hooks**, which codex loads natively — the AI
-cannot bypass them. `codex-rs/codex-empirica-plugin/hooks.json` wires them:
+Enforcement lives in the **vendored hooks**, which codex itself runs on every
+event, so the model cannot skip them by how it phrases a request or which tool it
+picks. Nothing locks the plugin on: `enabled = false` on its entry in
+`config.toml` turns it off. `codex-rs/codex-empirica-plugin/hooks.json` wires
+them:
 
 | Event | Hook | Does |
 |---|---|---|
@@ -157,7 +160,7 @@ State (SQLite / git-notes / Qdrant) is Empirica's, not ecodex's — see Empirica
 | `codex-rs/codex-empirica-plugin/` | The plugin host, the vendored Empirica hooks / skills / agents, the default config ecodex writes on first start, and the vendored-hooks test suite |
 | `codex-rs/codex-empirica-translator/` | The Responses-API translator for Chat Completions and Anthropic providers |
 | `scripts/` | `install.sh` (prebuilt install), `release.sh`, `sync-homebrew.sh`, `setup-codex.py` (re-vendor + de-Claude), the CI drift guards, `scoped_cargo_audit.py` |
-| `ecodex/` | The source-build installer and the system-wide lock example (`requirements.toml.example`) |
+| `ecodex/` | The source-build installer, its uninstaller and the `ecodex` wrapper script |
 | `docs/ecodex/` | ecodex-specific docs: architecture decisions, `api/`, `integrations/`, `positioning/`, `specs/` |
 | `.github/workflows/ci.yml` | Owned-crate build and test, the drift guards, the vendored-hook tests against a pinned empirica |
 | `.github/workflows/release.yml` | On a version tag, builds the four release targets and attaches them to the GitHub release |
