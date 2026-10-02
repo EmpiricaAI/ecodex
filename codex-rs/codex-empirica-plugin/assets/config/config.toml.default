@@ -1,61 +1,58 @@
-# ecodex bundled default config — installs to ~/.codex/config.toml on
-# first run if no user config exists. (If a user config exists, the
-# installer leaves it alone and prints these as suggested overrides.)
+# ecodex default config.
 #
-# This is the A + E layers of our discipline-strengthening stack:
-#   A — bundle empirica plugin enabled by default
-#   E — strict empirica defaults so the AI's calibration loop
-#       captures clean data (no fail-open hiding misses, lower
-#       auto-proceed threshold so most actions need explicit CHECK,
-#       etc.)
+# ecodex writes this file as ~/.codex/config.toml the first time it starts and
+# finds no config there. If you already have a config.toml, ecodex leaves it as
+# it is and only adds the [plugins."empirica@empiricaAI"] entry below; copy any
+# provider block you want from here.
 #
-# B — the structural lock against runtime disable — lives in
-# `managed.toml.example` and is installed separately at /etc/ecodex/
-# or ~/.ecodex/.
+# Two parts of ecodex's discipline live in this file: the empirica plugin is
+# enabled by default, and the strict-mode settings are described at the end.
+# The third part, a system-wide lock that stops the plugin being switched off,
+# is ecodex/requirements.toml.example, installed separately to
+# /etc/codex/requirements.toml. See docs/ecodex/integrations/
+# discipline-strengthening.md.
 
-# ─── Feature gates (A — these unlock the plugin host) ────────────────
-# Without these the plugin host is dark and ALL plugin hooks silently
-# no-op (sentinel firewall, session bind, transaction enforcer, the
-# whole empirica integration). The doctor (`empirica diagnose-ecodex`)
-# also FAILs on a missing plugin_hooks flag.
+# ─── Plugin host ─────────────────────────────────────────────────────
+# Plugins are on by default in this codex, and plugin hooks no longer have a
+# feature gate (codex ignores `plugin_hooks`). Both keys stay because
+# `empirica diagnose --frontend ecodex` still checks for plugin_hooks.
 suppress_unstable_features_warning = true
 
 [features]
 plugins = true
 plugin_hooks = true
 
-# ─── Plugin enablement (A) ───────────────────────────────────────────
+# ─── The empirica plugin ─────────────────────────────────────────────
+# ecodex installs the bundled plugin itself. Set enabled = false to turn it
+# off; ecodex respects that and does not switch it back on.
 
 [plugins."empirica@empiricaAI"]
 enabled = true
 
-# ─── Curated provider defaults (open-weights focus) ──────────────────
-# See docs/ecodex/integrations/providers.md for the full set + auth
-# instructions for each.
+# ─── Providers ───────────────────────────────────────────────────────
+# Open-weights providers first. docs/ecodex/integrations/providers.md covers
+# each one and how to get its key.
 #
-# ⚠ WIRE-API STATUS: codex upstream removed `wire_api = "chat"` support
-# (commit d2394a2494, "chore: nuke chat/completions API"). Many legacy remote
-# providers below speak chat-completions, NOT Responses API natively, so their
-# requests fail at runtime unless routed through the translator. Providers
-# explicitly documented as native Responses endpoints, including Hugging Face
-# and the local backends, do not need the translator.
-#
-# The fix is `codex-empirica-translator` — SHIPPED in v0.2.5 (published on
-# crates.io). It bridges codex Responses <-> provider chat/anthropic via a
-# provider-neutral CIF. It is NOT auto-spawned yet, so to use a chat provider:
-#   1. Start it:  `ecodex-translator`  (scripts/ecodex-translator.sh — sources
-#      provider keys from ~/.empirica/credentials.yaml, binds 127.0.0.1:18080).
-#      Background it with:  nohup ecodex-translator >~/.codex/translator.log 2>&1 &
-#   2. Point the provider's `base_url` at the translator, NOT the real API:
+# codex speaks only the Responses API. A provider whose API speaks only Chat
+# Completions has to be reached through the translator that ships with ecodex,
+# `codex-empirica-translator`:
+#   1. Start it: `codex-empirica-translator` (no flags). It listens on
+#      127.0.0.1:18080 and reads its routes from ~/.codex/translator-upstreams.toml,
+#      which ecodex writes on first start with routes for Mistral.
+#      To keep it running: nohup codex-empirica-translator >~/.codex/translator.log 2>&1 &
+#   2. Point the provider's base_url at the translator, not at the provider:
 #        base_url = "http://localhost:18080/v1"
-#   3. Add the provider's route to ~/.codex/translator-upstreams.toml
-#      (model_match glob -> real base_url + protocol {chat|anthropic} + api_key_env).
-# Local providers that speak Responses natively (Ollama :11434, llama.cpp on the
-# Strix) do NOT need the translator. See the [model_providers.mistral] block below
-# for a working, verified example (Devstral, 256K ctx).
-
-model = "deepseek-chat"
-model_provider = "deepseek"
+#   3. Add a route for the provider's models to translator-upstreams.toml
+#      (a model_match pattern, the real base_url, protocol chat or anthropic,
+#      and the api_key_env holding the key).
+# The translator takes keys from the environment, or from
+# ~/.empirica/credentials.yaml (MISTRAL_API_KEY reads mistral.api_key).
+# Providers that serve the Responses API themselves (Hugging Face, the local
+# servers below) need no translator. The [model_providers.mistral] block is a
+# complete example of a translated provider.
+#
+# This file sets no default model, so ecodex starts on codex's own default until
+# you pick one with `/model` or set `model` and `model_provider` at the top.
 
 [model_providers.deepseek]
 name = "DeepSeek"
@@ -85,72 +82,43 @@ env_key = "MOONSHOT_API_KEY"
 env_key_instructions = "Get an API key at https://platform.moonshot.cn/console/api-keys, then export MOONSHOT_API_KEY in your shell."
 wire_api = "responses"
 
-# EU data-sovereignty route. Mistral AI is EU-domiciled (Paris); the API is
-# EU-hosted, so code never leaves the EU — the answer for users who legally or
-# contractually cannot route to US/CN providers. Devstral 2 (devstral-latest)
-# is the agentic-coding flagship; Codestral (codestral-latest) is the
-# code-completion tier. Both are also open-weights, so the same models can be
-# self-hosted on EU hardware (Ollama/vLLM) for full air-gap.
+# The EU data-sovereignty route. Mistral AI is based in Paris and its API is
+# hosted in the EU, so code stays in the EU: the choice for anyone who cannot
+# send code to US or Chinese providers. Devstral (devstral-latest, 256K context)
+# is the agentic coding model; Codestral (codestral-latest) is the completion
+# model. Both are open-weights, so the same models can run on your own EU
+# hardware (Ollama, vLLM) with nothing leaving the building.
+#
+# Setup: put the key in ~/.empirica/credentials.yaml as mistral.api_key (or
+# export MISTRAL_API_KEY), start `codex-empirica-translator`, then pick
+# devstral-latest. Valid ids include devstral-latest, devstral-2512 and
+# devstral-medium-latest; "devstral-2-latest" does not exist.
 [model_providers.mistral]
 name = "Mistral (EU — Paris) via translator :18080"
-# base_url points at the TRANSLATOR, not api.mistral.ai — codex is Responses-only.
-# Setup: (1) put the key in ~/.empirica/credentials.yaml under `mistral.api_key`
-#     (or export MISTRAL_API_KEY); (2) start the translator:
-#     `codex-empirica-translator`. Its Mistral routes are in
-#     ~/.codex/translator-upstreams.toml, which ecodex writes on first run.
-# Then set model = "devstral-latest" (256K ctx). NB: "devstral-2-latest" is NOT a
-# valid Mistral id — use devstral-latest / devstral-2512 / devstral-medium-latest.
 base_url = "http://localhost:18080/v1"
 wire_api = "responses"
 
-# ─── Local serving backends ──────────────────────────────────────────
-# `ollama` (:11434) and `lmstudio` (:1234) are BUILT-IN providers —
-# codex auto-discovers them on the standard local ports; no config needed
-# unless overriding the port/host. llama.cpp and vLLM are NOT built-in —
-# add them explicitly as below. All four expose an OpenAI-compatible
-# `/v1/models` endpoint, so `ecodex models refresh` can discover what each
-# is serving (see docs/ecodex/integrations/model-registry.md).
+# ─── Local servers ───────────────────────────────────────────────────
+# `ollama` (port 11434) and `lmstudio` (port 1234) are built-in providers, found
+# on their standard ports with no config. llama.cpp and vLLM are not built in,
+# so they are defined below. All four list their models at /v1/models, so
+# `ecodex models refresh` can discover what each is serving
+# (docs/ecodex/integrations/model-registry.md).
 
-# llama.cpp `llama-server` — defaults to 127.0.0.1:8080, serves one model.
+# llama.cpp `llama-server`: 127.0.0.1:8080 by default, one model.
 [model_providers.llamacpp]
 name = "llama.cpp (local)"
 base_url = "http://localhost:8080/v1"
 env_key_instructions = "Local llama-server — no auth by default."
 wire_api = "responses"
 
-# vLLM `vllm serve` — defaults to localhost:8000, serves one model at a time.
+# vLLM `vllm serve`: localhost:8000 by default, one model at a time.
 [model_providers.vllm]
 name = "vLLM (local)"
 base_url = "http://localhost:8000/v1"
 env_key_instructions = "Local vLLM server — no auth by default. Set VLLM_API_KEY + uncomment env_key if you started vllm with --api-key."
 # env_key = "VLLM_API_KEY"
 wire_api = "responses"
-
-# ─── Strict empirica defaults (E) ────────────────────────────────────
-# These knobs are read by the empirica python CLI from the environment.
-# Codex's TOML config doesn't know about them, so the ecodex installer
-# also drops a wrapper script at /usr/local/bin/ecodex that exports
-# these before exec'ing the actual binary at /usr/local/lib/ecodex/bin/
-# ecodex. See docs/ecodex/integrations/discipline-strengthening.md for
-# the wrapper script template.
-#
-# Strict defaults to set:
-#   EMPIRICA_SENTINEL_REQUIRE_BOOTSTRAP=true
-#       Sentinel requires `empirica project-bootstrap` to have run before
-#       any praxic action. Forces the AI to load project context before
-#       acting.
-#   EMPIRICA_SENTINEL_COMPACT_INVALIDATION=true
-#       After a context compaction, prior CHECKs are invalidated. The AI
-#       must re-CHECK because its post-compaction belief state is fresh.
-#   EMPIRICA_SENTINEL_CHECK_EXPIRY=true
-#       30-minute CHECK expiry instead of session-long. Tighter
-#       observation cadence on the calibration loop.
-#   EMPIRICA_CALIBRATION_FEEDBACK=true
-#       Surface calibration feedback in PREFLIGHT/CHECK output so the AI
-#       sees its own Brier-score trajectory and can adjust.
-#
-# These are NOT set in this TOML file; the wrapper script handles them.
-# Documented here so users know what ecodex's strict mode means.
 
 [model_providers.openrouter]
 name = "OpenRouter"
@@ -159,11 +127,10 @@ env_key = "OPENROUTER_API_KEY"
 env_key_instructions = "Get an API key at https://openrouter.ai/keys, then export OPENROUTER_API_KEY in your shell or add to ~/.codex/.env."
 wire_api = "responses"
 
-# Hugging Face Inference Providers' OpenAI-compatible router. The router
-# implements the Responses API directly, so this provider does not need the
-# ecodex translator. Use a fine-grained token with the "Make calls to Inference
-# Providers" permission. The separate huggingface.config.toml overlay selects
-# a representative model for `ecodex exec -p huggingface`.
+# Hugging Face Inference Providers, through its OpenAI-compatible router, which
+# serves the Responses API itself. Use a fine-grained token with the "Make calls
+# to Inference Providers" permission. The huggingface.config.toml overlay picks
+# a model for `ecodex exec -p huggingface`.
 [model_providers.huggingface]
 name = "Hugging Face Inference Providers"
 base_url = "https://router.huggingface.co/v1"
@@ -171,9 +138,24 @@ env_key = "HF_TOKEN"
 env_key_instructions = "Create a fine-grained token with Inference Providers permission at https://huggingface.co/settings/tokens, then export HF_TOKEN in your shell."
 wire_api = "responses"
 
-# ─── Frontier direct: OpenAI (GPT-5.x) ───────────────────────────────
-# ecodex leads with open-weights but does NOT lock out frontier models.
-# `openai` is a reserved built-in provider ID in ecodex 0.147+, so it must not
-# be redefined under `model_providers`. The GPT-5.x presets in `/model`
-# auto-select the built-in provider, which reads OPENAI_API_KEY and speaks the
-# native Responses API without a translator.
+# ─── OpenAI ──────────────────────────────────────────────────────────
+# ecodex leads with open-weights models but does not shut out frontier ones.
+# `openai` is a built-in provider id and must not be redefined under
+# model_providers. The GPT presets in `/model` select it; it reads
+# OPENAI_API_KEY and needs no translator.
+
+# ─── Strict mode ─────────────────────────────────────────────────────
+# The empirica Sentinel reads these from the environment, not from this file:
+#   EMPIRICA_SENTINEL_REQUIRE_BOOTSTRAP=true
+#       No praxic action until `empirica project-bootstrap` has run, so the
+#       model loads the project's context before it acts.
+#   EMPIRICA_SENTINEL_COMPACT_INVALIDATION=true
+#       A context compaction invalidates earlier CHECKs; the model checks again
+#       from its post-compaction state.
+#   EMPIRICA_SENTINEL_CHECK_EXPIRY=true
+#       A CHECK expires after 30 minutes instead of lasting the session.
+#   EMPIRICA_CALIBRATION_FEEDBACK=true
+#       PREFLIGHT and CHECK show the model its own calibration record.
+# A source install (ecodex/scripts/install.sh) puts ecodex behind a small
+# wrapper that exports all four. Prebuilt installs do not: export them in your
+# shell to run strict.
