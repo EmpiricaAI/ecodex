@@ -31,7 +31,7 @@ Which layer does the bug live in? (See README "What ecodex adds on top of codex"
 - OS: <!-- Linux distro+version, macOS version -->
 - Provider in use: <!-- DeepSeek / Qwen / Kimi / Ollama / OpenRouter / etc. -->
 
-## `empirica diagnose-ecodex` output
+## `empirica diagnose --frontend ecodex` output
 
 <details>
 <summary>doctor output</summary>

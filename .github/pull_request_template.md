@@ -26,7 +26,7 @@ Which layer is this PR primarily touching?
 - [ ] `cd codex-rs && cargo test --lib -p codex-cli -p codex-empirica-plugin -p codex-empirica-translator`
 - [ ] `cd codex-rs && cargo clippy --workspace --all-targets`
 - [ ] Manual smoke test:
-- [ ] `empirica diagnose-ecodex` (where applicable)
+- [ ] `empirica diagnose --frontend ecodex` (where applicable)
 
 ## Risk
 

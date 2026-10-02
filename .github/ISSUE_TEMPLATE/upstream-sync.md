@@ -30,6 +30,7 @@ Areas where ecodex diverges from upstream that need careful merge attention:
 - [ ] Translator integration points
 - [ ] Statusline (ecodex-specific rendering)
 - [ ] config.toml.default + curated_models.rs
+- [ ] Plugin provisioning at startup (cli/src/main.rs → codex_empirica_plugin::provision)
 - [ ] Build profiles (fast-release)
 - [ ] Other: <!-- specify -->
 
@@ -37,9 +38,10 @@ Areas where ecodex diverges from upstream that need careful merge attention:
 
 - [ ] `git fetch upstream && git log --oneline last..target -- <path>` for each diverged area
 - [ ] Resolve conflicts; preserve ecodex divergences listed above
+- [ ] Bump `codex-rs/UPSTREAM_SYNC_TAG` to the merged upstream tag (CI checks it against the workspace version)
 - [ ] `cargo build --release -p codex-cli -p codex-empirica-plugin -p codex-empirica-translator`
 - [ ] `cargo test --lib -p codex-cli -p codex-empirica-plugin -p codex-empirica-translator`
-- [ ] `empirica diagnose-ecodex` clean
+- [ ] `empirica diagnose --frontend ecodex` clean
 - [ ] Manual smoke test: pick a curated model, run a turn that uses tools
 - [ ] CHANGELOG.md `[Unreleased]` entry with summary + risk notes
 - [ ] PR with all of the above documented in the description
