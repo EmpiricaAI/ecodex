@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Security
+- **Two Sentinel bypasses closed.** The empirica hooks are re-vendored from
+  empirica 1.14.5. In the earlier copy, a trailing `# --help` or a heredoc line
+  let an `empirica-workspace` write through the firewall as a read, and
+  `env rm -rf …` passed as a safe prefix.
+
+### Changed
+- The calibration summary that session start and post-compaction show the model
+  now loads under ecodex too (the hooks' new `calibration_block` helper is
+  bundled).
+
 ## [0.157.5] - 2026-10-02
 
 ### Changed

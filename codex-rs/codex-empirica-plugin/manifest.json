@@ -24,6 +24,6 @@
   "writableRoots": [
     "~/.empirica"
   ],
-  "empiricaVendorVersion": "1.14.3",
-  "empiricaVendorCommit": "13b58943d89e"
+  "empiricaVendorVersion": "1.14.5",
+  "empiricaVendorCommit": "6004abda76c5"
 }
