@@ -941,7 +941,11 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::DaemonAutoStart,
         key: "daemon_auto_start",
         stage: Stage::Stable,
-        default_enabled: true,
+        // ecodex: off by default. Auto-start installs the background app-server
+        // from a packaged Codex CLI layout (codex-package.json, bin/codex) that
+        // ecodex's installers do not produce, so with it on the TUI fails at
+        // start with "this CLI has no complete local package".
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::TranscriptV2,

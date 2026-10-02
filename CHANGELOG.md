@@ -25,6 +25,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   when it is missing.
 
 ### Fixed
+- **Interactive ecodex starts again.** Since 0.157.2, `ecodex` (the TUI) could
+  fail at start with "this CLI has no complete local package; install a packaged
+  Codex CLI or use the standalone installer". Upstream codex now starts a
+  background app-server by default, and sets it up from a packaged CLI layout that
+  ecodex does not ship. ecodex now leaves that off by default; `ecodex exec` was
+  never affected. On an older build, add `daemon_auto_start = false` under
+  `[features]` in `~/.codex/config.toml`, or pass `--no-daemon`.
 - The default config's strict-mode note said prebuilt installs do not run strict
   mode. They do: the `ecodex` binary turns it on at startup on every install path.
 
