@@ -34,6 +34,7 @@ import argparse
 import ast
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -170,15 +171,190 @@ def git_ls(emp: Path, ref: str, reldir: str) -> list[str]:
     return [Path(p).name for p in r.stdout.split("\n") if p.strip() and not p.endswith("/")]
 
 
-# ── main pipeline ───────────────────────────────────────────────────
-def main() -> int:
+# ── pipeline phases ─────────────────────────────────────────────────
+@dataclass
+class Sync:
+    """What one import pass found, and (with --apply) wrote."""
+
+    drifted: list[Path] = field(default_factory=list)
+    deployable: list[Path] = field(default_factory=list)
+    new_upstream: list[str] = field(default_factory=list)
+    flags: dict[str, list[tuple[int, str]]] = field(default_factory=dict)
+
+
+def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="empirica → ecodex import + de-Claude pipeline")
     ap.add_argument("--apply", action="store_true", help="write drifted files (default: dry-run)")
     ap.add_argument("--deploy", action="store_true", help="copy synced files to runtime cache")
     ap.add_argument("--ref", default="develop", help="empirica git ref to import from")
     ap.add_argument("--empirica", default=str(DEFAULT_EMPIRICA), help="empirica repo path")
     ap.add_argument("--no-verify", action="store_true", help="skip py_compile + tests")
-    args = ap.parse_args()
+    return ap.parse_args()
+
+
+def sync_dir(
+    emp: Path,
+    ref: str,
+    eco_dir: Path,
+    emp_reldir: str,
+    emp_files: set[str],
+    apply: bool,
+    sync: Sync,
+) -> None:
+    """IMPORT one vendored directory: sync drifted files, scan them, note new upstream files.
+
+    Raises RuntimeError when a file cannot be read from empirica.
+    """
+    eco_files = {p.name for p in eco_dir.iterdir() if p.is_file()}
+
+    # files ecodex vendors → sync if drifted
+    for name in sorted(eco_files):
+        if name in RETIRED:
+            continue  # deliberately retired — never re-vendor
+        if name not in emp_files:
+            continue  # ecodex-only (e.g. native agents) — leave untouched
+        blob = git_show(emp, ref, f"{emp_reldir}/{name}")
+        target = eco_dir / name
+        sync.deployable.append(target)
+        if target.read_bytes() != blob:
+            sync.drifted.append(target)
+            if apply:
+                target.write_bytes(blob)
+        # scan the (post-sync) content for model-facing claude-isms
+        try:
+            f = declaude_flags(target, blob.decode("utf-8", "replace"))
+            if f:
+                sync.flags[str(target.relative_to(REPO))] = f
+        except Exception:
+            pass
+
+    # empirica-NEW files ecodex doesn't vendor yet (retired ones suppressed)
+    for name in sorted(emp_files - eco_files):
+        if name.startswith(".") or name.endswith((".pyc",)) or name in RETIRED:
+            continue
+        sync.new_upstream.append(f"{emp_reldir}/{name}")
+
+
+def import_vendored(emp: Path, ref: str, apply: bool) -> Sync | None:
+    """IMPORT every DIR_MAP directory. None (after saying why) when empirica can't be read."""
+    try:
+        upstream_files = {
+            eco_dir: set(git_ls(emp, ref, emp_reldir))
+            for eco_dir, emp_reldir in DIR_MAP.items()
+        }
+    except RuntimeError as exc:
+        print(f"✗ cannot inspect empirica source: {exc}", file=sys.stderr)
+        return None
+
+    sync = Sync()
+    for eco_dir, emp_reldir in DIR_MAP.items():
+        try:
+            sync_dir(emp, ref, eco_dir, emp_reldir, upstream_files[eco_dir], apply, sync)
+        except RuntimeError as exc:
+            print(f"✗ cannot read empirica source: {exc}", file=sys.stderr)
+            return None
+    return sync
+
+
+def scan_skills(flags: dict[str, list[tuple[int, str]]]) -> None:
+    """DE-CLAUDE scan of the vendored skills (scan-only, not in DIR_MAP on purpose).
+
+    Skills are a *snapshot* layer — ecodex vendors them once and de-Claudes
+    in place; they are NOT re-synced from empirica (no DIR_MAP entry), so a
+    human's de-Claude edits here are durable. But they ARE the largest
+    model-facing surface (pinned skill bodies + descriptions inject into the
+    model's context every session), and a DIR_MAP-only scan silently skipped
+    them — giving false "clean" reports. Scan the local copies so any
+    Claude-ism (regression or newly-vendored skill) surfaces here too.
+    """
+    skills_dir = PLUGIN / "skills"
+    if not skills_dir.exists():
+        return
+    for md in sorted(skills_dir.rglob("*.md")):
+        try:
+            f = declaude_flags(md, md.read_text("utf-8", errors="replace"))
+            if f:
+                flags[str(md.relative_to(REPO))] = f
+        except Exception:
+            pass
+
+
+def report(sync: Sync, apply: bool) -> None:
+    print(f"DRIFTED ({len(sync.drifted)}):")
+    for p in sync.drifted:
+        print(f"  {'updated' if apply else 'would update'}  {p.relative_to(REPO)}")
+    if not sync.drifted:
+        print("  (in sync)")
+
+    if sync.new_upstream:
+        print(f"\nNEW upstream files ecodex doesn't vendor ({len(sync.new_upstream)}):")
+        for n in sync.new_upstream:
+            print(f"  + {n}")
+
+    if not sync.flags:
+        print("\nDE-CLAUDE FLAGS: none (no model-facing Claude-isms in synced content)")
+        return
+    total = sum(len(v) for v in sync.flags.values())
+    print(f"\nDE-CLAUDE FLAGS — model-facing Claude-isms ({total} in {len(sync.flags)} files):")
+    for fpath, fl in sync.flags.items():
+        print(f"  {fpath}")
+        for ln, txt in fl[:6]:
+            print(f"    :{ln}  {txt}")
+        if len(fl) > 6:
+            print(f"    … +{len(fl) - 6} more")
+    print("  ↳ verbatim hook internals are excluded; these are prose the model reads.")
+
+
+def verify(drifted: list[Path]) -> bool:
+    """VERIFY: py_compile the changed Python, then run the vendored-hook tests."""
+    changed_py = [p for p in drifted if p.suffix == ".py"]
+    if changed_py:
+        print("\nVERIFY py_compile:")
+        r = subprocess.run([sys.executable, "-m", "py_compile", *map(str, changed_py)])
+        print("  OK" if r.returncode == 0 else "  ✗ FAILED")
+        if r.returncode != 0:
+            return False
+    print("VERIFY vendored_hooks tests:")
+    r = subprocess.run(
+        [sys.executable, "-m", "pytest",
+         "codex-rs/codex-empirica-plugin/tests/vendored_hooks/", "-q"],
+        cwd=REPO,
+    )
+    if r.returncode != 0:
+        print("  ✗ tests failed")
+        return False
+    return True
+
+
+def deploy(deployable: list[Path]) -> None:
+    """DEPLOY the synced hook files into the newest runtime plugin cache."""
+    cache = Path.home() / ".codex" / "plugins" / "cache" / "empiricaAI" / "empirica"
+    vers = sorted([d for d in cache.glob("*/") if d.is_dir()]) if cache.exists() else []
+    if not vers:
+        print("\nDEPLOY: no runtime cache found, skipped")
+        return
+    cdir = vers[-1] / "hooks_scripts"
+    print(f"\nDEPLOY → {cdir}:")
+    deployed = 0
+    for p in deployable:
+        # map assets/hooks_scripts/<sub>/<f> → cache/hooks_scripts/<sub>/<f>
+        try:
+            sub = p.relative_to(ASSETS / "hooks_scripts")
+        except ValueError:
+            continue  # agents/ not under hooks_scripts → skip cache deploy
+        dest = cdir / sub
+        cache_differs = not dest.exists() or dest.read_bytes() != p.read_bytes()
+        if dest.parent.exists() and cache_differs:
+            dest.write_bytes(p.read_bytes())
+            print(f"  deployed {sub}")
+            deployed += 1
+    if not deployed:
+        print("  (already in sync)")
+
+
+# ── main pipeline ───────────────────────────────────────────────────
+def main() -> int:
+    args = parse_args()
 
     emp = Path(args.empirica).expanduser()
     if not (emp / ".git").exists():
@@ -191,151 +367,23 @@ def main() -> int:
             print(f"✗ vendored target directory missing: {path}", file=sys.stderr)
         return 2
 
-    drifted: list[Path] = []
-    deployable: list[Path] = []
-    new_upstream: list[str] = []
-    all_flags: dict[str, list[tuple[int, str]]] = {}
+    mode = "APPLY" if args.apply else "dry-run"
+    print(f"setup-codex: importing from {emp.name}@{args.ref}  ({mode})\n")
 
-    print(f"setup-codex: importing from {emp.name}@{args.ref}  ({'APPLY' if args.apply else 'dry-run'})\n")
-
-    try:
-        upstream_files = {
-            eco_dir: set(git_ls(emp, args.ref, emp_reldir))
-            for eco_dir, emp_reldir in DIR_MAP.items()
-        }
-    except RuntimeError as exc:
-        print(f"✗ cannot inspect empirica source: {exc}", file=sys.stderr)
+    sync = import_vendored(emp, args.ref, args.apply)
+    if sync is None:
         return 2
+    scan_skills(sync.flags)
+    report(sync, args.apply)
 
-    for eco_dir, emp_reldir in DIR_MAP.items():
-        eco_files = {p.name for p in eco_dir.iterdir() if p.is_file()}
-        emp_files = upstream_files[eco_dir]
-
-        # files ecodex vendors → sync if drifted
-        for name in sorted(eco_files):
-            if name in RETIRED:
-                continue  # deliberately retired — never re-vendor
-            if name not in emp_files:
-                continue  # ecodex-only (e.g. native agents) — leave untouched
-            try:
-                blob = git_show(emp, args.ref, f"{emp_reldir}/{name}")
-            except RuntimeError as exc:
-                print(f"✗ cannot read empirica source: {exc}", file=sys.stderr)
-                return 2
-            target = eco_dir / name
-            deployable.append(target)
-            cur = target.read_bytes()
-            if cur != blob:
-                drifted.append(target)
-                if args.apply:
-                    target.write_bytes(blob)
-            # scan the (post-sync) content for model-facing claude-isms
-            try:
-                scan_text = blob.decode("utf-8", "replace")
-                f = declaude_flags(target, scan_text)
-                if f:
-                    all_flags[str(target.relative_to(REPO))] = f
-            except Exception:
-                pass
-
-        # empirica-NEW files ecodex doesn't vendor yet (retired ones suppressed)
-        for name in sorted(emp_files - eco_files):
-            if name.startswith(".") or name.endswith((".pyc",)) or name in RETIRED:
-                continue
-            new_upstream.append(f"{emp_reldir}/{name}")
-
-    # ── skills: SCAN-ONLY (not in DIR_MAP on purpose) ──
-    # Skills are a *snapshot* layer — ecodex vendors them once and de-Claudes
-    # in place; they are NOT re-synced from empirica (no DIR_MAP entry), so a
-    # human's de-Claude edits here are durable. But they ARE the largest
-    # model-facing surface (pinned skill bodies + descriptions inject into the
-    # model's context every session), and the DIR_MAP-only scan above silently
-    # skipped them — giving false "clean" reports. Scan the local copies so any
-    # Claude-ism (regression or newly-vendored skill) surfaces here too.
-    skills_dir = PLUGIN / "skills"
-    if skills_dir.exists():
-        for md in sorted(skills_dir.rglob("*.md")):
-            try:
-                f = declaude_flags(md, md.read_text("utf-8", errors="replace"))
-                if f:
-                    all_flags[str(md.relative_to(REPO))] = f
-            except Exception:
-                pass
-
-    # ── report ──
-    rel = lambda p: str(p.relative_to(REPO))
-    print(f"DRIFTED ({len(drifted)}):")
-    for p in drifted:
-        print(f"  {'updated' if args.apply else 'would update'}  {rel(p)}")
-    if not drifted:
-        print("  (in sync)")
-
-    if new_upstream:
-        print(f"\nNEW upstream files ecodex doesn't vendor ({len(new_upstream)}):")
-        for n in new_upstream:
-            print(f"  + {n}")
-
-    if all_flags:
-        total = sum(len(v) for v in all_flags.values())
-        print(f"\nDE-CLAUDE FLAGS — model-facing Claude-isms ({total} in {len(all_flags)} files):")
-        for fpath, fl in all_flags.items():
-            print(f"  {fpath}")
-            for ln, txt in fl[:6]:
-                print(f"    :{ln}  {txt}")
-            if len(fl) > 6:
-                print(f"    … +{len(fl) - 6} more")
-        print("  ↳ verbatim hook internals are excluded; these are prose the model reads.")
-    else:
-        print("\nDE-CLAUDE FLAGS: none (no model-facing Claude-isms in synced content)")
-
-    # ── verify ──
-    if args.apply and not args.no_verify:
-        changed_py = [p for p in drifted if p.suffix == ".py"]
-        if changed_py:
-            print("\nVERIFY py_compile:")
-            r = subprocess.run([sys.executable, "-m", "py_compile", *map(str, changed_py)])
-            print("  OK" if r.returncode == 0 else "  ✗ FAILED")
-            if r.returncode != 0:
-                return 1
-        print("VERIFY vendored_hooks tests:")
-        r = subprocess.run(
-            [sys.executable, "-m", "pytest",
-             "codex-rs/codex-empirica-plugin/tests/vendored_hooks/", "-q"],
-            cwd=REPO,
-        )
-        if r.returncode != 0:
-            print("  ✗ tests failed")
-            return 1
-
-    # ── deploy ──
+    if args.apply and not args.no_verify and not verify(sync.drifted):
+        return 1
     if args.apply and args.deploy:
-        cache = Path.home() / ".codex" / "plugins" / "cache" / "empiricaAI" / "empirica"
-        vers = sorted([d for d in cache.glob("*/") if d.is_dir()]) if cache.exists() else []
-        if vers:
-            cdir = vers[-1] / "hooks_scripts"
-            print(f"\nDEPLOY → {cdir}:")
-            deployed = 0
-            for p in deployable:
-                # map assets/hooks_scripts/<sub>/<f> → cache/hooks_scripts/<sub>/<f>
-                try:
-                    sub = p.relative_to(ASSETS / "hooks_scripts")
-                    dest = cdir / sub
-                    cache_differs = not dest.exists() or dest.read_bytes() != p.read_bytes()
-                    if dest.parent.exists() and cache_differs:
-                        dest.write_bytes(p.read_bytes())
-                        print(f"  deployed {sub}")
-                        deployed += 1
-                except ValueError:
-                    pass  # agents/ not under hooks_scripts → skip cache deploy
-            if not deployed:
-                print("  (already in sync)")
-        else:
-            print("\nDEPLOY: no runtime cache found, skipped")
-
+        deploy(sync.deployable)
     if args.apply:
         stamp_vendor_vintage(emp, args.ref)
 
-    print(f"\nDone. {'Wrote' if args.apply else 'Dry-run —'} {len(drifted)} file(s)"
+    print(f"\nDone. {'Wrote' if args.apply else 'Dry-run —'} {len(sync.drifted)} file(s)"
           f"{'.' if args.apply else '; re-run with --apply to write.'}")
     return 0
 
