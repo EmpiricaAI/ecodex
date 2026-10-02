@@ -19,21 +19,22 @@ protocol and back. Nothing starts the translator for you.
 | **LM Studio** (local) | `lmstudio` (built-in) | `http://localhost:1234/v1` | direct | none |
 | **llama.cpp** (local) | `llamacpp` | `http://localhost:8080/v1` | direct | none |
 | **vLLM** (local) | `vllm` | `http://localhost:8000/v1` | direct | optional `VLLM_API_KEY` |
-| **Mistral** (EU, Paris) | `mistral` | `https://api.mistral.ai/v1` (Chat Completions) | translator; ecodex ships its routes | `MISTRAL_API_KEY` |
-| **DeepSeek** | `deepseek` | `https://api.deepseek.com/v1` | see below | `DEEPSEEK_API_KEY` |
-| **Qwen** (Alibaba Cloud DashScope) | `qwen` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | see below | `DASHSCOPE_API_KEY` |
-| **GLM** (Zhipu AI) | `glm` | `https://open.bigmodel.cn/api/paas/v4` | see below | `ZHIPU_API_KEY` |
-| **Kimi** (Moonshot AI) | `kimi` | `https://api.moonshot.cn/v1` | see below | `MOONSHOT_API_KEY` |
-| **OpenRouter** (gateway) | `openrouter` | `https://openrouter.ai/api/v1` | see below | `OPENROUTER_API_KEY` |
-| **Hugging Face** Inference Providers | `huggingface` | `https://router.huggingface.co/v1` | direct (the router serves Responses) | `HF_TOKEN` |
-| **OpenAI** | `openai` (built-in) | `https://api.openai.com/v1` | direct | `OPENAI_API_KEY` |
+| **Mistral** (EU, Paris) | `mistral` | `https://api.mistral.ai/v1` (Chat Completions) | translator | `MISTRAL_API_KEY` or `mistral.api_key` |
+| **DeepSeek** | `deepseek` | `https://api.deepseek.com/v1` (Chat Completions) | translator | `DEEPSEEK_API_KEY` or `deepseek.api_key` |
+| **Qwen** (Alibaba Cloud DashScope) | `qwen` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` (Chat Completions) | translator | `DASHSCOPE_API_KEY` or `dashscope.api_key` |
+| **GLM** (Zhipu AI) | `glm` | `https://open.bigmodel.cn/api/paas/v4` (Chat Completions) | translator | `ZHIPU_API_KEY` or `zhipu.api_key` |
+| **Kimi** (Moonshot AI) | `kimi` | `https://api.moonshot.cn/v1` (Chat Completions) | translator | `MOONSHOT_API_KEY` or `moonshot.api_key` |
+| **OpenRouter** (gateway) | `openrouter` | `https://openrouter.ai/api/v1` (serves Responses) | direct | `OPENROUTER_API_KEY` |
+| **Hugging Face** Inference Providers | `huggingface` | `https://router.huggingface.co/v1` (serves Responses) | direct | `HF_TOKEN` |
+| **OpenAI** | `openai` (built-in) | `https://api.openai.com/v1` | direct | `OPENAI_API_KEY` or ChatGPT sign-in |
 
-> **Open question: DeepSeek, Qwen, GLM, Kimi and OpenRouter.** The default config
-> ecodex writes points these straight at their APIs with `wire_api = "responses"`.
-> This document and [`MISTRAL_SOVEREIGN.md`](../MISTRAL_SOVEREIGN.md) treat
-> Chat-Completions-only providers as needing the translator. Which of these five
-> serve the Responses API has not been tested here. If a direct call fails, route
-> the provider through the translator as described below; that works either way.
+For the translated providers, the key goes to the translator, not to ecodex: an
+environment variable in the shell that starts it, or the named section of
+`~/.empirica/credentials.yaml` (`deepseek: {api_key: …}`). The default config
+points their `base_url` at the translator, and the routes file ecodex writes
+already has a route for each. All of them speak Chat Completions for certain;
+whether some also serve the Responses API was not tested, and through the
+translator they work either way.
 
 **EU data sovereignty.** `mistral` is the EU-hosted cloud route: Mistral AI is
 based in Paris and its API is hosted in the EU, so code stays in the EU. It is the
@@ -71,8 +72,11 @@ refresh` can discover what each is serving.
 Two files are involved, both in `~/.codex/`:
 
 1. **`translator-upstreams.toml`** maps model names to the real API. ecodex writes
-   it on first start with routes for Mistral (`devstral-*`, `codestral-*`,
-   `mistral-*`) and never overwrites your edits. Add one route per provider:
+   it on first start, with routes for Mistral (`devstral-*`, `codestral-*`,
+   `mistral-*`), DeepSeek, Qwen, GLM and Kimi, and never overwrites your edits. A
+   route whose key the translator cannot find is skipped with a warning when it
+   starts; it refuses to start only when no route has a key. If your file
+   predates these routes, add them (this is what ecodex ships):
 
    ```toml
    [[upstream]]
@@ -98,7 +102,14 @@ Two files are involved, both in `~/.codex/`:
 
    [[upstream]]
    name        = "kimi"
-   model_match = "kimi*"
+   model_match = "kimi-*"
+   base_url    = "https://api.moonshot.cn/v1"
+   protocol    = "chat"
+   api_key_env = "MOONSHOT_API_KEY"
+
+   [[upstream]]
+   name        = "moonshot"
+   model_match = "moonshot-*"
    base_url    = "https://api.moonshot.cn/v1"
    protocol    = "chat"
    api_key_env = "MOONSHOT_API_KEY"
@@ -107,7 +118,8 @@ Two files are involved, both in `~/.codex/`:
    The first matching route wins, so put specific patterns before any catch-all.
    Never put a key in this file.
 
-2. **`config.toml`** points the provider at the translator instead of its API:
+2. **`config.toml`** points the provider at the translator instead of its API.
+   The default config does this already; an older config may need it:
 
    ```toml
    [model_providers.deepseek]

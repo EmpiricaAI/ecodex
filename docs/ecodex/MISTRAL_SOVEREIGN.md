@@ -78,8 +78,11 @@ nohup codex-empirica-translator >~/.codex/translator.log 2>&1 &   # background
 With no flags it reads its routes from `~/.codex/translator-upstreams.toml` and
 listens on `127.0.0.1:18080`. ecodex writes that file the first time you start a
 session if you don't have one, with routes for `devstral-*`, `codestral-*` and
-`mistral-*` to `https://api.mistral.ai/v1`. Use `--bind 0.0.0.0:18080` to share
-the translator on a LAN.
+`mistral-*` to `https://api.mistral.ai/v1`, plus routes for the other Chat
+Completions providers (DeepSeek, Qwen, GLM, Kimi). A route the translator has no
+key for is skipped with a warning at startup, so with only a Mistral key you
+see four warnings and the Mistral routes work. Use `--bind 0.0.0.0:18080` to
+share the translator on a LAN.
 
 Check it: `curl -s 127.0.0.1:18080/healthz` lists the three Mistral routes.
 
@@ -152,14 +155,18 @@ Same models, same config, no traffic leaving your network.
 
 ## Troubleshooting
 
-- **The translator says `api_key_env MISTRAL_API_KEY is unset`.** The key is not
-  in the environment or under `mistral.api_key` in `~/.empirica/credentials.yaml`.
+- **The translator logs "route skipped" for the Mistral routes, or refuses to
+  start with "no route … has a key".** The key is not in the environment or under
+  `mistral.api_key` in `~/.empirica/credentials.yaml`. Add it and restart the
+  translator.
 - **The translator says it has no upstreams.** `~/.codex/translator-upstreams.toml`
   is missing: start an ecodex session once to create it, or pass
   `--upstreams-config <path>`.
 - **`connection refused` or no response.** The translator isn't running, or the
   provider's `base_url` points at `api.mistral.ai` instead of `localhost:18080`.
-- **Turns disconnect mid-stream.** Free-tier throttling; use a funded key.
+- **Turns disconnect mid-stream, or stall on rate limits.** Free-tier throttling;
+  use a funded key. The translator already retries a rate limit (429) a few times,
+  waiting for `Retry-After` when Mistral sends it.
 - **`Model metadata not found`.** The model id isn't in the curated registry; use
   one from the table above.
 - **The config fails to load.** The `mistral` provider must use
