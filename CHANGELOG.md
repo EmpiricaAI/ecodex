@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.157.6] - 2026-10-03
+
 ### Security
 - **Two Sentinel bypasses closed.** The empirica hooks are re-vendored from
   empirica 1.14.5. In the earlier copy, a trailing `# --help` or a heredoc line
@@ -832,7 +834,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.5...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.6...HEAD
+[0.157.6]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.5...v0.157.6
 [0.157.5]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.4...v0.157.5
 [0.157.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.3...v0.157.4
 [0.157.3]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.2...v0.157.3
