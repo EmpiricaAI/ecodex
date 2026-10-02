@@ -196,8 +196,10 @@ ecodex keeps the entry through upgrades. It writes its default config only where
 there is no `config.toml`, so add the provider settings the job needs to the same
 file. With the plugin off, no hooks run and no `.empirica/` is created.
 
-Setting `EMPIRICA_SENTINEL_LOOPING=false` in the job's environment does not help:
-the hooks do not see it.
+To keep the plugin's hooks running but stop the Sentinel refusing anything, set
+`EMPIRICA_SENTINEL_LOOPING=false` in the job's environment instead. A
+`~/.empirica/sentinel_enabled` file overrides it: if that file exists, it decides,
+whatever the variable says.
 
 ## Update
 
