@@ -29,7 +29,7 @@ cd ecodex
 ecodex --version
 ```
 
-The source installer builds the release binaries (`ecodex`, `codex-empirica-plugin`, `codex-empirica-translator`) and installs them with a small wrapper that exports ecodex's strict-mode settings. Unlike the prebuilt installer, it does not install the `empirica` CLI; do that yourself (`pipx install empirica`). The first time ecodex starts it writes the bundled plugin and a default `~/.codex/config.toml` itself. [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) covers the prebuilt channels, updating, and environment-specific notes.
+The source installer builds the release binaries (`ecodex`, `codex-empirica-plugin`, `codex-empirica-translator`), installs them behind a small wrapper, and sets up the `empirica` CLI with pipx or uv when it is missing, like the prebuilt installer. The first time ecodex starts it writes the bundled plugin and a default `~/.codex/config.toml` itself. [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) covers the prebuilt channels, updating, and environment-specific notes.
 
 ### Iterate on the empirica plugin (L2)
 

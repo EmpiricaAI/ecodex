@@ -9,12 +9,15 @@
 # clobbers ~/.codex/config.toml if it already exists.
 #
 # Usage: ./install.sh [--system | --user] [--prefix DIR] [--no-build] [--fast]
-#   --system    Install managed.toml to /etc/ecodex/ (requires sudo)
-#   --user      Install managed.toml to ~/.ecodex/ (default)
-#   --prefix    Override binary install dir (default: /usr/local)
+#   --system    Install under --prefix and the requirements.toml lock to
+#               /etc/codex/ (requires sudo)
+#   --user      Install under ~/.local, no lock (default)
+#   --prefix    Binary install dir for --system (default: /usr/local)
 #   --no-build  Skip the cargo build step (assume binaries already built)
 #   --fast      Build with [profile.fast-release] (lto=thin, codegen-units=16)
 #               for faster dev iteration. Use --release builds for shipping.
+# Installs ecodex, codex-empirica-plugin and codex-empirica-translator, and the
+# empirica CLI if it is missing.
 
 set -euo pipefail
 
@@ -29,6 +32,7 @@ WORKSPACE_ROOT="$(cd -- "${ECODEX_ROOT}/.." &> /dev/null && pwd)"
 # `${VAR+1}` expands to `1` if VAR was set (even to empty), else to nothing.
 ECODEX_BINARY_PRESET=${ECODEX_BINARY+1}
 PLUGIN_BINARY_PRESET=${PLUGIN_BINARY+1}
+TRANSLATOR_BINARY_PRESET=${TRANSLATOR_BINARY+1}
 
 # ─── Defaults ────────────────────────────────────────────────────────
 SCOPE="user"           # system | user
@@ -38,6 +42,7 @@ BUILD_PROFILE="release"   # release | fast-release  (T79 — --fast flag flips t
 CARGO_TARGET_DIR_NAME="release"   # cargo's directory name for the chosen profile
 ECODEX_BINARY="${ECODEX_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/ecodex}"
 PLUGIN_BINARY="${PLUGIN_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/codex-empirica-plugin}"
+TRANSLATOR_BINARY="${TRANSLATOR_BINARY:-${WORKSPACE_ROOT}/codex-rs/target/release/codex-empirica-translator}"
 PLUGIN_SRC="${WORKSPACE_ROOT}/codex-rs/codex-empirica-plugin"
 PLUGIN_VERSION="0.1.0"
 PLUGIN_KEY="empirica@empiricaAI"   # codex requires <plugin>@<marketplace> format
@@ -54,6 +59,7 @@ while [[ $# -gt 0 ]]; do
       CARGO_TARGET_DIR_NAME="fast-release"
       ECODEX_BINARY="${WORKSPACE_ROOT}/codex-rs/target/fast-release/ecodex"
       PLUGIN_BINARY="${WORKSPACE_ROOT}/codex-rs/target/fast-release/codex-empirica-plugin"
+      TRANSLATOR_BINARY="${WORKSPACE_ROOT}/codex-rs/target/fast-release/codex-empirica-translator"
       shift
       ;;
     -h|--help)
@@ -98,6 +104,7 @@ HUGGINGFACE_PROFILE="${HOME}/.codex/huggingface.config.toml"
 # `target/fast-release/...` and the comparison then trivially succeeded.
 ECODEX_BINARY_OVERRIDDEN=${ECODEX_BINARY_PRESET:-0}
 PLUGIN_BINARY_OVERRIDDEN=${PLUGIN_BINARY_PRESET:-0}
+TRANSLATOR_BINARY_OVERRIDDEN=${TRANSLATOR_BINARY_PRESET:-0}
 
 if [[ ! -d "$PLUGIN_SRC" ]]; then
   echo "ecodex install: plugin source not found at $PLUGIN_SRC" >&2
@@ -106,17 +113,17 @@ fi
 
 if [[ "$SKIP_BUILD" -eq 1 ]]; then
   echo "→ Skipping cargo build (--no-build)"
-elif [[ "$ECODEX_BINARY_OVERRIDDEN" -eq 1 && "$PLUGIN_BINARY_OVERRIDDEN" -eq 1 ]]; then
-  echo "→ Skipping cargo build (ECODEX_BINARY + PLUGIN_BINARY both overridden via env)"
+elif [[ "$ECODEX_BINARY_OVERRIDDEN" -eq 1 && "$PLUGIN_BINARY_OVERRIDDEN" -eq 1 && "$TRANSLATOR_BINARY_OVERRIDDEN" -eq 1 ]]; then
+  echo "→ Skipping cargo build (ECODEX_BINARY, PLUGIN_BINARY and TRANSLATOR_BINARY overridden via env)"
 else
   if ! command -v cargo >/dev/null 2>&1; then
     echo "ecodex install: cargo not found on PATH" >&2
     echo "  Install Rust: https://rustup.rs/   then re-run this script." >&2
-    echo "  (Or pre-build elsewhere and re-run with ECODEX_BINARY=... PLUGIN_BINARY=... ./install.sh --no-build)" >&2
+    echo "  (Or pre-build elsewhere and re-run with ECODEX_BINARY=... PLUGIN_BINARY=... TRANSLATOR_BINARY=... ./install.sh --no-build)" >&2
     exit 1
   fi
-  echo "→ Building ecodex + empirica plugin (cargo build --profile=${BUILD_PROFILE}; no-op if up-to-date)"
-  (cd "${WORKSPACE_ROOT}/codex-rs" && cargo build --profile="${BUILD_PROFILE}" -p codex-cli -p codex-empirica-plugin)
+  echo "→ Building ecodex, the empirica plugin and the translator (cargo build --profile=${BUILD_PROFILE}; no-op if up-to-date)"
+  (cd "${WORKSPACE_ROOT}/codex-rs" && cargo build --profile="${BUILD_PROFILE}" -p codex-cli -p codex-empirica-plugin -p codex-empirica-translator)
 fi
 
 # ─── Sanity checks (post-build) ──────────────────────────────────────
@@ -130,6 +137,12 @@ if [[ ! -x "$PLUGIN_BINARY" ]]; then
   echo "ecodex install: plugin binary still missing at $PLUGIN_BINARY after build" >&2
   echo "  Run cargo build manually to see errors:" >&2
   echo "    (cd ${WORKSPACE_ROOT}/codex-rs && cargo build --release -p codex-empirica-plugin)" >&2
+  exit 1
+fi
+if [[ ! -x "$TRANSLATOR_BINARY" ]]; then
+  echo "ecodex install: translator binary still missing at $TRANSLATOR_BINARY after build" >&2
+  echo "  Run cargo build manually to see errors:" >&2
+  echo "    (cd ${WORKSPACE_ROOT}/codex-rs && cargo build --release -p codex-empirica-translator)" >&2
   exit 1
 fi
 
@@ -249,7 +262,7 @@ if [[ -d "${PLUGIN_SRC}/assets/hooks_scripts" ]]; then
   rm -rf "${PLUGIN_DEST_DIR}/hooks_scripts"
   cp -r "${PLUGIN_SRC}/assets/hooks_scripts" "${PLUGIN_DEST_DIR}/hooks_scripts"
 else
-  echo "WARNING: ${PLUGIN_SRC}/assets/hooks_scripts/ missing — plugin will fall back to ~/.claude/...; run scripts/sync-empirica-assets.sh to vendor." >&2
+  echo "WARNING: ${PLUGIN_SRC}/assets/hooks_scripts/ missing — plugin will fall back to ~/.claude/...; run scripts/setup-codex.py --apply to vendor." >&2
 fi
 
 # Bundled empirica subagents (architecture, security, ux, etc.):
@@ -260,12 +273,32 @@ if [[ -d "${PLUGIN_SRC}/assets/agents" ]]; then
   rm -rf "${PLUGIN_DEST_DIR}/agents"
   cp -r "${PLUGIN_SRC}/assets/agents" "${PLUGIN_DEST_DIR}/agents"
 else
-  echo "WARNING: ${PLUGIN_SRC}/assets/agents/ missing — subagents won't seed; run scripts/sync-empirica-assets.sh to vendor." >&2
+  echo "WARNING: ${PLUGIN_SRC}/assets/agents/ missing — subagents won't seed; run scripts/setup-codex.py --apply to vendor." >&2
 fi
 
 echo "→ Installing plugin binary to $PLUGIN_BIN_DEST"
 # Same ETXTBSY safety as the ecodex binary above.
 install_binary "$PLUGIN_BINARY" "$PLUGIN_BIN_DEST"
+
+TRANSLATOR_BIN_DEST="$(dirname "$WRAPPER_DEST")/codex-empirica-translator"
+echo "→ Installing translator binary to $TRANSLATOR_BIN_DEST"
+install_binary "$TRANSLATOR_BINARY" "$TRANSLATOR_BIN_DEST"
+
+# ─── empirica CLI (the plugin's hooks run under its interpreter) ─────
+# Same step as scripts/install.sh (the prebuilt installer); keep the two in
+# step. Quiet when empirica is already installed.
+if command -v empirica >/dev/null 2>&1; then
+  :
+elif command -v pipx >/dev/null 2>&1; then
+  echo "→ Installing the empirica CLI (pipx install empirica)"
+  pipx install empirica >/dev/null || echo "WARNING: pipx install empirica failed — run it yourself" >&2
+elif command -v uv >/dev/null 2>&1; then
+  echo "→ Installing the empirica CLI (uv tool install empirica)"
+  uv tool install empirica >/dev/null || echo "WARNING: uv tool install empirica failed — run it yourself" >&2
+else
+  echo "NOTE: the empirica CLI is missing and neither pipx nor uv is available."
+  echo "      Install it with:  pipx install empirica   (the plugin's hooks need it)"
+fi
 
 # ─── Verify install ──────────────────────────────────────────────────
 # Catch the common "everything copied but it doesn't actually work"
@@ -287,6 +320,7 @@ verify "wrapper executable + on PATH"   "[[ -x \"$WRAPPER_DEST\" ]]"
 verify "wrapper resolves the binary"     "grep -q \"^ECODEX_BINARY_PATH=\\\"$BINARY_DEST\\\"\" \"$WRAPPER_DEST\""
 verify "ecodex binary executable"        "[[ -x \"$BINARY_DEST\" ]]"
 verify "plugin binary on PATH"           "[[ -x \"$PLUGIN_BIN_DEST\" ]]"
+verify "translator binary on PATH"       "[[ -x \"$TRANSLATOR_BIN_DEST\" ]]"
 verify "plugin manifest readable"        "[[ -r \"${PLUGIN_DEST_DIR}/.codex-plugin/plugin.json\" ]]"
 verify "plugin manifest declares statusline"  "grep -q '\"statusline\"' \"${PLUGIN_DEST_DIR}/.codex-plugin/plugin.json\""
 verify "bundled hooks_scripts/ present"  "[[ -d \"${PLUGIN_DEST_DIR}/hooks_scripts\" ]]"
@@ -306,6 +340,7 @@ echo "  • binary:        $BINARY_DEST"
 echo "  • wrapper:       $WRAPPER_DEST  (this is what users invoke as 'ecodex')"
 echo "  • plugin cache:  $PLUGIN_DEST_DIR/  (manifest+hooks+mcp+skills+statusline)"
 echo "  • plugin binary: $PLUGIN_BIN_DEST  (codex's hooks invoke this)"
+echo "  • translator:    $TRANSLATOR_BIN_DEST  (start it for Chat-Completions providers)"
 if [[ -n "$REQUIREMENTS_PATH" ]]; then
   echo "  • lock:          $REQUIREMENTS_PATH  (pins empirica@empiricaAI enabled — system-enforced)"
 else
