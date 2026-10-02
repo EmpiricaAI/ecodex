@@ -56,6 +56,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 ECODEX_ROOT="$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
 
 CARGO_TOML="${ECODEX_ROOT}/codex-rs/Cargo.toml"
+CARGO_LOCK="${ECODEX_ROOT}/codex-rs/Cargo.lock"
 CHANGELOG="${ECODEX_ROOT}/CHANGELOG.md"
 
 BUMP_KIND=""        # major | minor | patch | explicit
@@ -265,6 +266,14 @@ else
   printf '  [dry-run] sed-equivalent: [workspace.package] version "%s" → "%s"\n' "$current_version" "$new_version"
 fi
 
+# ─── Refresh Cargo.lock ──────────────────────────────────────────────
+# Cargo.lock records every workspace member's version, so the bump above
+# leaves it stale. `cargo update --workspace --offline` rewrites exactly
+# those entries (one version line per member) and touches no third-party
+# package, so the release commit carries a lock that matches Cargo.toml.
+log "Refreshing $CARGO_LOCK"
+run_or_dry cargo update --workspace --offline --manifest-path "$CARGO_TOML"
+
 # ─── Roll CHANGELOG.md ───────────────────────────────────────────────
 # Replace `## [Unreleased]` header with `## [Unreleased]` (empty)
 # followed by `## [NEW] - YYYY-MM-DD` containing the previous Unreleased
@@ -353,7 +362,7 @@ fi
 # Run AFTER bump + changelog roll (so the version under test is the
 # version that's about to be tagged) and BEFORE commit + tag (so a
 # failed gate leaves the working tree dirty for review — `git checkout
-# -- codex-rs/Cargo.toml CHANGELOG.md` reverts cleanly).
+# -- codex-rs/Cargo.toml codex-rs/Cargo.lock CHANGELOG.md` reverts cleanly).
 #
 # Each gate exits non-zero on failure. Cargo invocations stream output
 # directly to the user's terminal so the failure is legible.
@@ -404,7 +413,7 @@ if [[ "$GATE_CLIPPY" -eq 1 ]]; then gate_clippy; fi
 # ─── Commit ──────────────────────────────────────────────────────────
 if [[ "$SKIP_COMMIT" -eq 0 ]]; then
   log "Staging + committing"
-  run_or_dry git add "$CARGO_TOML" "$CHANGELOG"
+  run_or_dry git add "$CARGO_TOML" "$CARGO_LOCK" "$CHANGELOG"
   run_or_dry git commit -m "release: v${new_version}"
 fi
 
