@@ -12,19 +12,10 @@
 # /etc/codex/requirements.toml. See docs/ecodex/integrations/
 # discipline-strengthening.md.
 
-# ─── Plugin host ─────────────────────────────────────────────────────
-# Plugins are on by default in this codex, and plugin hooks no longer have a
-# feature gate (codex ignores `plugin_hooks`). Both keys stay because
-# `empirica diagnose --frontend ecodex` still checks for plugin_hooks.
-suppress_unstable_features_warning = true
-
-[features]
-plugins = true
-plugin_hooks = true
-
 # ─── The empirica plugin ─────────────────────────────────────────────
-# ecodex installs the bundled plugin itself. Set enabled = false to turn it
-# off; ecodex respects that and does not switch it back on.
+# ecodex installs the bundled plugin itself; plugins and their hooks are on by
+# default in codex, with no feature flag to set. Set enabled = false to turn the
+# plugin off; ecodex respects that and does not switch it back on.
 
 [plugins."empirica@empiricaAI"]
 enabled = true

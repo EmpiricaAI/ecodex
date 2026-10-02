@@ -177,40 +177,6 @@ else
   cp "${PLUGIN_SRC}/assets/config/huggingface.config.toml" "$HUGGINGFACE_PROFILE"
 fi
 
-# ─── Idempotent feature-flag patch (A — unlocks plugin host) ─────────
-# Without `[features] plugin_hooks = true` the plugin host is DARK and
-# every empirica hook (sentinel-gate, session-init, tool-router, etc.)
-# silently no-ops. We discovered this 4 days late on a previous run.
-# This block is a no-op when the keys are already present, so it's
-# safe to run on every install.
-patch_feature_keys() {
-  local cfg="$1"
-  local needs_patch=0
-  grep -qE '^[[:space:]]*plugin_hooks[[:space:]]*=[[:space:]]*true' "$cfg" || needs_patch=1
-  grep -qE '^[[:space:]]*plugins[[:space:]]*=[[:space:]]*true' "$cfg" || needs_patch=1
-  if [[ "$needs_patch" -eq 0 ]]; then
-    echo "  ✓ [features] plugin_hooks + plugins already set"
-    return
-  fi
-  echo "  → Appending [features] block to $cfg (plugin_hooks=true, plugins=true)"
-  {
-    echo ""
-    echo "# ─── Feature gates (added by ecodex install.sh) ───────────────────"
-    echo "# Without these the plugin host is dark and ALL plugin hooks no-op."
-    echo "# Re-run install.sh to re-apply if you remove these by accident."
-    grep -qE '^[[:space:]]*suppress_unstable_features_warning' "$cfg" \
-      || echo "suppress_unstable_features_warning = true"
-    echo ""
-    echo "[features]"
-    grep -qE '^[[:space:]]*plugins[[:space:]]*=[[:space:]]*true' "$cfg" \
-      || echo "plugins = true"
-    grep -qE '^[[:space:]]*plugin_hooks[[:space:]]*=[[:space:]]*true' "$cfg" \
-      || echo "plugin_hooks = true"
-  } >> "$cfg"
-}
-echo "→ Verifying [features] gates in $CODEX_CONFIG"
-patch_feature_keys "$CODEX_CONFIG"
-
 # ─── Install wrapper script + binary ─────────────────────────────────
 # `cp` over a binary that's currently executing fails with ETXTBSY
 # ("Text file busy") on Linux. Linux holds the inode alive via the
