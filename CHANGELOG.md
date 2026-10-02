@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **DeepSeek, Qwen, GLM and Kimi go through the translator.** The default config
+  pointed them straight at their Chat Completions APIs, which codex cannot speak.
+  New installs now point them at `codex-empirica-translator`, and the routes file
+  ecodex writes includes their routes; add a key (`deepseek`, `dashscope`,
+  `zhipu` or `moonshot` in `~/.empirica/credentials.yaml`, or the environment
+  variable) and start the translator. An existing `config.toml` or
+  `translator-upstreams.toml` is left as it is. OpenRouter stays direct: it serves
+  the Responses API itself.
+- **The translator starts with the routes it has keys for.** A route whose key is
+  missing used to stop the translator from starting at all; it is now skipped with
+  a warning, and the translator refuses to start only when no route has a key.
+- **The source installer matches the prebuilt one.** `ecodex/scripts/install.sh`
+  now builds and installs `codex-empirica-translator` and sets up the empirica CLI
+  when it is missing.
+
+### Fixed
+- The default config's strict-mode note said prebuilt installs do not run strict
+  mode. They do: the `ecodex` binary turns it on at startup on every install path.
+
 ## [0.157.4] - 2026-10-02
 
 ### Fixed

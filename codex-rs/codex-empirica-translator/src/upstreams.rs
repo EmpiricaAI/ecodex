@@ -69,6 +69,11 @@ impl UpstreamRouter {
 
     /// Load + resolve a TOML config file. `api_key_env` is resolved from the
     /// current process environment at load time, falling back to `key_store`.
+    ///
+    /// A route whose key is in neither place is skipped with a warning rather
+    /// than failing the whole file: the shipped routes list providers a user
+    /// may have no key for, and those must not stop the routes they do have
+    /// a key for. Loading fails only when no route is left.
     pub fn from_toml_file(path: &Path, key_store: &KeyStore) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read upstreams config at {}", path.display()))?;
@@ -82,12 +87,31 @@ impl UpstreamRouter {
             );
         }
 
-        let upstreams = parsed
-            .upstream
-            .into_iter()
-            .map(|upstream| upstream.resolve(key_store))
-            .collect::<Result<Vec<_>>>()?;
+        let mut upstreams = Vec::new();
+        let mut keyless = Vec::new();
+        for raw in parsed.upstream {
+            let name = raw.name.clone();
+            let var = raw.api_key_env.clone().unwrap_or_default();
+            match raw.resolve(key_store)? {
+                Some(upstream) => upstreams.push(upstream),
+                None => {
+                    tracing::warn!(
+                        upstream = %name,
+                        api_key_env = %var,
+                        "route skipped: no key in the environment or the empirica key store"
+                    );
+                    keyless.push(format!("`{name}` ({var})"));
+                }
+            }
+        }
 
+        if upstreams.is_empty() {
+            anyhow::bail!(
+                "no route in {} has a key: {}. Export the variable, or add <provider>.api_key to ~/.empirica/credentials.yaml (MISTRAL_API_KEY reads mistral.api_key)",
+                path.display(),
+                keyless.join(", ")
+            );
+        }
         Ok(Self::new(upstreams))
     }
 }
@@ -148,30 +172,30 @@ struct RawUpstream {
 }
 
 impl RawUpstream {
-    fn resolve(self, key_store: &KeyStore) -> Result<Upstream> {
+    /// The resolved route, or `None` when it names an `api_key_env` that has
+    /// no key in the environment or the key store. A bad protocol is an error.
+    fn resolve(self, key_store: &KeyStore) -> Result<Option<Upstream>> {
         let protocol = UpstreamProtocol::parse(&self.protocol)
             .with_context(|| format!("upstream `{}` protocol", self.name))?;
         let api_key = match &self.api_key_env {
-            Some(var) => Some(
-                std::env::var(var)
+            Some(var) => {
+                let Some(key) = std::env::var(var)
                     .ok()
                     .or_else(|| key_store.key_for_env(var))
-                    .with_context(|| {
-                        format!(
-                            "upstream `{}` api_key_env `{var}` is unset and the empirica key store has no key for it",
-                            self.name
-                        )
-                    })?,
-            ),
+                else {
+                    return Ok(None);
+                };
+                Some(key)
+            }
             None => None,
         };
-        Ok(Upstream {
+        Ok(Some(Upstream {
             name: self.name,
             model_match: self.model_match,
             base_url: self.base_url,
             protocol,
             api_key,
-        })
+        }))
     }
 }
 
@@ -294,7 +318,7 @@ protocol = "anthropic"
     #[test]
     fn unset_key_env_falls_back_to_the_key_store() {
         let key_store = KeyStore::from_yaml(
-            "mistral:\n  api_key: sk-from-store\ncortex:\n  url: https://example.test\n",
+            "mistral:\n  api_key: sk-from-store\necodextest:\n  api_key: sk-test\ncortex:\n  url: https://example.test\n",
         )
         .expect("key store");
         let resolve = |api_key_env: &str| {
@@ -306,24 +330,88 @@ protocol = "anthropic"
                 api_key_env: Some(api_key_env.to_string()),
             }
             .resolve(&key_store)
-            .map(|upstream| upstream.api_key)
+            .map(|upstream| upstream.map(|upstream| upstream.api_key))
             .map_err(|err| err.to_string())
         };
 
         assert_eq!(
             [
+                resolve("ECODEXTEST_API_KEY"),
                 resolve("ECODEX_TEST_UNSET_MISTRAL_API_KEY"),
                 resolve("MISTRAL_API_KEY_ECODEX_TEST_UNSET"),
             ],
-            [
-                Err("upstream `mistral` api_key_env `ECODEX_TEST_UNSET_MISTRAL_API_KEY` is unset and the empirica key store has no key for it".to_string()),
-                Err("upstream `mistral` api_key_env `MISTRAL_API_KEY_ECODEX_TEST_UNSET` is unset and the empirica key store has no key for it".to_string()),
-            ]
+            [Ok(Some(Some("sk-test".to_string()))), Ok(None), Ok(None)]
         );
         assert_eq!(
             key_store.key_for_env("MISTRAL_API_KEY"),
             Some("sk-from-store".to_string())
         );
         assert_eq!(key_store.key_for_env("CORTEX_API_KEY"), None);
+    }
+
+    fn write_routes(contents: &str) -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "translator-upstreams-test-{}-{}.toml",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, contents).expect("write routes");
+        path
+    }
+
+    #[test]
+    fn routes_without_a_key_are_skipped_not_fatal() {
+        let path = write_routes(
+            r#"
+[[upstream]]
+name = "deepseek"
+model_match = "deepseek-*"
+base_url = "https://api.deepseek.com/v1"
+protocol = "chat"
+api_key_env = "ECODEX_TEST_UNSET_DEEPSEEK_API_KEY"
+
+[[upstream]]
+name = "local"
+model_match = "local-*"
+base_url = "http://localhost:11434/v1"
+protocol = "chat"
+"#,
+        );
+        let router = UpstreamRouter::from_toml_file(&path, &KeyStore::default()).expect("load");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            router
+                .upstreams()
+                .iter()
+                .map(|u| u.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["local"]
+        );
+        assert!(router.route("deepseek-chat").is_none());
+    }
+
+    #[test]
+    fn a_routes_file_with_no_usable_route_is_an_error() {
+        let path = write_routes(
+            r#"
+[[upstream]]
+name = "deepseek"
+model_match = "deepseek-*"
+base_url = "https://api.deepseek.com/v1"
+protocol = "chat"
+api_key_env = "ECODEX_TEST_UNSET_DEEPSEEK_API_KEY"
+"#,
+        );
+        let err = UpstreamRouter::from_toml_file(&path, &KeyStore::default())
+            .expect_err("no usable route");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            err.to_string()
+                .contains("has a key: `deepseek` (ECODEX_TEST_UNSET_DEEPSEEK_API_KEY)"),
+            "{err}"
+        );
     }
 }

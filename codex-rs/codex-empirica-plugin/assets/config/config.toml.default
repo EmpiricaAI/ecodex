@@ -47,39 +47,39 @@ enabled = true
 #      and the api_key_env holding the key).
 # The translator takes keys from the environment, or from
 # ~/.empirica/credentials.yaml (MISTRAL_API_KEY reads mistral.api_key).
-# Providers that serve the Responses API themselves (Hugging Face, the local
-# servers below) need no translator. The [model_providers.mistral] block is a
-# complete example of a translated provider.
+# Providers that serve the Responses API themselves (OpenRouter, Hugging Face,
+# the local servers below) need no translator. The [model_providers.mistral]
+# block is a complete example of a translated provider.
 #
 # This file sets no default model, so ecodex starts on codex's own default until
 # you pick one with `/model` or set `model` and `model_provider` at the top.
 
+# DeepSeek, Qwen, GLM and Kimi speak Chat Completions, so they go through the
+# translator, which holds their keys: put each key in
+# ~/.empirica/credentials.yaml (deepseek / dashscope / zhipu / moonshot, each with
+# an api_key) or export the variable named in translator-upstreams.toml, then
+# start `codex-empirica-translator`. Keys: platform.deepseek.com/api_keys,
+# dashscope.console.aliyun.com/apiKey, bigmodel.cn/usercenter/proj-mgmt/apikeys,
+# platform.moonshot.cn/console/api-keys.
+
 [model_providers.deepseek]
-name = "DeepSeek"
-base_url = "https://api.deepseek.com/v1"
-env_key = "DEEPSEEK_API_KEY"
-env_key_instructions = "Get an API key at https://platform.deepseek.com/api_keys, then export DEEPSEEK_API_KEY in your shell."
+name = "DeepSeek via translator :18080"
+base_url = "http://localhost:18080/v1"
 wire_api = "responses"
 
 [model_providers.qwen]
-name = "Qwen (Alibaba Cloud)"
-base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-env_key = "DASHSCOPE_API_KEY"
-env_key_instructions = "Get an API key at https://dashscope.console.aliyun.com/apiKey, then export DASHSCOPE_API_KEY in your shell."
+name = "Qwen (Alibaba Cloud) via translator :18080"
+base_url = "http://localhost:18080/v1"
 wire_api = "responses"
 
 [model_providers.glm]
-name = "GLM (Zhipu AI)"
-base_url = "https://open.bigmodel.cn/api/paas/v4"
-env_key = "ZHIPU_API_KEY"
-env_key_instructions = "Get an API key at https://bigmodel.cn/usercenter/proj-mgmt/apikeys, then export ZHIPU_API_KEY in your shell."
+name = "GLM (Zhipu AI) via translator :18080"
+base_url = "http://localhost:18080/v1"
 wire_api = "responses"
 
 [model_providers.kimi]
-name = "Kimi (Moonshot AI)"
-base_url = "https://api.moonshot.cn/v1"
-env_key = "MOONSHOT_API_KEY"
-env_key_instructions = "Get an API key at https://platform.moonshot.cn/console/api-keys, then export MOONSHOT_API_KEY in your shell."
+name = "Kimi (Moonshot AI) via translator :18080"
+base_url = "http://localhost:18080/v1"
 wire_api = "responses"
 
 # The EU data-sovereignty route. Mistral AI is based in Paris and its API is

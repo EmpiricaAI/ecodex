@@ -31,3 +31,42 @@ model_match = "mistral-*"
 base_url    = "https://api.mistral.ai/v1"
 protocol    = "chat"
 api_key_env = "MISTRAL_API_KEY"
+
+# The providers below speak Chat Completions. A route whose key is missing is
+# skipped with a warning when the translator starts, so list them freely: add a
+# key (credentials.yaml section in brackets) and restart the translator.
+
+[[upstream]]
+name        = "deepseek"           # key: deepseek.api_key
+model_match = "deepseek-*"
+base_url    = "https://api.deepseek.com/v1"
+protocol    = "chat"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[[upstream]]
+name        = "qwen"               # key: dashscope.api_key
+model_match = "qwen*"
+base_url    = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"   # dashscope.aliyuncs.com in mainland China
+protocol    = "chat"
+api_key_env = "DASHSCOPE_API_KEY"
+
+[[upstream]]
+name        = "glm"                # key: zhipu.api_key
+model_match = "glm-*"
+base_url    = "https://open.bigmodel.cn/api/paas/v4"
+protocol    = "chat"
+api_key_env = "ZHIPU_API_KEY"
+
+[[upstream]]
+name        = "kimi"               # key: moonshot.api_key
+model_match = "kimi-*"
+base_url    = "https://api.moonshot.cn/v1"
+protocol    = "chat"
+api_key_env = "MOONSHOT_API_KEY"
+
+[[upstream]]
+name        = "moonshot"           # key: moonshot.api_key
+model_match = "moonshot-*"
+base_url    = "https://api.moonshot.cn/v1"
+protocol    = "chat"
+api_key_env = "MOONSHOT_API_KEY"
