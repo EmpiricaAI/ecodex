@@ -104,11 +104,23 @@ case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) : ;;
   *) info "NOTE: ${INSTALL_DIR} is not on your PATH. Add:  export PATH=\"${INSTALL_DIR}:\$PATH\"" ;;
 esac
+# --- empirica CLI (the plugin's hooks shell out to it) ------------------------
+if command -v empirica >/dev/null 2>&1; then
+  :
+elif command -v pipx >/dev/null 2>&1; then
+  info "installing the empirica CLI (pipx install empirica)…"
+  pipx install empirica >/dev/null || info "WARNING: pipx install empirica failed — run it yourself"
+elif command -v uv >/dev/null 2>&1; then
+  info "installing the empirica CLI (uv tool install empirica)…"
+  uv tool install empirica >/dev/null || info "WARNING: uv tool install empirica failed — run it yourself"
+else
+  info "NOTE: the empirica CLI is missing and neither pipx nor uv is available."
+  info "      Install it with:  pipx install empirica   (the plugin's hooks need it)"
+fi
+
 cat <<'EOF'
 
 Next steps:
-  • Install the empirica CLI if you don't have it (the plugin's hooks need it):
-      https://github.com/EmpiricaAI/empirica
   • Run  ecodex  — the first session installs the empirica plugin and a curated
       ~/.codex/config.toml. Later upgrades:  ecodex update
   • Mistral / Devstral: store the key under mistral.api_key in

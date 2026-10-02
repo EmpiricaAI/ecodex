@@ -12,6 +12,9 @@ class Ecodex < Formula
   version "__VERSION__"
   license "Apache-2.0"
 
+  # The plugin's hooks shell out to the empirica CLI.
+  depends_on "empiricaai/tap/empirica"
+
   on_macos do
     on_arm do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-aarch64-apple-darwin.tar.gz"
@@ -42,8 +45,7 @@ class Ecodex < Formula
   def caveats
     <<~EOS
       The first `ecodex` session installs the empirica plugin and a curated
-      ~/.codex/config.toml. The plugin's hooks need the empirica CLI on PATH:
-        https://github.com/EmpiricaAI/empirica
+      ~/.codex/config.toml.
       Mistral/Devstral route through the translator: store the key under
       mistral.api_key in ~/.empirica/credentials.yaml, then run
       `codex-empirica-translator`.

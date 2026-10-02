@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **Mistral shell calls no longer fail.** Devstral fills the shell tool's optional
+  `justification` without `sandbox_permissions`, and codex rejects that combination,
+  so every shell call was refused. The translator now drops a `justification` that
+  comes without `sandbox_permissions`; on its own it requests nothing. Calls that do
+  ask for escalation pass through unchanged.
+- **Rate limits are waited out instead of hammered.** After a provider's 429, codex
+  retried within a fraction of a second and gave up within about a second. The
+  translator now retries a 429 itself: it waits for `Retry-After` when given,
+  otherwise backs off exponentially from 2 seconds, capped at 30 seconds per wait.
+  It also serves each request on its own thread, so one waiting or streaming session
+  no longer blocks the others.
+
+### Changed
+- **The installers set up the empirica CLI.** The install script (and `ecodex
+  update` on that channel) installs the empirica CLI with `pipx` or `uv` when it is
+  missing, and stays quiet when it is present; it used to print a reminder every
+  time. The Homebrew formula now depends on the tap's `empirica` formula.
+
 ## [0.157.2] - 2026-10-01
 
 ### Added
