@@ -133,9 +133,10 @@ to diff against on each re-sync.
 
 ### Discipline strengthening
 
-The plugin is enabled by default (A), a system-wide `requirements.toml` can
-pin it on (B), and the binary turns on strict mode at startup on every install
-path (E). [`integrations/discipline-strengthening.md`](integrations/discipline-strengthening.md)
+Two things keep the discipline on: the plugin is enabled by default, and the
+binary turns on strict mode at startup on every install path. Nothing locks the
+plugin on; `enabled = false` on its entry turns it off.
+[`integrations/discipline-strengthening.md`](integrations/discipline-strengthening.md)
 has the decision and the details.
 
 ---
@@ -154,8 +155,9 @@ requests and forwards them through a Canonical Intermediate Format (CIF) and
 per-protocol adapters.
 
 - Routes by model name from `~/.codex/translator-upstreams.toml` (written on
-  first start with Mistral routes); keys come from the environment or
-  `~/.empirica/credentials.yaml`.
+  first start with routes for Mistral, DeepSeek, Qwen, GLM and Kimi); keys come
+  from the environment or `~/.empirica/credentials.yaml`, and a route without a
+  key is skipped.
 - Retries a provider's rate limit (429) itself, honouring `Retry-After`.
 - Repairs tool-call arguments chat models produce but codex rejects
   (`tool_args.rs`).
@@ -202,8 +204,8 @@ mark into the OpenAI one.
   depending on the tap's `empirica` formula.
 - **`ecodex/scripts/install.sh`** — the source-build installer: builds the
   binaries, installs them behind `ecodex/scripts/ecodex-wrapper.sh` (which also
-  passes a cortex key for mesh installs), and with `--system` installs the
-  `requirements.toml` lock. `uninstall.sh` reverses it.
+  passes a cortex key for mesh installs), per user or, with `--system`, under
+  `/usr/local`. `uninstall.sh` reverses it.
 
 ### Empirica chat
 
@@ -226,9 +228,9 @@ L3/L2  ecodex binary starts
        - provision(): plugin, config entry, default config and routes written if needed
    │
    ▼
-L1     codex loads config and the managed requirements (/etc/codex/requirements.toml),
-       discovers empirica@empiricaAI in the plugin cache, registers its hooks,
-       starts the agent runtime and TUI; the ntfy listener connects if configured
+L1     codex loads config, discovers empirica@empiricaAI in the plugin cache,
+       registers its hooks, starts the agent runtime and TUI; the ntfy listener
+       connects if configured
    │
    ▼
 L2     SessionStart → codex-empirica-plugin session-start
@@ -268,7 +270,7 @@ ecodex/                                   # repo root
 ├── ruff.toml                             # lint scope: the code ecodex owns
 ├── codex-rs/                             # the Rust workspace
 │   ├── cli/                              # L1: entrypoint (bin_name ecodex) + L2 provisioning call
-│   ├── arg0/                             # L1 + E: strict-mode defaults at startup
+│   ├── arg0/                             # L1; L2 strict-mode defaults at startup
 │   ├── core/                             # L1 agent runtime; L3 ntfy listener, Monitor, hot-swap
 │   ├── tui/                              # L1 UI; L3 curated models, Empirica mark
 │   ├── models-manager/                   # L1; L2 base prompt, L3 curated registry seed
@@ -282,7 +284,7 @@ ecodex/                                   # repo root
 │   │   ├── tests/vendored_hooks/         # pytest against a real empirica
 │   │   └── src/                          # provision, empirica_cli, translate_output, hooks/
 │   └── codex-empirica-translator/        # L3: Responses ↔ Chat/Anthropic bridge
-├── ecodex/                               # source-build installer, wrapper, lock template
+├── ecodex/                               # source-build installer and wrapper
 ├── scripts/                              # install.sh, release.sh, sync-homebrew.sh, setup-codex.py, CI guards
 ├── packaging/homebrew/                   # the Homebrew formula
 ├── npm/                                  # the ecodex npm package
