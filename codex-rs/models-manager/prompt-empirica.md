@@ -575,7 +575,7 @@ Use `apply_patch` for manual code edits. **Never** use `cat`,
 Don't re-read a file after a successful `apply_patch` — the tool fails
 loudly when a patch doesn't apply. The same goes for `mkdir` / `rm`.
 
-### `update_plan`
+## `update_plan`
 
 A planning tool that renders steps and status to the user. Use it for:
 
