@@ -63,9 +63,11 @@ fn pluck_context(cc: &Value) -> Option<String> {
 /// `pluck_context` silently DROPPED it — a fresh model then started with no
 /// session_id and no PREFLIGHT template and could not bootstrap into a
 /// transaction. Flat `context` still wins when present (CC-shape hooks like
-/// tool-router.py). Scoped to SessionStart on purpose: codex does NOT accept
-/// `additionalContext` on PreToolUse, so `translate_pre_tool_use` must keep
-/// using the flat-only `pluck_context`.
+/// tool-router.py). PostToolUse needs it too: truncation-legibility.py emits
+/// only the nested shape, and its notice would otherwise never reach the
+/// model. Not used for PreToolUse on purpose: codex does NOT accept
+/// `additionalContext` there, so `translate_pre_tool_use` must keep using the
+/// flat-only `pluck_context`.
 fn pluck_context_or_additional(cc: &Value) -> Option<String> {
     pluck_context(cc).or_else(|| {
         cc.get("hookSpecificOutput")
@@ -199,7 +201,7 @@ fn translate_post_tool_use(cc: &Value) -> Value {
     out.insert("continue".into(), json!(pluck_continue(cc)));
     let mut hso = Map::new();
     hso.insert("hookEventName".into(), json!("PostToolUse"));
-    if let Some(ctx) = pluck_context(cc) {
+    if let Some(ctx) = pluck_context_or_additional(cc) {
         hso.insert("additionalContext".into(), json!(ctx));
     }
     out.insert("hookSpecificOutput".into(), Value::Object(hso));
@@ -268,6 +270,26 @@ mod tests {
             v["hookSpecificOutput"]["additionalContext"],
             json!("Session ID: 785ec3ba\nRun PREFLIGHT."),
             "SessionStart must surface session-init's nested additionalContext to the model"
+        );
+    }
+
+    #[test]
+    fn post_tool_use_reads_nested_additional_context() {
+        // truncation-legibility.py emits only the nested shape; the flat-only
+        // pluck_context would drop its notice before it reached the model.
+        let out = translate(
+            "PostToolUse",
+            r#"{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Truncation: `head -3` returned exactly 3 lines"}}"#,
+        );
+        assert_eq!(
+            parse(&out),
+            json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": "Truncation: `head -3` returned exactly 3 lines"
+                }
+            })
         );
     }
 

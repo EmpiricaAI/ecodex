@@ -30,6 +30,17 @@
             "statusMessage": "Empirica entity extract"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook PostToolUse truncation-legibility.py",
+            "timeout": 10,
+            "statusMessage": "Empirica truncation check"
+          }
+        ]
       }
     ],
     "SessionStart": [
