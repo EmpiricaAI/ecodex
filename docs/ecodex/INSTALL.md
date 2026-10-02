@@ -2,16 +2,17 @@
 
 ecodex installs the same way whichever channel you pick: you put the binaries on
 your `PATH`, and the first session sets up everything else. That includes the
-empirica plugin (the Sentinel, the hooks and the bundled skills) and a curated
-`config.toml`. Every later upgrade refreshes the plugin.
+empirica plugin (the Sentinel, the hooks and the bundled skills), a curated
+`config.toml` and the translator's routes. Every later upgrade refreshes the
+plugin.
 
 ## Prerequisites
 
-- **The `empirica` CLI on `PATH`.** The plugin's hooks shell out to it. Install it
-  from [`EmpiricaAI/empirica`](https://github.com/EmpiricaAI/empirica) before your
-  first session. Without it the hooks fail quietly and the discipline goes dark,
-  although ecodex itself still runs.
 - **Linux or macOS.** Windows is not supported yet.
+- **The `empirica` CLI.** The plugin's hooks run under it, so the Sentinel needs
+  it. The install script, Homebrew and the source build set it up for you (with
+  `pipx` or `uv` when it is missing). With cargo or a bare tarball, install it
+  yourself: `pipx install empirica`.
 - **A Rust toolchain** ([rustup.rs](https://rustup.rs/), stable) only for the
   cargo and source-build channels.
 
@@ -32,45 +33,50 @@ builds target glibc 2.35 (Ubuntu 22.04) and newer.
 ### Install script
 
 Detects your OS and CPU, downloads the matching release tarball, verifies its
-SHA-256 and installs four binaries into `~/.local/bin`: `ecodex`,
-`codex-empirica-plugin`, `codex-empirica-translator` and `codex-code-mode-host`.
-Install elsewhere with `--prefix DIR` or `ECODEX_INSTALL_DIR`, and pin a release
-with `ECODEX_VERSION=<tag>`.
+SHA-256, installs four binaries into `~/.local/bin` (`ecodex`,
+`codex-empirica-plugin`, `codex-empirica-translator` and `codex-code-mode-host`),
+and sets up the empirica CLI if it is missing. Install elsewhere with
+`--prefix DIR` or `ECODEX_INSTALL_DIR`, and pin a release with
+`ECODEX_VERSION=<tag>`.
 
 ### Homebrew
 
 Installs the same four prebuilt binaries from the
-[`EmpiricaAI/homebrew-tap`](https://github.com/EmpiricaAI/homebrew-tap) tap.
+[`EmpiricaAI/homebrew-tap`](https://github.com/EmpiricaAI/homebrew-tap) tap, and
+the tap's `empirica` formula with them.
 
 ### Release tarball
 
 Each tarball holds the four binaries and a `.sha256` file to check it against.
 Put all four in one directory on your `PATH`: the plugin binary runs for every
-hook event, and the translator serves providers that need it.
+hook event, and the translator serves the providers that need it. Then install
+the empirica CLI.
 
 ### Cargo
 
-`cargo install` builds only the `ecodex` binary. Install the plugin binary too,
-or the hooks cannot run (ecodex warns you on first session if it is missing):
+`cargo install` builds only the `ecodex` binary. Install the plugin binary, the
+translator and the empirica CLI too:
 
 ```sh
 cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli
-cargo install codex-empirica-plugin
-cargo install codex-empirica-translator   # only for providers routed through the translator
+cargo install codex-empirica-plugin       # the hooks cannot run without it; ecodex warns if it is missing
+cargo install codex-empirica-translator   # for Mistral, DeepSeek, Qwen, GLM and Kimi
+pipx install empirica
 ```
 
 ### Source build
 
 Builds the workspace in release mode (10–25 minutes the first time, minutes
 after that), installs a wrapper at `~/.local/bin/ecodex` with the binary under
-`~/.local/lib/ecodex/bin/`, and lays down the plugin and config immediately
-instead of at the first session.
+`~/.local/lib/ecodex/bin/`, puts the plugin binary and the translator beside it,
+sets up the empirica CLI if it is missing, and lays down the plugin and config
+immediately instead of at the first session.
 
 | Flag | Effect |
 |---|---|
 | `--user` (default) | Per-user install under `~/.local` and `~/.codex`. No sudo. |
 | `--system` | Installs under `/usr/local` (or `--prefix DIR`) and writes `/etc/codex/requirements.toml`, which locks the empirica plugin on so a runtime cannot disable it without root. Needs sudo. |
-| `--no-build` | Skips the build; point `ECODEX_BINARY` and `PLUGIN_BINARY` at prebuilt binaries. |
+| `--no-build` | Skips the build; point `ECODEX_BINARY`, `PLUGIN_BINARY` and `TRANSLATOR_BINARY` at prebuilt binaries. |
 | `--fast` | Builds with a thin-LTO profile for quicker iteration. |
 
 On a `--user` install a determined runtime can still disable the plugin, because
@@ -87,7 +93,7 @@ as `ecodex mcp list` or `ecodex login` leave your files alone.
 | `~/.codex/plugins/cache/empiricaAI/empirica/<version>/` | Writes the empirica plugin: manifest, hooks, MCP servers, skills, hook scripts and subagents. Rewritten whenever it differs from the copy inside the binary, so upgrades refresh it. |
 | `~/.codex/config.toml` | Created from the bundled default (curated providers, plugin enabled) when it does not exist. An existing config is edited only to add `[plugins."empirica@empiricaAI"]` when it has no entry for the plugin. |
 | `~/.codex/huggingface.config.toml` | Added when missing: a profile for Hugging Face Inference Providers. |
-| `~/.codex/translator-upstreams.toml` | Added when missing: the translator's routes for Mistral (Devstral, Codestral). |
+| `~/.codex/translator-upstreams.toml` | Added when missing: the translator's routes for Mistral, DeepSeek, Qwen, GLM and Kimi. |
 
 Your own settings always win. ecodex never overwrites an existing file other than
 its plugin directory, and an explicit `enabled = false` on the plugin entry keeps
@@ -108,24 +114,61 @@ empirica diagnose --frontend ecodex
 `empirica diagnose` checks the plugin files, the hook scripts, the statusline and
 the empirica CLI, and prints a hint for anything that fails.
 
-## Configure a provider
+## Choose a model provider
 
-The default config sets DeepSeek as the starting model and carries curated
-entries for other providers. Each entry names the environment variable that holds
-its key.
+ecodex sets no default model; it starts on codex's own default until you pick one
+with `/model`. codex speaks only the OpenAI Responses API, which splits the
+providers in two.
 
-1. Get an API key, or start a local model server.
-2. Export the variable the provider's entry names, for example
-   `export DEEPSEEK_API_KEY=...`.
-3. Run `ecodex` and pick the model with `/model`.
+**Direct.** These serve the Responses API themselves, so ecodex talks to them
+straight away:
 
-- **Local models.** Ollama (`localhost:11434`) and LM Studio (`localhost:1234`)
-  are built in and need no config. llama.cpp and vLLM have entries in the default
-  config.
-- **Mistral.** Devstral and Codestral speak only Chat Completions, so they go
-  through the translator: store the key and run `codex-empirica-translator`. See
-  [`MISTRAL_SOVEREIGN.md`](MISTRAL_SOVEREIGN.md).
-- **Hugging Face.** See [`integrations/huggingface.md`](integrations/huggingface.md).
+| Provider | What you do |
+|---|---|
+| OpenAI | Sign in with your ChatGPT account, or export `OPENAI_API_KEY`. Pick a GPT model in `/model`. |
+| OpenRouter | Export `OPENROUTER_API_KEY`. |
+| Hugging Face | Export `HF_TOKEN`; `ecodex -p huggingface` uses the bundled profile. See [`integrations/huggingface.md`](integrations/huggingface.md). |
+| Local servers | Ollama (`localhost:11434`) and LM Studio (`localhost:1234`) need nothing; llama.cpp and vLLM have entries in the default config. Start the server and pick its model. |
+
+**Through the translator.** Mistral (Devstral, Codestral), DeepSeek, Qwen, GLM
+and Kimi speak only Chat Completions. `codex-empirica-translator`, installed with
+ecodex, sits between them and codex on `127.0.0.1:18080`. Three steps:
+
+1. **Store the key.** Either in the empirica key store,
+   `~/.empirica/credentials.yaml`:
+
+   ```yaml
+   mistral:
+     api_key: <your key>
+   ```
+
+   using the section `mistral`, `deepseek`, `dashscope` (Qwen), `zhipu` (GLM) or
+   `moonshot` (Kimi), or as an environment variable in the shell that starts the
+   translator: `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY`,
+   `ZHIPU_API_KEY` or `MOONSHOT_API_KEY`. Never put a key in a ecodex config file.
+2. **Start the translator** and leave it running, with no flags:
+
+   ```sh
+   codex-empirica-translator
+   # or in the background:
+   nohup codex-empirica-translator >~/.codex/translator.log 2>&1 &
+   ```
+
+   It logs a warning for each provider it has no key for and serves the rest.
+   Restart it after adding a key.
+3. **Pick the model** in `/model` (or `ecodex -c model_provider=mistral -m
+   devstral-latest`). The default config already points these providers at the
+   translator.
+
+If your `~/.codex/config.toml` or `translator-upstreams.toml` was written by an
+older ecodex, it is left as it is: copy the provider blocks from the
+[default config](https://github.com/EmpiricaAI/ecodex/blob/main/codex-rs/codex-empirica-plugin/assets/config/config.toml.default)
+and the routes from the
+[default routes](https://github.com/EmpiricaAI/ecodex/blob/main/codex-rs/codex-empirica-plugin/assets/config/translator-upstreams.toml).
+[`integrations/providers.md`](integrations/providers.md) has every provider,
+model ids to start with, and how to add your own;
+[`MISTRAL_SOVEREIGN.md`](MISTRAL_SOVEREIGN.md) walks through the EU route in
+detail.
 
 You can switch provider mid-session with `/model`; the next turn uses the new one.
 
@@ -148,8 +191,8 @@ checkout. If `ecodex update` says it cannot detect the install method, your
 ecodex predates channel detection: run your install command once by hand, and
 `ecodex update` works from then on.
 
-The next session after an update refreshes the plugin. Sessions already running
-keep the old binary until you restart them.
+The next session after an update refreshes the plugin. Sessions already running,
+and a running translator, keep the old binary until you restart them.
 
 ## Uninstall
 
@@ -161,17 +204,37 @@ set `enabled = false` under `[plugins."empirica@empiricaAI"]`.
 
 ## Troubleshooting
 
+**"this CLI has no complete local package; install a packaged Codex CLI or use the standalone installer"**
+Your ecodex tries to start upstream codex's background app-server, which needs a
+packaged CLI layout ecodex does not ship. Current ecodex leaves it off; on an
+older build, add `daemon_auto_start = false` under `[features]` in
+`~/.codex/config.toml`, or start with `ecodex --no-daemon`. Then update.
+
 **"`codex-empirica-plugin` is not on PATH, so its hooks cannot run"**
 The plugin binary must sit on your `PATH`. The install script, Homebrew and the
 tarball install it alongside `ecodex`; after `cargo install`, run
 `cargo install codex-empirica-plugin`.
 
-**`empirica: command not found` in hook output**
-Install the empirica CLI. The hooks fail quietly without it.
+**"Empirica Sentinel is OFF" in a session**
+The hooks run with the Python of the `empirica` command on your `PATH`, and that
+Python could not import empirica. Check that `empirica --version` works in the
+shell you start ecodex from, then run `empirica diagnose --frontend ecodex`.
+ecodex releases before 0.157.4 used the first `python3` on `PATH` instead, which
+cannot see a pipx or Homebrew empirica: update ecodex.
 
 **"could not install the empirica plugin"**
 ecodex could not write under `~/.codex` (or `$CODEX_HOME`). Check the directory's
 permissions; the session continues without a refreshed plugin.
+
+**The translator says "route skipped"**
+It has no key for that provider. Add the key as in step 1 above and restart the
+translator. If it refuses to start with "no route … has a key", it has no key for
+any provider in its routes file.
+
+**A Chat Completions provider fails straight away**
+Its `[model_providers.*]` block still points at the provider's own API, which
+codex cannot use. Point `base_url` at `http://localhost:18080/v1`, make sure the
+translator has a route and a key for the model, and that it is running.
 
 **The translator says it has no upstreams**
 `~/.codex/translator-upstreams.toml` is missing. Start an ecodex session once to

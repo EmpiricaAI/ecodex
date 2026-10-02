@@ -18,7 +18,7 @@ This is **not** a drop-in replacement for codex. It is opinionated: the discipli
 
 ## Status
 
-Alpha. **`main` tracks upstream codex 0.157** (synced from the stable `rust-v0.157.0` tag; latest release [v0.154.0](https://github.com/EmpiricaAI/ecodex/releases)). The version tracks the upstream [openai/codex](https://github.com/openai/codex) base this build is derived from — hence the jump from `0.2.x` at the first rebased release (`0.146.0`). Tracking the base keeps the client version ecodex reports compatible with OpenAI's per-model version gates, so frontier models work over ChatGPT-subscription sign-in; ecodex patches increment as `0.157.x`, then move to the new base on each upstream sync. (First public release v0.1.0 was 2026-06-02.) The release pipeline (gated build/test/clippy, GitHub release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
+Alpha. **`main` tracks upstream codex 0.157** (synced from the stable `rust-v0.157.0` tag; latest release [v0.157.5](https://github.com/EmpiricaAI/ecodex/releases)). The version tracks the upstream [openai/codex](https://github.com/openai/codex) base this build is derived from — hence the jump from `0.2.x` at the first rebased release (`0.146.0`). Tracking the base keeps the client version ecodex reports compatible with OpenAI's per-model version gates, so frontier models work over ChatGPT-subscription sign-in; ecodex patches increment as `0.157.x`, then move to the new base on each upstream sync. (First public release v0.1.0 was 2026-06-02.) The release pipeline (gated build/test/clippy, GitHub release, crates.io publish for owned crates, Homebrew tap) lives in `scripts/release.sh`.
 
 `main` is the canonical branch and carries all active work: the empirica plugin, the protocol translator, curated open-weights provider defaults and the model registry, the native mesh listener, the Empirica welcome mark, and the discipline wiring. Upstream `openai/codex` is tracked through the `upstream` remote; stable upstream tags are merged in periodically (see `docs/ecodex/` and the upstream-sync issue template).
 
@@ -58,9 +58,9 @@ What users notice that vanilla codex doesn't do:
 
 Every channel ends up the same. You put the binaries on your `PATH`, and the first session sets up the rest: the empirica plugin (the Sentinel, the hooks and the bundled skills) and a curated `~/.codex/config.toml`. Each upgrade refreshes the plugin, and `ecodex update` upgrades through whichever channel you used.
 
-Non-developers should use the install script or Homebrew: prebuilt binaries for macOS and Linux, no Rust toolchain. The cargo and source-build channels compile the workspace (10–25 min). With cargo, also run `cargo install codex-empirica-plugin` so the hooks can run.
+Non-developers should use the install script or Homebrew: prebuilt binaries for macOS and Linux, no Rust toolchain. The cargo and source-build channels compile the workspace (10–25 min). With cargo, also run `cargo install codex-empirica-plugin codex-empirica-translator` so the hooks and the translator are there.
 
-The empirica CLI must also be on `PATH`; install it from [`EmpiricaAI/empirica`](https://github.com/EmpiricaAI/empirica). Without it the plugin's hooks fail quietly and the discipline goes dark.
+The plugin's hooks run under the [empirica](https://github.com/EmpiricaAI/empirica) CLI. The install script, Homebrew and the source build install it for you when it is missing; with cargo or a bare tarball, run `pipx install empirica`.
 
 [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) covers what the first session writes, updating, uninstalling and troubleshooting.
 
@@ -70,7 +70,17 @@ The empirica CLI must also be on `PATH`; install it from [`EmpiricaAI/empirica`]
 ecodex
 ```
 
-If you have no `~/.codex/config.toml`, the first session writes the curated one; its starting model is DeepSeek. Export the key for the provider you want (each provider entry in the config names its variable), pick a model with `/model`, and start. You can switch provider mid-session through `/model` without restarting. For Mistral, start `codex-empirica-translator` first; see [`docs/ecodex/MISTRAL_SOVEREIGN.md`](docs/ecodex/MISTRAL_SOVEREIGN.md).
+If you have no `~/.codex/config.toml`, the first session writes the curated one. It sets no default model: pick one with `/model`. You can switch provider mid-session through `/model` without restarting.
+
+codex speaks only the OpenAI Responses API, so providers come in two kinds:
+
+- **Direct** — OpenAI (sign in, or `OPENAI_API_KEY`), OpenRouter (`OPENROUTER_API_KEY`), Hugging Face (`HF_TOKEN`), and local servers (Ollama and LM Studio need no config; llama.cpp and vLLM are in the default config). Set the key or start the server, then pick the model.
+- **Through the translator** — Mistral (Devstral, Codestral), DeepSeek, Qwen, GLM and Kimi speak only Chat Completions. `codex-empirica-translator`, installed with ecodex, bridges them:
+  1. Put the key in `~/.empirica/credentials.yaml` under the provider's section (`mistral`, `deepseek`, `dashscope`, `zhipu` or `moonshot`) as `api_key: …`, or export `MISTRAL_API_KEY` / `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` / `ZHIPU_API_KEY` / `MOONSHOT_API_KEY`.
+  2. Run `codex-empirica-translator` (no flags) and leave it running. It serves the providers it has keys for and warns about the rest.
+  3. Pick the model in `/model`, for example `devstral-latest`.
+
+[`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md#choose-a-model-provider) has the details, including what to copy if your config predates these routes; [`docs/ecodex/MISTRAL_SOVEREIGN.md`](docs/ecodex/MISTRAL_SOVEREIGN.md) walks through the EU route.
 
 ## Glossary
 
@@ -112,7 +122,7 @@ For the full vocabulary and how the pieces compose, see [`docs/ecodex/system-ove
 
 ecodex is a **product fork**, not a derivative. Upstream improvements flow in by merging stable upstream tags into `main`; our hardening fixes go back as PRs against `openai/codex`. The agent runtime, sandbox, RPC protocol, plugin host and hook system all come from upstream.
 
-What ecodex adds is mostly *additive*: new crates (`codex-empirica-plugin`, `codex-empirica-translator`), new manifest fields (`writableRoots`, `statusline`), new provider entries, the empirica base prompt, and an install script that handles the bundled plugin layout. We do **not** rename, reorganise or break upstream APIs. Where a feature has to live inside upstream code — the mid-session provider swap, the native mesh listener, the extra hook events, the welcome mark — it is kept small and marked as an ecodex extension, so each upstream merge can carry it forward.
+What ecodex adds is mostly *additive*: new crates (`codex-empirica-plugin`, `codex-empirica-translator`), new manifest fields (`writableRoots`, `statusline`), new provider entries, the empirica base prompt, installers, and the startup step that writes the bundled plugin. We do **not** rename, reorganise or break upstream APIs. Where a feature has to live inside upstream code — the mid-session provider swap, the native mesh listener, the extra hook events, the welcome mark — it is kept small and marked as an ecodex extension, so each upstream merge can carry it forward.
 
 The one policy exception we maintain inside upstream code is the `ECODEX_AUTO_TRUSTED_PLUGIN_IDS` allowlist in `codex-rs/hooks/src/engine/discovery.rs` — first-party plugin trust on first install, in lieu of upstream's user-trust review flow. When empirica becomes a marketplace plugin, this comes off and we use the upstream-intended flow.
 
