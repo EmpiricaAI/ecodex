@@ -94,6 +94,12 @@ jobs:
       - name: Check UPSTREAM_SYNC_TAG tracks workspace version
         run: python3 scripts/check_upstream_sync_tag.py
 
+      # The empirica-core ref above must be the commit the hooks were vendored
+      # from (manifest.json empiricaVendorCommit). The two are kept by hand and
+      # drifted after v0.157.0, failing CI on main. Pure file inspection.
+      - name: Check the empirica-core pin matches the vendored commit
+        run: python3 scripts/check_empirica_core_pin.py
+
       - name: Run hermetic vendored-hook tests
         run: |
           python3 -m venv "$RUNNER_TEMP/vendored-hooks-venv"
@@ -108,7 +114,7 @@ jobs:
           PATH="$RUNNER_TEMP/vendored-hooks-venv/bin:$PATH" \
             "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
             codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -v
-          # sync-tag guard self-test runs here (venv has pytest); the guard
-          # itself is the bare CI gate above.
+          # The drift guards' self-tests run here (venv has pytest); the guards
+          # themselves are the bare CI gates above.
           "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
-            scripts/test_check_upstream_sync_tag.py -q
+            scripts/test_check_upstream_sync_tag.py scripts/test_check_empirica_core_pin.py -q
