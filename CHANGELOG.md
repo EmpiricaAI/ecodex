@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.157.4] - 2026-10-02
+
 ### Fixed
 - **The Sentinel runs on pipx, uv and Homebrew installs of empirica.** ecodex ran
   the empirica hooks with the first `python3` on PATH. Those installers keep
@@ -769,7 +771,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.3...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.4...HEAD
+[0.157.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.3...v0.157.4
 [0.157.3]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.2...v0.157.3
 [0.157.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.1...v0.157.2
 [0.157.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.0...v0.157.1
