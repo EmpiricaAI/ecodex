@@ -75,12 +75,9 @@ immediately instead of at the first session.
 | Flag | Effect |
 |---|---|
 | `--user` (default) | Per-user install under `~/.local` and `~/.codex`. No sudo. |
-| `--system` | Installs under `/usr/local` (or `--prefix DIR`) and writes `/etc/codex/requirements.toml`, which locks the empirica plugin on so a runtime cannot disable it without root. Needs sudo. |
+| `--system` | Installs the binaries under `/usr/local` (or `--prefix DIR`). Needs sudo. |
 | `--no-build` | Skips the build; point `ECODEX_BINARY`, `PLUGIN_BINARY` and `TRANSLATOR_BINARY` at prebuilt binaries. |
 | `--fast` | Builds with a thin-LTO profile for quicker iteration. |
-
-On a `--user` install a determined runtime can still disable the plugin, because
-codex reads managed requirements only from `/etc/codex/requirements.toml`.
 
 ## What the first session sets up
 
@@ -200,8 +197,7 @@ there is no `config.toml`, so add the provider settings the job needs to the sam
 file. With the plugin off, no hooks run and no `.empirica/` is created.
 
 Setting `EMPIRICA_SENTINEL_LOOPING=false` in the job's environment does not help:
-the hooks do not see it. A `--system` install locks the plugin on for every user,
-so set up runners with a per-user install.
+the hooks do not see it.
 
 ## Update
 
