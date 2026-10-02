@@ -9,28 +9,28 @@
 class Ecodex < Formula
   desc "Empirica-native fork of OpenAI Codex — calibrated agentic coding CLI"
   homepage "https://github.com/EmpiricaAI/ecodex"
-  version "0.157.1"
+  version "0.157.2"
   license "Apache-2.0"
 
   on_macos do
     on_arm do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-aarch64-apple-darwin.tar.gz"
-      sha256 "41115219a1adde24f3e8b3050d0d13775fd3ec146d43a3552a51e0a90a9c5ea3"
+      sha256 "2dfcc9340954bbcffb12c8f3628835f494f30fc7ab3b96e29511494e3d9b7d8d"
     end
     on_intel do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-x86_64-apple-darwin.tar.gz"
-      sha256 "e422cd000a5e8a6271a7bbc6e06810acc881ff5def57e09202e7da5166e5e412"
+      sha256 "f079bf84e95341c638709afc1b0c3bdeefb33398b5b96d4a3592801df4d1f0d7"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "a15298aa534529fd683a4878a3cd072dd936fa0bca9e6cb34e765d2d6e1f0e5e"
+      sha256 "fd782d381989d5a0627c7da8a5a62db9736bf62a7a03fe6b7e9dbdbdb443ed86"
     end
     on_intel do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "45f14ebc5cf6e0621abdbc6832f37f973f0300651fec2db08f648dfccef86f4c"
+      sha256 "d7b96983bcbe6a91778391ee42063e023c4c9f61c3cdfca84284088145a8aaec"
     end
   end
 
@@ -41,10 +41,12 @@ class Ecodex < Formula
 
   def caveats
     <<~EOS
-      ecodex's epistemic plugin needs the empirica CLI on PATH:
+      The first `ecodex` session installs the empirica plugin and a curated
+      ~/.codex/config.toml. The plugin's hooks need the empirica CLI on PATH:
         https://github.com/EmpiricaAI/empirica
-      Chat providers (Mistral/Devstral, etc.) route through the translator:
-        run `codex-empirica-translator` before launching ecodex.
+      Mistral/Devstral route through the translator: store the key under
+      mistral.api_key in ~/.empirica/credentials.yaml, then run
+      `codex-empirica-translator`.
     EOS
   end
 
