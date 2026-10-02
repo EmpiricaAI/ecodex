@@ -247,14 +247,17 @@ anything:
 empirica cockpit status --profile <profile> --output json
 ```
 
-`configured_projects` must list every practice with the right path. If the command
-errors, or a practice is missing, show the error and fix the draft. Don't report
+It must return `ok: true` with an empty `problems` list, and `configured_projects`
+must list every practice with the right path. `status` catches a YAML error, a pane
+naming a project that isn't under `projects:`, a group without a name, and a group
+left with no usable pane; it exits non-zero and lists them under `problems`. A
+practice directory that doesn't exist yet is only a `warnings` entry. If `ok` is
+false or a practice is missing, show the problems and fix the draft. Don't report
 success over it.
 
-That check covers `projects:` only. `status` does not look inside `groups:`, so a
-pane naming a project that isn't listed passes here and fails only at launch. Read
-the file back and match every `{project: …}` pane against a `name:` under
-`projects:`.
+On an empirica older than 1.14.5, `status` does not look inside `groups:` and its
+output has no `ok` field. There, read the file back and match every
+`{project: …}` pane against a `name:` under `projects:` yourself.
 
 **Hand the launch to the user.** Launching opens a new window or takes over a
 terminal, and the user should be the one to do that. Give them the commands:
