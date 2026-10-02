@@ -9,28 +9,31 @@
 class Ecodex < Formula
   desc "Empirica-native fork of OpenAI Codex — calibrated agentic coding CLI"
   homepage "https://github.com/EmpiricaAI/ecodex"
-  version "0.157.2"
+  version "0.157.3"
   license "Apache-2.0"
+
+  # The plugin's hooks shell out to the empirica CLI.
+  depends_on "empiricaai/tap/empirica"
 
   on_macos do
     on_arm do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-aarch64-apple-darwin.tar.gz"
-      sha256 "2dfcc9340954bbcffb12c8f3628835f494f30fc7ab3b96e29511494e3d9b7d8d"
+      sha256 "944c7d7970476e888b6cd08e7dbff310573ca6632c5ff76a196142947f6701b3"
     end
     on_intel do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-x86_64-apple-darwin.tar.gz"
-      sha256 "f079bf84e95341c638709afc1b0c3bdeefb33398b5b96d4a3592801df4d1f0d7"
+      sha256 "e5691f2b9e0bba95f8c0a9c30d5c89a5726ccebfa65e828f20dd687868ff0976"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "fd782d381989d5a0627c7da8a5a62db9736bf62a7a03fe6b7e9dbdbdb443ed86"
+      sha256 "f293a97d545f38b0460c019174b569fade02cc7d5492f49491f76679dc02f894"
     end
     on_intel do
       url "https://github.com/EmpiricaAI/ecodex/releases/download/v#{version}/ecodex-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "d7b96983bcbe6a91778391ee42063e023c4c9f61c3cdfca84284088145a8aaec"
+      sha256 "7264ad9f7ef4b438a92b02c9feb58ec41389f24c393648a379acf09b9e256c30"
     end
   end
 
@@ -42,8 +45,7 @@ class Ecodex < Formula
   def caveats
     <<~EOS
       The first `ecodex` session installs the empirica plugin and a curated
-      ~/.codex/config.toml. The plugin's hooks need the empirica CLI on PATH:
-        https://github.com/EmpiricaAI/empirica
+      ~/.codex/config.toml.
       Mistral/Devstral route through the translator: store the key under
       mistral.api_key in ~/.empirica/credentials.yaml, then run
       `codex-empirica-translator`.
