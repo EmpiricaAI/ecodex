@@ -7,10 +7,7 @@
 #
 # Two parts of ecodex's discipline show here: the empirica plugin is enabled by
 # default, and strict mode (set by the binary itself) is described at the end.
-# The third part, a system-wide lock that stops the plugin being switched off,
-# is ecodex/requirements.toml.example, installed separately to
-# /etc/codex/requirements.toml. See docs/ecodex/integrations/
-# discipline-strengthening.md.
+# See docs/ecodex/integrations/discipline-strengthening.md.
 
 # ─── The empirica plugin ─────────────────────────────────────────────
 # ecodex installs the bundled plugin itself; plugins and their hooks are on by

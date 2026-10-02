@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ecodex uninstall script
 #
-# Removes the wrapper, binary, and managed.toml lock. Leaves
-# ~/.codex/config.toml alone (it may contain user customizations).
+# Removes the wrapper, the binary, the plugin binary and the plugin cache.
+# Leaves ~/.codex/config.toml alone (it may contain user customizations).
 #
 # Usage: ./uninstall.sh [--system | --user] [--prefix DIR] [--purge]
-#   --system  Remove system-scope install (/etc/ecodex/, /usr/local/bin)
-#   --user    Remove per-user install (~/.ecodex/, ~/.local/bin) — default
+#   --system  Remove a system-scope install (under --prefix)
+#   --user    Remove the per-user install (~/.local) — default
 #   --prefix  Override binary install dir (default: /usr/local)
 #   --purge   Also remove ~/.codex/config.toml (CAUTION: loses user config)
 
@@ -23,7 +23,7 @@ while [[ $# -gt 0 ]]; do
     --prefix)  PREFIX="$2";    shift 2 ;;
     --purge)   PURGE=1;        shift ;;
     -h|--help)
-      sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#//'
+      sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#//'
       exit 0
       ;;
     *) echo "ecodex uninstall: unknown arg '$1'" >&2; exit 64 ;;
@@ -31,31 +31,33 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$SCOPE" == "system" ]]; then
-  MANAGED_DIR="/etc/ecodex"
   WRAPPER_DEST="${PREFIX}/bin/ecodex"
   BINARY_DEST="${PREFIX}/lib/ecodex"
-  REQUIREMENTS_PATH="/etc/codex/requirements.toml"
   if [[ "$EUID" -ne 0 ]]; then
     echo "ecodex uninstall --system requires root (rerun with sudo)" >&2
     exit 1
   fi
+  # Older --system installs wrote /etc/codex/requirements.toml, meant as a lock
+  # that kept the plugin enabled. codex never enforced it. Remove it only when
+  # it is that file, so an administrator's own requirements.toml stays.
+  OLD_LOCK="/etc/codex/requirements.toml"
+  if [[ -f "$OLD_LOCK" ]] && head -n 1 "$OLD_LOCK" | grep -q '^# ecodex managed config'; then
+    echo "→ Removing $OLD_LOCK (written by an older ecodex install)"
+    rm -f "$OLD_LOCK"
+    rmdir --ignore-fail-on-non-empty "$(dirname "$OLD_LOCK")" 2>/dev/null || true
+  fi
+  # Even older installs used /etc/ecodex/managed.toml.
+  rm -f /etc/ecodex/managed.toml 2>/dev/null || true
+  rmdir --ignore-fail-on-non-empty /etc/ecodex 2>/dev/null || true
 else
   WRAPPER_DEST="${HOME}/.local/bin/ecodex"
   BINARY_DEST="${HOME}/.local/lib/ecodex"
-  REQUIREMENTS_PATH=""
   # Legacy cleanup: earlier installer used ~/.ecodex/managed.toml
   rm -f "${HOME}/.ecodex/managed.toml" 2>/dev/null || true
   rmdir --ignore-fail-on-non-empty "${HOME}/.ecodex" 2>/dev/null || true
 fi
 
 CODEX_CONFIG="${HOME}/.codex/config.toml"
-
-# ─── Remove requirements.toml lock (system installs only) ────────────
-if [[ -n "$REQUIREMENTS_PATH" && -f "$REQUIREMENTS_PATH" ]]; then
-  echo "→ Removing requirements.toml lock from $REQUIREMENTS_PATH"
-  rm -f "$REQUIREMENTS_PATH"
-  rmdir --ignore-fail-on-non-empty "$(dirname "$REQUIREMENTS_PATH")" 2>/dev/null || true
-fi
 
 # ─── Remove wrapper + binary ─────────────────────────────────────────
 if [[ -f "$WRAPPER_DEST" ]]; then

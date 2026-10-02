@@ -13,6 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   empirica 1.14.5. In the earlier copy, a trailing `# --help` or a heredoc line
   let an `empirica-workspace` write through the firewall as a read, and
   `env rm -rf …` passed as a safe prefix.
+- **There is no system-wide plugin lock, and the source installer no longer
+  claims one.** `ecodex/scripts/install.sh --system` used to write
+  `/etc/codex/requirements.toml` and say that it kept the empirica plugin from
+  being switched off. codex does not enforce that setting, so the plugin could
+  always be disabled. The installer no longer writes the file, and
+  `uninstall.sh --system` removes the copy an older install left (only that
+  copy, recognised by its first line).
 
 ### Changed
 - The calibration summary that session start and post-compaction show the model
