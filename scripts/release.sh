@@ -613,12 +613,21 @@ fi
 # the release-binaries CI workflow to have completed (same precondition
 # --publish-homebrew has) — this checks the REAL uploaded tarballs, not
 # a local build.
+#
+# A binary that reports the right version is not yet a working ecodex:
+# prebuilt releases up to 0.157.1 passed this check while installing no
+# empirica plugin at all. So the check also starts one session against a
+# scratch CODEX_HOME (`ecodex exec` with empty stdin provisions, then exits
+# for want of a prompt) and requires what that first start writes — the
+# bundled plugin, its config entry, the translator routes — plus the two
+# companion binaries the plugin's hooks and the translator need.
 if [[ "$VERIFY_INSTALL" -eq 1 ]]; then
   log "Smoke-testing scripts/install.sh against v${new_version}"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     # shellcheck disable=SC2016  # backticks are documentation, not substitution
     printf '  [dry-run] install to a scratch prefix, ECODEX_VERSION=v%s, check `ecodex --version` reports %s\n' \
       "$new_version" "$new_version" >&2
+    printf '  [dry-run] start `ecodex exec` once against a scratch CODEX_HOME, check it provisioned the empirica plugin, config entry and translator routes\n' >&2
   else
     verify_dir="$(mktemp -d)"
     trap 'rm -rf "$verify_dir"' EXIT INT TERM
@@ -631,6 +640,25 @@ if [[ "$VERIFY_INSTALL" -eq 1 ]]; then
       error "installed binary reports '${installed_version}', expected exact version token '${new_version}'"
     fi
     log "install.sh verified: ${installed_version}"
+
+    codex_home="${verify_dir}/codex-home"
+    mkdir -p "$codex_home"
+    PATH="${verify_dir}:${PATH}" CODEX_HOME="$codex_home" \
+      "${verify_dir}/ecodex" exec </dev/null >"${verify_dir}/exec.log" 2>&1 || true
+    missing=()
+    for binary in codex-empirica-plugin codex-empirica-translator; do
+      [[ -x "${verify_dir}/${binary}" ]] || missing+=("the ${binary} binary")
+    done
+    compgen -G "${codex_home}/plugins/cache/empiricaAI/empirica/*/.codex-plugin/plugin.json" >/dev/null \
+      || missing+=("the empirica plugin in plugins/cache/empiricaAI/empirica/")
+    grep -qF '[plugins."empirica@empiricaAI"]' "${codex_home}/config.toml" 2>/dev/null \
+      || missing+=('[plugins."empirica@empiricaAI"] in config.toml')
+    [[ -f "${codex_home}/translator-upstreams.toml" ]] || missing+=("translator-upstreams.toml")
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      cat "${verify_dir}/exec.log" >&2
+      error "v${new_version} installs but is not an integrated ecodex; missing: $(IFS=';'; echo "${missing[*]}")"
+    fi
+    log "first session provisioned the empirica plugin, its config entry and the translator routes"
     rm -rf "$verify_dir"
     trap - EXIT INT TERM
   fi
