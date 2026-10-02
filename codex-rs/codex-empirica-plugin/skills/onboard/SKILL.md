@@ -65,6 +65,12 @@ decides which setup steps apply. Plain skips the cortex wiring
 (Step 5). Surface the trade-off plainly: plain = single-user, no mesh;
 ecosystem = multi-practice + AI-to-AI, needs a cortex account/key.
 
+Also ask whether this install will run jobs nobody watches (CI, cron,
+scripted `ecodex exec`). No one opens a transaction in those, so inside a
+git repository the Sentinel refuses every command that writes. Send the
+user to "Unattended runs" in `docs/ecodex/INSTALL.md`, which gives the
+three ways to run them; this skill covers interactive use.
+
 ### Step 1 — run the deterministic diagnostics
 
 ```bash
@@ -265,6 +271,8 @@ practices set up per project. ecodex is ready to run.
 - **Installing ecodex** — the installers and the first session do that;
   `docs/ecodex/INSTALL.md` covers the channels. This skill is the
   post-install gap-fill + provider/mode setup.
+- **Unattended runners** — `docs/ecodex/INSTALL.md` ("Unattended runs")
+  covers them; see Step 0.
 - **The TUI onboarding** (`onboarding_screen.rs`: Welcome → Auth →
   Trust) — that's codex-upstream's auth + project-trust flow. This skill
   is the ecodex provider/model/cortex setup that complements it.
