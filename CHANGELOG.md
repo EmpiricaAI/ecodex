@@ -8,6 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **The Sentinel runs on pipx, uv and Homebrew installs of empirica.** ecodex ran
+  the empirica hooks with the first `python3` on PATH. Those installers keep
+  empirica in a private environment, so on a machine whose `python3` is the
+  system one the hooks could not import empirica, and every tool call was let
+  through ("Empirica Sentinel is OFF"). The install script sets empirica up with
+  pipx since 0.157.3, so fresh installs were affected. Hooks now run with the
+  interpreter of the `empirica` command on PATH, and fall back to `python3` only
+  when there is none.
+
+### Added
+- **The model is told when the shell output it read was partial.** When a
+  command's own `| head -N` or `sed -n` range returned exactly that many lines, or
+  the response declared itself one page of more (`has_more`, `truncated`, a
+  `matched` count above what was returned), the model gets a one-line notice, so
+  a partial view is not read as the whole answer. Shell calls only; it never
+  blocks or changes the output.
+
+### Changed
+- **The default config says what is true.** The `config.toml` ecodex writes on
+  first start no longer tells you to run the `ecodex-translator` script, which
+  prebuilt installs never had: start `codex-empirica-translator` instead (no
+  flags). It also stops implying a DeepSeek default model — those lines sat in
+  the wrong table and never took effect; ecodex starts on codex's own default
+  until you pick one. The `scripts/ecodex-translator.sh` wrapper is removed; the
+  translator binary does everything it did.
+
 ## [0.157.3] - 2026-10-02
 
 ### Fixed
