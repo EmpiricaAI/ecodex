@@ -628,6 +628,7 @@ if [[ "$VERIFY_INSTALL" -eq 1 ]]; then
     printf '  [dry-run] install to a scratch prefix, ECODEX_VERSION=v%s, check `ecodex --version` reports %s\n' \
       "$new_version" "$new_version" >&2
     printf '  [dry-run] start `ecodex exec` once against a scratch CODEX_HOME, check it provisioned the empirica plugin, config entry and translator routes\n' >&2
+    printf '  [dry-run] start the interactive `ecodex` under a pty for 15s, check it waits for input instead of exiting\n' >&2
   else
     verify_dir="$(mktemp -d)"
     trap 'rm -rf "$verify_dir"' EXIT INT TERM
@@ -659,6 +660,26 @@ if [[ "$VERIFY_INSTALL" -eq 1 ]]; then
       error "v${new_version} installs but is not an integrated ecodex; missing: $(IFS=';'; echo "${missing[*]}")"
     fi
     log "first session provisioned the empirica plugin, its config entry and the translator routes"
+
+    # The interactive TUI starts differently from `ecodex exec`: 0.157.2-0.157.4
+    # passed every check above while `ecodex` itself exited at start (upstream's
+    # daemon auto-start). Start it once under a pty in a scratch project: a
+    # healthy TUI is still waiting for input when the timeout ends it (124);
+    # one that fails at start exits first with another status.
+    if [[ "$(uname -s)" == "Linux" ]] && command -v script >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+      mkdir -p "${verify_dir}/tui-project"
+      tui_status=0
+      (cd "${verify_dir}/tui-project" && PATH="${verify_dir}:${PATH}" CODEX_HOME="$codex_home" \
+        timeout 15 script -qec "${verify_dir}/ecodex --no-alt-screen" /dev/null \
+        </dev/null >"${verify_dir}/tui.log" 2>&1) || tui_status=$?
+      if [[ "$tui_status" -ne 124 ]]; then
+        tail -20 "${verify_dir}/tui.log" >&2
+        error "v${new_version}: interactive ecodex exited at start (status ${tui_status}) instead of waiting for input"
+      fi
+      log "interactive ecodex started and waited for input"
+    else
+      warn "interactive start check skipped: it needs Linux with script(1) and timeout(1)"
+    fi
     rm -rf "$verify_dir"
     trap - EXIT INT TERM
   fi
