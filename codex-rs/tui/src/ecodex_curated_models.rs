@@ -35,10 +35,9 @@
 //! entry, the TUI emits an `OverrideTurnContext` op with both `model`
 //! and `model_provider` set so routing follows the picker's intent.
 //!
-//! Note: provider switching currently requires session restart for the
-//! new ModelClient to take effect. The picker emits the override and
-//! shows a "restart ecodex to apply" notice. Mid-session ModelClient
-//! hot-swap is a future enhancement.
+//! A provider change takes effect mid-session: the session swaps its
+//! ModelClient to the new provider in place
+//! (`Session::swap_model_client_to_provider` in core's session module).
 //!
 //! ## Adding a model
 //!
