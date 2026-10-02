@@ -19,6 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   now loads under ecodex too (the hooks' new `calibration_block` helper is
   bundled).
 
+### Fixed
+- **No plan-tool guidance when the plan tool is off.** With `update_plan`
+  disabled, codex removes the plan section from the instructions, but only a
+  section with a level-2 heading. ecodex's prompt had it at level 3, so the model
+  was still told how to use a tool it did not have. The heading is now level 2
+  and the section is removed when the tool is off.
+
 ## [0.157.5] - 2026-10-02
 
 ### Changed
