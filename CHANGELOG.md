@@ -26,6 +26,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   was still told how to use a tool it did not have. The heading is now level 2
   and the section is removed when the tool is off.
 
+### Documentation
+- **Unattended runs.** [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md#unattended-runs)
+  now says what happens in a job nobody watches: in a git repository the Sentinel
+  refuses every command that writes, because no one opens a transaction. Run such
+  jobs with the plugin off, with `-c plugins.empirica@empiricaAI.enabled=false`
+  for one run or `enabled = false` in a runner's own `CODEX_HOME`.
+
 ## [0.157.5] - 2026-10-02
 
 ### Changed

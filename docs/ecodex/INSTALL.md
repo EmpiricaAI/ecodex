@@ -172,6 +172,37 @@ detail.
 
 You can switch provider mid-session with `/model`; the next turn uses the new one.
 
+## Unattended runs
+
+The Sentinel expects a practitioner: before the model may change anything, it
+has to open a transaction (PREFLIGHT). A CI job, a cron job or any `ecodex exec`
+run that nobody watches never opens one. In a git repository the session creates
+`.empirica/` in the repository, and the Sentinel then refuses every command that
+writes or runs something ("No open transaction. Submit PREFLIGHT ..."); reads
+still work.
+
+Run such jobs with the plugin off. For a single run:
+
+```sh
+ecodex exec -c plugins.empirica@empiricaAI.enabled=false "<prompt>"
+```
+
+For a runner that only does unattended work, give it its own `CODEX_HOME` and
+put this in that directory's `config.toml`:
+
+```toml
+[plugins."empirica@empiricaAI"]
+enabled = false
+```
+
+ecodex keeps the entry through upgrades. It writes its default config only where
+there is no `config.toml`, so add the provider settings the job needs to the same
+file. With the plugin off, no hooks run and no `.empirica/` is created.
+
+Setting `EMPIRICA_SENTINEL_LOOPING=false` in the job's environment does not help:
+the hooks do not see it. A `--system` install locks the plugin on for every user,
+so set up runners with a per-user install.
+
 ## Update
 
 ```sh
@@ -221,6 +252,10 @@ Python could not import empirica. Check that `empirica --version` works in the
 shell you start ecodex from, then run `empirica diagnose --frontend ecodex`.
 ecodex releases before 0.157.4 used the first `python3` on `PATH` instead, which
 cannot see a pipx or Homebrew empirica: update ecodex.
+
+**"No open transaction. Submit PREFLIGHT ..." in an unattended job**
+Nobody opened a transaction, so the Sentinel refuses the job's commands. Run the
+job with the plugin off, as in [Unattended runs](#unattended-runs).
 
 **"could not install the empirica plugin"**
 ecodex could not write under `~/.codex` (or `$CODEX_HOME`). Check the directory's
