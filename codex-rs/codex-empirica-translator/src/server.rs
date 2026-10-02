@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tiny_http::{Request, Response, Server};
 use tracing::{error, info, warn};
 
@@ -105,13 +106,36 @@ pub fn run(config: ServerConfig) -> Result<()> {
     );
 
     let cfg = Arc::new(config);
+    // One thread per request: a streaming turn or a rate-limit backoff must not
+    // stall other sessions sharing this translator, or a /healthz probe.
     for request in server.incoming_requests() {
         let cfg = Arc::clone(&cfg);
-        if let Err(e) = handle_request(request, cfg) {
-            error!(error = %e, "request handler error");
-        }
+        std::thread::spawn(move || {
+            if let Err(e) = handle_request(request, cfg) {
+                error!(error = %e, "request handler error");
+            }
+        });
     }
     Ok(())
+}
+
+/// Retries after an upstream 429 before the translator gives up and passes it on.
+const RATE_LIMIT_RETRIES: u32 = 4;
+/// Shortest wait after a 429. codex's own retry comes back within a fraction of
+/// a second, which a per-second or token-window limit refuses again.
+const RATE_LIMIT_FLOOR: Duration = Duration::from_secs(2);
+/// Longest single wait, whatever the upstream's `Retry-After` asks for.
+const RATE_LIMIT_CAP: Duration = Duration::from_secs(30);
+
+/// How long to wait before retry `attempt` (0-based) after a 429: the
+/// upstream's `Retry-After` in seconds when it sends one, otherwise
+/// exponential backoff from the floor, never below the floor or above the cap.
+fn rate_limit_delay(retry_after: Option<&str>, attempt: u32) -> Duration {
+    let backoff = RATE_LIMIT_FLOOR.saturating_mul(2u32.saturating_pow(attempt));
+    retry_after
+        .and_then(|seconds| seconds.trim().parse::<u64>().ok())
+        .map_or(backoff, Duration::from_secs)
+        .clamp(RATE_LIMIT_FLOOR, RATE_LIMIT_CAP)
 }
 
 fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
@@ -275,7 +299,31 @@ fn handle_request(mut request: Request, cfg: Arc<ServerConfig>) -> Result<()> {
             info!(messages_tail = %tail_str, "upstream messages tail (Tx-S diagnostic)");
         }
     }
-    let upstream_resp = req_builder.send().context("upstream request")?;
+    let mut attempt = 0;
+    let upstream_resp = loop {
+        let resp = req_builder
+            .try_clone()
+            .context("upstream request cannot be resent")?
+            .send()
+            .context("upstream request")?;
+        if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS || attempt == RATE_LIMIT_RETRIES
+        {
+            break resp;
+        }
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok());
+        let delay = rate_limit_delay(retry_after, attempt);
+        warn!(
+            upstream_name = %upstream.name,
+            attempt,
+            delay_ms = delay.as_millis() as u64,
+            "upstream rate-limited (429); retrying"
+        );
+        std::thread::sleep(delay);
+        attempt += 1;
+    };
 
     if !upstream_resp.status().is_success() {
         let status = upstream_resp.status().as_u16();
@@ -371,3 +419,7 @@ fn write_chunked(writer: &mut dyn Write, bytes: &[u8]) -> Result<()> {
 fn _force_read_in_scope() -> impl Read {
     std::io::empty()
 }
+
+#[cfg(test)]
+#[path = "server_tests.rs"]
+mod tests;

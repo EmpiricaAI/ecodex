@@ -332,7 +332,11 @@ pub fn encode_events(event: &StreamEvent, state: &mut EncoderState) -> Vec<Vec<u
             //
             // Item shape matches codex/tests/common/responses.rs::ev_function_call:
             // {"type":"function_call","call_id":..,"name":..,"arguments":..}
-            for tc in tool_calls {
+            let arguments: Vec<_> = tool_calls
+                .iter()
+                .map(|tc| crate::tool_args::normalize_tool_arguments(&tc.arguments))
+                .collect();
+            for (tc, arguments) in tool_calls.iter().zip(&arguments) {
                 let added = json!({
                     "type": "response.output_item.added",
                     "item": {
@@ -349,7 +353,7 @@ pub fn encode_events(event: &StreamEvent, state: &mut EncoderState) -> Vec<Vec<u
                         "type": "function_call",
                         "call_id": tc.id,
                         "name": tc.name,
-                        "arguments": tc.arguments,
+                        "arguments": arguments,
                     }
                 });
                 frames.push(sse_frame("response.output_item.done", &done));
@@ -359,12 +363,12 @@ pub fn encode_events(event: &StreamEvent, state: &mut EncoderState) -> Vec<Vec<u
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": text}],
             })];
-            for tc in tool_calls {
+            for (tc, arguments) in tool_calls.iter().zip(&arguments) {
                 output.push(json!({
                     "type": "function_call",
                     "call_id": tc.id,
                     "name": tc.name,
-                    "arguments": tc.arguments,
+                    "arguments": arguments,
                 }));
             }
             let payload = json!({

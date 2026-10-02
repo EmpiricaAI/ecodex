@@ -37,6 +37,9 @@ pub mod server;
 /// modifying the translator inner loop.
 pub mod tap;
 
+/// Repairs to tool-call arguments that chat models produce but codex rejects.
+mod tool_args;
+
 /// Multi-upstream router. One translator process can serve N upstream
 /// providers, routing per-request by the incoming `model` field via a
 /// TOML config of `[[upstream]]` entries (first-match-wins glob).
