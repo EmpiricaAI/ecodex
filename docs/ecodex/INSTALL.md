@@ -88,7 +88,7 @@ as `ecodex mcp list` or `ecodex login` leave your files alone.
 | Path | What ecodex does |
 |---|---|
 | `~/.codex/plugins/cache/empiricaAI/empirica/<version>/` | Writes the empirica plugin: manifest, hooks, MCP servers, skills, hook scripts and subagents. Rewritten whenever it differs from the copy inside the binary, so upgrades refresh it. |
-| `~/.codex/config.toml` | Created from the bundled default (curated providers, plugin enabled) when it does not exist. An existing config is edited only to add `[plugins."empirica@empiricaAI"]` when it has no entry for the plugin. |
+| `~/.codex/config.toml` | Created from the bundled default (curated providers, plugin enabled) when it does not exist. An existing config is edited only to add `[plugins."empirica@empiricaAI"]` when it has no entry for the plugin. Either way the plugin's Empirica MCP server is set off; [`api/mcp.md`](api/mcp.md) says when to turn it on. |
 | `~/.codex/huggingface.config.toml` | Added when missing: a profile for Hugging Face Inference Providers. |
 | `~/.codex/translator-upstreams.toml` | Added when missing: the translator's routes for Mistral, DeepSeek, Qwen, GLM and Kimi. |
 
