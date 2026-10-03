@@ -3,34 +3,35 @@
 Tracks how ecodex's hook-event surface relates to upstream codex, and where
 each ecodex-divergent event is dispatched in `codex-rs/core/`.
 
-> **Premise update (post-convergence).** An earlier version of this doc framed
-> ecodex as adding *7 events on top of stock codex's 6*. That framing is
-> **obsolete**. Stock codex's `HookEventName` now carries **11** variants, and
-> **5** of the events ecodex once added independently (`SessionEnd`,
-> `PreCompact`, `PostCompact`, `SubagentStart`, `SubagentStop`) **converged with
-> upstream** — ecodex now adopts upstream's variants rather than maintaining its
-> own. Only **2** events remain genuine ecodex divergences: `TaskCompleted` and
-> `PostToolUseFailure`.
+> **Premise.** An earlier version of this doc framed ecodex as adding *7 events
+> on top of stock codex's 6*. That framing is **obsolete**. Five of the events
+> ecodex once added independently (`SessionEnd`, `PreCompact`, `PostCompact`,
+> `SubagentStart`, `SubagentStop`) **converged with upstream** — ecodex adopts
+> upstream's variants rather than maintaining its own. Only **2** events remain
+> genuine ecodex divergences: `TaskCompleted` and `PostToolUseFailure`.
 
-## Ground truth — `HookEventName` (`codex-rs/protocol/src/protocol.rs:1705-1729`)
+## Ground truth — `HookEventName` (`codex-rs/protocol/src/protocol.rs`)
 
-The enum has **13** variants total: **11 upstream** + **2 ecodex-divergent**.
+Locate the enum by `pub enum HookEventName`; line numbers drift. It has
+**14** variants: **12 upstream** + **2 ecodex-divergent**.
 
-**11 upstream variants** (ecodex adopts these directly):
+**12 upstream variants** (ecodex adopts these directly). The handler column is
+what the plugin's `hooks.json` wires today:
 
 | Event | Lifecycle point | empirica handler(s) |
 |---|---|---|
 | `PreToolUse` | Before any tool invocation | `sentinel-gate.py` |
-| `PermissionRequest` | When a tool needs permission | (no-op for empirica) |
-| `PostToolUse` | After a successful tool invocation | `tool-failure.py` (canonical) + `entity-extractor.py` |
+| `PermissionRequest` | When a tool needs permission | none (subcommand accepted, no handler) |
+| `PostToolUse` | After a successful tool invocation | `tool-failure.py` (canonical) + `entity-extractor.py` + `truncation-legibility.py` |
 | `PreCompact` | Just before compaction runs | `pre-compact.py` |
 | `PostCompact` | Just after compaction (`success: bool`) | `post-compact.py` |
-| `SessionStart` | New or resumed codex session | `session-init.py` + siblings |
+| `SessionStart` | New, resumed, cleared, forked or post-compaction session (`source` says which) | `session-init.py` + `ewm-protocol-loader.py` + `post-compact.py` + `session-monitor-arm.py` |
 | `SessionEnd` | Session shutdown | `session-end-postflight.py` |
-| `UserPromptSubmit` | User submits a prompt | `tool-router.py` + siblings |
+| `UserPromptSubmit` | User submits a prompt | `tool-router.py` + `context-shift-tracker.py` |
 | `SubagentStart` | Parent session, after a subagent spawns | `subagent-start.py` |
 | `SubagentStop` | Subagent's own session, on self-report done | `subagent-stop.py` |
 | `Stop` | Agent turn ends | `transaction-enforcer.py` |
+| `Interrupt` | The user interrupts a running turn | none |
 
 **2 ecodex-divergent variants** (marked in `protocol.rs` under the
 `── ecodex divergence ──` comment):
@@ -57,7 +58,10 @@ rather than dispatching inline.
   `run_post_compact_hooks()`, fired around the compaction task so all
   compaction implementations get the events. PreCompact awaits synchronously
   (the `.await` is the natural block — snapshot work completes before the
-  summarizer touches history).
+  summarizer touches history). After a compaction codex also queues a
+  `SessionStart` with `source = "compact"`, which is why `post-compact.py` is
+  registered on both events: the empirica hook returns early on any
+  `SessionStart` whose `source` is not `compact`.
 - **`SubagentStart`** — selected as `StartHookTarget::SubagentStart` inside the
   session-start dispatch path (`run_pending_session_start_hooks`); fires in the
   **parent's** session when a subagent thread is spawned.
@@ -99,7 +103,7 @@ toml key) is now **`Stage::Removed`**: the `plugin_hooks` toml key is **ignored*
 ## Notes
 
 - **Hook contract:** input is JSON on stdin (event-shape per
-  `codex-rs/protocol/src/protocol.rs`), output is JSON on stdout per the codex
+  `codex-rs/hooks/src/schema.rs`), output is JSON on stdout per the codex
   hook output schema (`hookSpecificOutput.additionalContext` for context
   injection, `permissionDecision`/`continue: false` for blocking).
 - **Fail-open vs fail-closed:** the `PreToolUse` firewall is a security floor

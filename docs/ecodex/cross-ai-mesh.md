@@ -52,7 +52,7 @@ Round trip, end to end, is typically a few seconds.
 | **Mailbox CLI** | the `empirica` CLI | `mailbox poll`, `mailbox show`, `mailbox reply`, `mailbox archive` — identical in every harness, and allowed by the Sentinel before a transaction is open. |
 | **Cortex MCP server** (optional) | `~/.codex/config.toml` `[mcp_servers.cortex]` | Exposes the `cortex_*` tools — collab, propose, inbox and outbox polls — for richer mesh work. |
 | **Vendored mesh hook scripts** | `codex-rs/codex-empirica-plugin/assets/hooks_scripts/hooks/` | empirica's mesh-aware lifecycle handlers (session start, task completion and others). |
-| **Extended hook events** | `codex-rs/core/src/...` | The seven extra lifecycle events (`TaskCompleted`, `PreCompact`, `SubagentStart`, …) so plugin handlers fire at the right moments. See [`hook-events-roadmap.md`](hook-events-roadmap.md). |
+| **Hook events** | `codex-rs/core/src/hook_runtime.rs` | Upstream codex's lifecycle events (`SessionStart`, `SessionEnd`, `PreCompact`, `PostCompact`, `SubagentStart`, `SubagentStop`, …) plus ecodex's two additions, `TaskCompleted` and `PostToolUseFailure`, so the mesh-aware handlers fire at the right moments. See [`hook-events-roadmap.md`](hook-events-roadmap.md). |
 
 ## Setup
 
