@@ -2,6 +2,14 @@
 
 **Started:** 2026-05-01 · **Upstream HEAD at start:** `ff27d01676` · **Branch lineage:** `inspect/codex-rs` → `build/v1-plugin`
 
+> **Historical (2026-05).** The inspection that drove the architecture decision,
+> kept as a record. Counts, paths and line numbers are from upstream `ff27d01676`
+> and have since moved: the hook surface is twelve upstream events plus two of
+> ecodex's ([`hook-events-roadmap.md`](hook-events-roadmap.md)), `core/src/goals.rs`
+> no longer exists, and the plugin cache layout is
+> `<marketplace>/<plugin>/<version>/.codex-plugin/plugin.json`. For the current
+> system read [`system-overview.md`](system-overview.md).
+
 T2 investigation notes for the ecodex fork. Drove the T3 architecture decision (now in [`architecture.md`](architecture.md)). Live in our fork only — not for upstream.
 
 ## Top-level finding

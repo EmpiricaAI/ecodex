@@ -1,5 +1,13 @@
 # ecodex Branding Swap
 
+> **Historical (2026-05).** This is the plan for the rename, kept as a record of
+> why each change was made. The rename is done: `bin_name` is `ecodex`, the
+> `curl | bash` installer ships (`scripts/install.sh`), and the plugin cache
+> path is `~/.codex/plugins/cache/empiricaAI/empirica/<version>/`. The
+> "Current → Change to" table, its line numbers and the "future transaction"
+> wording below describe the state before the work, not the code today.
+> [`../system-overview.md`](../system-overview.md) describes what ships.
+
 How to rebrand the codex binary as `ecodex` for our distribution.
 
 ## Summary

@@ -2,6 +2,14 @@
 
 **Date:** 2026-05-01 · **Branch:** `inspect/codex-rs` → carried forward on `build/v1-plugin`
 
+> **Historical (2026-05).** The decision record for the v1 build, kept for the
+> reasoning. The "next phase" items below have shipped, `main` is the canonical
+> branch (`build/v1-plugin` is gone), empirica state lives under `~/.empirica/`
+> rather than `~/.codex/empirica/`, and code pointers such as `protocol.rs` line
+> numbers have moved. For the current system read
+> [`system-overview.md`](system-overview.md); for the top-level map,
+> [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md).
+
 Architectural commitments for the v1 ecodex build. Driven by [`inspection.md`](inspection.md) (T2 investigation findings).
 
 ## Decisions
