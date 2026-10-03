@@ -240,6 +240,9 @@ fn synthesize_entry(slug: &str, provider_id: &str) -> CuratedEntry {
         calibration_tier: Some("unmeasured".to_string()),
         last_verified: None,
         evidence: Some(format!("discovered: {provider_id}")),
+        // Discovery output never offers a picker row: picker membership is
+        // ecodex's curation and comes from the bundled seed only.
+        picker: None,
     }
 }
 

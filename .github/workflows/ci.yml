@@ -49,6 +49,12 @@ jobs:
       - name: Build + test owned crates
         run: cargo test -p codex-empirica-plugin -p codex-empirica-translator
 
+      # The release ships the `ecodex` binary; the owned crates above do not
+      # compile it. An ecodex change to a shared type (v0.157.8: a new field on
+      # CuratedEntry) broke the binary after the tag because nothing here built it.
+      - name: Check the shipped binary compiles
+        run: cargo check -p codex-cli --bin ecodex
+
       - name: Check Hugging Face integration contract
         working-directory: .
         run: |
