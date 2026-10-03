@@ -120,7 +120,8 @@ empirica noetic-batch - << 'EOF'
 EOF
 ```
 
-The same operation is available through the empirica MCP server the plugin ships.
+The same operation is available as an MCP tool when the plugin's Empirica MCP
+server is turned on. It is off by default, because the CLI does the same job.
 
 ### Log as a graph, and type it by the question it answers
 
