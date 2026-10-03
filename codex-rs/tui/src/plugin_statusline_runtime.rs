@@ -28,6 +28,11 @@
 //!
 //! - `PLUGIN_ROOT` + `CLAUDE_PLUGIN_ROOT` (CC compat) → plugin install dir
 //! - `PLUGIN_DATA` + `CLAUDE_PLUGIN_DATA` → plugin data dir
+//! - `EMPIRICA_INSTANCE_ID` → the codex thread id, once the session is
+//!   configured. The empirica session-init hook records each session as
+//!   `~/.empirica/instance_projects/<thread id>.json`, so this is what lets
+//!   the statusline name the right session when several run in one
+//!   directory. The same id goes first in the stdin payload resolution.
 //!
 //! ## Timeouts
 //!
@@ -37,7 +42,11 @@
 //! never blocks the TUI footer for more than a render frame or two.
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use codex_plugin::PluginId;
@@ -62,6 +71,9 @@ const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) struct PluginStatuslineRuntime {
     app_event_tx: AppEventSender,
     tasks: HashMap<PluginId, JoinHandle<()>>,
+    /// The codex thread id of the active session, shared with the running
+    /// loops so a thread change reaches them on their next tick.
+    instance_id: Arc<Mutex<Option<String>>>,
 }
 
 impl PluginStatuslineRuntime {
@@ -69,6 +81,16 @@ impl PluginStatuslineRuntime {
         Self {
             app_event_tx,
             tasks: HashMap::new(),
+            instance_id: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Record the codex thread id the statusline should identify itself by.
+    /// Set on the child's environment and tried first when resolving the
+    /// empirica session, instead of a process-global variable.
+    pub(crate) fn set_instance_id(&self, instance_id: Option<String>) {
+        if let Ok(mut slot) = self.instance_id.lock() {
+            *slot = instance_id;
         }
     }
 
@@ -98,7 +120,8 @@ impl PluginStatuslineRuntime {
         for (id, source) in new_ids {
             self.tasks.entry(id).or_insert_with(|| {
                 let tx = self.app_event_tx.clone();
-                tokio::spawn(run_plugin_statusline_loop(source, tx))
+                let instance_id = Arc::clone(&self.instance_id);
+                tokio::spawn(run_plugin_statusline_loop(source, tx, instance_id))
             });
         }
     }
@@ -119,7 +142,11 @@ impl Drop for PluginStatuslineRuntime {
 
 /// Per-source loop. Runs forever; killed via `JoinHandle::abort()`
 /// when the runtime swaps source sets or ChatWidget is dropped.
-async fn run_plugin_statusline_loop(source: PluginStatuslineSource, tx: AppEventSender) {
+async fn run_plugin_statusline_loop(
+    source: PluginStatuslineSource,
+    tx: AppEventSender,
+    instance_id: Arc<Mutex<Option<String>>>,
+) {
     let plugin_root = source.plugin_root.as_path().to_string_lossy().to_string();
     let plugin_data_root = source
         .plugin_data_root
@@ -131,7 +158,13 @@ async fn run_plugin_statusline_loop(source: PluginStatuslineSource, tx: AppEvent
 
     // Fire once immediately so the footer populates before the first tick
     // interval elapses (avoids a 1.5s blank gap on session start).
-    let output = invoke_once(&command, &plugin_root, &plugin_data_root).await;
+    let output = invoke_once(
+        &command,
+        &plugin_root,
+        &plugin_data_root,
+        current_instance_id(&instance_id).as_deref(),
+    )
+    .await;
     tx.send(AppEvent::PluginStatuslineOutputUpdated {
         plugin_id: plugin_id.clone(),
         output,
@@ -139,12 +172,22 @@ async fn run_plugin_statusline_loop(source: PluginStatuslineSource, tx: AppEvent
 
     loop {
         tokio::time::sleep(TICK_INTERVAL).await;
-        let output = invoke_once(&command, &plugin_root, &plugin_data_root).await;
+        let output = invoke_once(
+            &command,
+            &plugin_root,
+            &plugin_data_root,
+            current_instance_id(&instance_id).as_deref(),
+        )
+        .await;
         tx.send(AppEvent::PluginStatuslineOutputUpdated {
             plugin_id: plugin_id.clone(),
             output,
         });
     }
+}
+
+fn current_instance_id(slot: &Mutex<Option<String>>) -> Option<String> {
+    slot.lock().ok().and_then(|id| id.clone())
 }
 
 /// Spawn the plugin command, write the empirica-session JSON context to
@@ -162,13 +205,15 @@ async fn run_plugin_statusline_loop(source: PluginStatuslineSource, tx: AppEvent
 /// context to the script. The doctor's
 /// `check_ecodex_statusline_runtime_stdin` regression-tests this.
 async fn invoke_once(
-    command: &std::path::Path,
+    command: &Path,
     plugin_root: &str,
     plugin_data_root: &str,
+    instance_id: Option<&str>,
 ) -> Vec<u8> {
-    let stdin_payload = build_statusline_stdin_payload();
+    let stdin_payload = build_statusline_stdin_payload(instance_id);
 
-    let spawn_result = tokio::process::Command::new(command)
+    let mut process = tokio::process::Command::new(command);
+    process
         .env("PLUGIN_ROOT", plugin_root)
         .env("CLAUDE_PLUGIN_ROOT", plugin_root)
         .env("PLUGIN_DATA", plugin_data_root)
@@ -176,8 +221,11 @@ async fn invoke_once(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn();
+        .kill_on_drop(true);
+    if let Some(instance_id) = instance_id {
+        process.env("EMPIRICA_INSTANCE_ID", instance_id);
+    }
+    let spawn_result = process.spawn();
 
     let mut child = match spawn_result {
         Ok(child) => child,
@@ -210,18 +258,28 @@ async fn invoke_once(
 /// Build the JSON payload piped to plugin statusline scripts.
 ///
 /// Resolution strategy for `session_id`:
-///   1. `~/.empirica/instance_projects/tmux_<TMUX_PANE>.json` — direct
-///      pane bind written by the empirica session-init hook
-///   2. Any `~/.empirica/instance_projects/*.json` whose `project_path`
-///      matches the current cwd — fallback when TMUX_PANE isn't set
-///      (e.g. running outside tmux)
-///   3. Empty payload — script renders `[ecodex:inactive]`, which is the
+///   1. `~/.empirica/instance_projects/<codex thread id>.json`, the file
+///      the empirica session-init hook writes for this session
+///   2. The same directory keyed by the TUI's own environment: an explicit
+///      `EMPIRICA_INSTANCE_ID`, `tmux_<TMUX_PANE>`, `term_<TERM_SESSION_ID>`,
+///      `wid_<WINDOWID>`
+///   3. Any instance file whose `project_path` is a prefix of the current
+///      cwd — ambiguous when several sessions share a directory
+///   4. Empty payload — script renders `[ecodex:inactive]`, which is the
 ///      correct UX signal that no session is bound to this shell
-fn build_statusline_stdin_payload() -> String {
-    let session_id = resolve_empirica_session_id_for_current_shell();
-    let cwd = std::env::current_dir()
-        .ok()
-        .and_then(|p| p.to_str().map(str::to_string));
+fn build_statusline_stdin_payload(instance_id: Option<&str>) -> String {
+    let cwd = std::env::current_dir().ok();
+    let session_id = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .and_then(|home| {
+            let instance_dir = home.join(".empirica").join("instance_projects");
+            resolve_in_dir(
+                &instance_dir,
+                &instance_file_candidates(instance_id),
+                cwd.as_deref(),
+            )
+        });
+    let cwd = cwd.and_then(|p| p.to_str().map(str::to_string));
 
     let mut obj = serde_json::Map::new();
     if let Some(sid) = session_id {
@@ -238,56 +296,50 @@ fn build_statusline_stdin_payload() -> String {
     serde_json::Value::Object(obj).to_string()
 }
 
-fn resolve_empirica_session_id_for_current_shell() -> Option<String> {
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
-    let instance_dir = home.join(".empirica").join("instance_projects");
-
-    // Mirrors empirica/plugins/claude-code-integration/lib/project_resolver.py
-    // ::get_instance_id() priority list. Order:
-    //   1. EMPIRICA_INSTANCE_ID (explicit override / codex thread_id, set by
-    //      Tx-Z's plugin propagation). Stored as `<id>.json` literally.
-    //   2. TMUX_PANE → tmux_<num>.json
-    //   3. TERM_SESSION_ID → term_<sanitized>.json (macOS Terminal.app)
-    //   4. WINDOWID → wid_<num>.json (X11)
-    //   5. cwd-prefix match across all instance files (last resort, ambiguous
-    //      for multi-instance same-cwd; documented gap pending Tx-Z's plugin
-    //      side landing on every install).
+/// Instance-file stems to try, most specific first. Mirrors
+/// empirica's `get_instance_id()` priority list after the session's own
+/// thread id: an explicit `EMPIRICA_INSTANCE_ID`, then the tmux pane, the
+/// Terminal.app session and the X11 window.
+fn instance_file_candidates(instance_id: Option<&str>) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(id) = instance_id.filter(|id| !id.is_empty()) {
+        candidates.push(id.to_string());
+    }
     if let Ok(explicit) = std::env::var("EMPIRICA_INSTANCE_ID")
         && !explicit.is_empty()
     {
-        let path = instance_dir.join(format!("{explicit}.json"));
-        if let Some(sid) = read_session_id_from_instance_file(&path) {
-            return Some(sid);
-        }
+        candidates.push(explicit);
     }
     if let Ok(pane) = std::env::var("TMUX_PANE") {
-        let pane_num = pane.trim_start_matches('%');
-        let path = instance_dir.join(format!("tmux_{pane_num}.json"));
-        if let Some(sid) = read_session_id_from_instance_file(&path) {
-            return Some(sid);
-        }
+        candidates.push(format!("tmux_{}", pane.trim_start_matches('%')));
     }
     if let Ok(term) = std::env::var("TERM_SESSION_ID") {
-        let safe = term.replace('/', "_");
-        let path = instance_dir.join(format!("term_{safe}.json"));
-        if let Some(sid) = read_session_id_from_instance_file(&path) {
-            return Some(sid);
-        }
+        candidates.push(format!("term_{}", term.replace('/', "_")));
     }
     if let Ok(wid) = std::env::var("WINDOWID") {
-        let path = instance_dir.join(format!("wid_{wid}.json"));
+        candidates.push(format!("wid_{wid}"));
+    }
+    candidates
+}
+
+/// The first candidate whose `<stem>.json` names a session wins. Failing
+/// that, the most recently written instance file whose `project_path` is a
+/// prefix of `cwd`, which cannot tell apart sessions sharing a directory;
+/// that is why callers put the thread id first.
+fn resolve_in_dir(
+    instance_dir: &Path,
+    candidates: &[String],
+    cwd: Option<&Path>,
+) -> Option<String> {
+    for stem in candidates {
+        let path = instance_dir.join(format!("{stem}.json"));
         if let Some(sid) = read_session_id_from_instance_file(&path) {
             return Some(sid);
         }
     }
 
-    // Cwd-prefix match across all instance entries — picks the most recently
-    // written file whose project_path is a prefix of current cwd. Fragile
-    // for multi-instance same-cwd; only reached when none of the explicit
-    // identity keys above resolved.
-    let cwd = std::env::current_dir().ok()?;
-    let cwd_str = cwd.to_str()?;
-    let entries = std::fs::read_dir(&instance_dir).ok()?;
+    let cwd_str = cwd?.to_str()?;
+    let entries = std::fs::read_dir(instance_dir).ok()?;
     let mut best: Option<(std::time::SystemTime, String)> = None;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -323,7 +375,7 @@ fn resolve_empirica_session_id_for_current_shell() -> Option<String> {
     best.map(|(_, sid)| sid)
 }
 
-fn read_session_id_from_instance_file(path: &std::path::Path) -> Option<String> {
+fn read_session_id_from_instance_file(path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
     json.get("empirica_session_id")
@@ -331,3 +383,7 @@ fn read_session_id_from_instance_file(path: &std::path::Path) -> Option<String> 
         .and_then(|v| v.as_str())
         .map(str::to_string)
 }
+
+#[cfg(test)]
+#[path = "plugin_statusline_runtime_tests.rs"]
+mod tests;

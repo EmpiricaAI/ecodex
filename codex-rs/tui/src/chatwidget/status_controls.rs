@@ -109,6 +109,8 @@ impl ChatWidget {
         self.plugin_statusline_outputs
             .retain(|id, _| active_ids.contains(id));
         self.plugin_statusline_sources = sources.clone();
+        self.plugin_statusline_runtime
+            .set_instance_id(self.thread_id.map(|id| id.to_string()));
         self.plugin_statusline_runtime.set_sources(sources);
         self.recompute_plugin_statusline();
     }

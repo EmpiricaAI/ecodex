@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **The statusline names the right session when several run in one
+  directory.** The empirica plugin's statusline resolved its session from the
+  tmux pane or, failing that, from the working directory, which is ambiguous
+  with two sessions in the same project. The TUI now hands it the codex thread
+  id, the key the empirica session-init hook files each session under, both on
+  the statusline command's environment (`EMPIRICA_INSTANCE_ID`) and first in its
+  resolution order.
+
 ## [0.157.7] - 2026-10-03
 
 ### Changed
