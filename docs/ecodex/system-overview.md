@@ -129,7 +129,9 @@ to diff against on each re-sync.
 - **`assets/agents/`** — Empirica's subagents (architecture, security, ux,
   performance, and the outreach scout, search and fact-scorer), seeded at
   `SessionStart` for codex's agent tool.
-- **`mcp_servers.json`** — the Empirica MCP server the plugin registers.
+- **`mcp_servers.json`** — declares the Empirica MCP server, which ecodex's
+  config leaves off: it wraps the `empirica` CLI the model can run itself.
+  [`api/mcp.md`](api/mcp.md) has the switch.
 
 ### Discipline strengthening
 
