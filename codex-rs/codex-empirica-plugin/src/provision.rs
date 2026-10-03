@@ -8,9 +8,10 @@
 //!   installed copy does not match the bundle, as recorded by a fingerprint
 //!   marker. Every ecodex upgrade therefore refreshes the plugin.
 //! - **Config.** A missing `config.toml` is created from the bundled default
-//!   (curated providers, plugin enabled). A missing Hugging Face profile and a
-//!   missing translator route file (Mistral) are added. An existing config gains the plugin entry when it has none. An entry
-//!   the user wrote, including `enabled = false`, is left alone.
+//!   (curated providers, plugin enabled, its MCP server off). A missing Hugging
+//!   Face profile and a missing translator route file are added. An existing
+//!   config gains the plugin entry, with the MCP server off, when it has none.
+//!   An entry the user wrote, including `enabled = false`, is left alone.
 //! - **Migration.** A `[plugins."empirica@nubaeon"]` entry from before the
 //!   marketplace rename becomes `[plugins."empirica@empiricaAI"]` with its
 //!   settings intact. The old cache directory is not deleted: sessions started
@@ -36,6 +37,8 @@ const PLUGIN_NAME: &str = "empirica";
 const PLUGIN_KEY: &str = "empirica@empiricaAI";
 /// The plugin's key before it moved to the empiricaAI marketplace.
 const LEGACY_PLUGIN_KEY: &str = "empirica@nubaeon";
+/// The MCP server `mcp_servers.json` declares.
+const MCP_SERVER_NAME: &str = "empirica";
 /// Fingerprint of the bundle last written into the plugin directory.
 const BUNDLE_MARKER: &str = ".ecodex-bundle";
 
@@ -248,6 +251,15 @@ fn ensure_config(codex_home: &Path, report: &mut ProvisionReport) -> io::Result<
     if !plugins.contains_key(PLUGIN_KEY) {
         let mut entry = Table::new();
         entry.insert("enabled", value(true));
+        // Empirica's MCP server only wraps the empirica CLI, which a session
+        // with a shell runs directly. Leave it declared but off; clients
+        // without a shell turn it on here.
+        let mut server = Table::new();
+        server.insert("enabled", value(false));
+        let mut servers = Table::new();
+        servers.set_implicit(true);
+        servers.insert(MCP_SERVER_NAME, Item::Table(server));
+        entry.insert("mcp_servers", Item::Table(servers));
         plugins.insert(PLUGIN_KEY, Item::Table(entry));
         report.plugin_enabled = true;
     }

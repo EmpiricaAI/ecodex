@@ -71,7 +71,8 @@ fn existing_config_gains_the_plugin_entry() -> io::Result<()> {
     );
     assert_eq!(
         fs::read_to_string(&config_path)?,
-        "model = \"gpt-5\"\n\n[plugins.\"empirica@empiricaAI\"]\nenabled = true\n"
+        "model = \"gpt-5\"\n\n[plugins.\"empirica@empiricaAI\"]\nenabled = true\n\n\
+         [plugins.\"empirica@empiricaAI\".mcp_servers.empirica]\nenabled = false\n"
     );
     Ok(())
 }

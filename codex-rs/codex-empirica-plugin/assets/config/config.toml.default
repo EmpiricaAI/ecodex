@@ -17,6 +17,12 @@
 [plugins."empirica@empiricaAI"]
 enabled = true
 
+# The plugin also ships Empirica's MCP server. It only wraps the empirica CLI,
+# which ecodex runs directly wherever it has a shell, so it is off. Set
+# enabled = true for a client without a shell, such as a GUI or web front end.
+[plugins."empirica@empiricaAI".mcp_servers.empirica]
+enabled = false
+
 # ─── Providers ───────────────────────────────────────────────────────
 # Open-weights providers first. docs/ecodex/integrations/providers.md covers
 # each one and how to get its key.

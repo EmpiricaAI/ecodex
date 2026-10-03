@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Empirica's MCP server is off by default.** It only wraps the `empirica`
+  CLI, which ecodex runs directly wherever it has a shell. New configs, and
+  configs that gain the plugin entry, now carry
+  `[plugins."empirica@empiricaAI".mcp_servers.empirica] enabled = false`. Set
+  it to `true` for a client without a shell, such as a GUI or web front end. An
+  existing plugin entry is left as it is: add those two lines to turn the
+  server off there. The Cortex MCP server is unaffected.
+
 ### Fixed
 - **Switching an old Mistral session to an OpenAI model no longer fails.** A
   chat model can call a tool by a name OpenAI does not accept: Devstral once
