@@ -79,12 +79,13 @@ With no flags it reads its routes from `~/.codex/translator-upstreams.toml` and
 listens on `127.0.0.1:18080`. ecodex writes that file the first time you start a
 session if you don't have one, with routes for `devstral-*`, `codestral-*` and
 `mistral-*` to `https://api.mistral.ai/v1`, plus routes for the other Chat
-Completions providers (DeepSeek, Qwen, GLM, Kimi). A route the translator has no
-key for is skipped with a warning at startup, so with only a Mistral key you
-see four warnings and the Mistral routes work. Use `--bind 0.0.0.0:18080` to
-share the translator on a LAN.
+Completions providers (DeepSeek, Qwen, GLM, Kimi, Moonshot). A route the
+translator has no key for is skipped with a warning at startup, so with only a
+Mistral key you see one warning per keyless route and the Mistral routes work.
+Use `--bind 0.0.0.0:18080` to share the translator on a LAN.
 
-Check it: `curl -s 127.0.0.1:18080/healthz` lists the three Mistral routes.
+Check it: `curl -s 127.0.0.1:18080/healthz` returns the routes that have a key —
+with only a Mistral key, the three Mistral routes.
 
 ### 4. Choose a Mistral model in ecodex
 
@@ -114,17 +115,21 @@ Run a turn; the translator's log shows the request going to `api.mistral.ai`.
 
 ## The EU model family
 
-All are EU-hosted and in ecodex's curated registry:
+All are EU-hosted and in ecodex's curated registry (`devstral-latest` is the one
+offered in the `/model` picker; type the others into the picker's custom entry
+or set them in `config.toml`):
 
 | Model | Role | Context | Use for |
 |---|---|---|---|
 | **`devstral-latest`** | Agentic-coding flagship | 256K | Default for ecodex work: multi-step, tool use |
-| `devstral-2512` | Pinned Devstral snapshot (alias `devstral-medium-latest`) | 256K | Reproducible, version-pinned runs |
-| `devstral-small-2512` | Smaller Devstral | 256K | Lighter, cheaper coding turns |
+| `devstral-2512` | Pinned Devstral snapshot | 256K | Reproducible, version-pinned runs |
+| `devstral-medium-latest` | Alias of the current Devstral 2 build | 256K | Same as above, tracking alias |
 | `codestral-latest` | Code completion | 256K | Fast completion and fill-in-the-middle |
-| `mistral-large-latest` | General reasoning | large | Non-coding tasks |
+| `mistral-large-latest` | General reasoning | 256K | Non-coding tasks |
 
-There is no `devstral-2-latest` on the Mistral API; use the ids above.
+There is no `devstral-2-latest` on the Mistral API; use the ids above. Devstral
+Small (`devstral-small-2512`) is served by the same routes but is not in the
+curated registry, so ecodex has no context-window metadata for it.
 
 ---
 

@@ -46,17 +46,19 @@ The check never writes to the real home directory or live ecodex config.
 
 ## Configure inference
 
-The source installer copies `ecodex/huggingface.config.toml` to
-`~/.codex/huggingface.config.toml` (the default `CODEX_HOME`) if the destination
-does not already exist. Profile-v2 selection uses this separate file; a legacy
-`[profiles.huggingface]` table in the main config is not selected by
-`-p huggingface` on current ecodex.
+The profile ships at
+`codex-rs/codex-empirica-plugin/assets/config/huggingface.config.toml`. The first
+ecodex session writes it to `$CODEX_HOME/huggingface.config.toml` (default
+`~/.codex/`) when that file is missing, on every install channel; the source
+installer copies the same file. An existing file is left alone. Profile-v2
+selection uses this separate file; a legacy `[profiles.huggingface]` table in the
+main config is not selected by `-p huggingface` on current ecodex.
 
-For a source checkout without running the installer:
+To seed it by hand from a source checkout:
 
 ```bash
 mkdir -p "${CODEX_HOME:-$HOME/.codex}"
-cp ecodex/huggingface.config.toml \
+cp codex-rs/codex-empirica-plugin/assets/config/huggingface.config.toml \
   "${CODEX_HOME:-$HOME/.codex}/huggingface.config.toml"
 ```
 
@@ -116,9 +118,8 @@ secret manager for the ecodex process.
 - A shell may resolve an older or broken `hf` shim before the intended binary.
   Use `command -v hf` and `hf --version`; pass explicit binary paths to the
   repo-side live check when needed.
-- The prebuilt binary installer does not seed ecodex configuration. Copy the
-  profile as shown above, or add the `huggingface` provider and profile overlay
-  to the active `CODEX_HOME` yourself.
+- The profile is written only when missing. If you deleted or renamed it, start
+  a session (or copy it as shown above) before using `-p huggingface`.
 - Skill catalogs are snapshotted for a running session. Restart ecodex after
   changing installed skills.
 
