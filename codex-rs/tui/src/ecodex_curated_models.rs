@@ -226,6 +226,28 @@ pub(crate) fn provider_for_model(model: &str) -> Option<&'static str> {
     None
 }
 
+/// The provider a TUI start should use when nothing chose one explicitly.
+///
+/// `exec -m` and the `/model` picker already send a bare OpenAI-family model
+/// (`gpt-*`, `chatgpt-*`, `o1|o3|o4*`, no router `/`) to the built-in `openai`
+/// provider. A config can still pair such a model with another provider,
+/// because the model-migration prompt used to persist the model alone, and a
+/// fresh start then took the pair as written: a GPT model sent to the Mistral
+/// translator. Returns `Some("openai")` only when no provider was given
+/// explicitly, the model is OpenAI-family and the configured provider is not
+/// already `openai`; every other case keeps the configured provider.
+pub(crate) fn startup_provider_override(
+    explicit_provider: Option<&str>,
+    model: Option<&str>,
+    configured_provider: &str,
+) -> Option<&'static str> {
+    if explicit_provider.is_some() {
+        return None;
+    }
+    let openai = codex_model_provider_info::openai_direct_provider(model?)?;
+    (configured_provider != openai).then_some(openai)
+}
+
 /// Bare OpenAI-family model ids that must hit `api.openai.com` directly.
 /// Router slugs like "openai/gpt-5.2-codex" contain '/' and are resolved by
 /// `provider_for_slug` (→ openrouter), so anything with a '/' is excluded here.
@@ -276,6 +298,48 @@ mod tests {
         assert_eq!(provider_for_slug("openrouter/auto"), Some("openrouter"));
         assert_eq!(provider_for_slug("devstral-latest"), Some("mistral"));
         assert_eq!(provider_for_slug("not-in-curated"), None);
+    }
+
+    #[test]
+    fn startup_provider_override_routes_only_unrouted_openai_models() {
+        // config pairs a GPT model with the translator (the migration-prompt case)
+        assert_eq!(
+            startup_provider_override(
+                /*explicit_provider*/ None,
+                Some("gpt-6-sol"),
+                "mistral"
+            ),
+            Some("openai")
+        );
+        // already on openai: nothing to change
+        assert_eq!(
+            startup_provider_override(/*explicit_provider*/ None, Some("gpt-6-sol"), "openai"),
+            None
+        );
+        // an explicit provider (--oss, -c model_provider=) always wins
+        assert_eq!(
+            startup_provider_override(Some("mistral"), Some("gpt-6-sol"), "mistral"),
+            None
+        );
+        // non-OpenAI models and router slugs keep their provider
+        assert_eq!(
+            [
+                startup_provider_override(
+                    /*explicit_provider*/ None,
+                    Some("devstral-latest"),
+                    "mistral"
+                ),
+                startup_provider_override(
+                    /*explicit_provider*/ None,
+                    Some("openai/gpt-5.2-codex"),
+                    "openrouter"
+                ),
+                startup_provider_override(
+                    /*explicit_provider*/ None, /*model*/ None, "mistral"
+                ),
+            ],
+            [None, None, None]
+        );
     }
 
     #[test]

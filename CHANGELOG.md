@@ -15,6 +15,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   produced it.
 
 ### Fixed
+- **A GPT model in `config.toml` no longer starts on the Mistral translator.**
+  When the default model was switched by the model-migration prompt, the
+  provider stayed as it was, and the next session sent a `gpt-*` model to
+  whatever provider the config named ("no upstream matches model"). ecodex now
+  routes a bare OpenAI-family model to the `openai` provider at start, as
+  `ecodex exec -m` and the `/model` picker already did, unless a provider was
+  chosen explicitly; and the migration prompt saves the provider with the model.
 - **The statusline names the right session when several run in one
   directory.** The empirica plugin's statusline resolved its session from the
   tmux pane or, failing that, from the working directory, which is ambiguous

@@ -424,6 +424,17 @@ pub(super) async fn run_main_inner(
 
     let additional_dirs = cli.add_dir.clone();
 
+    // ecodex: `-m gpt-…` with no provider goes to openai, as it does for
+    // `exec -m`; the configured provider may be a chat translator.
+    let model_provider_override = model_provider_override.or_else(|| {
+        crate::ecodex_curated_models::startup_provider_override(
+            /*explicit_provider*/ None,
+            model.as_deref(),
+            /*configured_provider*/ "",
+        )
+        .map(str::to_string)
+    });
+
     let mut overrides = ConfigOverrides {
         model,
         approval_policy,
@@ -450,6 +461,29 @@ pub(super) async fn run_main_inner(
         .await?;
     if app_server_target.uses_embedded_network_policy() {
         embedded_network_policy.activate(&mut config);
+    }
+    // ecodex: the config itself can pair a bare OpenAI-family model with
+    // another provider (the migration prompt persisted the model alone). Route
+    // it to openai, as the picker and `exec -m` do, by loading once more with
+    // the provider override; nothing explicit chose a provider here.
+    if let Some(openai) = crate::ecodex_curated_models::startup_provider_override(
+        model_provider_override.as_deref(),
+        config.model.as_deref(),
+        &config.model_provider_id,
+    ) {
+        overrides.model_provider = Some(openai.to_string());
+        config = startup_draft
+            .run_until(load_config_or_exit(
+                cli_kv_overrides.clone(),
+                overrides.clone(),
+                loader_overrides.clone(),
+                cloud_config_bundle.clone(),
+                strict_config,
+            ))
+            .await?;
+        if app_server_target.uses_embedded_network_policy() {
+            embedded_network_policy.activate(&mut config);
+        }
     }
     startup_draft.apply_config(&config);
 
