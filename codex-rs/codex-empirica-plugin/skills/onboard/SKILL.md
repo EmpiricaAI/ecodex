@@ -35,10 +35,10 @@ Two user modes, kept explicitly distinct (David's requirement):
 
 - **Plain ecodex** — the AI calibration training environment, no mesh.
   The empirica plugin plus strict mode, which the `ecodex` binary turns on
-  by itself. No cortex MCP, no listener, no `credentials.yaml` cortex key.
+  by itself. No Cortex login, no Cortex MCP, no listener.
   The casual single-user mode.
-- **Ecosystem ecodex** — plain + the mesh (cortex MCP server + listener +
-  `credentials.yaml` cortex key). Multi-practice, cross-project,
+- **Ecosystem ecodex** — plain + the mesh (a Cortex login through
+  `empirica auth login`, the Cortex MCP server, the listener). Multi-practice, cross-project,
   AI-to-AI orchestration. Opt in with `--with-cortex` (or answer the
   mode prompt).
 
@@ -63,7 +63,7 @@ run `pipx install empirica` first; the hooks run under its interpreter.
 Ask the user (or detect `--with-cortex`): plain or ecosystem? The mode
 decides which setup steps apply. Plain skips the cortex wiring
 (Step 5). Surface the trade-off plainly: plain = single-user, no mesh;
-ecosystem = multi-practice + AI-to-AI, needs a cortex account/key.
+ecosystem = multi-practice + AI-to-AI, needs a Cortex account.
 
 Also ask whether this install will run jobs nobody watches (CI, cron,
 scripted `ecodex exec`). No one opens a transaction in those, so inside a
@@ -251,11 +251,33 @@ listener. Do not run Empirica's generic harness setup command: the current
 CLI deliberately refuses ecodex rather than writing another harness's
 files.
 
-Plain mode needs no mesh configuration. For ecosystem mode, provision the
-shared, harness-neutral `~/.empirica/credentials.yaml` with
-Cortex-issued credentials supplied by the user. Never invent or print
-credential values. Then verify the resulting Cortex and ntfy configuration
-with `empirica doctor` and re-run `empirica diagnose --frontend ecodex`.
+Plain mode needs no mesh configuration. For ecosystem mode:
+
+1. Have the user sign in with their Cortex account: `empirica auth login`.
+   It is interactive, so the user runs it. The login is what both the mesh
+   listener and Cortex MCP authenticate with.
+2. Add the Cortex MCP server to `~/.codex/config.toml`, authenticated
+   through that login:
+
+   ```toml
+   [mcp_servers.cortex]
+   url = "https://cortex.getempirica.com/mcp/"
+   http_headers_helper = "empirica auth token --headers"
+   startup_timeout_sec = 30
+   tool_timeout_sec = 60
+   ```
+
+   Check that `empirica auth token --headers` exits 0, but do not print its
+   output: it carries the token. If it exits 1, the login is missing.
+3. Only if a login is impossible (a runner that holds just a key), use
+   `bearer_token_env_var = "CORTEX_API_KEY"` instead of the helper, with the
+   key exported in the environment ecodex starts from. Never write a key into
+   a config file, and never invent or print credential values.
+4. Verify with `empirica doctor` and re-run
+   `empirica diagnose --frontend ecodex`.
+
+`docs/ecodex/cross-ai-mesh.md` has the full mesh setup and its
+troubleshooting.
 
 ### Step 6 — verify end-to-end
 
