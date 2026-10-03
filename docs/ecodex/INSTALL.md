@@ -101,6 +101,14 @@ intact.
 Several sessions starting at once, as the empirica cockpit does, are safe: they
 take turns.
 
+**The working directory becomes a practice.** When a session starts, ecodex
+runs `git init` if the directory has no `.git`, and `empirica project-init` if it
+has no `.empirica/`. That writes `.empirica/` into the directory and registers it
+as a practice in `~/.empirica/workspace`, which is what the Sentinel measures
+against. ecodex skips this in your home directory, at the filesystem root, and in
+a directory inside another git repository; if it fails, the session continues
+without a practice. With the plugin off, none of it happens.
+
 ## Verify
 
 ```sh
@@ -173,10 +181,10 @@ You can switch provider mid-session with `/model`; the next turn uses the new on
 
 The Sentinel expects a practitioner: before the model may change anything, it
 has to open a transaction (PREFLIGHT). A CI job, a cron job or any `ecodex exec`
-run that nobody watches never opens one. In a git repository the session creates
-`.empirica/` in the repository, and the Sentinel then refuses every command that
-writes or runs something ("No open transaction. Submit PREFLIGHT ..."); reads
-still work.
+run that nobody watches never opens one. The session still sets the working
+directory up as an empirica practice (see above), and the Sentinel then refuses
+every command that writes or runs something ("No open transaction. Submit
+PREFLIGHT ..."); reads still work.
 
 Run such jobs with the plugin off. For a single run:
 
