@@ -70,21 +70,34 @@ The listener starts only when it can find what it needs. It stays off, silently,
 
 ### 2. Cortex MCP server (optional)
 
-The mailbox CLI covers receiving and replying. For the full set of mesh tools, add the
-Cortex MCP server to `~/.codex/config.toml`:
+The mailbox CLI covers receiving and replying. For the full set of mesh tools and
+Cortex's knowledge sharing, sign in with your Cortex account:
+
+```sh
+empirica auth login
+```
+
+and add the Cortex MCP server to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.cortex]
 # streamable_http endpoint (the trailing slash matters — bare /mcp redirects).
 url = "https://cortex.getempirica.com/mcp/"
-bearer_token_env_var = "CORTEX_API_KEY"
+# Prints the Authorization header for your empirica login. ecodex runs it when
+# it connects and again whenever Cortex refuses the token.
+http_headers_helper = "empirica auth token --headers"
 startup_timeout_sec = 30
 tool_timeout_sec = 60
 ```
 
-Export the key in your shell's startup file. If you used `empirica setup`, the key is
-already in `~/.empirica/credentials.yaml`; reference it through the environment variable
-rather than writing the value into a file.
+Without a Cortex login the helper fails and the Cortex MCP server does not start;
+local empirica and the mailbox CLI work as before. Leave the block out if you have no
+Cortex account.
+
+**Fallback: a static API key.** Where a login is not available, such as a runner
+that only holds a key, replace the `http_headers_helper` line with
+`bearer_token_env_var = "CORTEX_API_KEY"` and export the key in the environment
+ecodex starts from. Never write the key itself into a config file.
 
 ### 3. Check it end to end
 
@@ -149,6 +162,7 @@ The base prompt's *Working with peer practices* section is the contract; in shor
 | Messages reach other practices but not this one | Addressed to a non-canonical form, or the canonical address in `project.yaml` is wrong | Compare the sender's target with `ai_id_mesh` from `empirica practice-context`; bare names bounce |
 | The wake arrives but the model doesn't act on it | The model treated the notification as ambient text | The wake text tells it to act first; if a model still ignores it, raise it — the base prompt may need a clearer steer |
 | Cortex MCP startup error | Wrong endpoint or transport | Use the streamable-HTTP URL with the trailing slash, as above |
+| Cortex MCP fails with "MCP HTTP headers helper exited with status 1" | No Cortex login for the helper to read | Run `empirica auth login`; `empirica auth token --headers` should then print an `Authorization` header |
 
 ## See also
 
