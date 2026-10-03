@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [0.157.8] - 2026-10-03
 
+### Fixed
+- **The `ecodex` binary compiles again.** The single-curated-list change added
+  a field to `CuratedEntry` that `ecodex models refresh` did not set, so the
+  first v0.157.8 tag built no binaries; the tag was moved onto the fix. CI now
+  checks that the shipped binary compiles before anything is tagged.
+
 ### Changed
 - **The statusline has a compact default.** The bundled
   `statusline_empirica.py` is taken from empirica's development branch just
