@@ -4,22 +4,31 @@ How the plugin binary integrates with codex's hook system.
 
 ## Plugin invocation
 
-Codex's hook engine invokes our plugin binary by event name as the first arg:
+Codex's hook engine runs the plugin binary with the event as the first
+argument. Five events have a dedicated handler; everything else goes through
+`run-hook`, which runs any vendored script for any event:
 
 ```
-codex-empirica-plugin pre-tool-use
-codex-empirica-plugin post-tool-use
-codex-empirica-plugin session-start
-codex-empirica-plugin user-prompt-submit
-codex-empirica-plugin stop
-codex-empirica-plugin permission-request
+codex-empirica-plugin pre-tool-use                     # sentinel-gate.py (the firewall)
+codex-empirica-plugin post-tool-use                    # tool-failure.py
+codex-empirica-plugin session-start                    # practice bootstrap, then session-init.py
+codex-empirica-plugin user-prompt-submit               # tool-router.py
+codex-empirica-plugin stop                             # transaction-enforcer.py
+codex-empirica-plugin run-hook <EventName> <script.py> # any other script on any event
+codex-empirica-plugin permission-request               # accepted, no-op
 ```
 
-Each invocation reads the codex hook payload as JSON on stdin, writes any response to stdout, and exits with a status code that codex interprets per its hook protocol.
+Each invocation reads the codex hook payload as JSON on stdin, writes any
+response to stdout, and exits with a status code that codex interprets per its
+hook protocol. `run-hook` resolves the script name against the vendored
+`hooks_scripts/hooks/` tree and is how one event fans out to several scripts
+without a Rust module per script.
 
 ## Wire-up via plugin manifest
 
-Hooks are registered in `hooks.json` (referenced from `manifest.json`):
+Hooks are registered in `hooks.json` (referenced from `manifest.json`). The
+schema is codex's `HookEventsToml` (`codex-rs/config/src/hook_config.rs`), the
+same shape as Claude Code's `settings.json` hook block:
 
 ```json
 {
@@ -33,12 +42,26 @@ Hooks are registered in `hooks.json` (referenced from `manifest.json`):
         "statusMessage": "Empirica sentinel"
       }]
     }],
-    "Stop": [...]
+    "TaskCompleted": [{
+      "matcher": ".*",
+      "hooks": [{
+        "type": "command",
+        "command": "codex-empirica-plugin run-hook TaskCompleted task-completed.py",
+        "timeout": 10,
+        "statusMessage": "Empirica POSTFLIGHT-enforcement check"
+      }]
+    }]
   }
 }
 ```
 
-Schema follows codex's `HookEventsToml` (`codex-rs/config/src/hook_config.rs:31`). Identical shape to Claude Code's `settings.json` hook block.
+The shipped `hooks.json` wires twelve events — upstream's `PreToolUse`,
+`PostToolUse`, `SessionStart`, `UserPromptSubmit`, `Stop`, `PreCompact`,
+`PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop` and ecodex's
+`TaskCompleted`, `PostToolUseFailure` — with seventeen commands in all;
+`PostToolUse`, `SessionStart` and `UserPromptSubmit` fan out to several
+scripts. `docs/ecodex/hook-events-roadmap.md` lists the script behind each
+event. `PermissionRequest` and `Interrupt` have no entry.
 
 ## Stdin payload (codex format)
 
@@ -59,7 +82,12 @@ Per `codex-rs/hooks/schema/generated/`. PreToolUse example:
 }
 ```
 
-Other events (Stop, SessionStart, etc.) follow the same envelope minus the per-event-specific fields.
+Other events follow the same envelope plus their own fields: `SessionStart`
+carries `source` (`startup | resume | clear | compact | fork`), `PostCompact`
+carries `success`, `SubagentStart` carries the child thread id, and so on.
+
+Every hook subprocess also receives `EMPIRICA_INSTANCE_ID` set to the codex
+thread id, which the Python side uses to key per-session state.
 
 ## Stdout / exit code → codex behavior
 
@@ -71,18 +99,26 @@ Other events (Stop, SessionStart, etc.) follow the same envelope minus the per-e
 | Exit 2, reason on stderr | Block with reason |
 | Exit ≠0 ≠2 | Failed hook (codex logs error, treatment varies by event) |
 
+Empirica's scripts emit Claude Code's flat output shape
+(`{continue, context, decision, suppressOutput}`); codex validates each event's
+output against a strict `additionalProperties: false` schema. Every handler
+therefore routes script output through `src/translate_output.rs`, which maps
+`context` to `hookSpecificOutput.additionalContext`, `decision: "block"` on
+`PreToolUse` to `permissionDecision: "deny"`, drops unknown fields, and turns
+an empty flat output into `{continue: true}`.
+
 ## Fail-open vs fail-closed semantics
 
 Failure handling is **not uniform across events** — it splits along a security
 boundary. The `pre-tool-use` **firewall** is a security floor and fails
-**CLOSED**; the informational (non-firewall) handlers fail **open**.
+**CLOSED**; the informational handlers fail **open**.
 
 ### PreToolUse firewall — fails CLOSED (security floor)
 
 `src/hooks/pre_tool_use.rs` treats the gate as a firewall that must never
 silently allow when it is broken. The policy is a pure mapping
-(`firewall_outcome`, lines 47-65) over the gate run result plus whether the
-gate script is installed:
+(`firewall_outcome`) over the gate run result plus whether the gate script is
+installed:
 
 | Gate state | Firewall response | Why |
 |---|---|---|
@@ -92,72 +128,68 @@ gate script is installed:
 | stdin payload unreadable | **Fail CLOSED** → deny (exit 2) | Can't read the payload → can't gate → deny. |
 | Genuinely **absent** (uninstalled, `FailOpenAbsent`) | Fail open → allow (exit 0) | The user opted out of the firewall; don't brick an un-gated install. |
 
-The key distinction (lines 57-62, 115-138): only a genuinely **absent** gate
-fails open. A gate that is **present but broken** fails closed. codex's raw
-PreToolUse contract only ever blocks on `exit 2 + non-empty stderr`, so the
-firewall synthesizes that shape to close the gap.
+Only a genuinely **absent** gate fails open. A gate that is **present but
+broken** fails closed. codex's raw PreToolUse contract only ever blocks on
+`exit 2 + non-empty stderr`, so the firewall synthesizes that shape to close
+the gap.
+
+Note the two layers: this is the Rust host's policy when the *script* cannot
+run. When the script runs but hits an exception inside, `sentinel-gate.py`'s
+own handler allows the action and writes `SENTINEL_CRASH: …` to stderr
+(deny instead when `EMPIRICA_SENTINEL_FAIL_CLOSED` is set) — exit 0, so the
+host forwards it as allow.
 
 ### Informational handlers — fail open
 
-The non-firewall handlers (`post-tool-use`, `session-start`,
-`user-prompt-submit`, `stop`) are informational: `src/empirica_cli.rs::run_hook_script`
-returns `Err` for infrastructure failures (script-file pre-check, spawn errors),
-and these handlers translate `Err` → `ExitCode::SUCCESS` (fail open) so the
-plugin's own brokenness doesn't strand the user. A **script-emitted** block
-(script exits 2 with stderr, or stdout JSON says deny) is a deliberate decision
-and propagates verbatim via `Ok(HookOutput { exit_code, .. })`.
+The other handlers (`post-tool-use`, `session-start`, `user-prompt-submit`,
+`stop`, and every `run-hook` invocation) are informational:
+`src/empirica_cli.rs::run_hook_script` returns `Err` for infrastructure
+failures (script-file pre-check, spawn errors), and these handlers translate
+`Err` → `ExitCode::SUCCESS` (fail open) so the plugin's own brokenness doesn't
+strand the user. A **script-emitted** block (script exits 2 with stderr, or
+stdout JSON says deny) is a deliberate decision and propagates verbatim.
 
-## Configuration
+## Interpreter and script location
+
+Scripts run under the interpreter named in the shebang of the `empirica` CLI on
+`PATH` (resolved on every run), with `python3` as the fallback. pipx, uv and
+Homebrew install empirica into a private venv the first `python3` cannot
+import from; running under that venv's interpreter is what keeps the Sentinel
+on.
 
 | Variable | Purpose |
 |---|---|
-| `EMPIRICA_HOOKS_DIR` | Manual **override** for the directory containing the Empirica Python hook scripts to subprocess to (dev / debugging / non-standard layouts). |
+| `EMPIRICA_HOOKS_DIR` | Manual **override** for the directory holding the Empirica hook scripts (dev / debugging / non-standard layouts). |
 
-`EMPIRICA_HOOKS_DIR` is an override, not the default. `resolve_hooks_dir()`
-(`src/empirica_cli.rs:128-136`) resolves the scripts directory in **three
-tiers**, highest priority first:
+`resolve_hooks_dir()` (`src/empirica_cli.rs`) resolves the scripts directory in
+three tiers, highest priority first:
 
-1. **`$EMPIRICA_HOOKS_DIR`** — if set, used verbatim (tilde-expanded). Manual
-   override for dev / debugging / non-standard layouts.
+1. **`$EMPIRICA_HOOKS_DIR`** — if set, used verbatim (tilde-expanded).
 2. **`$PLUGIN_ROOT/hooks_scripts/hooks`** — the **normal runtime path**. codex
    sets `PLUGIN_ROOT` when invoking plugin hook commands, so the plugin runs
    the copy of the scripts bundled inside its own install.
-3. **`~/.claude/plugins/local/empirica/hooks`** — last-resort fallback for
-   coexisting CC-empirica installs / dev-mode runs of the bare binary when
-   neither of the above is set.
+3. **`~/.claude/plugins/local/empirica/hooks`** — last-resort fallback for a
+   dev-mode run of the bare binary next to a Claude Code install.
 
-So under a normal codex plugin install, tier 2 (the `PLUGIN_ROOT`-relative
-bundled path) is what's used; the CC path is only a fallback.
+## Per-event handlers
 
-## Per-hook status
-
-| codex event | Plugin handler | Backed by | Status |
-|---|---|---|---|
-| `pre-tool-use` | `hooks::pre_tool_use::handle` | `sentinel-gate.py` | ✅ live |
-| `stop` | `hooks::stop::handle` | `transaction-enforcer.py` | ✅ live |
-| `post-tool-use` | `hooks::post_tool_use::handle` | `tool-failure.py` | ✅ live |
-| `session-start` | `hooks::session_start::handle` | `session-init.py` | ✅ live |
-| `user-prompt-submit` | `hooks::user_prompt_submit::handle` | `tool-router.py` | ✅ live |
-| `permission-request` | (no-op) | (codex-specific; design TBD) | stub |
-
-All five event handlers are wired as canonical handlers in `src/main.rs`
-(the `match event.as_str()` dispatch): `pre-tool-use`, `post-tool-use`,
-`session-start`, `user-prompt-submit`, and `stop` each dispatch to their
-handler module. Only `permission-request` is a genuine no-op stub —
-`src/main.rs` returns `ExitCode::SUCCESS` for it directly (design TBD).
-
-## Smoke test results (2026-05-02)
-
-T7 mini smoke test (binary-only; no live codex integration yet):
-
-| Test | Expected | Result |
+| Event | Plugin handler | Backed by |
 |---|---|---|
-| No args | Usage to stderr, exit 64 | ✅ |
-| Bogus event | Usage to stderr, exit 64 | ✅ |
-| `pre-tool-use` with mock script (exit 0 + JSON stdout) | Forward stdin, propagate stdout, exit 0 | ✅ |
-| `stop` with mock script | Forward stdin, exit 0 | ✅ |
-| Stub event (`post-tool-use`) | Silent, exit 0 | ✅ |
-| `pre-tool-use` with missing hooks dir | Fail open: warn to stderr, exit 0 | ❌→✅ (initially exited 2; fixed in T7 by adding script-exists pre-check in `empirica_cli.rs`) |
-| `pre-tool-use` with script that intentionally blocks (exit 2 + stderr) | Propagate: exit 2 + stderr verbatim | ✅ |
+| `PreToolUse` | `hooks::pre_tool_use::handle` | `sentinel-gate.py` |
+| `PostToolUse` | `hooks::post_tool_use::handle`, then `run-hook` | `tool-failure.py`, `entity-extractor.py`, `truncation-legibility.py` |
+| `SessionStart` | `hooks::session_start::handle`, then `run-hook` | host-side practice bootstrap (`src/practice_bootstrap.rs`), `session-init.py`, `ewm-protocol-loader.py`, `post-compact.py`, `session-monitor-arm.py` |
+| `UserPromptSubmit` | `hooks::user_prompt_submit::handle`, then `run-hook` | `tool-router.py`, `context-shift-tracker.py` |
+| `Stop` | `hooks::stop::handle` | `transaction-enforcer.py` |
+| `TaskCompleted`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop` | `run-hook` | one script each (`docs/ecodex/hook-events-roadmap.md`) |
+| `PermissionRequest` | no-op | — |
 
-**Live integration smoke test** (loading the plugin into a running codex) is deferred to a future transaction — requires building the codex binary itself and configuring plugin discovery against `~/.codex/plugins/cache/empirica/`.
+## Tests
+
+- `cargo nextest run -p codex-empirica-plugin` — the Rust handlers, output
+  translation, provisioning and practice bootstrap.
+- `pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks` — the vendored
+  scripts against codex-shaped payloads (needs empirica importable).
+- `cargo nextest run -p codex-cli --test empirica_provision` — the plugin
+  provisioned and loaded by a real ecodex binary.
+- `docs/ecodex/api/integration-tests.md` — the live checks and what
+  `empirica diagnose --frontend ecodex` verifies.
