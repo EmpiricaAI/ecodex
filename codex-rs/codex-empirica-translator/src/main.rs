@@ -4,7 +4,7 @@
 //!   codex-empirica-translator
 //!
 //! With no flags it reads the routes in `$CODEX_HOME/translator-upstreams.toml`
-//! (ecodex writes a Mistral default there), takes provider keys from the
+//! (ecodex's first session writes the default routes there), takes provider keys from the
 //! environment or the empirica key store (`~/.empirica/credentials.yaml`), and
 //! listens on `127.0.0.1:18080`. Point ecodex's provider config at
 //! `http://127.0.0.1:18080/v1`.
@@ -30,8 +30,8 @@ struct Args {
     /// Mutually exclusive with the single-upstream `--upstream-*` flags.
     /// Defaults to `$CODEX_HOME/translator-upstreams.toml` (`~/.codex/...`)
     /// when that file exists and no `--upstream-base-url` is given.
-    /// See `docs/ecodex/integrations/translator-multiplex.md` for the
-    /// schema and worked Kimi+DeepSeek example.
+    /// See the crate README for the schema; the shipped default is
+    /// `codex-empirica-plugin/assets/config/translator-upstreams.toml`.
     #[arg(long, env = "ECODEX_TRANSLATOR_UPSTREAMS_CONFIG")]
     upstreams_config: Option<PathBuf>,
 
@@ -109,7 +109,7 @@ fn main() -> Result<()> {
         None => {
             let base_url = args.upstream_base_url.clone().ok_or_else(|| {
                 anyhow::anyhow!(
-                    "no upstreams: create $CODEX_HOME/translator-upstreams.toml (ecodex writes a Mistral default on first run), or pass --upstreams-config <path> or --upstream-base-url <url>"
+                    "no upstreams: create $CODEX_HOME/translator-upstreams.toml (ecodex's first session writes the default routes), or pass --upstreams-config <path> or --upstream-base-url <url>"
                 )
             })?;
             let protocol = UpstreamProtocol::parse(&args.upstream_protocol)?;

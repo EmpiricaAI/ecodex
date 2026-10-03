@@ -22,9 +22,6 @@ workspace = true
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 
-# Phase 1 (this commit): scaffold + resurrected source vendored as reference.
-# Phase 2 (next session): wire imports against codex-api/codex-protocol pub
-# surface, add tiny_http server, integration tests.
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
