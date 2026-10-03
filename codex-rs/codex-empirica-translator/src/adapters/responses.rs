@@ -336,13 +336,17 @@ pub fn encode_events(event: &StreamEvent, state: &mut EncoderState) -> Vec<Vec<u
                 .iter()
                 .map(|tc| crate::tool_args::normalize_tool_arguments(&tc.arguments))
                 .collect();
-            for (tc, arguments) in tool_calls.iter().zip(&arguments) {
+            let names: Vec<_> = tool_calls
+                .iter()
+                .map(|tc| crate::tool_args::sanitize_tool_name(&tc.name))
+                .collect();
+            for ((tc, arguments), name) in tool_calls.iter().zip(&arguments).zip(&names) {
                 let added = json!({
                     "type": "response.output_item.added",
                     "item": {
                         "type": "function_call",
                         "call_id": tc.id,
-                        "name": tc.name,
+                        "name": name,
                         "arguments": "",
                     }
                 });
@@ -352,7 +356,7 @@ pub fn encode_events(event: &StreamEvent, state: &mut EncoderState) -> Vec<Vec<u
                     "item": {
                         "type": "function_call",
                         "call_id": tc.id,
-                        "name": tc.name,
+                        "name": name,
                         "arguments": arguments,
                     }
                 });
@@ -363,11 +367,11 @@ pub fn encode_events(event: &StreamEvent, state: &mut EncoderState) -> Vec<Vec<u
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": text}],
             })];
-            for (tc, arguments) in tool_calls.iter().zip(&arguments) {
+            for ((tc, arguments), name) in tool_calls.iter().zip(&arguments).zip(&names) {
                 output.push(json!({
                     "type": "function_call",
                     "call_id": tc.id,
-                    "name": tc.name,
+                    "name": name,
                     "arguments": arguments,
                 }));
             }
@@ -766,6 +770,43 @@ mod tests {
             s[3].starts_with("event: response.completed\n"),
             "frame 3 must be completed: {}",
             s[3]
+        );
+    }
+
+    /// A chat model can call a tool by a name the Responses API rejects;
+    /// codex would record it, and the session's history would then fail on
+    /// an OpenAI model. Every frame carries the sanitized name instead.
+    #[test]
+    fn encode_events_sanitizes_tool_names_the_responses_api_rejects() {
+        use crate::cif::ToolCall;
+        let mut state = EncoderState::default();
+        let frames = encode_events(
+            &StreamEvent::Completed {
+                text: "".into(),
+                tool_calls: vec![ToolCall {
+                    id: "FwUSzyfQY".into(),
+                    name: "unsupported call: empirica".into(),
+                    arguments: "{}".into(),
+                }],
+                finish_reason: FinishReason::ToolCalls,
+                response_id: Some("r-4".into()),
+            },
+            &mut state,
+        );
+
+        let frames: Vec<String> = frames
+            .iter()
+            .map(|f| String::from_utf8(f.clone()).unwrap())
+            .collect();
+        assert_eq!(
+            frames
+                .iter()
+                .map(|f| (
+                    f.contains("\"name\":\"unsupported_call__empirica\""),
+                    f.contains("unsupported call: empirica")
+                ))
+                .collect::<Vec<_>>(),
+            vec![(true, false); 3]
         );
     }
 }

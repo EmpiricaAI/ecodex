@@ -28,3 +28,24 @@ fn arguments_needing_no_repair_pass_through_unchanged() {
         [true, true, true, true]
     );
 }
+
+#[test]
+fn tool_names_the_responses_api_rejects_are_sanitized() {
+    assert_eq!(
+        sanitize_tool_name("unsupported call: empirica"),
+        "unsupported_call__empirica"
+    );
+}
+
+#[test]
+fn valid_tool_names_pass_through_unchanged() {
+    let names = ["exec_command", "apply_patch", "mcp__cortex__cortex-collab"];
+
+    assert_eq!(
+        names.map(|name| matches!(
+            sanitize_tool_name(name),
+            Cow::Borrowed(unchanged) if unchanged == name
+        )),
+        [true, true, true]
+    );
+}

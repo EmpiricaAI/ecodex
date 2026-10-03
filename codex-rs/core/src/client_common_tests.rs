@@ -270,3 +270,57 @@ fn serializes_flex_service_tier_when_set() {
         Some("flex")
     );
 }
+
+fn tool_call_history(call_name: &str, output_name: Option<&str>) -> Vec<ResponseItem> {
+    vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: call_name.to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            encrypted_function_args: None,
+            call_id: "call-1".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: Some("call-1".to_string()),
+            name: output_name.map(str::to_string),
+            namespace: None,
+            output: FunctionCallOutputPayload::from_text("unsupported call".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ]
+}
+
+#[test]
+fn tool_names_the_responses_api_rejects_are_sanitized_for_requests() {
+    let prompt = Prompt {
+        input: tool_call_history("unsupported call: empirica", Some("bad.name")),
+        ..Prompt::default()
+    };
+    let model_info = model_info_from_slug("gpt-5.4");
+
+    assert_eq!(
+        prompt.get_formatted_input_for_request(&model_info),
+        tool_call_history("unsupported_call__empirica", Some("bad_name"))
+    );
+    assert_eq!(
+        prompt.input,
+        tool_call_history("unsupported call: empirica", Some("bad.name"))
+    );
+}
+
+#[test]
+fn valid_tool_names_are_sent_unchanged() {
+    let prompt = Prompt {
+        input: tool_call_history("mcp__cortex__cortex-collab", /*output_name*/ None),
+        ..Prompt::default()
+    };
+    let model_info = model_info_from_slug("gpt-5.4");
+
+    assert_eq!(
+        prompt.get_formatted_input_for_request(&model_info),
+        prompt.input
+    );
+}

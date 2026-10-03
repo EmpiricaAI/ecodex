@@ -62,7 +62,69 @@ impl Prompt {
     ) -> Vec<ResponseItem> {
         let mut input = self.input.clone();
         normalize_image_details(&mut input, model_info);
+        sanitize_tool_names(&mut input);
         input
+    }
+}
+
+/// ecodex: a model behind the chat translator can leave a tool call in history
+/// whose name the Responses API rejects (it must match `^[a-zA-Z0-9_-]+$`):
+/// Devstral once echoed codex's own "unsupported call: empirica" back as a tool
+/// name. After a switch to an OpenAI model, that one item made every request
+/// fail with a 400. Disallowed characters become `_`; calls pair with their
+/// outputs by `call_id`, so nothing depends on the exact name. Valid names are
+/// left untouched, so the request is unchanged for every other history.
+fn sanitize_tool_names(items: &mut [ResponseItem]) {
+    for item in items {
+        match item {
+            ResponseItem::FunctionCall {
+                name, namespace, ..
+            }
+            | ResponseItem::CustomToolCall {
+                name, namespace, ..
+            } => {
+                sanitize_tool_name(name);
+                if let Some(namespace) = namespace {
+                    sanitize_tool_name(namespace);
+                }
+            }
+            ResponseItem::FunctionCallOutput {
+                name, namespace, ..
+            } => {
+                for field in [name, namespace].into_iter().flatten() {
+                    sanitize_tool_name(field);
+                }
+            }
+            ResponseItem::CustomToolCallOutput { name, .. } => {
+                if let Some(name) = name {
+                    sanitize_tool_name(name);
+                }
+            }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::Message { .. }
+            | ResponseItem::Reasoning { .. }
+            | ResponseItem::AgentMessage { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::ConfigurationUpdate { .. }
+            | ResponseItem::CompactionTrigger { .. }
+            | ResponseItem::ContextCompaction { .. }
+            | ResponseItem::Other => {}
+        }
+    }
+}
+
+fn sanitize_tool_name(name: &mut String) {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    if !name.chars().all(allowed) {
+        *name = name
+            .chars()
+            .map(|c| if allowed(c) { c } else { '_' })
+            .collect();
     }
 }
 

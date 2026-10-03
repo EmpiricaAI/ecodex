@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **Switching an old Mistral session to an OpenAI model no longer fails.** A
+  chat model can call a tool by a name OpenAI does not accept: Devstral once
+  echoed codex's own "unsupported call: empirica" back as a tool name. That
+  name stayed in the session's history, and after `/model` switched to an
+  OpenAI model every request failed with a 400 (`input[N].name ... does not
+  match pattern`). Requests now replace the characters OpenAI rejects in such
+  names with `_`, so existing sessions work again, and the translator does the
+  same before a new tool call reaches the history.
+
 ## [0.157.6] - 2026-10-03
 
 ### Security
