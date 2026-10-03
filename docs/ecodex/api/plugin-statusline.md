@@ -3,11 +3,13 @@
 Codex plugins can declare a **statusline command** that the TUI invokes
 on a debounced tick and renders below the user prompt. This is the
 mechanism ecodex's empirica plugin uses to display live epistemic state
-(vectors / phase indicator / open goals / CHECK gate) without the model
-or the user having to query for it.
+(stage, confidence, open artifacts, whether to investigate or act)
+without the model or the user having to query for it.
 
 The surface is **generalized** — any plugin can contribute one. There
-is nothing empirica-specific in the codex side of the contract.
+is nothing empirica-specific in the codex side of the contract, apart
+from one environment variable (below) that carries the session identity
+any plugin may use.
 
 ## Quick start (plugin author)
 
@@ -51,10 +53,11 @@ output appears in the footer below the user prompt.
 4. **Background runtime** — one `tokio::spawn` per source. Each task
    fires the script immediately, then loops:
    `sleep 1.5s → invoke → emit AppEvent::PluginStatuslineOutputUpdated`.
-5. **Render** — `ChatWidget::recompute_plugin_statusline` aggregates
-   cached outputs (sorted by `PluginId` for stable order, joined with
-   `' │ '`), parses ANSI via `codex_ansi_escape`, and pushes the
-   resulting `Line` through `set_status_line`.
+5. **Render** — `recompute_plugin_statusline` (in
+   `tui/src/chatwidget/status_controls.rs`) aggregates cached outputs
+   (sorted by `PluginId` for stable order, joined with `' │ '`), parses
+   ANSI via `codex_ansi_escape`, and pushes the resulting `Line` through
+   `set_status_line`.
 
 ## Subprocess contract
 
@@ -66,14 +69,35 @@ Each tick, codex spawns the declared command with:
 | `CLAUDE_PLUGIN_ROOT` | same as `PLUGIN_ROOT` (CC compat) |
 | `PLUGIN_DATA` | absolute path to the plugin data dir |
 | `CLAUDE_PLUGIN_DATA` | same as `PLUGIN_DATA` (CC compat) |
+| `EMPIRICA_INSTANCE_ID` | the codex thread id, once the session is configured; unset before that |
 
-stdin is `/dev/null`. stdout is captured up to the timeout and treated
-as ANSI text. stderr is discarded.
+The same contract as the plugin's hook subprocesses, so vendored asset
+lookups work identically, and the thread id is what lets a script tell
+apart several sessions running in one directory.
+
+**stdin** is a piped JSON object, then closed:
+
+```json
+{"session_id": "<empirica session id>", "cwd": "<ecodex working directory>"}
+```
+
+Either key is omitted when it cannot be resolved (an empty object `{}` is
+still sent). `session_id` is read from empirica's instance files under
+`~/.empirica/instance_projects/`: first `<thread id>.json` (the
+`EMPIRICA_INSTANCE_ID` value), then the ids empirica's own
+`get_instance_id()` would try (`EMPIRICA_INSTANCE_ID` from the
+environment, a tmux pane, an X window id), and failing all of those the
+most recently written instance file whose `project_path` is a prefix of
+`cwd`. That last fallback cannot distinguish sessions sharing a
+directory, which is why the thread id goes first.
+
+stdout is captured up to the timeout and treated as ANSI text. stderr is
+discarded.
 
 **Timeout:** 2 seconds per invocation. If the script hangs longer than
-that, codex `kill_on_drop`s the child and reports an empty output for
-this tick. The next tick fires a fresh attempt — the runtime never
-accumulates concurrent invocations for the same plugin.
+that, codex kills the child and reports an empty output for this tick.
+The next tick fires a fresh attempt — the runtime never accumulates
+concurrent invocations for the same plugin.
 
 **Failure handling:** any of {non-zero exit code, spawn error, timeout}
 result in an empty output. `ChatWidget` removes the plugin's entry from
@@ -82,13 +106,13 @@ disappears within one tick rather than lingering as stale content.
 
 ## Tick cadence
 
-Fixed at **1.5 seconds** in `tui/src/plugin_statusline_runtime.rs`.
-This matches the cadence empirica's chat statusline + the original CC
-plugin's `statusline_empirica.py` settled on. If you need faster
-updates the cadence is a single `Duration` constant — change with
-care; faster ticks proportionally increase subprocess fan-out.
+Fixed at **1.5 seconds** (`TICK_INTERVAL` in
+`tui/src/plugin_statusline_runtime.rs`). This matches the cadence
+empirica's chat statusline settled on. The cadence is a single `Duration`
+constant — change with care; faster ticks proportionally increase
+subprocess fan-out.
 
-## Render order and v0 caveat
+## Render order and caveat
 
 When **any** plugin contributes statusline content, the plugin output
 **overrides** the codex-managed `/statusline` items (model, git branch,
@@ -96,11 +120,7 @@ context %, etc.) in the footer slot. This is intentional for ecodex —
 empirica's statusline IS the primary signal for epistemic-discipline
 work — but it means a user who configured codex's built-in statusline
 items via `/statusline` won't see them while plugin output is present.
-
-A future enhancement (tracked as Tx6(b)/3d in goal `7cddbf5e`) will
-render plugin lines as a sibling band BELOW the existing status line
-items rather than replacing them, giving users both. Until then,
-plugins that contribute a statusline should treat it as a takeover.
+Plugins that contribute a statusline should treat it as a takeover.
 
 When the cache becomes empty (no plugins, all failed, all cleared),
 the override clears and the codex-managed items reappear on the next
@@ -114,8 +134,9 @@ the override clears and the codex-managed items reappear on the next
 - The runtime never spawns concurrent invocations for the same plugin
   (back-pressure is built-in). A misbehaving script can't slow the
   TUI by more than the 2s timeout per tick.
-- All env vars passed to the script are codex-internal paths. No user
-  conversation content, model output, or session secrets are exposed.
+- The script sees codex-internal paths, the thread id and the working
+  directory. No conversation content, model output, or session secrets
+  are exposed.
 
 ## Performance considerations
 
@@ -137,23 +158,34 @@ the override clears and the codex-managed items reappear on the next
 | `tui/src/app/background_requests.rs` | `refresh_plugin_statusline_sources()` async fetch |
 | `tui/src/app_event.rs` | `RefreshPluginStatuslineSources` + `PluginStatuslineSourcesLoaded` + `PluginStatuslineOutputUpdated` events |
 | `tui/src/app/event_dispatch.rs` | event-routing handlers |
-| `tui/src/plugin_statusline_runtime.rs` | per-plugin tokio task + subprocess invoker |
-| `tui/src/chatwidget.rs` | `plugin_statusline_outputs` cache + `recompute_plugin_statusline()` |
+| `tui/src/plugin_statusline_runtime.rs` | per-plugin tokio task, subprocess invoker, stdin payload and instance-file resolution |
+| `tui/src/chatwidget/status_controls.rs` | `plugin_statusline_outputs` cache + `recompute_plugin_statusline()` |
+| `tui/src/chatwidget/session_flow.rs` | hands the configured thread id to the runtime |
 
 ## Example: empirica plugin
 
 ecodex's bundled empirica plugin (`codex-rs/codex-empirica-plugin/`)
 declares `"statusline": "./hooks_scripts/scripts/statusline_empirica.py"`.
-The vendored script reads empirica's session database directly and
-prints a single line like:
+The vendored script reads empirica's session database for the session
+named on stdin and prints one line. The default **compact** mode is:
 
 ```
-[ecodex] ⚡84% ↕71% │ 🎯23 ❓11/2 │ CHK ⚙88%→ │ K:88% C:92%
+practice │ stage confidence │ G U A F/D │ Δ mark │ context │ 🔍 investigate | 🔨 act - model
 ```
 
-This shows: project tag, confidence emoji + percentage, change-vector
-arrow, open-goals count, open-unknowns count, CHECK gate state, and
-top vector values. Refreshes every 1.5s as the AI works.
+that is: the practice name, the transaction stage with its confidence,
+open goals / unknowns / assumptions and findings / decisions counts, a
+learning mark after the delta sign when vectors moved, context-window use
+when the harness reports it, and whether the Sentinel would currently
+let the agent act, with the active model.
+
+Modes: `compact` (default), `expanded` (the previous layout: phase
+composite, key vectors, open counts, CHECK gate), `basic`, `learning`,
+`full`. The mode is read on every render from `~/.empirica/statusline_mode`
+(`echo expanded > ~/.empirica/statusline_mode`; no restart), and from
+`EMPIRICA_STATUS_MODE` when that file is absent. `EMPIRICA_STATUS_MODEL=0`
+hides the model tag. The script's header comment is the authoritative
+list.
 
 ## See also
 
