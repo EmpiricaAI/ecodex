@@ -5082,11 +5082,12 @@ async fn blocked_and_failed_hooks_render_feedback_and_errors() {
         .collect::<String>();
     assert_chatwidget_snapshot!("hook_blocked_failed_feedback_history_snapshot", rendered);
     assert!(
-        rendered.contains("Blocked by hook\n  └ run tests before touching the fixture"),
+        rendered
+            .contains("Blocked by hook · PreToolUse\n  └ run tests before touching the fixture"),
         "expected blocked hook feedback: {rendered:?}"
     );
     assert!(
-        rendered.contains("Hook failed\n  └ hook exited with code 7"),
+        rendered.contains("Hook failed · PostToolUse\n  └ hook exited with code 7"),
         "expected failed hook error: {rendered:?}"
     );
 }

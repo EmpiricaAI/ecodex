@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **A failed hook says which event it ran for.** "Hook failed", "Blocked by
+  hook" and "Hook stopped" now carry the lifecycle event, as in
+  `Hook failed · SessionStart`, so a failure can be traced to the hook that
+  produced it.
+
 ### Fixed
 - **The statusline names the right session when several run in one
   directory.** The empirica plugin's statusline resolved its session from the

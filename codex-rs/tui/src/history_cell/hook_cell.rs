@@ -45,6 +45,9 @@ const HOOK_OUTPUT_BODY_INDENT: &str = "    ";
 struct HookRunCell {
     /// Stable protocol id used to match begin/end updates for the same hook invocation.
     id: String,
+    /// The lifecycle event this hook ran for. Shown on failure headers so a user
+    /// can tell which hook misbehaved; the summary carries no hook name.
+    event_name: codex_app_server_protocol::HookEventName,
     /// Optional hook-supplied detail shown next to the running header.
     status_message: Option<String>,
     /// Rendering lifecycle for this run.
@@ -182,6 +185,7 @@ impl HookCell {
         }
         self.runs.push(HookRunCell {
             id: run.id,
+            event_name: run.event_name,
             status_message: run.status_message,
             state: HookRunState::pending(now),
         });
@@ -205,12 +209,14 @@ impl HookCell {
             return true;
         }
         let HookRunSummary {
+            event_name,
             status_message,
             status,
             entries,
             ..
         } = run;
         let existing = &mut self.runs[index];
+        existing.event_name = event_name;
         existing.status_message = status_message;
         existing.state = HookRunState::completed(status, entries);
         true
@@ -225,6 +231,7 @@ impl HookCell {
         }
         let HookRunSummary {
             id,
+            event_name,
             status_message,
             status,
             entries,
@@ -232,6 +239,7 @@ impl HookCell {
         } = run;
         self.runs.push(HookRunCell {
             id,
+            event_name,
             status_message,
             state: HookRunState::completed(status, entries),
         });
@@ -286,12 +294,16 @@ impl HookCell {
             {
                 lines.push(vec!["↳ Hook · ".dim(), first_line.to_string().into()].into());
             } else {
+                // ecodex: name the event on anything that went wrong. The
+                // summary has no hook name, so the event is the best handle a
+                // user has for finding the culprit among several hooks.
+                let event_name = run.event_name;
                 let header_text = match status {
-                    HookRunStatus::Completed => "Hook completed",
-                    HookRunStatus::Failed => "Hook failed",
-                    HookRunStatus::Blocked => "Blocked by hook",
-                    HookRunStatus::Stopped => "Hook stopped",
-                    HookRunStatus::Running => "Hook running",
+                    HookRunStatus::Completed => "Hook completed".to_string(),
+                    HookRunStatus::Failed => format!("Hook failed · {event_name:?}"),
+                    HookRunStatus::Blocked => format!("Blocked by hook · {event_name:?}"),
+                    HookRunStatus::Stopped => format!("Hook stopped · {event_name:?}"),
+                    HookRunStatus::Running => "Hook running".to_string(),
                 };
                 lines.push(
                     vec![
@@ -639,7 +651,7 @@ mod tests {
 
             assert_eq!(
                 line_texts(&cell.display_lines(/*width*/ 20)).join("\n"),
-                "• Hook stopped\n  └ first\n    second\n    third\n    fourth\n    fifth",
+                "• Hook stopped · UserPromptSubmit\n  └ first\n    second\n    third\n    fourth\n    fifth",
                 "expected {kind:?} output to remain complete",
             );
         }
@@ -648,9 +660,9 @@ mod tests {
     #[test]
     fn unsuccessful_hooks_use_bold_red_bullets_and_actionable_details() {
         for (status, expected_header) in [
-            (HookRunStatus::Failed, "• Hook failed"),
-            (HookRunStatus::Blocked, "• Blocked by hook"),
-            (HookRunStatus::Stopped, "• Hook stopped"),
+            (HookRunStatus::Failed, "• Hook failed · PreToolUse"),
+            (HookRunStatus::Blocked, "• Blocked by hook · PreToolUse"),
+            (HookRunStatus::Stopped, "• Hook stopped · PreToolUse"),
         ] {
             let detail = "Policy prevented this action.";
             let cell = completed_hook_cell(

@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 5083
 expression: rendered
 ---
-• Blocked by hook
+• Blocked by hook · PreToolUse
   └ run tests before touching the fixture
 
-• Hook failed
+• Hook failed · PostToolUse
   └ hook exited with code 7
