@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [Unreleased]
 
 ### Changed
+- **Hooks re-vendored from empirica 1.14.6.** Four hooks change
+  (`sentinel-gate`, `session-init`, `post-compact`, `tool-router`):
+  outside a git repository or empirica project the Sentinel now says so and
+  allows, instead of failing open through its crash handler; `empirica auth
+  status` and the monitor tool's `list` action are reads, not gated; the
+  "Sentinel is OFF" repair hint and the tool-router's hints now name ecodex's
+  CLI verbs instead of Claude Code's setup and MCP tools; the deploy-gap check
+  is skipped under ecodex; and an auto-checkpoint after a CHECK no longer
+  writes a second, all-0.5 CHECK row. CI tests the hooks against that release.
 - **One list for the curated models.** The `/model` picker's curated entries
   are now read from `models.curated.json`, the seed that also holds their
   metadata, instead of a second list kept by hand in the TUI. A picked model

@@ -820,6 +820,44 @@ def format_context(ctx: dict) -> str:
     return "\n".join(parts) if parts else "  (No context loaded)"
 
 
+#: Set when this SessionStart was refused the instance pointer because another live claude owns it;
+#: main() puts it in the context the model sees. A stderr line alone is not seen by the model.
+_INSTANCE_CLASH_NOTICE = ""
+
+
+def _with_clash_notice(context: str) -> str:
+    """``context`` with the instance-clash notice in front of it, when this start was refused the pointer.
+
+    main() did this, but the resume and adoption paths build their own context and exit first, and
+    `claude --continue` (the remedy the notice itself recommends) goes through the resume path, so the
+    refusal reached stderr only and the model never saw it.
+    """
+    return f"{_INSTANCE_CLASH_NOTICE}\n\n{context}" if _INSTANCE_CLASH_NOTICE else context
+
+
+def _foreign_owner_holds_pointer(
+    instance_file: Path, instance_id: object, claude_session_id: str, project_path
+) -> bool:
+    """True when the pointer at ``instance_file`` belongs to another LIVE claude in another project.
+
+    Records the notice main() shows the model. Never raises (a hook must not fail on this check).
+    """
+    global _INSTANCE_CLASH_NOTICE
+    if not (instance_file.exists() and claude_session_id):
+        return False
+    try:
+        from instance_clash import clash_notice, foreign_live_owner
+
+        owner = foreign_live_owner(json.loads(instance_file.read_text()), claude_session_id, str(project_path))
+        if not owner:
+            return False
+        _INSTANCE_CLASH_NOTICE = clash_notice(str(instance_id), owner, str(project_path))
+        print(_INSTANCE_CLASH_NOTICE, file=sys.stderr)
+        return True
+    except Exception:
+        return False
+
+
 def _write_instance_projects(project_path: str, claude_session_id: str, empirica_session_id: str) -> bool:
     """
     Write instance isolation files. Establishes linkage between Claude's
@@ -833,6 +871,13 @@ def _write_instance_projects(project_path: str, claude_session_id: str, empirica
         instance_dir = Path.home() / ".empirica" / "instance_projects"
         instance_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         instance_file = instance_dir / f"{instance_id}.json"
+
+        # Another LIVE claude, in another project, already owns this instance id: do not take its
+        # pointer over. The guard below looked for an open transaction in THIS session's project
+        # directory, where the owner's transaction cannot be, so it never fired (nle took core's
+        # pointer on 2026-09-29, 10-01 and 10-02). Our own session-keyed active_work is still
+        # written below; only the shared instance pointer is left alone.
+        keep_owner_pointer = _foreign_owner_holds_pointer(instance_file, instance_id, claude_session_id, project_path)
 
         # Get TTY key if available
         tty_key = None
@@ -886,9 +931,10 @@ def _write_instance_projects(project_path: str, claude_session_id: str, empirica
             # (incl. `--resume`), keeping the captured pid current.
             "ppid_create_time": _proc_create_time(os.getppid()),
         }
-        with open(instance_file, "w") as f:
-            json.dump(instance_data, f, indent=2)
-        os.chmod(instance_file, 0o600)
+        if not keep_owner_pointer:
+            with open(instance_file, "w") as f:
+                json.dump(instance_data, f, indent=2)
+            os.chmod(instance_file, 0o600)
 
         # Write session-specific active_work file (with claude_session_id suffix)
         folder_name = Path(project_path).name
@@ -1287,7 +1333,8 @@ def _handle_resume_path(claude_session_id: str, project_root: Path, ai_id: str) 
         "bootstrap_complete": bootstrap_ok,
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": f"""
+            "additionalContext": _with_clash_notice(
+                f"""
 ## Session Resumed
 
 **Session ID:** `{session_id}` (existing, from {existing.get("source", "unknown")})
@@ -1296,7 +1343,8 @@ def _handle_resume_path(claude_session_id: str, project_root: Path, ai_id: str) 
 Anchor files updated for new terminal. Existing session and transaction state preserved.
 
 **Note:** If you need a fresh session, run `empirica session-create --ai-id {ai_id}`.
-""",
+"""
+            ),
         },
     }
 
@@ -1334,7 +1382,8 @@ def _handle_orphan_adoption(claude_session_id: str, project_root: Path) -> bool:
         "bootstrap_complete": bootstrap_ok,
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": f"""
+            "additionalContext": _with_clash_notice(
+                f"""
 ## Transaction Adopted After Restart
 
 **Session ID:** `{session_id}` (adopted from orphaned transaction)
@@ -1344,7 +1393,8 @@ Found an open transaction from a previous terminal/tmux instance.
 Session and transaction state preserved -- anchor files updated for new instance.
 
 **After reviewing context:** Run CHECK or continue your transaction.
-""",
+"""
+            ),
         },
     }
 
@@ -1584,7 +1634,7 @@ def _harness() -> str:
     opt-outs) is what lets a non-CC harness stop forking hook bodies per
     re-vendor: it sets EMPIRICA_HARNESS once and the guards below read it.
     """
-    return (os.environ.get("EMPIRICA_HARNESS") or "claude-code").strip() or "claude-code"
+    return (os.environ.get("EMPIRICA_HARNESS") or "claude-code").strip().lower() or "claude-code"
 
 
 def _deploy_gap_block(project_root: Path) -> str:
@@ -1595,7 +1645,15 @@ def _deploy_gap_block(project_root: Path) -> str:
 
     An import or read failure is reported, not swallowed: silence is what a
     clean fresh verdict looks like, so a broken reader must not look clean.
+
+    Skipped off Claude Code (``EMPIRICA_HARNESS != 'claude-code'``). The detector
+    compares this box's CLI, deployed Claude Code plugin and MCP wrapper against
+    their checkouts, so under another harness it describes a deploy that session
+    does not run, and a harness that never vendored the cache module would read
+    ``verdict unreadable`` at every start (ecodex, prop_dke2es3rhff4plrgfliiqldf24).
     """
+    if _harness() != "claude-code":
+        return ""
     try:
         from deploy_gap_cache import session_start_block
 
@@ -1744,6 +1802,10 @@ def main():
     calibration_text = _calibration_block(project_root)
     if calibration_text:
         prompt = f"{prompt}\n\n{calibration_text}\n"
+
+    # Refused another live claude's instance pointer: say so where the model reads it.
+    if _INSTANCE_CLASH_NOTICE:
+        prompt = f"{_INSTANCE_CLASH_NOTICE}\n\n{prompt}"
 
     output = {
         "ok": True,
