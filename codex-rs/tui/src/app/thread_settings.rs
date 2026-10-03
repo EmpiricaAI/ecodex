@@ -72,8 +72,7 @@ impl App {
         // ecodex: resolve the provider the selected model routes to so core
         // hot-swaps the ModelClient (T78 path). Without this the picker changes
         // only the model name and gpt-5.x 404s against the active custom provider.
-        let model_provider =
-            crate::ecodex_curated_models::provider_for_model(&model).map(str::to_string);
+        let model_provider = crate::ecodex_curated_models::provider_for_model(&model);
         let is_cyber_model = self.model_catalog.try_list_models().is_ok_and(|models| {
             models.iter().any(|preset| {
                 preset.model == model

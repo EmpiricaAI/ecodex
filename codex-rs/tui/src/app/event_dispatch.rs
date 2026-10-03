@@ -2080,7 +2080,8 @@ impl App {
                         crate::config_update::build_model_selection_edits(
                             model.as_str(),
                             Some(default_effort),
-                            crate::ecodex_curated_models::provider_for_model(model.as_str()),
+                            crate::ecodex_curated_models::provider_for_model(model.as_str())
+                                .as_deref(),
                         ),
                         "default model and reasoning effort",
                     )

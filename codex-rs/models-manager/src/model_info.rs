@@ -124,7 +124,17 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
     // Layer 1: exact-slug curated entry (bundled seed ∪ ~/.codex/models.user.json).
     // Most specific — wins over the family-prefix table below.
     if let Some(entry) = crate::curated_seed::lookup(slug) {
-        return crate::curated_seed::enrich(build_fallback_model_info(slug), &entry);
+        let mut template = build_fallback_model_info(slug);
+        // A seeded entry without a verified context window keeps the
+        // family-prefix figure it had before it was seeded, instead of the
+        // generic default.
+        if entry.context_window.is_none()
+            && let Some(known) = recognize_open_weights_family(slug)
+        {
+            template.context_window = Some(known.context_window);
+            template.max_context_window = Some(known.context_window);
+        }
+        return crate::curated_seed::enrich(template, &entry);
     }
     // Layer 2: family-prefix recognition (legacy conservative fallback).
     let mut info = build_fallback_model_info(slug);

@@ -118,7 +118,9 @@ fn discovery_drops_unstable_and_dated_variants() {
     assert!(!discovery_keeps("deepseek/deepseek-v3.1-terminus"));
     assert!(!discovery_keeps("qwen/qwen3-coder-preview"));
     // dated snapshot pins dropped in favor of rolling alias
-    assert!(!discovery_keeps("mistralai/mistral-small-24b-instruct-2501"));
+    assert!(!discovery_keeps(
+        "mistralai/mistral-small-24b-instruct-2501"
+    ));
     assert!(!discovery_keeps("deepseek/deepseek-chat-v3-0324"));
     // stable flagship tiers KEPT
     assert!(discovery_keeps("deepseek/deepseek-v4-pro"));
@@ -170,7 +172,11 @@ fn collapse_keeps_unversioned_slugs_as_own_lines() {
         .map(std::string::ToString::to_string)
         .collect();
     let out = collapse_to_latest_per_line(&slugs);
-    assert_eq!(out.len(), 2, "distinct unversioned slugs both kept: {out:?}");
+    assert_eq!(
+        out.len(),
+        2,
+        "distinct unversioned slugs both kept: {out:?}"
+    );
 }
 
 #[test]
@@ -179,4 +185,38 @@ fn unseeded_slug_still_falls_through_to_family_or_fallback() {
     // (via family table or generic fallback).
     let info = model_info_from_slug("some-unknown-model-xyz:7b");
     assert_eq!(info.slug, "some-unknown-model-xyz:7b");
+}
+
+#[test]
+fn picker_entries_are_ordered_seeded_and_carry_a_provider() {
+    let entries = crate::curated_seed::picker_entries();
+    let orders: Vec<u32> = entries
+        .iter()
+        .filter_map(|entry| entry.picker.as_ref().map(|picker| picker.order))
+        .collect();
+    let mut sorted = orders.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted, orders, "picker order must be ascending and unique");
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry
+                .picker
+                .as_ref()
+                .is_some_and(|picker| !picker.provider.is_empty()))
+            .filter(|has_provider| !has_provider)
+            .count(),
+        0,
+        "every picker entry names its provider"
+    );
+    // Every picker slug resolves through the seed, never through the fallback.
+    for entry in &entries {
+        let info = model_info_from_slug(&entry.slug);
+        assert!(
+            !info.used_fallback_model_metadata,
+            "{} is offered in the picker but resolves to fallback metadata",
+            entry.slug
+        );
+    }
 }

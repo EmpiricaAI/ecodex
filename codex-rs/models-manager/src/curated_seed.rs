@@ -49,6 +49,58 @@ pub struct CuratedEntry {
     /// Provenance: where this entry came from (e.g. "discovered: <provider>").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<String>,
+    /// Present on the entries ecodex offers in the `/model` picker. The seed
+    /// is the one list; the picker is derived from it, so a slug can no longer
+    /// be offered without being seeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picker: Option<PickerMeta>,
+}
+
+/// How a curated entry appears in the `/model` picker.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PickerMeta {
+    /// The `model_providers.<id>` the picker switches to with the model.
+    pub provider: String,
+    pub category: PickerCategory,
+    /// Position in the picker, ascending.
+    pub order: u32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PickerCategory {
+    CloudCoding,
+    CloudReasoning,
+    LocalOpenWeights,
+    CloudRouter,
+}
+
+impl PickerCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CloudCoding => "Cloud — coding-strong",
+            Self::CloudReasoning => "Cloud — reasoning-strong",
+            Self::LocalOpenWeights => "Local — open-weights",
+            Self::CloudRouter => "Cloud — router (catchall)",
+        }
+    }
+}
+
+/// The entries the `/model` picker offers, in picker order.
+///
+/// Read from the bundled seed only: picker membership is ecodex's curation,
+/// and `models.user.json` (discovery output, which wins on slug collision in
+/// the merged table) carries no `picker` block, so going through the merged
+/// table would drop every curated slug the user has also discovered.
+/// Metadata lookups for the chosen model still go through the merged table.
+pub fn picker_entries() -> Vec<CuratedEntry> {
+    let mut entries: Vec<CuratedEntry> = BUNDLED_SEED
+        .iter()
+        .filter(|entry| entry.picker.is_some())
+        .cloned()
+        .collect();
+    entries.sort_by_key(|entry| entry.picker.as_ref().map_or(u32::MAX, |p| p.order));
+    entries
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -187,23 +239,34 @@ pub fn existing_user_entries() -> Vec<CuratedEntry> {
 /// families only" discovery policy (drops gemma/llama/phi/cohere general-chat
 /// families that aren't coding-tier for our purposes). Edit here to widen.
 const CURATED_FAMILIES: &[&str] = &[
-    "kimi",     // Moonshot
-    "qwen",     // Alibaba (incl qwen-coder, qwen*-max)
-    "deepseek", // incl R1 / V3.x
-    "gpt-oss",  // OpenAI open-weights
-    "glm",      // Z.ai / Zhipu
-    "minimax",  // MiniMax
-    "mistral",  // Mistral AI
-    "mixtral",  // Mistral MoE
-    "devstral", // Mistral agentic-coding
-    "codestral",// Mistral coding
+    "kimi",      // Moonshot
+    "qwen",      // Alibaba (incl qwen-coder, qwen*-max)
+    "deepseek",  // incl R1 / V3.x
+    "gpt-oss",   // OpenAI open-weights
+    "glm",       // Z.ai / Zhipu
+    "minimax",   // MiniMax
+    "mistral",   // Mistral AI
+    "mixtral",   // Mistral MoE
+    "devstral",  // Mistral agentic-coding
+    "codestral", // Mistral coding
 ];
 
 /// Suffixes/markers that indicate a NON-coding variant even within a curated
 /// family (OCR, vision, embeddings, audio, rerank, raw base models).
 const NONCODING_MARKERS: &[&str] = &[
-    "ocr", "vision", "-vl", "embed", "embedding", "rerank", "audio", "tts",
-    "whisper", "image", "-base", "guard", "moderation",
+    "ocr",
+    "vision",
+    "-vl",
+    "embed",
+    "embedding",
+    "rerank",
+    "audio",
+    "tts",
+    "whisper",
+    "image",
+    "-base",
+    "guard",
+    "moderation",
 ];
 
 /// Variant markers that indicate an UNSTABLE or DERIVATIVE release we don't want
@@ -214,8 +277,19 @@ const NONCODING_MARKERS: &[&str] = &[
 /// deliberately NOT here. Applied by `discovery_keeps` (never to exact seed
 /// entries — the seed always wins).
 const UNSTABLE_VARIANT_MARKERS: &[&str] = &[
-    "-exp", "exp-", "experimental", "-preview", "preview-", "-rc", "-beta",
-    "-alpha", "distill", "-terminus", "-thinking-", "-nightly", "-latest-",
+    "-exp",
+    "exp-",
+    "experimental",
+    "-preview",
+    "preview-",
+    "-rc",
+    "-beta",
+    "-alpha",
+    "distill",
+    "-terminus",
+    "-thinking-",
+    "-nightly",
+    "-latest-",
 ];
 
 /// Normalize a slug to its bare family-matchable form: strip `<provider>/`
@@ -240,7 +314,10 @@ pub fn discovery_keeps(slug: &str) -> bool {
     }
     let norm = normalize_slug(slug);
     let full = slug.to_ascii_lowercase();
-    if NONCODING_MARKERS.iter().any(|m| norm.contains(m) || full.contains(m)) {
+    if NONCODING_MARKERS
+        .iter()
+        .any(|m| norm.contains(m) || full.contains(m))
+    {
         return false;
     }
     if UNSTABLE_VARIANT_MARKERS.iter().any(|m| full.contains(m)) {

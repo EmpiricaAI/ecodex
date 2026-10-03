@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [Unreleased]
 
 ### Changed
+- **One list for the curated models.** The `/model` picker's curated entries
+  are now read from `models.curated.json`, the seed that also holds their
+  metadata, instead of a second list kept by hand in the TUI. A picked model
+  can no longer be missing its metadata. Six picker entries that were never
+  seeded (Kimi, Claude Sonnet 4.6, DeepSeek R1, and the three local Ollama
+  models) are seeded without a verified context window; they keep the figure
+  they had and no longer trigger the fallback warning.
 - **A failed hook says which event it ran for.** "Hook failed", "Blocked by
   hook" and "Hook stopped" now carry the lifecycle event, as in
   `Hook failed · SessionStart`, so a failure can be traced to the hook that

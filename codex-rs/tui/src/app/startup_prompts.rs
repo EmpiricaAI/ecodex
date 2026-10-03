@@ -220,8 +220,7 @@ pub(super) fn apply_accepted_model_migration(
     // ecodex: persist the provider the target routes to, as the picker does.
     // Persisting the model alone left configs pairing a GPT model with a chat
     // translator, which a fresh start then followed.
-    let model_provider =
-        crate::ecodex_curated_models::provider_for_model(&target_model).map(str::to_string);
+    let model_provider = crate::ecodex_curated_models::provider_for_model(&target_model);
     app_event_tx.send(AppEvent::PersistModelSelection {
         model: target_model,
         effort: Some(target_default_effort),

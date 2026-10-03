@@ -13,7 +13,8 @@
       "jurisdiction": { "country": "FR", "eu_data_residency": true },
       "calibration_tier": "unmeasured",
       "last_verified": "2026-07-20",
-      "evidence": "verified live: api.mistral.ai/v1/models -> devstral-latest ctx=262144 (2026-07-20)"
+      "evidence": "verified live: api.mistral.ai/v1/models -> devstral-latest ctx=262144 (2026-07-20)",
+      "picker": { "provider": "mistral", "category": "cloud_coding", "order": 3 }
     },
     {
       "slug": "devstral-2512",
@@ -234,7 +235,8 @@
       "jurisdiction": { "country": "US", "eu_data_residency": false },
       "calibration_tier": "unmeasured",
       "last_verified": "2026-07-09",
-      "evidence": "verified: openrouter.ai/docs/model-route/variants (auto = best-of router, no fixed context window). context_window set conservatively; re-verify if OpenRouter publishes a floor."
+      "evidence": "verified: openrouter.ai/docs/model-route/variants (auto = best-of router, no fixed context window). context_window set conservatively; re-verify if OpenRouter publishes a floor.",
+      "picker": { "provider": "openrouter", "category": "cloud_router", "order": 8 }
     },
     {
       "slug": "anthropic/claude-opus-4.7",
@@ -247,7 +249,8 @@
       "jurisdiction": { "country": "US", "eu_data_residency": false },
       "calibration_tier": "unmeasured",
       "last_verified": "2026-07-09",
-      "evidence": "verified: openrouter.ai/anthropic/claude-opus-4.7 (1M context). context_window per Anthropic Opus 4.7 spec."
+      "evidence": "verified: openrouter.ai/anthropic/claude-opus-4.7 (1M context). context_window per Anthropic Opus 4.7 spec.",
+      "picker": { "provider": "openrouter", "category": "cloud_router", "order": 9 }
     },
     {
       "slug": "openai/gpt-5.2-codex",
@@ -260,7 +263,8 @@
       "jurisdiction": { "country": "US", "eu_data_residency": false },
       "calibration_tier": "unmeasured",
       "last_verified": "2026-07-09",
-      "evidence": "verified: openrouter.ai/openai/gpt-5.2-codex (400K context). context_window per picker description (David-authored)."
+      "evidence": "verified: openrouter.ai/openai/gpt-5.2-codex (400K context). context_window per picker description (David-authored).",
+      "picker": { "provider": "openrouter", "category": "cloud_router", "order": 10 }
     },
     {
       "slug": "x-ai/grok-code-fast-1",
@@ -273,7 +277,8 @@
       "jurisdiction": { "country": "US", "eu_data_residency": false },
       "calibration_tier": "unmeasured",
       "last_verified": "2026-07-09",
-      "evidence": "verified: openrouter.ai/x-ai/grok-code-fast-1 (256K context). context_window per picker description (David-authored)."
+      "evidence": "verified: openrouter.ai/x-ai/grok-code-fast-1 (256K context). context_window per picker description (David-authored).",
+      "picker": { "provider": "openrouter", "category": "cloud_router", "order": 11 }
     },
     {
       "slug": "google/gemini-2.5-pro",
@@ -286,7 +291,64 @@
       "jurisdiction": { "country": "US", "eu_data_residency": false },
       "calibration_tier": "unmeasured",
       "last_verified": "2026-07-09",
-      "evidence": "verified: openrouter.ai/google/gemini-2.5-pro (1M context). context_window per picker description (David-authored)."
+      "evidence": "verified: openrouter.ai/google/gemini-2.5-pro (1M context). context_window per picker description (David-authored).",
+      "picker": { "provider": "openrouter", "category": "cloud_router", "order": 12 }
+    },
+    {
+      "slug": "kimi-for-coding",
+      "display_name": "Kimi K2.6 (Moonshot)",
+      "description": "256K MoE, agent-tuned, strong tool-calling reliability. Routed via local translator (anthropic protocol). Subscription gated.",
+      "supports_tools": true,
+      "calibration_tier": "unmeasured",
+      "evidence": "picker entry; context window not yet verified against provider docs, family-prefix figure applies",
+      "picker": { "provider": "kimi", "category": "cloud_coding", "order": 1 }
+    },
+    {
+      "slug": "claude-sonnet-4-6",
+      "display_name": "Claude Sonnet 4.6 (Anthropic direct)",
+      "description": "Frontier agent SOTA, calibrated reasoning, strong honesty about uncertainty. Pay-as-you-go via api.anthropic.com.",
+      "supports_tools": true,
+      "calibration_tier": "unmeasured",
+      "evidence": "picker entry; context window not yet verified against provider docs, family-prefix figure applies",
+      "picker": { "provider": "anthropic", "category": "cloud_coding", "order": 2 }
+    },
+    {
+      "slug": "deepseek-reasoner",
+      "display_name": "DeepSeek R1 / V3 (DeepSeek)",
+      "description": "Strong reasoning trace, 128K context, very competitive pricing. OpenAI-compat chat completions via translator.",
+      "supports_tools": true,
+      "reasoning": { "supported": true },
+      "calibration_tier": "unmeasured",
+      "evidence": "picker entry; context window not yet verified against provider docs, family-prefix figure applies",
+      "picker": { "provider": "deepseek", "category": "cloud_reasoning", "order": 4 }
+    },
+    {
+      "slug": "qwen3-coder:latest",
+      "display_name": "Qwen3-Coder 30B-A3B (local)",
+      "description": "256K native context, MoE arch (~3B active), purpose-built for coding agents. Excellent for codebase work that exceeds cloud context budgets.",
+      "supports_tools": true,
+      "calibration_tier": "unmeasured",
+      "evidence": "picker entry; context window not yet verified against provider docs, family-prefix figure applies",
+      "picker": { "provider": "ollama", "category": "local_open_weights", "order": 5 }
+    },
+    {
+      "slug": "deepseek-r1:32b",
+      "display_name": "DeepSeek-R1 32B (local)",
+      "description": "Distilled reasoning model, 128K context, strong on chain-of-thought tasks. Local inference via Ollama.",
+      "supports_tools": true,
+      "reasoning": { "supported": true },
+      "calibration_tier": "unmeasured",
+      "evidence": "picker entry; context window not yet verified against provider docs, family-prefix figure applies",
+      "picker": { "provider": "ollama", "category": "local_open_weights", "order": 6 }
+    },
+    {
+      "slug": "llama3.1:70b",
+      "display_name": "Llama 3.1 70B (local)",
+      "description": "128K context, generalist baseline. Local inference; weaker at agent-loop coding than qwen3-coder, included as a control.",
+      "supports_tools": true,
+      "calibration_tier": "unmeasured",
+      "evidence": "picker entry; context window not yet verified against provider docs, family-prefix figure applies",
+      "picker": { "provider": "ollama", "category": "local_open_weights", "order": 7 }
     }
   ]
 }

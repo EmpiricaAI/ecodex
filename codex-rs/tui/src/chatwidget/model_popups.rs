@@ -335,8 +335,7 @@ impl ChatWidget {
                     // cross-provider choice survives restart (None = keep current).
                     model_provider: crate::ecodex_curated_models::provider_for_model(
                         &model_for_action,
-                    )
-                    .map(str::to_string),
+                    ),
                 });
             }
             if let Some(warning) = warning.clone() {
@@ -446,8 +445,7 @@ impl ChatWidget {
                 model: model.clone(),
                 effort: effort.clone(),
                 // ecodex: persist the routed provider (None = keep current).
-                model_provider: crate::ecodex_curated_models::provider_for_model(&model)
-                    .map(str::to_string),
+                model_provider: crate::ecodex_curated_models::provider_for_model(&model),
             });
             if let Some(warning) = warning.clone() {
                 tx.send(AppEvent::InsertHistoryCell(Box::new(
