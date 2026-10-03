@@ -74,11 +74,12 @@ are properties of codex, so they hold until upstream changes them.
   the key is `<plugin>@<marketplace>`, each segment alphanumeric, dash or
   underscore (`utils/plugins/src/plugin_namespace.rs`,
   `plugin/src/plugin_id.rs`). The empirica plugin is `empirica@empiricaAI`.
-- **The disable lock is system-wide only.** codex reads managed requirements
-  from `/etc/codex/requirements.toml` on Unix and
+- **codex's only lock on plugin state is system-wide.** codex reads managed
+  requirements from `/etc/codex/requirements.toml` on Unix and
   `%ProgramData%\OpenAI\Codex\requirements.toml` on Windows
-  (`config/src/loader/mod.rs`). There is no per-user path, so a per-user install
-  cannot stop a determined runtime from setting the plugin's `enabled = false`.
+  (`config/src/loader/mod.rs`). There is no per-user path, so nothing in a
+  per-user install stops a runtime from setting the plugin's `enabled = false`;
+  ecodex does not add a lock of its own.
 - **codex speaks only the Responses API.** Upstream removed `wire_api = "chat"`,
   which is why ecodex has its own translator for Chat Completions and Anthropic
   providers.

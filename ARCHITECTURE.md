@@ -96,7 +96,7 @@ them:
 | Event | Hook | Does |
 |---|---|---|
 | `PreToolUse` | `sentinel-gate` | Classifies every tool call noetic/praxic by **effect, not name**; blocks praxic before CHECK. Over-gating a read is a defect too, so a read named to convention is classified correctly for free |
-| `SessionStart` | `session-init`, `ewm-protocol-loader`, `post-compact`, `session-monitor-arm` | Binds the session and loads epistemic context and the workflow protocol; restores state after a compaction; arms the mesh listener when peer messaging is configured |
+| `SessionStart` | host-side practice bootstrap, then `session-init`, `ewm-protocol-loader`, `post-compact`, `session-monitor-arm` | Makes the cwd a practice when it is not one (`git init`, `empirica project-init`; never in `$HOME`), binds the session and loads epistemic context and the workflow protocol; restores state after a compaction; arms the mesh listener when peer messaging is configured |
 | `UserPromptSubmit` | `tool-router`, `context-shift-tracker` | Assesses each prompt against the current epistemic state; records whether a prompt answers the model's own question or starts something unasked |
 | `PostToolUse` | `tool-failure`, `entity-extractor`, `truncation-legibility` (shell only) | Counts noetic vs praxic work; extracts the functions, classes and imports of edited files; tells the model when the output it just read was partial |
 | `PostToolUseFailure` | `tool-failure` | Filters genuine dead-ends from operational noise (timeouts, signals, outages) before they become "avoid re-trying" retrieval; redacts credentials |
@@ -139,9 +139,10 @@ most load-bearing bit of ecodex-specific infrastructure is what keeps it honest:
 
 ecodex is a first-class peer in Empirica's AI-to-AI mesh:
 
-- **Native ntfy listener** + the `Monitor` tool arm a background watcher, so a
-  peer proposal wakes the session in seconds via a `<task-notification>`, not on
-  the next prompt.
+- **Native ntfy listener** (in-process, started with the session; nothing to
+  arm) wakes the session in seconds via a `<task-notification>` when a peer
+  proposal arrives, not on the next prompt. The `Monitor` tool is the
+  general-purpose sibling for streams the listener does not cover.
 - **Cortex** carries ECO-gated proposals (`mailbox`); **git-notes messaging**
   carries server-less words. Rule of thumb: *messages carry words, proposals
   carry authority.* Everything mesh-related is optional — the binary is fully

@@ -189,7 +189,7 @@ benefit.
 | `codex-rs/codex-empirica-plugin/src/provision.rs`, called from `codex-rs/cli/src/main.rs` | A | writes the plugin and enables it at startup |
 | [`codex-rs/codex-empirica-plugin/assets/config/config.toml.default`](../../../codex-rs/codex-empirica-plugin/assets/config/config.toml.default) | A | the config ecodex writes when none exists |
 | `codex-rs/arg0/src/lib.rs` `apply_ecodex_strict_defaults` | E | strict mode on every install path |
-| [`ecodex/scripts/ecodex-wrapper.sh`](../../../ecodex/scripts/ecodex-wrapper.sh) | (source builds) | also exports the strict settings, now redundant with E, and passes the cortex key for mesh installs |
+| [`ecodex/scripts/ecodex-wrapper.sh`](../../../ecodex/scripts/ecodex-wrapper.sh) | (source builds) | also exports the strict settings, now redundant with E, and exports `CORTEX_API_KEY` for the Cortex MCP static-key fallback |
 
 Still open: the real lock, and the C escalation, which stays unbuilt until there
 is evidence it is needed.

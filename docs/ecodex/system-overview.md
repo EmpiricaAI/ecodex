@@ -168,8 +168,10 @@ per-protocol adapters.
 
 ### Providers and the model registry
 
-- **Curated providers** (`codex-rs/tui/src/ecodex_curated_models.rs` and the
-  default config) lead with open-weights clouds and local servers;
+- **Curated providers and the `/model` picker**: the picker is derived from the
+  curated seed (`codex-rs/models-manager/models.curated.json`, entries with a
+  `picker` block), with the provider blocks in the default config; it leads
+  with open-weights clouds and local servers.
   [`integrations/providers.md`](integrations/providers.md) has the set.
 - **The model registry** (`codex-rs/models-manager/models.curated.json` plus a
   user overlay at `~/.codex/models.user.json`): `ecodex models list` shows it,
@@ -183,8 +185,8 @@ per-protocol adapters.
 
 - **ntfy listener** (`codex-rs/core/src/ntfy_listener.rs`): holds an
   authenticated ntfy stream and turns each ECO-decided proposal event into a
-  session wake. It is transport only; the content is fetched over the Cortex MCP
-  tools by the woken model.
+  session wake. It is transport only; the woken model fetches the content with
+  the `empirica mailbox` CLI or the Cortex MCP tools.
 - **`Monitor` tool** (`codex-rs/core/src/tools/handlers/monitor.rs`): lets the
   model watch a background stream and be woken by its events.
 - [`cross-ai-mesh.md`](cross-ai-mesh.md) covers the design.
@@ -199,15 +201,17 @@ mark into the OpenAI one.
 ### Installers
 
 - **`scripts/install.sh`** — the prebuilt installer behind `curl | bash` and
-  `ecodex update`: downloads the release, installs `ecodex`,
-  `codex-empirica-plugin` and `codex-empirica-translator`, and sets up the
-  `empirica` CLI with pipx or uv when it is missing.
+  `ecodex update`: downloads the release, installs the four binaries (`ecodex`,
+  `codex-empirica-plugin`, `codex-empirica-translator`, `codex-code-mode-host`),
+  and sets up the `empirica` CLI with pipx or uv when it is missing.
 - **Homebrew** (`packaging/homebrew/ecodex.rb`, published to the EmpiricaAI tap),
   depending on the tap's `empirica` formula.
 - **`ecodex/scripts/install.sh`** — the source-build installer: builds the
-  binaries, installs them behind `ecodex/scripts/ecodex-wrapper.sh` (which also
-  passes a cortex key for mesh installs), per user or, with `--system`, under
-  `/usr/local`. `uninstall.sh` reverses it.
+  binaries, installs them behind `ecodex/scripts/ecodex-wrapper.sh`, per user
+  or, with `--system`, under `/usr/local`. The wrapper exports `CORTEX_API_KEY`
+  from the empirica credentials when present — only needed by the static-key
+  fallback for the Cortex MCP server; the default setup authenticates through
+  `empirica auth token --headers`. `uninstall.sh` reverses it.
 
 ### Empirica chat
 
@@ -274,8 +278,8 @@ ecodex/                                   # repo root
 │   ├── cli/                              # L1: entrypoint (bin_name ecodex) + L2 provisioning call
 │   ├── arg0/                             # L1; L2 strict-mode defaults at startup
 │   ├── core/                             # L1 agent runtime; L3 ntfy listener, Monitor, hot-swap
-│   ├── tui/                              # L1 UI; L3 curated models, Empirica mark
-│   ├── models-manager/                   # L1; L2 base prompt, L3 curated registry seed
+│   ├── tui/                              # L1 UI; L3 picker from the seed, startup routing, Empirica mark
+│   ├── models-manager/                   # L1; L2 base prompt, L3 curated seed (registry + picker)
 │   ├── core-plugins/, plugin/, hooks/    # L1 plugin and hook hosts
 │   ├── codex-empirica-plugin/            # L2
 │   │   ├── manifest.json, hooks.json, mcp_servers.json

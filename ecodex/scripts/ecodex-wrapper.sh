@@ -22,9 +22,11 @@ export EMPIRICA_CALIBRATION_FEEDBACK="${EMPIRICA_CALIBRATION_FEEDBACK:-true}"
 # without editing this script.)
 
 # ─── Cortex mesh auth (opt-in; mesh installs only) ───────────────────
-# codex's cortex MCP client reads its bearer from $CORTEX_API_KEY. If
-# that's not already in the env but the user has an empirica credentials
-# file carrying a cortex key, export it here so mesh installs authenticate
+# The default Cortex MCP setup authenticates through
+# `http_headers_helper = "empirica auth token --headers"`; the static-key
+# fallback (`bearer_token_env_var = "CORTEX_API_KEY"`) reads $CORTEX_API_KEY.
+# If that's not already in the env but the user has an empirica credentials
+# file carrying a cortex key, export it here so the fallback authenticates
 # regardless of shell rc (the 401 some sessions hit). OSS-only users are
 # unaffected: with no cortex key (and no cortex server in the default
 # config) nothing is exported and nothing changes. Reads the user's own
