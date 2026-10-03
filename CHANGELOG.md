@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [Unreleased]
 
 ### Changed
+- **The statusline has a compact default.** The bundled
+  `statusline_empirica.py` is taken from empirica's development branch just
+  after 1.14.6: one line with practice, stage and confidence, open counts, a
+  learning delta mark, context and investigate-or-act, with the model at the
+  end. The previous layout is one switch away:
+  `echo expanded > ~/.empirica/statusline_mode` (or `EMPIRICA_STATUS_MODE`).
 - **Hooks re-vendored from empirica 1.14.6.** Four hooks change
   (`sentinel-gate`, `session-init`, `post-compact`, `tool-router`):
   outside a git repository or empirica project the Sentinel now says so and
