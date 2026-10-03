@@ -22,13 +22,15 @@ A model that scores 90 on coding benchmarks but capitulates under pressure or ha
 
 ## The curated picker
 
-Models in ecodex's curated picker (`/model` → arrow keys) are chosen to span this property surface. Twelve entries across four categories:
+Models in ecodex's curated picker (`/model` → arrow keys) are chosen to span this property surface. The picker is derived from the curated seed (`codex-rs/models-manager/models.curated.json`, entries with a `picker` block): twelve entries across four categories.
+
+> **Known gaps in the shipped picker** (tracked for the next release): `kimi-for-coding` is the picker's label, not a Moonshot model id — Kimi For Coding is served at `https://api.moonshot.ai/v1` (chat protocol) under `kimi-k3` / `kimi-k2.7-code-highspeed`, and the shipped `kimi-*` route points at the mainland endpoint; `claude-sonnet-4-6` routes to an `anthropic` provider that the default config does not define (add a provider block pointing at the translator and an `anthropic`-protocol route); `deepseek-reasoner` is no longer a DeepSeek model id (`deepseek-flash` / `deepseek-v4-pro` are). Until those land, use the ids in [`integrations/providers.md`](integrations/providers.md) through the picker's custom entry.
 
 ### Cloud — coding-strong
 
-#### `kimi-for-coding` (Kimi K2.6, Moonshot)
+#### `kimi-for-coding` (Kimi K3, Moonshot)
 
-256K MoE, agent-tuned. Routes via the local translator (Anthropic protocol). Subscription-gated.
+256K, agent-tuned. Reached through the translator's `kimi` route (chat protocol); API key, metered.
 
 **Strengths:** Very strong tool-call reliability — Kimi was tuned for agent workflows specifically. 256K context is comfortable for codebase exploration. Routes via the empirica translator so the protocol surface is clean.
 
@@ -37,9 +39,9 @@ Models in ecodex's curated picker (`/model` → arrow keys) are chosen to span t
 - Generally good calibration; PREFLIGHT vectors tend to match actual outcome within typical drift.
 - Honest about uncertainty when explicitly asked.
 
-#### `claude-sonnet-4-6` (Anthropic direct) and `anthropic/claude-opus-4.7` (via OpenRouter)
+#### `claude-sonnet-4-6` (Anthropic, through the translator) and `anthropic/claude-opus-4.7` (via OpenRouter)
 
-Frontier Anthropic tier. Sonnet 4.6 is daily-driver speed; Opus 4.7 is the reasoning tier.
+Frontier Anthropic tier. Sonnet 4.6 is daily-driver speed; Opus 4.7 is the reasoning tier. Anthropic's API speaks Messages, not Responses, so a direct key goes through the translator's `anthropic` protocol (see the gap note above); OpenRouter serves Responses and needs no translator.
 
 **Strengths:** Best-in-class calibration. Trained explicitly on honesty about uncertainty. Tool use is rock-solid. Holds positions under push-back without being stubborn.
 
@@ -61,9 +63,9 @@ Frontier Anthropic tier. Sonnet 4.6 is daily-driver speed; Opus 4.7 is the reaso
 
 ### Cloud — reasoning-strong
 
-#### `deepseek-reasoner` (DeepSeek R1 / V3)
+#### `deepseek-reasoner` (DeepSeek; today `deepseek-v4-pro`)
 
-128K context, very competitive pricing, strong reasoning trace.
+Very competitive pricing, strong reasoning trace. The picker's `deepseek-reasoner` id has been retired by DeepSeek; `deepseek-v4-pro` (1M context) is the reasoning-strong id now, `deepseek-flash` the fast one — both through the shipped `deepseek-*` route.
 
 **Strengths:** Excellent value when reasoning depth matters. Reasoning trace is genuinely visible (vs. some "reasoning models" that just produce longer answers). OpenAI-compat chat completions, routes via translator.
 
@@ -165,7 +167,7 @@ Google's flagship general model, 1M context.
 
 ### Default daily driver
 
-**Claude Sonnet 4.6** (direct or via OpenRouter). Best calibration for the cost. Tool use is reliable. Honest about uncertainty.
+**Claude Sonnet 4.6** (via OpenRouter today; through the translator's `anthropic` route with your own key). Best calibration for the cost. Tool use is reliable. Honest about uncertainty.
 
 ### When you want raw coding muscle
 

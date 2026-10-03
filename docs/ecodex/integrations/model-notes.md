@@ -30,12 +30,12 @@ cache is hitting before you commit to a provider at volume.
 | Model (provider) | Auth into ecodex | Subscription usable? | Wiring | ecodex verdict |
 |---|---|---|---|---|
 | **GPT-5.6 / GPT-6 families** (OpenAI) | **OAuth** — ChatGPT subscription (device auth), or API key | ✅ yes | `openai` provider, `requires_openai_auth = true`. The client version tracks the codex base so per-model gates pass | **Best** (GPT-5.6, measured). The reference bar everything else is measured against; GPT-6 models ship in the bundled catalog but are not yet measured in ecodex |
-| **Devstral 2 / Devstral** (Mistral) | **API key only** (La Plateforme) | ❌ no OAuth path | Via the translator (`base_url = http://localhost:18080/v1`), `env_key = MISTRAL_API_KEY`. See [`MISTRAL_SOVEREIGN.md`](../MISTRAL_SOVEREIGN.md) | **Our workhorse — best after the OpenAI models in ecodex-lab.** Strong agentic, multi-file coding; EU-sovereign |
-| **Claude** (Anthropic) | **API key only** (`x-api-key`) | ❌ no — Anthropic restricts Free/Pro/Max subscription sign-in to its own products; other tools may only use a subscription through Anthropic's Agent SDK, which ecodex does not route through | Via the translator: an upstream with `protocol = "anthropic"` and `api_key_env` naming your key | Metered API pricing. For subscription-billed Claude, use a Claude Code seat alongside ecodex |
-| **GLM-5.2** (Zhipu / Z.ai) | API key | **Plan-priced key** — the GLM Coding Plan is billed as a subscription but still hands you an API key; no OAuth | `env_key`, base_url `https://api.z.ai/api/paas/v4` | Promising |
-| **Kimi K3** (Moonshot) | API key | No — metered pay-as-you-go for third-party clients | `env_key`, base_url `https://api.moonshot.ai/v1` | Promising (1M context, open-weight) |
-| **DeepSeek V4** (DeepSeek) | API key | No — metered only; no plan, no OAuth | `env_key`, base_url `https://api.deepseek.com` | Promising (1M context; very low cache-read price) |
-| **MiniMax-M3** (MiniMax) | API key | **Plan-priced key** — Token/Coding Plan (`sk-cp-…`, quota-based) or metered (`sk-api-…`); no OAuth | `env_key`, base_url `https://api.minimax.io/v1` | Promising (1M context) |
+| **Devstral 2 / Devstral** (Mistral) | **API key only** (La Plateforme) | ❌ no OAuth path | Via the translator: the shipped `mistral` provider (`base_url = http://localhost:18080/v1`, no `env_key`) and the shipped `devstral-*` route; the key goes to the translator (`MISTRAL_API_KEY` or `mistral.api_key`). See [`MISTRAL_SOVEREIGN.md`](../MISTRAL_SOVEREIGN.md) | **Our workhorse — best after the OpenAI models in ecodex-lab.** Strong agentic, multi-file coding; EU-sovereign |
+| **Claude** (Anthropic) | **API key only** (`x-api-key`) | ❌ no — Anthropic restricts Free/Pro/Max subscription sign-in to its own products; other tools may only use a subscription through Anthropic's Agent SDK, which ecodex does not route through | Via the translator: add a route with `protocol = "anthropic"`, `base_url = https://api.anthropic.com/v1` and `api_key_env` naming your key, plus a provider block pointing at the translator — neither ships in the defaults | Metered API pricing. For subscription-billed Claude, use a Claude Code seat alongside ecodex |
+| **GLM-5.2** (Zhipu / Z.ai) | API key | **Plan-priced key** — the GLM Coding Plan is billed as a subscription but still hands you an API key; no OAuth | Via the translator: shipped `glm` provider + `glm-*` route (`open.bigmodel.cn`; international accounts switch the route to `https://api.z.ai/api/paas/v4`); key `ZHIPU_API_KEY` / `zhipu.api_key` | Promising |
+| **Kimi K3** (Moonshot) | API key | No — metered pay-as-you-go for third-party clients | Via the translator: shipped `kimi` provider + `kimi-*` route (`api.moonshot.cn`; international accounts switch to `https://api.moonshot.ai/v1`); key `MOONSHOT_API_KEY` / `moonshot.api_key` | Promising (open-weight) |
+| **DeepSeek** (`deepseek-flash`, `deepseek-v4-pro`) | API key | No — metered only; no plan, no OAuth | Via the translator: shipped `deepseek` provider + `deepseek-*` route (`api.deepseek.com/v1`); key `DEEPSEEK_API_KEY` / `deepseek.api_key` | Promising (1M context; very low cache-read price) |
+| **MiniMax-M3** (MiniMax) | API key | **Plan-priced key** — Token/Coding Plan (`sk-cp-…`, quota-based) or metered (`sk-api-…`); no OAuth | Via the translator: add a `minimax-*` route to `https://api.minimax.io/v1` (`protocol = "chat"`) and a provider block — no default ships | Promising (1M context) |
 
 > The "promising" models have all run in ecodex-lab and produced useful work; they sit
 > below Devstral for us today, and the verdicts will sharpen as we accumulate grounded
@@ -54,14 +54,17 @@ cache is hitting before you commit to a provider at volume.
 | Provider | Model slug | Context | Open-weight? | Native prompt caching | API console | Pricing / plan |
 |---|---|---|---|---|---|---|
 | **Zhipu / Z.ai** | `glm-5.2` | ⚠️ unverified (GLM-4.6 = 200K) | ⚠️ unverified | Yes (cached-input pricing) | [z.ai/model-api](https://z.ai/model-api) | [docs.z.ai pricing](https://docs.z.ai/guides/overview/pricing) |
-| **Moonshot / Kimi** | `kimi-k3` | 1,048,576 (1M) | Yes (Modified MIT) | Yes (automatic context caching) | [platform.moonshot.ai](https://platform.moonshot.ai) | [Kimi pricing](https://platform.moonshot.ai/docs/pricing/chat) |
-| **DeepSeek** | `deepseek-v4-flash` / `deepseek-v4-pro` | 1M (384K max out) | ⚠️ unverified (V3 was MIT) | Yes (disk-based automatic context caching) | [platform.deepseek.com](https://platform.deepseek.com) | [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing) |
+| **Moonshot / Kimi** | `kimi-k3` (`kimi-k2.7-code-highspeed` for speed) | ⚠️ unverified — Kimi's coding guide says 256K for the coding model | Yes (Modified MIT) | Yes (automatic context caching) | [platform.kimi.ai](https://platform.kimi.ai) | [Kimi pricing](https://platform.kimi.ai/docs/pricing/chat) |
+| **DeepSeek** | `deepseek-flash` / `deepseek-v4-pro` | 1M | ⚠️ unverified (V3 was MIT) | Yes (disk-based automatic context caching) | [platform.deepseek.com](https://platform.deepseek.com) | [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing) |
 | **MiniMax** | `MiniMax-M3` | 1,000,000 (1M) | ⚠️ unverified (M2 was MIT) | Yes (cache-read pricing) | [platform.minimax.io](https://platform.minimax.io) | [MiniMax token plan](https://platform.minimax.io/docs/token-plan/quickstart) |
 | **Anthropic** | `claude-*` (current families) | per model | No | Yes (explicit cache-control) | [console.anthropic.com](https://console.anthropic.com) | [Anthropic pricing](https://www.anthropic.com/pricing) |
 
-DeepSeek's `deepseek-chat` / `deepseek-reasoner` aliases were retired; use the explicit
-`deepseek-v4-flash` / `deepseek-v4-pro` slugs. DeepSeek also doubles its rates during
-peak hours, so the same workload costs different amounts depending on when it runs.
+DeepSeek's `deepseek-chat` / `deepseek-reasoner` aliases were retired, and
+`deepseek-v4-flash` is now a legacy name served by the current Flash model; use
+`deepseek-flash` / `deepseek-v4-pro`. (The curated picker still lists
+`deepseek-reasoner`; that entry is scheduled for replacement.) DeepSeek also doubles
+its rates during peak hours, so the same workload costs different amounts depending on
+when it runs.
 
 Every provider above offers **native prompt caching on its own API** — which is exactly
 why **provider-direct beats OpenRouter** for these: you get a documented cache contract

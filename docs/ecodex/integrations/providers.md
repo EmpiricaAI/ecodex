@@ -49,8 +49,11 @@ Mistral API. [`MISTRAL_SOVEREIGN.md`](../MISTRAL_SOVEREIGN.md) is the worked set
 ones. The GPT presets in the `/model` picker use the built-in `openai` provider:
 choosing a bare OpenAI-family id (`gpt-*`, `chatgpt-*`, `o1`/`o3`/`o4*`, with no
 `/` router prefix) switches `model_provider` to `openai`, so the request goes to
-OpenAI rather than to whichever provider was active (`provider_for_slug` in
-`codex-rs/tui/src/ecodex_curated_models.rs`). `openai` is a built-in id: do not
+OpenAI rather than to whichever provider was active. The rule is
+`openai_direct_provider` in `codex-rs/model-provider-info/src/lib.rs`, applied
+by the picker (`provider_for_model`) and at startup (`startup_provider_override`
+in `codex-rs/tui/src/ecodex_curated_models.rs`) when the saved model is an
+OpenAI id but the saved provider is not. `openai` is a built-in id: do not
 redefine it under `[model_providers]`.
 
 ### Local servers
@@ -116,7 +119,10 @@ Two files are involved, both in `~/.codex/`:
    ```
 
    The first matching route wins, so put specific patterns before any catch-all.
-   Never put a key in this file.
+   Never put a key in this file. The shipped GLM and Kimi routes use the
+   mainland endpoints (`open.bigmodel.cn`, `api.moonshot.cn`); international
+   accounts change `base_url` to `https://api.z.ai/api/paas/v4` and
+   `https://api.moonshot.ai/v1` — same keys, same protocol.
 
 2. **`config.toml`** points the provider at the translator instead of its API.
    The default config does this already; an older config may need it:
@@ -154,10 +160,10 @@ models refresh` discovers what your configured providers actually serve (see
 |---|---|---|
 | `mistral` | `devstral-latest` | agentic coding, 256K context |
 | `mistral` | `codestral-latest` | completion |
-| `deepseek` | `deepseek-chat` | strong general model |
+| `deepseek` | `deepseek-flash`, `deepseek-v4-pro` | current DeepSeek ids (1M context); the old `deepseek-chat` / `deepseek-reasoner` aliases are gone |
 | `qwen` | `qwen3-coder-plus` | coder-tuned, strong tool use |
-| `glm` | `glm-4.6` | Zhipu flagship |
-| `kimi` | `kimi-k2.6` | Moonshot flagship |
+| `glm` | `glm-5.2` | Zhipu flagship |
+| `kimi` | `kimi-k3` | Moonshot flagship; `kimi-k2.7-code-highspeed` for faster output |
 | `ollama` | `qwen3-coder:30b`, `gpt-oss:20b`, `deepseek-r1` | whatever you have pulled |
 | `lmstudio`, `llamacpp`, `vllm` | the model the server is running | local |
 

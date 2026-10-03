@@ -34,23 +34,34 @@ hand-authored per model. A seed entry overrides only the fields it sets
 
 ```jsonc
 {
-  "slug": "moonshotai/kimi-k2.6",
-  "display_name": "Kimi K2.6 (Moonshot)",
+  "slug": "devstral-latest",
+  "display_name": "Devstral (Mistral — EU, Paris)",
+  "description": "Mistral's agentic-coding flagship. 256K context, EU-hosted.",
   "context_window": 262144,
   "supports_tools": true,
   "reasoning": { "supported": true },
-  "routes": ["openrouter", "direct"],
-  "jurisdiction": { "country": "CN", "eu_data_residency": false },
+  "routes": ["direct"],
+  "jurisdiction": { "country": "FR", "eu_data_residency": true },
   "calibration_tier": "unmeasured",
-  "last_verified": "2026-06-02"
+  "last_verified": "2026-07-20",
+  "evidence": "verified live: api.mistral.ai/v1/models -> devstral-latest ctx=262144 (2026-07-20)",
+  "picker": { "provider": "mistral", "category": "cloud_coding", "order": 3 }
 }
 ```
+
+The seed is also the one source of the `/model` picker: an entry with a
+`picker` block is offered there (`curated_seed::picker_entries`), an entry
+without one is curated metadata only. Picker membership comes from the bundled
+seed; `models.user.json` cannot add or remove picker rows.
 
 ### Fields
 
 | Field | Meaning |
 |---|---|
 | `slug` | Exact model id as the provider/OpenRouter names it |
+| `display_name`, `description` | What the picker and `ecodex models list` show |
+| `evidence` | How the slug and context window were checked (a live `/v1/models` probe, a model page) — required for a picker entry |
+| `picker` | `{provider, category, order}` — the `model_providers.<id>` the picker switches to (must be built in or in `config.toml.default`), one of `cloud_coding | cloud_reasoning | local_open_weights | cloud_router`, and the position |
 | `context_window` | Tokens; overrides the conservative family default |
 | `supports_tools` | Function/tool calling (a hard requirement for the agent loop) |
 | `reasoning.supported` | Has a thinking / high-reasoning mode. **Not always true** — e.g. Qwen3-Coder is `tools=yes / thinking=no` |
@@ -83,7 +94,7 @@ common backends expose an OpenAI-compatible `GET /v1/models`:
 
 | Backend | base_url | Provider id |
 |---|---|---|
-| Ollama | `http://localhost:11434/v1` | `oss` (built-in) |
+| Ollama | `http://localhost:11434/v1` | `ollama` (built-in) |
 | LM Studio | `http://localhost:1234/v1` | `lmstudio` (built-in) |
 | llama.cpp (`llama-server`) | `http://localhost:8080/v1` | add `[model_providers.llamacpp]` |
 | vLLM (`vllm serve`) | `http://localhost:8000/v1` | add `[model_providers.vllm]` |
