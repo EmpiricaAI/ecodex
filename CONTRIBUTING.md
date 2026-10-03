@@ -59,11 +59,13 @@ Adding a new adapter: implement the protocol → CIF and CIF → SSE-stream conv
 
 ### Add a curated provider (L3)
 
-Curated entries live in `codex-rs/tui/src/ecodex_curated_models.rs` and `codex-rs/codex-empirica-plugin/assets/config/config.toml.default`. Each entry needs:
+The curated seed `codex-rs/models-manager/models.curated.json` is the one list: the `/model` picker is derived from it (`curated_seed::picker_entries`), and `ecodex models` reads it. `codex-rs/tui/src/ecodex_curated_models.rs` only turns seed entries into presets; nothing is hand-written there. A new picker entry needs:
 
-1. A `ModelPreset` definition (display name, description, slug, default reasoning effort).
-2. A `[model_providers.<name>]` block in `config.toml.default` (base URL, env key for the API key, wire API).
-3. A `provider_for_slug` mapping if the model routes to a different provider than the slug suggests.
+1. A seed entry: `slug`, `display_name`, `description`, `context_window`, `supports_tools`, `reasoning`, `routes`, `jurisdiction`, `calibration_tier: "unmeasured"`, and `last_verified` + `evidence` saying how the context window was checked.
+2. A `"picker": { "provider": "<id>", "category": "<cloud_coding | cloud_reasoning | local_open_weights | cloud_router>", "order": <n> }` block. `provider` is the `model_providers.<id>` the picker switches to with the model — it must exist, either built into codex (`openai`, `ollama`, `lmstudio`, …) or as a block in `config.toml.default`.
+3. A `[model_providers.<id>]` block in `codex-rs/codex-empirica-plugin/assets/config/config.toml.default` when the provider is not built in (base URL, env key for the API key, wire API).
+
+Entries without a `picker` block are still curated (context window, capabilities, `ecodex models` output) but not offered in the picker. Picker membership comes from the bundled seed only: `~/.codex/models.user.json` (written by `ecodex models refresh`) overlays the seed for capability lookups and wins on a slug collision, but it cannot add or remove picker rows.
 
 codex speaks only the Responses API. A provider that serves it is reached directly. A provider that speaks only Chat Completions or Anthropic Messages is reached through the translator: its `base_url` points at `http://localhost:18080/v1`, and its models get a route in `codex-rs/codex-empirica-plugin/assets/config/translator-upstreams.toml`, the routes file ecodex writes for new installs. Nothing starts the translator automatically.
 
