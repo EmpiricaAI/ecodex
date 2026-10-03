@@ -234,7 +234,8 @@ and a running translator, keep the old binary until you restart them.
 ## Uninstall
 
 For a source build, `./ecodex/scripts/uninstall.sh` removes the binaries and the
-plugin cache; `--purge` also removes `~/.codex/`. For the other channels, remove
+plugin cache; `--purge` also moves `~/.codex/config.toml` aside to a timestamped
+backup. For the other channels, remove
 the four binaries (or `brew uninstall ecodex`) and
 `~/.codex/plugins/cache/empiricaAI/`. To keep ecodex but run without the plugin,
 set `enabled = false` under `[plugins."empirica@empiricaAI"]`.
@@ -256,8 +257,8 @@ tarball install it alongside `ecodex`; after `cargo install`, run
 The hooks run with the Python of the `empirica` command on your `PATH`, and that
 Python could not import empirica. Check that `empirica --version` works in the
 shell you start ecodex from, then run `empirica diagnose --frontend ecodex`.
-ecodex releases before 0.157.4 used the first `python3` on `PATH` instead, which
-cannot see a pipx or Homebrew empirica: update ecodex.
+Older ecodex builds used the first `python3` on `PATH` instead, which cannot see
+a pipx or Homebrew empirica: update ecodex.
 
 **"No open transaction. Submit PREFLIGHT ..." in an unattended job**
 Nobody opened a transaction, so the Sentinel refuses the job's commands. Run the
