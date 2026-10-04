@@ -1,5 +1,6 @@
 # Routes for codex-empirica-translator, which serves ecodex's Responses API on
-# 127.0.0.1:18080 and forwards to providers that speak only Chat Completions.
+# 127.0.0.1:18080 and forwards to providers that speak only Chat Completions or
+# the Anthropic Messages API.
 # Start it with `codex-empirica-translator` (no flags needed).
 #
 # Keys come from the environment variable named in api_key_env, or from the
@@ -70,3 +71,12 @@ model_match = "moonshot-*"
 base_url    = "https://api.moonshot.cn/v1"
 protocol    = "chat"
 api_key_env = "MOONSHOT_API_KEY"
+
+# Anthropic speaks the Messages API, not Chat Completions; the translator's
+# anthropic protocol sends x-api-key + anthropic-version to <base_url>/messages.
+[[upstream]]
+name        = "anthropic"          # key: anthropic.api_key
+model_match = "claude-*"
+base_url    = "https://api.anthropic.com/v1"
+protocol    = "anthropic"
+api_key_env = "ANTHROPIC_API_KEY"

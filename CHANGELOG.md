@@ -40,6 +40,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   `delete-artifacts` phantom-CHECK purge — come with the empirica release,
   not with ecodex.) Not vendored: core's new `ruling-shape.py`, which
   targets a Claude Code tool codex does not have.
+- **The `/model` picker's three broken rows are fixed, and Claude is wired.**
+  `kimi-for-coding` (not a Moonshot model id) is now `kimi-k3` (1M context);
+  `deepseek-reasoner` (retired by DeepSeek) is now `deepseek-v4-pro` (1M);
+  `claude-sonnet-4-6` pointed at a provider nothing defined and is now
+  `claude-sonnet-5-5` backed by a new `[model_providers.anthropic]` block and
+  a `claude-*` route in `translator-upstreams.toml` (Anthropic Messages API
+  through the translator; key `ANTHROPIC_API_KEY` or `anthropic.api_key`,
+  skipped with a warning like any keyless route). The six picker rows that
+  carried no context window now do, with the evidence recorded in the seed.
+  Existing installs keep their own `translator-upstreams.toml`; copy the
+  `anthropic` block from the shipped file to use the Claude row.
 - **ecodex on the new base.** The brand title (`∴ ecodex (vX) · turtles all
   the way down`) now comes from one place upstream introduced for the session
   header and the status card. Upstream moved its tooltips into a text asset, so

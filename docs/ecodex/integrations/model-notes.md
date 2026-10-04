@@ -31,7 +31,7 @@ cache is hitting before you commit to a provider at volume.
 |---|---|---|---|---|
 | **GPT-5.6 / GPT-6 families** (OpenAI) | **OAuth** — ChatGPT subscription (device auth), or API key | ✅ yes | `openai` provider, `requires_openai_auth = true`. The client version tracks the codex base so per-model gates pass | **Best** (GPT-5.6, measured). The reference bar everything else is measured against; GPT-6 models ship in the bundled catalog but are not yet measured in ecodex |
 | **Devstral 2 / Devstral** (Mistral) | **API key only** (La Plateforme) | ❌ no OAuth path | Via the translator: the shipped `mistral` provider (`base_url = http://localhost:18080/v1`, no `env_key`) and the shipped `devstral-*` route; the key goes to the translator (`MISTRAL_API_KEY` or `mistral.api_key`). See [`MISTRAL_SOVEREIGN.md`](../MISTRAL_SOVEREIGN.md) | **Our workhorse — best after the OpenAI models in ecodex-lab.** Strong agentic, multi-file coding; EU-sovereign |
-| **Claude** (Anthropic) | **API key only** (`x-api-key`) | ❌ no — Anthropic restricts Free/Pro/Max subscription sign-in to its own products; other tools may only use a subscription through Anthropic's Agent SDK, which ecodex does not route through | Via the translator: add a route with `protocol = "anthropic"`, `base_url = https://api.anthropic.com/v1` and `api_key_env` naming your key, plus a provider block pointing at the translator — neither ships in the defaults | Metered API pricing. For subscription-billed Claude, use a Claude Code seat alongside ecodex |
+| **Claude** (Anthropic) | **API key only** (`x-api-key`) | ❌ no — Anthropic restricts Free/Pro/Max subscription sign-in to its own products; other tools may only use a subscription through Anthropic's Agent SDK, which ecodex does not route through | Via the translator: the shipped `anthropic` provider + `claude-*` route (Messages API, `api.anthropic.com`); key `ANTHROPIC_API_KEY` / `anthropic.api_key`; ids `claude-sonnet-5-5`, `claude-opus-5-5` | Metered API pricing. For subscription-billed Claude, use a Claude Code seat alongside ecodex |
 | **GLM-5.2** (Zhipu / Z.ai) | API key | **Plan-priced key** — the GLM Coding Plan is billed as a subscription but still hands you an API key; no OAuth | Via the translator: shipped `glm` provider + `glm-*` route (`open.bigmodel.cn`; international accounts switch the route to `https://api.z.ai/api/paas/v4`); key `ZHIPU_API_KEY` / `zhipu.api_key` | Promising |
 | **Kimi K3** (Moonshot) | API key | No — metered pay-as-you-go for third-party clients | Via the translator: shipped `kimi` provider + `kimi-*` route (`api.moonshot.cn`; international accounts switch to `https://api.moonshot.ai/v1`); key `MOONSHOT_API_KEY` / `moonshot.api_key` | Promising (open-weight) |
 | **DeepSeek** (`deepseek-flash`, `deepseek-v4-pro`) | API key | No — metered only; no plan, no OAuth | Via the translator: shipped `deepseek` provider + `deepseek-*` route (`api.deepseek.com/v1`); key `DEEPSEEK_API_KEY` / `deepseek.api_key` | Promising (1M context; very low cache-read price) |
@@ -61,8 +61,7 @@ cache is hitting before you commit to a provider at volume.
 
 DeepSeek's `deepseek-chat` / `deepseek-reasoner` aliases were retired, and
 `deepseek-v4-flash` is now a legacy name served by the current Flash model; use
-`deepseek-flash` / `deepseek-v4-pro`. (The curated picker still lists
-`deepseek-reasoner`; that entry is scheduled for replacement.) DeepSeek also doubles
+`deepseek-flash` / `deepseek-v4-pro` (the picker offers `deepseek-v4-pro`). DeepSeek also doubles
 its rates during peak hours, so the same workload costs different amounts depending on
 when it runs.
 

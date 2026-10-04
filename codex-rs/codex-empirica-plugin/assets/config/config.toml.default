@@ -48,10 +48,11 @@ enabled = false
 # This file sets no default model, so ecodex starts on codex's own default until
 # you pick one with `/model` or set `model` and `model_provider` at the top.
 
-# DeepSeek, Qwen, GLM and Kimi speak Chat Completions, so they go through the
-# translator, which holds their keys: put each key in
-# ~/.empirica/credentials.yaml (deepseek / dashscope / zhipu / moonshot, each with
-# an api_key) or export the variable named in translator-upstreams.toml, then
+# DeepSeek, Qwen, GLM and Kimi speak Chat Completions and Anthropic speaks the
+# Messages API, so they go through the translator, which holds their keys: put
+# each key in ~/.empirica/credentials.yaml (deepseek / dashscope / zhipu /
+# moonshot / anthropic, each with an api_key) or export the variable named in
+# translator-upstreams.toml, then
 # start `codex-empirica-translator`. Keys: platform.deepseek.com/api_keys,
 # dashscope.console.aliyun.com/apiKey, bigmodel.cn/usercenter/proj-mgmt/apikeys,
 # platform.moonshot.cn/console/api-keys.
@@ -73,6 +74,17 @@ wire_api = "responses"
 
 [model_providers.kimi]
 name = "Kimi (Moonshot AI) via translator :18080"
+base_url = "http://localhost:18080/v1"
+wire_api = "responses"
+
+# Anthropic speaks the Messages API, so Claude goes through the translator too:
+# put the key in ~/.empirica/credentials.yaml as anthropic.api_key (or export
+# ANTHROPIC_API_KEY), start `codex-empirica-translator`, then pick
+# claude-sonnet-5-5 (claude-opus-5-5 for the reasoning tier). Keys:
+# console.anthropic.com/settings/keys. A Claude subscription does not sign in
+# here; this is the metered API.
+[model_providers.anthropic]
+name = "Anthropic (Claude) via translator :18080"
 base_url = "http://localhost:18080/v1"
 wire_api = "responses"
 

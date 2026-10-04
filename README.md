@@ -98,8 +98,8 @@ If you have no `~/.codex/config.toml`, the first session writes the curated one.
 codex speaks only the OpenAI Responses API, so providers come in two kinds:
 
 - **Direct** — OpenAI (sign in, or `OPENAI_API_KEY`), OpenRouter (`OPENROUTER_API_KEY`), Hugging Face (`HF_TOKEN`), and local servers (Ollama and LM Studio need no config; llama.cpp and vLLM are in the default config). Set the key or start the server, then pick the model.
-- **Through the translator** — Mistral (Devstral, Codestral), DeepSeek, Qwen, GLM and Kimi speak only Chat Completions. `codex-empirica-translator`, installed with ecodex, bridges them:
-  1. Put the key in `~/.empirica/credentials.yaml` under the provider's section (`mistral`, `deepseek`, `dashscope`, `zhipu` or `moonshot`) as `api_key: …`, or export `MISTRAL_API_KEY` / `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` / `ZHIPU_API_KEY` / `MOONSHOT_API_KEY`.
+- **Through the translator** — Mistral (Devstral, Codestral), DeepSeek, Qwen, GLM and Kimi speak only Chat Completions, and Anthropic (Claude) speaks the Messages API. `codex-empirica-translator`, installed with ecodex, bridges them:
+  1. Put the key in `~/.empirica/credentials.yaml` under the provider's section (`mistral`, `deepseek`, `dashscope`, `zhipu`, `moonshot` or `anthropic`) as `api_key: …`, or export `MISTRAL_API_KEY` / `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` / `ZHIPU_API_KEY` / `MOONSHOT_API_KEY` / `ANTHROPIC_API_KEY`.
   2. Run `codex-empirica-translator` (no flags) and leave it running. It serves the providers it has keys for and warns about the rest.
   3. Pick the model in `/model`, for example `devstral-latest`.
 

@@ -24,6 +24,7 @@ protocol and back. Nothing starts the translator for you.
 | **Qwen** (Alibaba Cloud DashScope) | `qwen` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` (Chat Completions) | translator | `DASHSCOPE_API_KEY` or `dashscope.api_key` |
 | **GLM** (Zhipu AI) | `glm` | `https://open.bigmodel.cn/api/paas/v4` (Chat Completions) | translator | `ZHIPU_API_KEY` or `zhipu.api_key` |
 | **Kimi** (Moonshot AI) | `kimi` | `https://api.moonshot.cn/v1` (Chat Completions) | translator | `MOONSHOT_API_KEY` or `moonshot.api_key` |
+| **Anthropic** (Claude) | `anthropic` | `https://api.anthropic.com/v1` (Messages API) | translator | `ANTHROPIC_API_KEY` or `anthropic.api_key` |
 | **OpenRouter** (gateway) | `openrouter` | `https://openrouter.ai/api/v1` (serves Responses) | direct | `OPENROUTER_API_KEY` |
 | **Hugging Face** Inference Providers | `huggingface` | `https://router.huggingface.co/v1` (serves Responses) | direct | `HF_TOKEN` |
 | **OpenAI** | `openai` (built-in) | `https://api.openai.com/v1` | direct | `OPENAI_API_KEY` or ChatGPT sign-in |
@@ -76,7 +77,8 @@ Two files are involved, both in `~/.codex/`:
 
 1. **`translator-upstreams.toml`** maps model names to the real API. ecodex writes
    it on first start, with routes for Mistral (`devstral-*`, `codestral-*`,
-   `mistral-*`), DeepSeek, Qwen, GLM and Kimi, and never overwrites your edits. A
+   `mistral-*`), DeepSeek, Qwen, GLM, Kimi and Anthropic (`claude-*`, Messages
+   API), and never overwrites your edits. A
    route whose key the translator cannot find is skipped with a warning when it
    starts; it refuses to start only when no route has a key. If your file
    predates these routes, add them (this is what ecodex ships):
@@ -116,6 +118,13 @@ Two files are involved, both in `~/.codex/`:
    base_url    = "https://api.moonshot.cn/v1"
    protocol    = "chat"
    api_key_env = "MOONSHOT_API_KEY"
+
+   [[upstream]]
+   name        = "anthropic"
+   model_match = "claude-*"
+   base_url    = "https://api.anthropic.com/v1"
+   protocol    = "anthropic"
+   api_key_env = "ANTHROPIC_API_KEY"
    ```
 
    The first matching route wins, so put specific patterns before any catch-all.
@@ -164,6 +173,7 @@ models refresh` discovers what your configured providers actually serve (see
 | `qwen` | `qwen3-coder-plus` | coder-tuned, strong tool use |
 | `glm` | `glm-5.2` | Zhipu flagship |
 | `kimi` | `kimi-k3` | Moonshot flagship; `kimi-k2.7-code-highspeed` for faster output |
+| `anthropic` | `claude-sonnet-5-5`, `claude-opus-5-5` | Anthropic's speed and reasoning tiers, 1M context |
 | `ollama` | `qwen3-coder:30b`, `gpt-oss:20b`, `deepseek-r1` | whatever you have pulled |
 | `lmstudio`, `llamacpp`, `vllm` | the model the server is running | local |
 
