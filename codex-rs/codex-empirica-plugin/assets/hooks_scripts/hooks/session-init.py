@@ -149,10 +149,17 @@ def _run_bootstrap(session_id: str, env: dict) -> tuple:
         return None, None
     try:
         bootstrap_data = json.loads(bootstrap_cmd.stdout)
+        # `project-bootstrap --output json` nests goals, findings and unknowns under `breadcrumbs`
+        # (top level: breadcrumbs, ok, project_id, project_name, project_skills). Reading them from the top
+        # level always found nothing, so every session start printed "(No context loaded)" (ecodex, David).
+        # A payload that really carries them at the top level still reads.
+        source = bootstrap_data.get("breadcrumbs")
+        if not isinstance(source, dict):
+            source = bootstrap_data
         project_context = {
-            "goals": bootstrap_data.get("goals", [])[:3],
-            "findings": bootstrap_data.get("findings", [])[:5],
-            "unknowns": bootstrap_data.get("unknowns", [])[:5],
+            "goals": (source.get("goals") or [])[:3],
+            "findings": (source.get("findings") or [])[:5],
+            "unknowns": (source.get("unknowns") or [])[:5],
         }
         return bootstrap_data, project_context
     except json.JSONDecodeError:
@@ -817,7 +824,9 @@ def format_context(ctx: dict) -> str:
             unknown = u.get("unknown", u) if isinstance(u, dict) else str(u)
             parts.append(f"  - {unknown[:100]}")
 
-    return "\n".join(parts) if parts else "  (No context loaded)"
+    # `ctx` is a dict here, so the project resolved and bootstrap ran: empty lists mean there was nothing to
+    # retrieve, which is a different statement from "no context" (None, handled above).
+    return "\n".join(parts) if parts else "  (Project loaded; nothing retrieved: no goals, findings or unknowns yet)"
 
 
 #: Set when this SessionStart was refused the instance pointer because another live claude owns it;
@@ -1434,11 +1443,18 @@ empirica preflight-submit - << 'EOF'
 {{
   "session_id": "<SESSION_ID>",
   "task_context": "<task>",
-  "vectors": {{ "know": 0.3, "uncertainty": 0.6, "context": 0.3, "engagement": 0.7 }},
+  "vectors": {{
+    "engagement": 0.7, "know": 0.3, "do": 0.5, "context": 0.3, "clarity": 0.5, "coherence": 0.5,
+    "signal": 0.5, "density": 0.4, "state": 0.3, "change": 0.0, "completion": 0.0, "impact": 0.5,
+    "uncertainty": 0.6
+  }},
   "reasoning": "New session baseline"
 }}
 EOF
 ```
+
+Report all 13 vectors (only `know` and `uncertainty` are enforced, but a vector you leave out is one you did
+not assess). Adjust the numbers to what you actually hold.
 """,
         },
     }
@@ -1446,7 +1462,7 @@ EOF
     sys.exit(0)
 
 
-def _init_context_budget(session_id: str, project_context: dict) -> dict:
+def _init_context_budget(session_id: str, project_context: dict, db_path=None) -> dict:
     """Initialize Context Budget Manager (bootloader phase).
 
     Returns budget summary dict, or dict with 'error' key on failure.
@@ -1529,7 +1545,7 @@ def _init_context_budget(session_id: str, project_context: dict) -> dict:
                     )
                 )
 
-        manager.persist_state()
+        manager.persist_state(db_path=db_path)
         return manager.get_inventory_summary()
     except Exception as e:
         return {"error": str(e)}
@@ -1779,7 +1795,12 @@ def main():
 
     # Initialize subsystems
     session_id = result["session_id"]
-    budget_summary = _init_context_budget(session_id, result.get("project_context", {}))
+    budget_db = Path(project_root) / ".empirica" / "sessions" / "sessions.db" if project_root else None
+    budget_summary = _init_context_budget(
+        session_id,
+        result.get("project_context", {}),
+        db_path=budget_db if budget_db and budget_db.exists() else None,
+    )
     dashboard_status = _init_dashboard(session_id, ai_id)
 
     # Zero-touch: auto-install canonical loops if this instance is fresh

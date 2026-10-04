@@ -22,6 +22,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   resend of queued messages after a reconnect fixed; many Windows and macOS
   sandbox fixes. Removed upstream: automatic follow-up prompt suggestions
   (`tui.prompt_suggestions`) and the bundled `plugin-creator` skill.
+- **Hooks re-vendored from empirica's development branch at `d270daac7`**
+  (after 1.14.6; the next core release carries the same commits). Five
+  files change: the context-budget state is written to the `sessions.db`
+  the hook already resolved, so the recurring *Failed to persist budget
+  state: Cannot determine sessions.db path* is gone; `post-compact` ignores
+  a `SessionStart` whose `source` is not `compact`, so a new or resumed
+  session no longer opens a second empirica session; `session-init` reads
+  the bootstrap context where `project-bootstrap` now puts it and says
+  *Project loaded; nothing retrieved* instead of *No context loaded* on an
+  empty practice; the Sentinel no longer gates `readlink`, `realpath`,
+  `git merge-base` or `claude --version`, scans SQL with quoted literals
+  blanked (a `LIKE '%update%'` is a read), treats pure-read Cortex/CRM MCP
+  tools as noetic in every phase, and names a command substitution as the
+  reason when that is what it refused. (The matching CLI-side fixes —
+  `goals-activate` linking only an open transaction, the
+  `delete-artifacts` phantom-CHECK purge — come with the empirica release,
+  not with ecodex.) Not vendored: core's new `ruling-shape.py`, which
+  targets a Claude Code tool codex does not have.
 - **ecodex on the new base.** The brand title (`∴ ecodex (vX) · turtles all
   the way down`) now comes from one place upstream introduced for the session
   header and the status card. Upstream moved its tooltips into a text asset, so
