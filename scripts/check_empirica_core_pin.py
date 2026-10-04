@@ -21,7 +21,9 @@ check_upstream_sync_tag.py in shape.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -77,7 +79,37 @@ def check(ci_path: Path = CI_YML, manifest_path: Path = MANIFEST) -> list[str]:
             f"ci.yml's pin comment says v{comment_version}, but manifest.json "
             f"empiricaVendorVersion is {version}. Update the comment with the ref."
         )
+    # A prefix match is not enough: a bump that rewrites only the manifest's
+    # twelve characters leaves the previous commit's tail in place, and that
+    # 40-character string names no object (0.160.0 cycle: three CI runs failed
+    # with "not our ref"). When an empirica checkout is reachable, ask it.
+    core = empirica_checkout()
+    if core is not None and not core_has_commit(core, ref):
+        failures.append(
+            f"ci.yml's ref {ref} is not a commit in the empirica checkout at {core} "
+            f"(the prefix matches the manifest, the rest does not). Set it from "
+            f"`git -C {core} rev-parse {commit}`."
+        )
     return failures
+
+
+def empirica_checkout() -> Path | None:
+    """A local empirica clone to verify the ref against: $EMPIRICA_CORE, else ../empirica."""
+    candidates = [os.environ.get("EMPIRICA_CORE"), str(REPO.parent / "empirica")]
+    for candidate in candidates:
+        if candidate and (Path(candidate) / ".git").exists():
+            return Path(candidate)
+    return None
+
+
+def core_has_commit(core: Path, ref: str) -> bool:
+    """True when `ref` names a commit object in `core` (fetching nothing)."""
+    result = subprocess.run(
+        ["git", "-C", str(core), "cat-file", "-e", f"{ref}^{{commit}}"],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
 
 
 def main() -> int:
