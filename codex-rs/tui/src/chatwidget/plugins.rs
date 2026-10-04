@@ -1037,5 +1037,4 @@ impl ChatWidget {
             self.plugins_popup_params(response, active_tab_id, selected_idx),
         );
     }
-
 }

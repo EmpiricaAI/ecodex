@@ -1,11 +1,8 @@
 ---
 source: tui/src/app/tests.rs
-assertion_line: 3716
+assertion_line: 5922
 expression: rendered
 ---
-╭────────────────────────────────────────────────────╮
-│ ∴ ecodex (v<VERSION>)  ·  turtles all the way down │
-│                                                    │
-│ model:     gpt-test high   /model to change        │
-│ directory: /tmp/project                            │
-╰────────────────────────────────────────────────────╯
+
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
+     /tmp/project

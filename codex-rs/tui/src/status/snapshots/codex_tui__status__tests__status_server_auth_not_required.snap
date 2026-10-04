@@ -1,19 +1,16 @@
 ---
 source: tui/src/status/tests.rs
-assertion_line: 816
 expression: rendered
 ---
 /status
 
-╭─────────────────────────────────────────────────────────────────────────────╮
-│  ∴ ecodex (v0.157.0)  ·  turtles all the way down                           │
-│                                                                             │
-│  Model:            gpt-5.6-sol (reasoning none, summaries auto)             │
-│  Model provider:   server-ollama                                            │
-│  Directory: [[workspace]]                                                   │
-│  Permissions:      Custom (workspace with network access, Ask for approval) │
-│  Agents.md:        <none>                                                   │
-│                                                                             │
-│  Token usage:      0 total  (0 input + 0 output)                            │
-│  Limits:           data not available yet                                   │
-╰─────────────────────────────────────────────────────────────────────────────╯
+  >_ OpenAI Codex (v0.0.0)
+
+  Model:           gpt-5.6-sol (reasoning none, summaries auto)
+  Model provider:  server-ollama
+  Directory:       [[workspace]]
+  Permissions:     Custom (workspace with network access, Ask for approval)
+  Agents.md:       <none>
+
+  Token usage:     0 total  (0 input + 0 output)
+  Limits:          data not available yet

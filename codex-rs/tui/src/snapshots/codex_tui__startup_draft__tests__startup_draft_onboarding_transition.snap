@@ -1,17 +1,16 @@
 ---
 source: tui/src/startup_draft_tests.rs
-assertion_line: 784
+assertion_line: 802
 expression: frames
 ---
 before onboarding: hidden (0x0 viewport)
 ---
 after onboarding:
-╭──────────────────────────────────────────────────╮
-│ ∴ ecodex (v<VERSION>)  ·  turtles all the way down │
-│                                                  │
-│ model:     loading   /model to change            │
-│ directory: loading                               │
-╰──────────────────────────────────────────────────╯
+
+  >_ OpenAI Codex (v<VERSION>)
+     loading
+
+  Pull up a prompt.
 
 
 › Ask Codex to do anything

@@ -114,17 +114,20 @@ subprocess fan-out.
 
 ## Render order and caveat
 
-When **any** plugin contributes statusline content, the plugin output
-**overrides** the codex-managed `/statusline` items (model, git branch,
-context %, etc.) in the footer slot. This is intentional for ecodex —
-empirica's statusline IS the primary signal for epistemic-discipline
-work — but it means a user who configured codex's built-in statusline
-items via `/statusline` won't see them while plugin output is present.
-Plugins that contribute a statusline should treat it as a takeover.
+Upstream codex renders its own footer status line by default (model with
+reasoning effort, current directory, thread name; configurable with
+`/statusline`). When **any** plugin contributes statusline content, the
+plugin output **takes over** that slot: `refresh_status_line_from_selections`
+returns early while the plugin cache is non-empty, so the codex-managed
+items are not drawn over the plugin line on each refresh tick. This is
+intentional for ecodex — empirica's statusline IS the primary signal for
+epistemic-discipline work — but it means a user who configured codex's
+built-in items won't see them while plugin output is present.
 
 When the cache becomes empty (no plugins, all failed, all cleared),
-the override clears and the codex-managed items reappear on the next
-`refresh_status_surfaces` tick.
+`recompute_plugin_statusline` hands the slot back by calling
+`refresh_status_surfaces`, so the codex-managed items reappear at once
+rather than leaving the footer blank.
 
 ## Security considerations
 

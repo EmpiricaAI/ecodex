@@ -8,6 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Upstream base moved to codex 0.160** (`rust-v0.160.0`, 334 commits since
+  `rust-v0.157.0`). What users get from upstream 0.158–0.160, in short: a
+  compact welcome screen; opt-in `instant_interrupt` to steer the model
+  mid-response; copy-on-select and right-click paste in fullscreen mode, with
+  transcript selections keeping their Markdown; sessions outside a project
+  when policy permits; `codex mcp add --oauth-client-secret` for MCP servers
+  that need a pre-registered OAuth client; terminal-input approval on by
+  default for elevated commands; `.aws` protected by default under writable
+  roots; explicit provider model catalogs no longer pick up unsupported bundled
+  models; faster plugin loading; SQLite startup stalls and the duplicated
+  resend of queued messages after a reconnect fixed; many Windows and macOS
+  sandbox fixes. Removed upstream: automatic follow-up prompt suggestions
+  (`tui.prompt_suggestions`) and the bundled `plugin-creator` skill.
+- **ecodex on the new base.** The brand title (`∴ ecodex (vX) · turtles all
+  the way down`) now comes from one place upstream introduced for the session
+  header and the status card. Upstream moved its tooltips into a text asset, so
+  ecodex's rebranded "Build faster with ecodex" tooltip is gone; the remaining
+  tips are upstream's. The hot-swapped model client passes the session's
+  request contributors, as upstream now requires. Dependency pins follow
+  upstream again (`gix`, `jsonwebtoken`, `tar` had been bumped by dependabot
+  on the old base); the bumps will come back one at a time.
+
 ## [0.157.8] - 2026-10-03
 
 ### Fixed

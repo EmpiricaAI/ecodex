@@ -317,6 +317,7 @@ mod tests {
             supports_websockets: true,
             supports_openai_builtin_tools: true,
             supports_standalone_web_search: true,
+            include_internal_metadata: false,
         }
     }
 }

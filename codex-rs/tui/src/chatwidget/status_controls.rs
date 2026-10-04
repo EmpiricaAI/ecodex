@@ -133,10 +133,11 @@ impl ChatWidget {
 
     /// Project the cached per-plugin outputs into a single status line (joined
     /// in PluginId order, ANSI-parsed) via the existing `set_status_line`
-    /// pipeline. Empty cache clears our override.
+    /// pipeline. An empty cache hands the footer slot back to the
+    /// codex-managed status items instead of blanking it.
     fn recompute_plugin_statusline(&mut self) {
         if self.plugin_statusline_outputs.is_empty() {
-            self.set_status_line(None);
+            self.refresh_status_surfaces();
             return;
         }
         let mut entries: Vec<(&PluginId, &Vec<u8>)> =
@@ -151,7 +152,8 @@ impl ChatWidget {
             .collect::<Vec<_>>()
             .join(" │ ");
         if aggregate.is_empty() {
-            self.set_status_line(None);
+            self.plugin_statusline_outputs.clear();
+            self.refresh_status_surfaces();
             return;
         }
         let line = codex_ansi_escape::ansi_escape_line(&aggregate);

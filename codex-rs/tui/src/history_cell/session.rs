@@ -1,25 +1,14 @@
 //! Session headers, onboarding guidance, and transcript cards.
 
+use std::sync::Arc;
+use std::sync::OnceLock;
+
 use super::*;
+use crate::empty_state_animation::Greeting;
 use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::style::accent_color;
 use crate::width::display_width;
-
-pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
-
-pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
-    if width < 4 {
-        return None;
-    }
-    let inner_width = std::cmp::min(width.saturating_sub(4) as usize, max_inner_width);
-    Some(inner_width)
-}
-
-/// Render `lines` inside a border sized to the widest span in the content.
-pub(crate) fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    with_border_internal(lines, /*forced_inner_width*/ None)
-}
 
 /// Render `lines` inside a border whose inner width is at least `inner_width`.
 ///
@@ -30,17 +19,8 @@ pub(crate) fn with_border_with_inner_width(
     lines: Vec<Line<'static>>,
     inner_width: usize,
 ) -> Vec<Line<'static>> {
-    with_border_internal(lines, Some(inner_width))
-}
-
-fn with_border_internal(
-    lines: Vec<Line<'static>>,
-    forced_inner_width: Option<usize>,
-) -> Vec<Line<'static>> {
     let max_line_width = lines.iter().map(line_width).max().unwrap_or(0);
-    let content_width = forced_inner_width
-        .unwrap_or(max_line_width)
-        .max(max_line_width);
+    let content_width = inner_width.max(max_line_width);
 
     let mut out = Vec::with_capacity(lines.len() + 2);
     let border_inner_width = content_width + 2;
@@ -64,6 +44,21 @@ fn with_border_internal(
     out
 }
 
+/// Brand title shared by the session header and the status card; each owns its own indentation.
+///
+/// ecodex T81 branding: "∴ ecodex (vX)  ·  turtles all the way down". The '∴'
+/// (therefore) glyph replaces the upstream shell-prompt '>_'; the tagline
+/// signals the epistemic-discipline framing.
+pub(crate) fn codex_title(version: &str) -> Vec<Span<'static>> {
+    vec![
+        "∴ ".fg(accent_color()),
+        "ecodex".bold(),
+        format!(" (v{version})").dim(),
+        "  ·  ".dim(),
+        "turtles all the way down".dim().italic(),
+    ]
+}
+
 #[derive(Debug)]
 struct TooltipHistoryCell {
     tip: String,
@@ -80,11 +75,6 @@ impl TooltipHistoryCell {
 }
 
 impl HistoryCell for TooltipHistoryCell {
-    fn compact_hyperlink_lines(&self, _width: u16) -> Vec<HyperlinkLine> {
-        // Optional tips stay available in detailed history without occupying the conversation.
-        Vec::new()
-    }
-
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         visible_lines(self.display_hyperlink_lines(width))
     }
@@ -125,6 +115,46 @@ impl HistoryCell for SessionNoticeCell {
 
 #[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
+
+/// Bind provisional and configured banners to the thread's chosen greeting.
+pub(crate) fn set_session_greeting(cell: &mut dyn HistoryCell, greeting: &Arc<OnceLock<Greeting>>) {
+    if let Some(header) = cell.as_any_mut().downcast_mut::<SessionHeaderHistoryCell>() {
+        header.greeting = Arc::clone(greeting);
+    } else if let Some(info) = cell.as_any_mut().downcast_mut::<SessionInfoCell>() {
+        for part in &mut info.0.parts {
+            set_session_greeting(part.as_mut(), greeting);
+        }
+    }
+}
+
+/// Fullscreen transcript presentation omits tips; scrollback retains the original cells.
+pub(crate) fn fullscreen_session_lines(
+    cell: &dyn HistoryCell,
+    width: u16,
+    detailed: bool,
+    mode: HistoryRenderMode,
+) -> Vec<HyperlinkLine> {
+    if let Some(info) = cell.as_any().downcast_ref::<SessionInfoCell>() {
+        let mut lines = Vec::new();
+        for part in &info.0.parts {
+            if part.as_any().is::<TooltipHistoryCell>() {
+                continue;
+            }
+            let part_lines = fullscreen_session_lines(part.as_ref(), width, detailed, mode);
+            if !part_lines.is_empty() {
+                if !lines.is_empty() {
+                    lines.push(HyperlinkLine::from(""));
+                }
+                lines.extend(part_lines);
+            }
+        }
+        lines
+    } else if detailed || mode == HistoryRenderMode::Rich {
+        cell.retained_hyperlink_lines(width, detailed)
+    } else {
+        cell.display_hyperlink_lines_for_mode(width, mode)
+    }
+}
 
 impl HistoryCell for SessionInfoCell {
     fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
@@ -169,13 +199,11 @@ pub(crate) fn new_session_info(
     is_first_event: bool,
     tooltip_override: Option<String>,
     auth_plan: Option<PlanType>,
-    show_fast_status: bool,
 ) -> SessionInfoCell {
-    // Header box rendered as history (so it appears at the very top)
+    // Header rendered as history (so it appears at the very top).
     let header = SessionHeaderHistoryCell::new(
         model_display_name.to_string(),
         session.reasoning_effort.clone(),
-        show_fast_status,
         config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
     )
@@ -223,9 +251,7 @@ pub(crate) fn new_session_info(
     } else {
         if local_settings.tui.show_tooltips
             && let Some(tooltips) = tooltip_override
-                .or_else(|| {
-                    tooltips::get_tooltip(auth_plan, show_fast_status, &local_settings.tui.keymap)
-                })
+                .or_else(|| tooltips::get_tooltip(auth_plan, &local_settings.tui.keymap))
                 .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
         {
             parts.push(Box::new(tooltips));
@@ -269,47 +295,26 @@ pub(crate) fn has_yolo_permissions(
 pub(crate) struct SessionHeaderHistoryCell {
     version: &'static str,
     model: String,
-    model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
-    show_fast_status: bool,
     directory: PathBuf,
     yolo_mode: bool,
+    greeting: Arc<OnceLock<Greeting>>,
 }
 
 impl SessionHeaderHistoryCell {
     pub(crate) fn new(
         model: String,
         reasoning_effort: Option<ReasoningEffortConfig>,
-        show_fast_status: bool,
-        directory: PathBuf,
-        version: &'static str,
-    ) -> Self {
-        Self::new_with_style(
-            model,
-            Style::default(),
-            reasoning_effort,
-            show_fast_status,
-            directory,
-            version,
-        )
-    }
-
-    pub(crate) fn new_with_style(
-        model: String,
-        model_style: Style,
-        reasoning_effort: Option<ReasoningEffortConfig>,
-        show_fast_status: bool,
         directory: PathBuf,
         version: &'static str,
     ) -> Self {
         Self {
             version,
             model,
-            model_style,
             reasoning_effort,
-            show_fast_status,
             directory,
             yolo_mode: false,
+            greeting: Default::default(),
         }
     }
 
@@ -354,94 +359,51 @@ impl SessionHeaderHistoryCell {
 
 impl HistoryCell for SessionHeaderHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let Some(inner_width) = card_inner_width(width, SESSION_HEADER_MAX_INNER_WIDTH) else {
-            return Vec::new();
-        };
-
-        let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
-
-        // ecodex T81 branding: title line "∴ ecodex (vX)  ·  turtles all the
-        // way down". The '∴' (therefore) glyph replaces the upstream
-        // shell-prompt '>_'; the tagline signals the epistemic-discipline
-        // framing. (Re-migrated into history_cell/session.rs after the 2026-05
-        // sync replaced the single history_cell.rs with a module dir.)
-        let title_spans: Vec<Span<'static>> = vec![
-            Span::from("∴ ").dim(),
-            Span::from("ecodex").bold(),
-            Span::from(" ").dim(),
-            Span::from(format!("(v{})", self.version)).dim(),
-            Span::from("  ·  ").dim(),
-            Span::from("turtles all the way down").dim().italic(),
-        ];
-
-        const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
-        const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
-        const DIR_LABEL: &str = "directory:";
-        const PERMISSIONS_LABEL: &str = "permissions:";
-        let label_width = if self.yolo_mode {
-            DIR_LABEL.len().max(PERMISSIONS_LABEL.len())
-        } else {
-            DIR_LABEL.len()
-        };
-
-        let model_label = format!(
-            "{model_label:<label_width$}",
-            model_label = "model:",
-            label_width = label_width
-        );
-        let reasoning_label = self.reasoning_label();
-        let model_spans: Vec<Span<'static>> = {
-            let mut spans = vec![
-                Span::from(format!("{model_label} ")).dim(),
-                Span::styled(self.model.clone(), self.model_style),
-            ];
-            if let Some(reasoning) = reasoning_label {
-                spans.push(Span::from(" "));
-                spans.push(Span::from(reasoning.to_owned()));
-            }
-            if self.show_fast_status {
-                spans.push("   ".into());
-                spans.push(Span::styled("fast", self.model_style.magenta()));
-            }
-            spans.push("   ".dim());
-            spans.push(CHANGE_MODEL_HINT_COMMAND.fg(accent_color()));
-            spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
-            spans
-        };
-
-        let dir_label = format!("{DIR_LABEL:<label_width$}");
-        let dir_prefix = format!("{dir_label} ");
-        let dir_prefix_width = display_width(dir_prefix.as_str());
-        let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
-        let dir = self.format_directory(Some(dir_max_width));
-        let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
-
+        let width = usize::from(width);
+        let mut title = vec!["  ".into()];
+        title.extend(codex_title(self.version));
         let mut lines = vec![
-            make_row(title_spans),
-            make_row(Vec::new()),
-            make_row(model_spans),
-            make_row(dir_spans),
+            Line::default(),
+            Line::from(title),
+            Line::from(vec![
+                "     ".into(),
+                self.format_directory(Some(width.saturating_sub(/*rhs*/ 5)))
+                    .dim(),
+            ]),
         ];
-
         if self.yolo_mode {
-            let permissions_label = format!("{PERMISSIONS_LABEL:<label_width$}");
-            lines.push(make_row(vec![
-                Span::from(format!("{permissions_label} ")).dim(),
+            lines.push(Line::from(vec![
+                "  permissions: ".dim(),
                 "YOLO mode".magenta().bold(),
             ]));
         }
-
-        let lines = lines
+        if let Some(greeting) = self.greeting.get() {
+            // The tip/help that follows has its own normal composite separator.
+            lines.extend([
+                Line::default(),
+                Line::from(vec!["  ".into(), greeting.phrase.fg(accent_color())]),
+            ]);
+        }
+        lines
             .into_iter()
-            .map(|line| truncate_line_with_ellipsis_if_overflow(line, inner_width))
-            .collect();
-        with_border(lines)
+            .map(|line| truncate_line_with_ellipsis_if_overflow(line, width))
+            .collect()
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
+        if self.greeting.get().is_some() {
+            return self
+                .display_lines(u16::MAX)
+                .into_iter()
+                .map(|line| Line::from(line.to_string()))
+                .collect();
+        }
         let mut lines = vec![
             // ecodex T81 branding (plain-text/accessibility variant).
-            Line::from(format!("ecodex (v{}) · turtles all the way down", self.version)),
+            Line::from(format!(
+                "ecodex (v{}) · turtles all the way down",
+                self.version
+            )),
             Line::from(format!(
                 "model: {}{}",
                 self.model,

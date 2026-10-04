@@ -26,6 +26,9 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
         if argv1 == Some(CODEX_FS_HELPER_ARG1) {
             return TestBinaryDispatchMode::DispatchArg0Only;
         }
+        if argv1 == Some(codex_sandboxing::CODEX_WINDOWS_MXC_ARG1) {
+            return TestBinaryDispatchMode::DispatchArg0Only;
+        }
         if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
             return TestBinaryDispatchMode::DispatchArg0Only;
         }
@@ -36,12 +39,16 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
 mod additional_context;
+#[path = "agent_control_tests.rs"]
+mod agent_control;
 mod agent_execution;
 mod agent_websocket;
 mod agents_md;
 mod app_tool_exposure;
 mod apply_patch_cli;
 mod apply_patch_serialization;
+#[cfg(target_os = "macos")]
+mod apply_patch_system_aliases;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
 mod audio_truncation;
@@ -76,6 +83,7 @@ mod external_auth;
 mod fork_thread;
 mod git_enrichment;
 mod guardian_authorization;
+mod guardian_authorization_refresh;
 #[path = "guardian_cached_score_tests.rs"]
 mod guardian_cached_score;
 #[path = "guardian_checkpoint_migration_tests.rs"]
@@ -129,6 +137,7 @@ mod mcp_user_verification;
 mod model_overrides;
 #[path = "model_provider_requirements_tests.rs"]
 mod model_provider_requirements;
+mod model_request;
 mod model_runtime_selectors;
 mod model_switching;
 mod model_visible_layout;
@@ -207,9 +216,16 @@ mod tool_lifecycle;
 mod tool_parallelism;
 mod tools;
 mod truncation;
+#[path = "turn_error_details_tests.rs"]
+mod turn_error_details;
 mod turn_input_submission;
 mod turn_state;
 mod unified_exec;
+#[path = "unified_exec_launch_failure_tests.rs"]
+mod unified_exec_launch_failure;
+#[cfg(windows)]
+#[path = "unified_exec_mxc_powershell_tests.rs"]
+mod unified_exec_mxc_powershell;
 mod unified_exec_process_events;
 mod unified_exec_stdin_approval;
 mod unified_exec_stdin_review_size;

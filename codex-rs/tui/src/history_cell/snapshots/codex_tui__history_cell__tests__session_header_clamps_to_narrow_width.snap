@@ -1,12 +1,9 @@
 ---
 source: tui/src/history_cell/tests.rs
-assertion_line: 1869
+assertion_line: 1867
 expression: "render_lines(&lines).join(\"\\n\")"
 ---
-╭──────────────────────────────────────────╮
-│ ∴ ecodex (vtest)  ·  turtles all the wa… │
-│                                          │
-│ model:       gpt-5.6-sol xhigh   fast  … │
-│ directory:   project                     │
-│ permissions: YOLO mode                   │
-╰──────────────────────────────────────────╯
+
+  >_ OpenAI Codex (vtest)
+     project
+  permissions: YOLO mode

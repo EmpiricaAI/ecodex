@@ -613,6 +613,7 @@ mod thread_processor_behavior_tests {
             supports_websockets: true,
             supports_openai_builtin_tools: true,
             supports_standalone_web_search: false,
+            include_internal_metadata: false,
         };
         let config_manager = ConfigManager::new(
             temp_dir.path().to_path_buf(),

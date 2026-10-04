@@ -68,11 +68,14 @@ impl JsonRpcConnectionEvent {
         };
 
         let queued_at = Instant::now();
+        // Record phase offsets from receipt because detached work can keep the span open.
         let request_span = tracing::info_span!(
             "codex.exec_server.request",
             otel.kind = "server",
             otel.name = "unknown",
             method = request.method.as_str(),
+            rpc.dispatch_offset_ns = tracing::field::Empty,
+            rpc.response_enqueue_offset_ns = tracing::field::Empty,
             result = tracing::field::Empty,
         );
         if let Some(trace) = &request.trace
@@ -249,7 +252,7 @@ fn kill_direct_child(child_process: &mut Child, action: &str) {
 #[cfg(windows)]
 fn kill_windows_process_tree(pid: u32) -> bool {
     let pid = pid.to_string();
-    match std::process::Command::new("taskkill")
+    match codex_utils_process::background_command("taskkill")
         .args(["/PID", pid.as_str(), "/T", "/F"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

@@ -4,6 +4,7 @@
 //! limits, add-credit nudges, and feedback uploads. Results are routed back through `AppEvent` so
 //! the main event loop remains single-threaded.
 
+use super::feedback_upload::fetch_feedback_upload;
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
@@ -596,8 +597,7 @@ impl App {
         tokio::spawn(async move {
             let plugins_input = config.plugins_config_input();
             let Ok(auth_manager) = codex_login::AuthManager::shared_from_config(
-                &config,
-                /*enable_codex_api_key_env*/ false,
+                &config, /*enable_codex_api_key_env*/ false,
             )
             .await
             else {
@@ -608,9 +608,9 @@ impl App {
             };
             let sources =
                 crate::legacy_core::plugins::plugins_manager_for_config(&config, auth_manager)
-                .plugins_for_config(&plugins_input)
-                .await
-                .effective_plugin_statusline_sources();
+                    .plugins_for_config(&plugins_input)
+                    .await
+                    .effective_plugin_statusline_sources();
             app_event_tx.send(AppEvent::PluginStatuslineSourcesLoaded { sources });
         });
     }
@@ -639,8 +639,10 @@ impl App {
             turn_id,
             include_logs,
         );
+        let codex_home = app_server.codex_home_path(&self.config.codex_home);
+        let feedback = self.feedback.clone();
         tokio::spawn(async move {
-            let result = fetch_feedback_upload(request_handle, params)
+            let result = fetch_feedback_upload(request_handle, codex_home, params, feedback)
                 .await
                 .map(|response| response.thread_id)
                 .map_err(|err| err.to_string());
@@ -800,6 +802,7 @@ pub(super) async fn fetch_all_mcp_server_statuses(
                     limit: Some(100),
                     detail: Some(detail),
                     thread_id: thread_id.clone(),
+                    server_name: None,
                 },
             })
             .await
@@ -1311,17 +1314,6 @@ pub(super) fn build_feedback_upload_params(
         extra_log_files,
         tags,
     }
-}
-
-pub(super) async fn fetch_feedback_upload(
-    request_handle: AppServerRequestHandle,
-    params: FeedbackUploadParams,
-) -> Result<FeedbackUploadResponse> {
-    let request_id = RequestId::String(format!("feedback-upload-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::FeedbackUpload { request_id, params })
-        .await
-        .wrap_err("feedback/upload failed in TUI")
 }
 
 /// Convert flat `McpServerStatus` responses into the per-server maps used by the

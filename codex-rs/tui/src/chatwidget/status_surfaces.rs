@@ -200,6 +200,14 @@ impl ChatWidget {
     }
 
     fn refresh_status_line_from_selections(&mut self, selections: &StatusSurfaceSelections) {
+        // ecodex T74: while a plugin statusline has output, it owns the footer
+        // slot; the codex-managed items come back as soon as the plugin cache
+        // empties (see `recompute_plugin_statusline`). Upstream renders
+        // model/cwd/thread-name here by default, so without this guard every
+        // refresh tick would overwrite the plugin line.
+        if !self.plugin_statusline_outputs.is_empty() {
+            return;
+        }
         let enabled = !selections.status_line_items.is_empty();
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {

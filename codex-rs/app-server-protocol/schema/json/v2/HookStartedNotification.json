@@ -18,7 +18,9 @@
         "subagentStart",
         "subagentStop",
         "stop",
-        "interrupt"
+        "interrupt",
+        "taskCompleted",
+        "postToolUseFailure"
       ],
       "type": "string"
     },

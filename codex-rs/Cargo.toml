@@ -1,8 +1,11 @@
 [workspace]
 members = [
+    "codex-empirica-plugin",
+    "codex-empirica-translator",
     "aws-auth",
     "analytics",
     "agent-graph-store",
+    "agent-message-board-client",
     "agent-identity",
     "agent-roles",
     "backend-client",
@@ -44,6 +47,7 @@ members = [
     "skills",
     "core",
     "core-api",
+    "core-plugin-common",
     "core-plugins",
     "diagnostics",
     "guardian-context",
@@ -80,8 +84,6 @@ members = [
     "linux-sandbox",
     "lmstudio",
     "login",
-    "codex-empirica-plugin",
-    "codex-empirica-translator",
     "codex-mcp",
     "memories/read",
     "memories/write",
@@ -110,6 +112,7 @@ members = [
     "user-verification",
     "tools",
     "v8-poc",
+    "websocket-auth",
     "websocket-client",
     "windows-sandbox-service",
     "worktree",
@@ -124,6 +127,7 @@ members = [
     "utils/image",
     "utils/json-to-toml",
     "utils/home-dir",
+    "utils/process",
     "utils/pty",
     "utils/readiness",
     "utils/redacted-string",
@@ -156,7 +160,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.157.8"
+version = "0.160.0"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
@@ -206,6 +210,7 @@ codex-code-mode-protocol = { path = "code-mode-protocol" }
 codex-code-mode-runtime = { path = "code-mode-runtime" }
 codex-home = { path = "codex-home" }
 codex-http-client = { path = "http-client" }
+codex-websocket-auth = { path = "websocket-auth" }
 codex-websocket-client = { path = "websocket-client" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
@@ -214,9 +219,10 @@ codex-agent-message-board-extension = { path = "ext/agent-message-board" }
 codex-connectors-extension = { path = "ext/connectors" }
 codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }
-codex-core-api = { path = "core-api" }
 codex-empirica-plugin = { path = "codex-empirica-plugin" }
 codex-empirica-translator = { path = "codex-empirica-translator" }
+codex-core-api = { path = "core-api" }
+codex-core-plugin-common = { path = "core-plugin-common" }
 codex-core-plugins = { path = "core-plugins" }
 codex-diagnostics = { path = "diagnostics" }
 codex-exec = { path = "exec" }
@@ -306,6 +312,7 @@ codex-utils-output-truncation = { path = "utils/output-truncation" }
 codex-utils-path = { path = "utils/path-utils" }
 codex-utils-path-uri = { path = "utils/path-uri" }
 codex-utils-plugins = { path = "utils/plugins" }
+codex-utils-process = { path = "utils/process" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-redacted-string = { path = "utils/redacted-string" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
@@ -380,8 +387,8 @@ eventsource-stream = "0.2.3"
 flate2 = "1.1.8"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
-gix = { version = "0.83.0", default-features = false, features = ["sha1"] }
-gix-url = "0.37.0"
+gix = { version = "0.81.0", default-features = false, features = ["sha1"] }
+gix-url = "0.35.2"
 glob = "0.3"
 globset = "0.4"
 hmac = "0.12.1"
@@ -399,7 +406,7 @@ insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
 jsonptr = { version = "0.7.1", default-features = false }
-jsonwebtoken = "10.3.0"
+jsonwebtoken = "9.3.1"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"
@@ -503,7 +510,7 @@ supports-color = "3.0.2"
 syntect = "5"
 sys-locale = "0.3.2"
 system-configuration = "0.7"
-tar = { version = "=0.4.46", default-features = false }
+tar = { version = "=0.4.45", default-features = false }
 tempfile = "3.23.0"
 test-log = "0.2.19"
 textwrap = "0.16.2"
@@ -605,9 +612,9 @@ ignored = [
 ]
 
 [profile.dev]
-# Keep line tables/backtraces while avoiding expensive full variable debug info
-# across local dev builds.
-debug = "limited"
+# The test profile inherits dev. Keep source locations in ordinary builds;
+# use CARGO_PROFILE_DEV_DEBUG=full (or CARGO_PROFILE_TEST_DEBUG=full) for locals.
+debug = "line-tables-only"
 
 [profile.dev-small]
 inherits = "dev"
@@ -626,22 +633,17 @@ strip = false
 # Balance parallel release code generation against binary size.
 codegen-units = 4
 
-# ecodex T79 — fast-release profile for dev iteration.
-#
-# release build with `lto = "fat"` + `codegen-units = 1` takes ~15–20 min for
-# a clean cli link on this codebase, which is painful when iterating on
-# TUI / picker / translator / plugin features. fast-release drops LTO to
-# "thin" and lifts codegen-units, cutting clean rebuild to ~3–5 min while
-# still producing a runtime-fast binary (opt-level inherited from release).
-# Trade: slightly larger binary, slightly slower runtime than the shipping
-# release. Use for `cargo build --profile fast-release ...` during
-# development; ship via `--release` (which keeps LTO=fat).
+# ecodex T79 — fast-release profile for dev iteration: release with thin LTO
+# and more codegen units, so a clean cli link takes minutes instead of ~15–20.
+# Slightly larger/slower binary than the shipping release. Use with
+# `cargo build --profile fast-release ...`.
 [profile.fast-release]
 inherits = "release"
 lto = "thin"
 codegen-units = 16
 # Keep symbols for backtraces during dev. Shipping release strips them.
 strip = "none"
+
 [profile.profiling]
 inherits = "release"
 debug = "full"
@@ -650,7 +652,6 @@ strip = false
 
 [profile.ci-test]
 # Reduce binary size to reduce disk pressure.
-debug = "limited"
 inherits = "test"
 opt-level = 0
 
