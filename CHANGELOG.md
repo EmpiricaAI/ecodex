@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.160.0] - 2026-10-04
+
 ### Changed
 - **Upstream base moved to codex 0.160** (`rust-v0.160.0`, 334 commits since
   `rust-v0.157.0`). What users get from upstream 0.158–0.160, in short: a
@@ -959,7 +961,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.8...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.0...HEAD
+[0.160.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.0...v0.160.0
 [0.157.8]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.7...v0.157.8
 [0.157.7]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.6...v0.157.7
 [0.157.6]: https://github.com/EmpiricaAI/ecodex/compare/v0.157.5...v0.157.6
