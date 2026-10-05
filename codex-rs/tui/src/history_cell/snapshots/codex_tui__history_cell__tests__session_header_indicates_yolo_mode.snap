@@ -1,9 +1,9 @@
 ---
 source: tui/src/history_cell/tests.rs
-assertion_line: 1885
+assertion_line: 1860
 expression: rendered
 ---
 
-  >_ OpenAI Codex (vtest)
+  ∴ ecodex (vtest)  ·  turtles all the way down
      /tmp/project
   permissions: YOLO mode
