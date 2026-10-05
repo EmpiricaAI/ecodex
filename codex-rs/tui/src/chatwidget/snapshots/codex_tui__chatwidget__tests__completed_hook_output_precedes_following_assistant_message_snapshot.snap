@@ -1,8 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 5131
 expression: history
 ---
-• Blocked by hook
+• Blocked by hook · PreToolUse
   └ command blocked by policy
 
 • The hook feedback was applied.

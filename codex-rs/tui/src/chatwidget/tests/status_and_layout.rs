@@ -5188,8 +5188,9 @@ async fn completed_same_id_hook_output_survives_restart() {
         "completed_same_id_hook_output_survives_restart_snapshot",
         hook_status_and_history_snapshot(&chat, "restarted", &history)
     );
+    // ecodex: hook headers carry the event name (`Hook stopped · Stop`).
     assert!(
-        history.contains("Hook stopped\n  └ continue with more context"),
+        history.contains("Hook stopped · Stop\n  └ continue with more context"),
         "first hook output should not be overwritten: {history:?}"
     );
 }

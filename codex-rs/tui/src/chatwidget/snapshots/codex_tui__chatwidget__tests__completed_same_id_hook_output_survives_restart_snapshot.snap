@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 5187
 expression: "hook_status_and_history_snapshot(&chat, \"restarted\", &history)"
 ---
 restarted
@@ -12,5 +13,5 @@ activity:
 "                                                                                "
 "  GPT-5.6-Sol default · /tmp/project                                            "
 history:
-• Hook stopped
+• Hook stopped · Stop
   └ continue with more context
