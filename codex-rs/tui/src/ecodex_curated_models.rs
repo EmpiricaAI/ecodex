@@ -111,7 +111,7 @@ mod tests {
     fn provider_for_slug_resolves_curated_entries() {
         assert_eq!(
             [
-                provider_for_slug("kimi-for-coding"),
+                provider_for_slug("kimi-k3"),
                 provider_for_slug("qwen3-coder:latest"),
                 provider_for_slug("openrouter/auto"),
                 provider_for_slug("devstral-latest"),
@@ -180,7 +180,7 @@ mod tests {
                 provider_for_model("gpt-5.5"),
                 provider_for_model("gpt-5.4"),
                 // curated entries keep their explicit provider
-                provider_for_model("kimi-for-coding"),
+                provider_for_model("kimi-k3"),
                 provider_for_model("devstral-latest"),
                 // router-prefixed OpenAI slug routes to the router, NOT openai-direct
                 provider_for_model("openai/gpt-5.2-codex"),
@@ -209,7 +209,7 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), ids.len(), "curated preset ids must be unique");
-        assert_eq!(ids.first().copied(), Some("kimi-for-coding"));
+        assert_eq!(ids.first().copied(), Some("kimi-k3"));
         assert!(presets.iter().all(|p| p.show_in_picker));
     }
 }
