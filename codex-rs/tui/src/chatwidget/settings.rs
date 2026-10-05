@@ -260,6 +260,9 @@ impl ChatWidget {
             /*effort*/ None,
             /*developer_instructions*/ None,
         );
+        // ecodex: the plugin statusline names the active model.
+        self.plugin_statusline_runtime
+            .set_model(Some(model.to_string()));
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
         {

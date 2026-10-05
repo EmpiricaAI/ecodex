@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+- **The statusline shows context use and the active model under ecodex.**
+  The TUI now hands the plugin statusline what it knows and the script cannot
+  find on its own — the percentage of the context window in use and the model
+  slug — on stdin, in the shape Claude Code's statusline payload uses
+  (`context_window.used_percentage`, `model.{id,display_name}`). The compact
+  line gains its context segment and names the model; the script's
+  `~/.empirica/context_usage_<thread id>.json` side file now exists for ecodex
+  sessions too.
+
 ### Fixed
 - **The base prompt gives the exact shape of a PREFLIGHT claim.** Core
   records a claim only when its text is under the key `claim`; an item keyed

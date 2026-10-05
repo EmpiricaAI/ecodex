@@ -78,11 +78,25 @@ apart several sessions running in one directory.
 **stdin** is a piped JSON object, then closed:
 
 ```json
-{"session_id": "<empirica session id>", "cwd": "<ecodex working directory>"}
+{
+  "session_id": "<empirica session id>",
+  "cwd": "<ecodex working directory>",
+  "context_window": {"used_percentage": 31},
+  "model": {"id": "devstral-latest", "display_name": "devstral-latest"}
+}
 ```
 
-Either key is omitted when it cannot be resolved (an empty object `{}` is
-still sent). `session_id` is read from empirica's instance files under
+Every key is omitted when the TUI does not know it yet (an empty object
+`{}` is still sent). `context_window.used_percentage` and `model` are the
+keys Claude Code's statusline payload uses, so a script written for one
+host reads the other unchanged; the vendored empirica statusline renders
+the context segment from the former and the model tag from the latter, and
+also writes `~/.empirica/context_usage_<instance id>.json` for other
+readers (the cockpit). The usage figure is the percentage of the model's
+context window in use, computed from the same token-usage events as the
+footer's own context indicator; it appears after the first turn's usage
+arrives and resets to absent on a thread switch. `session_id` is read from
+empirica's instance files under
 `~/.empirica/instance_projects/`: first `<thread id>.json` (the
 `EMPIRICA_INSTANCE_ID` value), then the ids empirica's own
 `get_instance_id()` would try (`EMPIRICA_INSTANCE_ID` from the

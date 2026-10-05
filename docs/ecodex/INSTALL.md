@@ -269,6 +269,17 @@ silently. The PREFLIGHT response echoes what it recorded under
 PREFLIGHT, or submit CHECK. This is the Sentinel working, not a broken hook: a
 hook failure reads *Hook failed · <Event>* in the TUI.
 
+**The session compacts long before the model's advertised context window**
+codex works against a model's *working* context window, not its maximum:
+upstream's catalog gives the GPT-6 family a 272K working window with an
+872K maximum, and auto-compaction triggers at about 95% of the working figure
+(roughly 258K) unless the catalog sets an explicit `auto_compact_token_limit`.
+`/status` shows the window in effect. To use more of the model, set
+`model_context_window = 872000` (or any value up to the model's maximum) in
+`~/.codex/config.toml`; ecodex clamps it to the catalog's maximum. Models that
+reach ecodex through the translator use the window the curated seed records
+for them (`ecodex models list`).
+
 **"No open transaction. Submit PREFLIGHT ..." in an unattended job**
 Nobody opened a transaction, so the Sentinel refuses the job's commands. Run the
 job with the plugin off, as in [Unattended runs](#unattended-runs).

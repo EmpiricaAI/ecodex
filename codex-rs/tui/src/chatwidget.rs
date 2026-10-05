@@ -1122,6 +1122,8 @@ impl ChatWidget {
                 self.bottom_pane
                     .set_context_window(/*percent*/ None, /*used_tokens*/ None);
                 self.token_info = None;
+                // ecodex: the plugin statusline shows context use too.
+                self.plugin_statusline_runtime.set_context_usage(None);
             }
         }
     }
@@ -1133,6 +1135,12 @@ impl ChatWidget {
         let percent = self.context_remaining_percent(&info);
         let used_tokens = self.context_used_tokens(&info, percent.is_some());
         self.bottom_pane.set_context_window(percent, used_tokens);
+        // ecodex: the plugin statusline shows context use and the model; the
+        // script takes the percentage USED, the footer tracks the remainder.
+        self.plugin_statusline_runtime
+            .set_context_usage(percent.map(|remaining| (100 - remaining).clamp(0, 100) as u8));
+        self.plugin_statusline_runtime
+            .set_model(Some(self.current_model().to_string()));
         self.token_info = Some(info);
     }
 

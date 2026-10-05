@@ -34,6 +34,10 @@
 //!   the statusline name the right session when several run in one
 //!   directory. The same id goes first in the stdin payload resolution.
 //!
+//! The stdin payload also carries the context-window use and the active
+//! model (see [`LiveContext`]), in the shape Claude Code's statusline
+//! payload uses, so one script serves both hosts.
+//!
 //! ## Timeouts
 //!
 //! Each subprocess run is wrapped with [`tokio::time::timeout`]. On
@@ -65,15 +69,32 @@ const TICK_INTERVAL: Duration = Duration::from_millis(1_500);
 /// this is reported as empty output; a fresh attempt fires on the next tick.
 const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// What the TUI knows and a statusline script cannot find on its own: which
+/// codex thread this is, how much of the model's context window is in use,
+/// and which model is active. Shared with the running loops so every tick
+/// carries the latest values; the script receives them on stdin in the
+/// shape Claude Code's statusline payload uses (`context_window.used_percentage`,
+/// `model.{id,display_name}`), so the vendored statusline renders them unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LiveContext {
+    /// The codex thread id of the active session.
+    pub(crate) instance_id: Option<String>,
+    /// Percent of the model's context window in use, 0–100, once token
+    /// usage is known for the session.
+    pub(crate) context_used_percentage: Option<u8>,
+    /// The active model slug.
+    pub(crate) model: Option<String>,
+}
+
 /// Owns one background task per registered plugin statusline command.
 /// Constructed once per ChatWidget; [`set_sources`] swaps the active
 /// source set (aborts old tasks, spawns new ones).
 pub(crate) struct PluginStatuslineRuntime {
     app_event_tx: AppEventSender,
     tasks: HashMap<PluginId, JoinHandle<()>>,
-    /// The codex thread id of the active session, shared with the running
-    /// loops so a thread change reaches them on their next tick.
-    instance_id: Arc<Mutex<Option<String>>>,
+    /// Session facts shared with the running loops so a change reaches them
+    /// on their next tick.
+    live: Arc<Mutex<LiveContext>>,
 }
 
 impl PluginStatuslineRuntime {
@@ -81,7 +102,7 @@ impl PluginStatuslineRuntime {
         Self {
             app_event_tx,
             tasks: HashMap::new(),
-            instance_id: Arc::new(Mutex::new(None)),
+            live: Arc::new(Mutex::new(LiveContext::default())),
         }
     }
 
@@ -89,8 +110,23 @@ impl PluginStatuslineRuntime {
     /// Set on the child's environment and tried first when resolving the
     /// empirica session, instead of a process-global variable.
     pub(crate) fn set_instance_id(&self, instance_id: Option<String>) {
-        if let Ok(mut slot) = self.instance_id.lock() {
-            *slot = instance_id;
+        if let Ok(mut live) = self.live.lock() {
+            live.instance_id = instance_id;
+        }
+    }
+
+    /// Record how much of the context window is in use (0–100), or `None`
+    /// while token usage is unknown; the statusline shows it on the next tick.
+    pub(crate) fn set_context_usage(&self, used_percentage: Option<u8>) {
+        if let Ok(mut live) = self.live.lock() {
+            live.context_used_percentage = used_percentage;
+        }
+    }
+
+    /// Record the active model so the statusline can name it.
+    pub(crate) fn set_model(&self, model: Option<String>) {
+        if let Ok(mut live) = self.live.lock() {
+            live.model = model;
         }
     }
 
@@ -120,8 +156,8 @@ impl PluginStatuslineRuntime {
         for (id, source) in new_ids {
             self.tasks.entry(id).or_insert_with(|| {
                 let tx = self.app_event_tx.clone();
-                let instance_id = Arc::clone(&self.instance_id);
-                tokio::spawn(run_plugin_statusline_loop(source, tx, instance_id))
+                let live = Arc::clone(&self.live);
+                tokio::spawn(run_plugin_statusline_loop(source, tx, live))
             });
         }
     }
@@ -145,7 +181,7 @@ impl Drop for PluginStatuslineRuntime {
 async fn run_plugin_statusline_loop(
     source: PluginStatuslineSource,
     tx: AppEventSender,
-    instance_id: Arc<Mutex<Option<String>>>,
+    live: Arc<Mutex<LiveContext>>,
 ) {
     let plugin_root = source.plugin_root.as_path().to_string_lossy().to_string();
     let plugin_data_root = source
@@ -158,13 +194,7 @@ async fn run_plugin_statusline_loop(
 
     // Fire once immediately so the footer populates before the first tick
     // interval elapses (avoids a 1.5s blank gap on session start).
-    let output = invoke_once(
-        &command,
-        &plugin_root,
-        &plugin_data_root,
-        current_instance_id(&instance_id).as_deref(),
-    )
-    .await;
+    let output = invoke_once(&command, &plugin_root, &plugin_data_root, &snapshot(&live)).await;
     tx.send(AppEvent::PluginStatuslineOutputUpdated {
         plugin_id: plugin_id.clone(),
         output,
@@ -172,13 +202,7 @@ async fn run_plugin_statusline_loop(
 
     loop {
         tokio::time::sleep(TICK_INTERVAL).await;
-        let output = invoke_once(
-            &command,
-            &plugin_root,
-            &plugin_data_root,
-            current_instance_id(&instance_id).as_deref(),
-        )
-        .await;
+        let output = invoke_once(&command, &plugin_root, &plugin_data_root, &snapshot(&live)).await;
         tx.send(AppEvent::PluginStatuslineOutputUpdated {
             plugin_id: plugin_id.clone(),
             output,
@@ -186,8 +210,8 @@ async fn run_plugin_statusline_loop(
     }
 }
 
-fn current_instance_id(slot: &Mutex<Option<String>>) -> Option<String> {
-    slot.lock().ok().and_then(|id| id.clone())
+fn snapshot(live: &Mutex<LiveContext>) -> LiveContext {
+    live.lock().map(|l| l.clone()).unwrap_or_default()
 }
 
 /// Spawn the plugin command, write the empirica-session JSON context to
@@ -208,9 +232,10 @@ async fn invoke_once(
     command: &Path,
     plugin_root: &str,
     plugin_data_root: &str,
-    instance_id: Option<&str>,
+    live: &LiveContext,
 ) -> Vec<u8> {
-    let stdin_payload = build_statusline_stdin_payload(instance_id);
+    let stdin_payload = build_statusline_stdin_payload(live);
+    let instance_id = live.instance_id.as_deref();
 
     let mut process = tokio::process::Command::new(command);
     process
@@ -267,7 +292,11 @@ async fn invoke_once(
 ///      cwd — ambiguous when several sessions share a directory
 ///   4. Empty payload — script renders `[ecodex:inactive]`, which is the
 ///      correct UX signal that no session is bound to this shell
-fn build_statusline_stdin_payload(instance_id: Option<&str>) -> String {
+///
+/// Alongside the session, the payload carries what the TUI knows and the
+/// script cannot find on its own, in Claude Code's statusline shape:
+/// `context_window.used_percentage` and `model.{id,display_name}`.
+fn build_statusline_stdin_payload(live: &LiveContext) -> String {
     let cwd = std::env::current_dir().ok();
     let session_id = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -275,18 +304,39 @@ fn build_statusline_stdin_payload(instance_id: Option<&str>) -> String {
             let instance_dir = home.join(".empirica").join("instance_projects");
             resolve_in_dir(
                 &instance_dir,
-                &instance_file_candidates(instance_id),
+                &instance_file_candidates(live.instance_id.as_deref()),
                 cwd.as_deref(),
             )
         });
     let cwd = cwd.and_then(|p| p.to_str().map(str::to_string));
+    statusline_payload_json(session_id, cwd, live)
+}
 
+/// The stdin JSON for the statusline script, from already-resolved parts.
+/// Pure, so the shape is testable without a home directory or a cwd.
+fn statusline_payload_json(
+    session_id: Option<String>,
+    cwd: Option<String>,
+    live: &LiveContext,
+) -> String {
     let mut obj = serde_json::Map::new();
     if let Some(sid) = session_id {
         obj.insert("session_id".into(), serde_json::Value::String(sid));
     }
     if let Some(c) = cwd {
         obj.insert("cwd".into(), serde_json::Value::String(c));
+    }
+    if let Some(used) = live.context_used_percentage {
+        obj.insert(
+            "context_window".into(),
+            serde_json::json!({ "used_percentage": used }),
+        );
+    }
+    if let Some(model) = live.model.as_deref() {
+        obj.insert(
+            "model".into(),
+            serde_json::json!({ "id": model, "display_name": model }),
+        );
     }
     if obj.is_empty() {
         // Still produce valid JSON ({}) so scripts that strict-parse stdin

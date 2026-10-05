@@ -75,6 +75,8 @@ impl ChatWidget {
         // thread id, the key the empirica session-init hook files it under.
         self.plugin_statusline_runtime
             .set_instance_id(Some(session.thread_id.to_string()));
+        self.plugin_statusline_runtime
+            .set_model(Some(session.model.clone()));
         #[cfg(target_os = "windows")]
         if self.windows_sandbox_local_server
             && matches!(self.codex_op_target, CodexOpTarget::AppEvent)

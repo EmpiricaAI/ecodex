@@ -11,6 +11,52 @@ fn write_instance(dir: &Path, stem: &str, project_path: &str, session_id: &str) 
 }
 
 #[test]
+fn payload_carries_context_use_and_model_in_the_claude_code_shape() {
+    let live = LiveContext {
+        instance_id: Some("thread-1".to_string()),
+        context_used_percentage: Some(31),
+        model: Some("devstral-latest".to_string()),
+    };
+    let payload = statusline_payload_json(
+        Some("sess-1".to_string()),
+        Some("/tmp/project".to_string()),
+        &live,
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&payload).expect("valid JSON");
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "session_id": "sess-1",
+            "cwd": "/tmp/project",
+            "context_window": { "used_percentage": 31 },
+            "model": { "id": "devstral-latest", "display_name": "devstral-latest" },
+        })
+    );
+}
+
+#[test]
+fn payload_omits_what_the_tui_does_not_know_yet() {
+    let payload = statusline_payload_json(None, None, &LiveContext::default());
+    assert_eq!(payload, "{}");
+    let payload = statusline_payload_json(
+        Some("sess-1".to_string()),
+        None,
+        &LiveContext {
+            model: Some("gpt-6.1-sol".to_string()),
+            ..LiveContext::default()
+        },
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&payload).expect("valid JSON");
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "session_id": "sess-1",
+            "model": { "id": "gpt-6.1-sol", "display_name": "gpt-6.1-sol" },
+        })
+    );
+}
+
+#[test]
 fn the_thread_id_wins_over_a_directory_match() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_instance(dir.path(), "tmux_7", "/work/project", "session-from-pane");
