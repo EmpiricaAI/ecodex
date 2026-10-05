@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Hooks re-vendored from empirica 1.14.8.** Two hooks change. The Sentinel
+  no longer refuses a PREFLIGHT whose claims are keyed `statement` or `text`
+  (core treats both as `claim` now) and a claim it cannot store is reported
+  instead of dropped; its SQL scan reads comments, every statement and `-cmd`,
+  and its refusal names only the real cause. `session-init` no longer prints
+  *Failed to persist budget state … run empirica project-init* inside an
+  initialised practice: when it cannot resolve the practice root it skips the
+  write and says so (*practice root unknown for this SessionStart (source=…,
+  cwd=…)*), and the resolver's own error now lists what it tried.
+
 ### Added
 - **The statusline shows context use and the active model under ecodex.**
   The TUI now hands the plugin statusline what it knows and the script cannot
