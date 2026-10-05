@@ -260,6 +260,15 @@ shell you start ecodex from, then run `empirica diagnose --frontend ecodex`.
 Older ecodex builds used the first `python3` on `PATH` instead, which cannot see
 a pipx or Homebrew empirica: update ecodex.
 
+**"No CHECK, and no grounded claims declared at PREFLIGHT" right after a PREFLIGHT that declared claims**
+The claims were not recorded. Core stores a claim only when its text is under
+the key `claim`; an item keyed `statement` (the falsifier shape) is dropped
+silently. The PREFLIGHT response echoes what it recorded under
+`claims.declared` — if that is empty or short, fix the shape
+(`{"claim": …, "grounding": "ran", "scope": …, "count": N}`) and re-run
+PREFLIGHT, or submit CHECK. This is the Sentinel working, not a broken hook: a
+hook failure reads *Hook failed · <Event>* in the TUI.
+
 **"No open transaction. Submit PREFLIGHT ..." in an unattended job**
 Nobody opened a transaction, so the Sentinel refuses the job's commands. Run the
 job with the plugin off, as in [Unattended runs](#unattended-runs).

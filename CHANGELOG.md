@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **The base prompt gives the exact shape of a PREFLIGHT claim.** Core
+  records a claim only when its text is under the key `claim`; an item keyed
+  `statement` (the falsifier shape) is dropped without a word, the PREFLIGHT
+  looks fine, and the Sentinel then refuses the first praxic call with *No
+  CHECK, and no grounded claims declared at PREFLIGHT*. The prompt now shows
+  the item (`{"claim", "grounding", "scope", "count"}` / `"ref"`) and tells
+  the model to compare the response's `claims.declared` echo with what it
+  sent. Core has the matching report (alias and a visible drop count).
+
 ## [0.160.0] - 2026-10-04
 
 ### Changed

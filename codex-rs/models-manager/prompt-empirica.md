@@ -204,7 +204,18 @@ then CHECK with what you found.
 ### Claims — what the work rests on
 
 PREFLIGHT and CHECK take a `claims` array: the two or three beliefs
-the praxic work actually depends on, each with how you know it.
+the praxic work actually depends on, each with how you know it. Each
+item is an object whose text lives under the key `claim` — not
+`statement`, which is the falsifier shape; an item without a `claim`
+key is dropped and records nothing:
+
+```json
+"claims": [
+  {"claim": "…what you rely on…", "grounding": "ran",
+   "scope": "what you measured over", "count": 12},
+  {"claim": "…", "grounding": "read", "ref": "path/to/file.rs:40-58"}
+]
+```
 
 | Grounding | Means |
 |---|---|
@@ -213,8 +224,12 @@ the praxic work actually depends on, each with how you know it.
 | `retrieved` | it came from a prior artifact of this practice — testimony, not observation |
 | `assumed` | you are acting without checking |
 
-The response tells you how many claims are weakly grounded, while you
-can still do something about it.
+The response echoes the claims it recorded (`claims.declared`, one entry
+per item with an id) and how many are weakly grounded, while you can still
+do something about it. If the echo lists fewer claims than you sent, the
+missing ones were not recorded — fix the shape before relying on them;
+the Sentinel will otherwise refuse the first praxic call with "no grounded
+claims declared".
 
 At POSTFLIGHT, adjudicate each claim: `held`, `refuted` or
 `untested`. Anything you leave out is recorded as `untested` and
