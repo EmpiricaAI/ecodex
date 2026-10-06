@@ -100,6 +100,9 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
         codex_home,
         &[
             "--no-alt-screen",
+            // ecodex routes a config-file gpt-* model to openai unless the provider is explicit.
+            "-c",
+            "model_provider=\"test\"",
             "-c",
             "features.worktrees=true",
             "-c",

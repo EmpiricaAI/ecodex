@@ -466,8 +466,17 @@ pub(super) async fn run_main_inner(
     // another provider (the migration prompt persisted the model alone). Route
     // it to openai, as the picker and `exec -m` do, by loading once more with
     // the provider override; nothing explicit chose a provider here.
+    // `-c model_provider=…` is an explicit choice too, so it is left alone.
+    let explicit_provider = if cli_kv_overrides
+        .iter()
+        .any(|(key, _)| key == "model_provider")
+    {
+        Some(config.model_provider_id.as_str())
+    } else {
+        model_provider_override.as_deref()
+    };
     if let Some(openai) = crate::ecodex_curated_models::startup_provider_override(
-        model_provider_override.as_deref(),
+        explicit_provider,
         config.model.as_deref(),
         &config.model_provider_id,
     ) {

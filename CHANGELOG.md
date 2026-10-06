@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - **`ecodex exec -m <gpt model> -c model_provider=…` honours the provider you
   named.** The headless auto-routing of OpenAI-family models to the built-in
   `openai` provider overrode an explicit `-c model_provider`; it now steps aside.
+- **The TUI honours `-c model_provider=…` too.** A config-file GPT model paired
+  with another provider is still routed to `openai` at start, but a provider
+  named on the command line is left alone.
 
 ## [0.160.1] - 2026-10-05
 

@@ -69,7 +69,7 @@ fn external_editors_keep_the_screen_and_return_the_draft() -> Result<()> {
             terminal.wait_for_screen("Save and close external editor to continue.")?;
             ensure!(terminal.screen_contains("initial draft"));
             if fullscreen {
-                ensure!(terminal.screen_contains("OpenAI Codex"));
+                ensure!(terminal.screen_contains("ecodex"));
                 ensure!(terminal.screen_contains("GPT-5.6-Terra"));
             }
             ensure!(
