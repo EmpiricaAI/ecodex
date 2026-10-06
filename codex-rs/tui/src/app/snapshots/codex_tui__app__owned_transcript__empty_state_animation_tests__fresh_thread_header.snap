@@ -5,7 +5,7 @@ expression: "format!(\"enabled:\\n{}\\n---\\ndisabled:\\n{}\", text(after), text
 ---
 enabled:
 
-  ∴ ecodex (v0.160.0)  ·  turtles all the way down
+  ∴ ecodex (v0.160.1)  ·  turtles all the way down
      /tmp/project
 
   Pull up a prompt.
@@ -51,7 +51,7 @@ enabled:
 ---
 disabled:
 
-  ∴ ecodex (v0.160.0)  ·  turtles all the way down
+  ∴ ecodex (v0.160.1)  ·  turtles all the way down
      /tmp/project
 
   Pull up a prompt.
