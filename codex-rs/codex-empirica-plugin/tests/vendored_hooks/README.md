@@ -53,6 +53,18 @@ Empirica revision before running this suite.
   command and referenced flag against Empirica's real argparse parser. This
   catches wrapper/CLI flag drift without maintaining a second command map.
 
+- `test_session_start_single_session_and_budget_persist.py` — pins the two
+  fixes empirica 1.14.8 made after the 2026-10 reports. codex fires every
+  SessionStart hook, so `post-compact.py` must skip any `source` other than
+  `compact` (else a second empirica session appears 0.26 s after session-init's),
+  while a payload with no usable `source` still runs (a compaction is never
+  dropped); and `session-init.py` persists budget state only into a
+  `sessions.db` it holds, otherwise skips and says why in its own words (it must
+  never let the resolver's "run project-init" text reach the model). Needs the
+  real empirica core (`ContextBudgetManager`); fails, not skips, without it.
+  Verified both ways: the post-compact cases fail with the guard removed and six
+  session-init cases fail against the pre-1.14.8 vendored copy.
+
 ## Adding coverage
 
 When a future empirica→ecodex hook re-sync changes behaviour, add a test here
