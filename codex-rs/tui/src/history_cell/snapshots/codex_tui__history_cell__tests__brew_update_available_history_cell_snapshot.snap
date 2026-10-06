@@ -4,7 +4,7 @@ assertion_line: 1380
 expression: rendered
 ---
 ╭──────────────────────────────────────────────────────╮
-│ ✨ Update available! 0.160.0 -> 9.9.9                │
+│ ✨ Update available! 0.160.1 -> 9.9.9                │
 │ Run brew upgrade EmpiricaAI/tap/ecodex to update.    │
 │                                                      │
 │ See full release notes:                              │

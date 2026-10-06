@@ -5,7 +5,7 @@ expression: "snapshots.join(\"\\n---\\n\")"
 ---
 empty (48 columns):
 
-  >_ OpenAI Codex (v<VERSION>)
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
      loading
 
   Pull up a prompt.
@@ -17,7 +17,7 @@ empty (48 columns):
 ---
 resuming (48 columns):
 
-  >_ OpenAI Codex (v<VERSION>)
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
      loading
   Resuming session…
 
@@ -27,7 +27,7 @@ resuming (48 columns):
 ---
 forking (48 columns):
 
-  >_ OpenAI Codex (v<VERSION>)
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
      loading
   Forking session…
 
@@ -37,7 +37,7 @@ forking (48 columns):
 ---
 multiline (48 columns):
 
-  >_ OpenAI Codex (v<VERSION>)
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
      loading
 
   Pull up a prompt.
@@ -50,7 +50,7 @@ multiline (48 columns):
 ---
 narrow (18 columns):
 
-  >_ OpenAI Codex…
+  ∴ ecodex (v0.16…
      loading
 
   Pull up a promp…
