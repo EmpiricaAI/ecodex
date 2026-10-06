@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **A replayed tool call keeps its namespace.** The tool-name sanitizer
+  (0.157.7) also rewrote the `namespace` of calls in history, so a namespace
+  like `test_namespace::` came back as `test_namespace__`. Only the `name` the
+  Responses API validates is rewritten now.
+- **`ecodex exec -m <gpt model> -c model_provider=…` honours the provider you
+  named.** The headless auto-routing of OpenAI-family models to the built-in
+  `openai` provider overrode an explicit `-c model_provider`; it now steps aside.
+
 ## [0.160.1] - 2026-10-05
 
 ### Changed

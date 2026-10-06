@@ -84,6 +84,26 @@ empirica compliance-report                   # lint, complexity, tests, docs, re
 
 `ruff.toml` at the repo root scopes Python lint to the code ecodex owns, so `compliance-report` does not report upstream's lint debt. [`AGENTS.md`](AGENTS.md) holds the full Rust conventions.
 
+### Running the `codex-core` integration suite (`core::all`)
+
+`cargo nextest run -p codex-core --test all` builds the test binary but **not** the workspace binaries the tests look up with `cargo_bin(...)`. Without them hundreds of tests fail with "binary not found" (the first baseline read 324 failures; with the binaries present it is 3). Before running the suite, build the helpers into the same `target/debug`:
+
+```sh
+cd codex-rs
+cargo build -p codex-exec -p codex-linux-sandbox -p codex-shell-escalation -p codex-rmcp-client -p codex-cli --bins
+ln -sf ecodex target/debug/codex        # ecodex renames the CLI; upstream tests look for `codex`
+```
+
+`codex-code-mode-host` cannot be built from this tree: the `v8` crate's sandbox archive is not published for any platform (`release.yml` explains it). Fetch upstream's prebuilt host for the tag in `codex-rs/UPSTREAM_SYNC_TAG` and put it at `target/debug/codex-code-mode-host`:
+
+```sh
+curl -fsSL "https://github.com/openai/codex/releases/download/$(cat UPSTREAM_SYNC_TAG)/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C target/debug
+```
+
+Known failures that are **not** ecodex's: `suite::network_approval::network_rejection_preserves_execution_and_review_outcomes::{accepted_review,latest_rejection,pending_review}` fail identically on pristine upstream `rust-v0.160.0` on the Strix Halo box (the sandboxed child is still alive at the deadline), so treat them as environmental until they pass somewhere.
+
+Where ecodex differs from upstream on purpose, the test follows ecodex: the `monitor` tool appears in the expected tool list (`prompt_caching`) and in the hashes of the `exec`/developer-namespace tool descriptions in the scenario snapshots. Regenerate those with `INSTA_UPDATE=always` and review that the diff is hash lines only.
+
 ## Coding conventions
 
 - **Don't break upstream surfaces.** ecodex does not rename, reorganize, or change the contract of an upstream type. We add layers; we don't divert. Every divergence costs us at every sync.
