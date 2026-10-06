@@ -187,7 +187,7 @@ fn terminal_app_ssh_fallback_renders_inline_startup() {
             buffer
                 .content
                 .iter()
-                .any(|cell| { cell.symbol() == ">" && cell.fg == crate::style::accent_color() })
+                .any(|cell| { cell.symbol() == "∴" && cell.fg == crate::style::accent_color() })
         );
         let frame = (0..height)
             .map(|y| {

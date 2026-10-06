@@ -34,15 +34,25 @@ fn tui_runtime_source_does_not_depend_on_manager_escape_hatches() {
         "thread_manager(",
     ];
 
+    // ecodex: the plugin statusline refresh must build a plugins manager, which needs an
+    // AuthManager. It is the one sanctioned use; anything else is still a regression.
+    let ecodex_allowed = [("app/background_requests.rs", "AuthManager")];
+
     let violations: Vec<String> = sources
         .iter()
         .flat_map(|path| {
             let contents = fs::read_to_string(path).expect("Rust source file should be readable");
             let path_display = path.display().to_string();
+            let allowed: Vec<&str> = ecodex_allowed
+                .iter()
+                .filter(|(suffix, _)| path_display.ends_with(suffix))
+                .map(|(_, needle)| *needle)
+                .collect();
             forbidden
                 .iter()
-                .filter(move |needle| contents.contains(**needle))
-                .map(move |needle| format!("{path_display} contains `{needle}`"))
+                .filter(|needle| contents.contains(**needle) && !allowed.contains(*needle))
+                .map(|needle| format!("{path_display} contains `{needle}`"))
+                .collect::<Vec<_>>()
         })
         .collect();
 
