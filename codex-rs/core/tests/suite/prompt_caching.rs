@@ -271,6 +271,9 @@ async fn prompt_tools_are_consistent_across_requests(
         expected_tools_names.push("update_plan");
     }
     expected_tools_names.extend([
+        // ecodex addition: the `monitor` tool sits between the shell/plan tools
+        // and the rest of the standard set.
+        "monitor",
         "request_user_input",
         "apply_patch",
         "view_image",

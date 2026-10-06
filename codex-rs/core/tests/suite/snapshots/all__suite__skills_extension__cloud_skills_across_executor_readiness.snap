@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/skills_extension.rs
-assertion_line: 3190
 expression: "context_snapshot::format_request_history_snapshot(\"Cloud skills rebalance once to retain every executor skill. Post-turn compaction and resume restore the same cloud allocation before the executor reconnects; both catalogs are fully reinjected once into the new history.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: Cloud skills rebalance once to retain every executor skill. Post-turn compaction and resume restore the same cloud allocation before the executor reconnects; both catalogs are fully reinjected once into the new history.
@@ -44,9 +43,10 @@ Settings:
 
 ## Window 2 (after request 1)
 Settings: relative to window 1
-  tools (9; hash=1df9146cc32e8188):
+  tools (10; hash=1bb8fbc216d76aa3):
     + function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     + function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    + function/monitor: Arm a watch on a background subprocess. On each line matching the regex `pattern`, a <task-notifi...; args=[action, command, cwd, monitor_id, pattern, persistent, stream]; hash=dea435ba6609ae7c
     + custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
     + function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
 -- request 2 (turn) --
@@ -82,6 +82,7 @@ Settings: relative to window 2
   tools (0; hash=09612b07b5ecb5a5):
     - removed function/exec_command
     - removed function/write_stdin
+    - removed function/monitor
     - removed function/wait_for_environment
     - removed function/request_user_input
     - removed custom/apply_patch

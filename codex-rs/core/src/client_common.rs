@@ -75,33 +75,25 @@ impl Prompt {
 /// fail with a 400. Disallowed characters become `_`; calls pair with their
 /// outputs by `call_id`, so nothing depends on the exact name. Valid names are
 /// left untouched, so the request is unchanged for every other history.
+///
+/// Only `name` fields are rewritten. The 400 that motivated this named
+/// `input[N].name`; a `namespace` is upstream's to preserve across dispatch and
+/// replay (`namespaced_custom_tool_call_preserves_namespace_through_dispatch_and_replay`
+/// caught the first version of this function rewriting `test_namespace::`).
 fn sanitize_tool_names(items: &mut [ResponseItem]) {
     for item in items {
         match item {
-            ResponseItem::FunctionCall {
-                name, namespace, ..
+            ResponseItem::FunctionCall { name, .. }
+            | ResponseItem::CustomToolCall { name, .. }
+            | ResponseItem::FunctionCallOutput {
+                name: Some(name), ..
             }
-            | ResponseItem::CustomToolCall {
-                name, namespace, ..
-            } => {
-                sanitize_tool_name(name);
-                if let Some(namespace) = namespace {
-                    sanitize_tool_name(namespace);
-                }
-            }
-            ResponseItem::FunctionCallOutput {
-                name, namespace, ..
-            } => {
-                for field in [name, namespace].into_iter().flatten() {
-                    sanitize_tool_name(field);
-                }
-            }
-            ResponseItem::CustomToolCallOutput { name, .. } => {
-                if let Some(name) = name {
-                    sanitize_tool_name(name);
-                }
-            }
-            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::CustomToolCallOutput {
+                name: Some(name), ..
+            } => sanitize_tool_name(name),
+            ResponseItem::FunctionCallOutput { name: None, .. }
+            | ResponseItem::CustomToolCallOutput { name: None, .. }
+            | ResponseItem::AdditionalTools { .. }
             | ResponseItem::Message { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::AgentMessage { .. }
