@@ -5,7 +5,7 @@ expression: "format!(\"cursor={:?}\\n{frame}\",\nlayout.cursor_pos(area)).replac
 ---
 cursor=Some((13, 12))
                                                 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading                                    
                                                 
   Pull up a prompt.                             

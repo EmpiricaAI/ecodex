@@ -5,7 +5,7 @@ expression: "normalize_snapshot_paths(normalize_agent_center_snapshot(snapshots.
 ---
 80 columns
 
-  ∴ ecodex (v0.160.1)  ·  turtles all the way down
+  ∴ ecodex (v0.1.0)  ·  turtles all the way down
      /tmp/project
 
   Pull up a prompt.
@@ -27,7 +27,7 @@ expression: "normalize_snapshot_paths(normalize_agent_center_snapshot(snapshots.
 
 32 columns
 
-  ∴ ecodex (v0.160.1)  ·  turtl…
+  ∴ ecodex (v0.1.0)  ·  turtles…
      /tmp/project
 
   Pull up a prompt.

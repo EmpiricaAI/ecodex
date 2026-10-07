@@ -6,7 +6,7 @@ expression: "snapshots.join(\"\\n---\\n\")"
 resume lookup fallback:
 before:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
 
   Pull up a prompt.
@@ -17,7 +17,7 @@ before:
 
 after:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
 
   Pull up a prompt.
@@ -30,7 +30,7 @@ after:
 fork lookup fallback:
 before:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
 
   Pull up a prompt.
@@ -41,7 +41,7 @@ before:
 
 after:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
 
   Pull up a prompt.
@@ -56,7 +56,7 @@ before:
 hidden while picker owns input
 after:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
 
   Pull up a prompt.
@@ -71,7 +71,7 @@ before:
 hidden while picker owns input
 after:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
 
   Pull up a prompt.

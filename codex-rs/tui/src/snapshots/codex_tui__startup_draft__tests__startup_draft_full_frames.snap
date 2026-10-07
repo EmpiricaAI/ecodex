@@ -5,7 +5,7 @@ expression: "snapshots.join(\"\\n---\\n\")"
 ---
 empty (48 columns):
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
 
   Pull up a prompt.
@@ -17,7 +17,7 @@ empty (48 columns):
 ---
 resuming (48 columns):
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
   Resuming session…
 
@@ -27,7 +27,7 @@ resuming (48 columns):
 ---
 forking (48 columns):
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
   Forking session…
 
@@ -37,7 +37,7 @@ forking (48 columns):
 ---
 multiline (48 columns):
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
 
   Pull up a prompt.
@@ -50,7 +50,7 @@ multiline (48 columns):
 ---
 narrow (18 columns):
 
-  ∴ ecodex (v0.16…
+  ∴ ecodex (v0.1.…
      loading
 
   Pull up a promp…

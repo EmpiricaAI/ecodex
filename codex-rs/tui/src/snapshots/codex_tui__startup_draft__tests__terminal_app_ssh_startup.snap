@@ -5,7 +5,7 @@ expression: "frames.join(\"\\n---\\n\").replace(crate::version::CODEX_CLI_VERSIO
 ---
 terminal_app_over_ssh=false, owned=true
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
 
   Pull up a prompt.
@@ -23,7 +23,7 @@ terminal_app_over_ssh=false, owned=true
 ---
 terminal_app_over_ssh=true, owned=false
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way d…
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      loading
 
   Pull up a prompt.
