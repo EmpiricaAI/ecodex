@@ -1233,7 +1233,7 @@ def is_safe_empirica_statement(command: str) -> bool:
     is a whole-input question. A caller that reaches for the wrong one is now
     making a visible choice rather than an invisible omission.
     """
-    return _is_single_statement(command) and is_safe_empirica_command(command)
+    return _is_single_statement(command) and _substitutions_are_safe(command) and is_safe_empirica_command(command)
 
 
 # Verb suffixes that denote a pure read in empirica's CLI naming convention.
@@ -1283,6 +1283,22 @@ def is_read_shaped_empirica_verb(cmd: str) -> bool:
     return verb.endswith(EMPIRICA_READ_SUFFIXES)
 
 
+def _is_plain_single_command(cmd: str) -> bool:
+    """One statement, with nothing riding along: no chain, background, pipe or newline
+    outside quotes, no file redirect, and no command substitution anywhere.
+
+    Substitution is refused even inside quotes: `$(...)` and backticks execute inside
+    DOUBLE quotes, and refusing inside single quotes too costs only a rare benign
+    command (the main classifier makes the same conservative call). Used where a verb
+    match alone would admit the rest of the line.
+    """
+    if "`" in cmd or "$(" in cmd:
+        return False
+    if not _is_single_statement(cmd):
+        return False
+    return not _has_dangerous_redirects(cmd)
+
+
 def is_toggle_command(command: str) -> str | None:
     """Detect if a command is writing or removing the Sentinel pause file.
 
@@ -1291,6 +1307,13 @@ def is_toggle_command(command: str) -> str | None:
     whitelisting it as a general safe command.
     """
     cmd = command.lstrip()
+
+    # The exemption is for the toggle ALONE. It runs before every gate, so a verb
+    # match on the first two tokens would admit whatever rides along:
+    # `empirica off ; rm -rf x`, `empirica off $(cmd)`, `rm -rf x # sentinel_paused`.
+    # Found by the 2026-10-05 sweep; the old comment called this "prompt-injection-safe".
+    if not _is_plain_single_command(cmd):
+        return None
 
     # Canonical CLI toggle verbs — the user-facing Sentinel pause/resume surface:
     #   empirica off [...]             → pause   (per-instance, or --global)
@@ -1320,9 +1343,12 @@ def is_toggle_command(command: str) -> str | None:
     if "sentinel_paused" in cmd and ("write_text" in cmd or "open(" in cmd):
         return "pause"
 
-    # Detect pause file removal
-    if cmd.startswith("rm ") and ("sentinel_paused" in cmd):
-        return "unpause"
+    # Detect pause file removal: `rm [flags] <path>...` where EVERY path is a pause file.
+    rm_tokens = cmd.split()
+    if rm_tokens and rm_tokens[0] == "rm":
+        paths = [t for t in rm_tokens[1:] if not t.startswith("-")]
+        if paths and all(Path(p).name.startswith("sentinel_paused") for p in paths):
+            return "unpause"
 
     return None
 
@@ -1386,6 +1412,10 @@ def is_transition_command(command: str) -> bool:
     # heredoc body is one statement and that separators inside quotes don't split.
     if _is_single_statement(cmd):
         head = cmd.split("<<")[0].strip() if "<<" in cmd else cmd
+        # A prefix match is a verb question; a substitution or file redirect on the
+        # same statement is a second command (`cd $(rm -rf x)`, `git add . > f`).
+        if not _substitutions_are_safe(cmd) or _has_dangerous_redirects(head):
+            return False
         return any(head.startswith(prefix) for prefix in TRANSITION_COMMANDS)
 
     # Multi-statement: EVERY segment must independently be a transition command
@@ -1437,6 +1467,10 @@ def is_transition_command(command: str) -> bool:
     _BENIGN_PRODUCERS = ("echo ", "echo", "cat ", "printf ")
     segments = [s.strip() for s in re.split(r"\n|;|&&|\|\||\||&", cmd) if s.strip()]
     if not segments:
+        return False
+    # An `echo`/`cat`/`printf` producer is benign only when it writes nothing and runs
+    # nothing: `cd x && echo y > ~/.bashrc` is a file write wearing a producer's name.
+    if not _substitutions_are_safe(cmd) or any(_has_dangerous_redirects(seg) for seg in segments):
         return False
     return all(
         any(seg.startswith(p) for p in TRANSITION_COMMANDS) or any(seg.startswith(p) for p in _BENIGN_PRODUCERS)
@@ -2324,6 +2358,55 @@ def _nvidia_smi_is_read_only(stripped: str) -> bool:
     return True
 
 
+# git branch / tag / remote are on the safe-prefix list for their LIST forms, but the
+# same verbs create, move and delete refs and remotes (`git branch -D x`, `git tag v1`,
+# `git remote add o u`). The list forms are the allowlist; anything else is a mutation.
+_GIT_BRANCH_READ_FLAGS = frozenset(
+    {"-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--list", "-l", "--show-current"}
+    | {"--no-color", "--color", "--column", "--no-column", "-i", "--ignore-case"}
+)
+_GIT_TAG_READ_FLAGS = frozenset(
+    {"-l", "--list", "-v", "--verify", "--no-color", "--color", "--column", "--no-column", "-i", "--ignore-case"}
+)
+_GIT_REF_VALUE_FLAGS = frozenset(
+    {"--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"}
+)
+
+
+def _git_ref_command_mutates(cmd: str) -> bool:
+    """True for `git branch|tag|remote` invocations that are not a pure listing."""
+    parts = _normalize_git_globals(cmd.strip()).split()
+    if len(parts) < 2 or parts[0] != "git" or parts[1] not in ("branch", "tag", "remote"):
+        return False
+    sub, rest = parts[1], parts[2:]
+    if sub == "remote":
+        if rest[:1] in (["-v"], ["--verbose"]):
+            rest = rest[1:]
+        return bool(rest) and rest[0] not in ("show", "get-url")
+    read_flags = _GIT_BRANCH_READ_FLAGS if sub == "branch" else _GIT_TAG_READ_FLAGS
+    listing = False
+    expect_value = False
+    for tok in rest:
+        if expect_value:
+            expect_value = False
+            continue
+        if tok in ("--list", "-l"):
+            listing = True
+        if tok in _GIT_REF_VALUE_FLAGS:
+            expect_value = True
+        elif (
+            (tok.startswith("--") and "=" in tok and tok.split("=", 1)[0] in _GIT_REF_VALUE_FLAGS)
+            or tok in read_flags
+            or (sub == "tag" and re.fullmatch(r"-n\d*", tok))
+        ):
+            continue
+        elif tok.startswith("-"):
+            return True
+        elif not listing:
+            return True  # a bare name creates a branch or tag
+    return False
+
+
 def _has_dangerous_tool_flags(cmd: str) -> bool:
     """True if ``cmd`` is a safe-prefixed tool invoked with a mutating/exec flag
     its prefix would otherwise wave through (the membrane-hole class).
@@ -2336,6 +2419,8 @@ def _has_dangerous_tool_flags(cmd: str) -> bool:
     """
     stripped = cmd.lstrip()
     head = stripped.split(" ", 1)[0]
+    if head == "git" and _git_ref_command_mutates(stripped):
+        return True
     if head in _AWK_NAMES:
         return "system(" in stripped or bool(_AWK_WRITE_RE.search(stripped))
     if head in _SED_NAMES:
@@ -2698,7 +2783,8 @@ def _is_segment_safe(segment: str) -> bool:
     # check runs — so without this, `cd /x && grep foo > /tmp/out` launders a
     # redirect past the gate. (Safe redirects like `2>/dev/null` were already
     # stripped from `clean` above, so anything left is a real one.)
-    if _has_dangerous_redirects(clean):
+    # A lone `&` (background operator) likewise starts a second command in the segment.
+    if _has_dangerous_redirects(clean) or _has_lone_ampersand(clean):
         return False
 
     # 1. Validate every embedded $() and backtick substitution. The inner
@@ -2743,8 +2829,9 @@ def _is_segment_safe(segment: str) -> bool:
                 return True
             return _is_segment_safe(rest)
 
-    # 4. Original safe forms.
-    if stripped.startswith("cd "):
+    # 4. Original safe forms. `cd x | rm y` is a pipe, not a directory change: the
+    # shortcut ran before the pipe check and waved the whole segment through.
+    if stripped.startswith("cd ") and not _contains_outside_quotes(stripped, "|"):
         return True
     # A piped segment (`empirica goals-list | tail`) must be validated
     # stage-by-stage — the trailing pipe can otherwise smuggle an executor
@@ -2819,6 +2906,56 @@ def _mask_arithmetic_expansions(command: str) -> str:
     return "".join(out)
 
 
+def _substitutions_are_safe(command: str) -> bool:
+    """Is every `$(...)` / backtick substitution in `command` itself a safe command?
+
+    Quote-agnostic on purpose: substitutions execute inside double quotes, so a
+    single-quoted literal is conservatively judged too. A heredoc body is excluded
+    (its delimiter governs expansion). Shared by the main classifier and the
+    empirica-statement rescue, which had its own blind spot here (2026-10-05).
+    """
+    body = command.split("<<")[0] if "<<" in command else command
+    for inner in _extract_command_substitutions(body):
+        inner_clean = inner.strip()
+        if inner_clean and not _is_command_text_safe(inner_clean):
+            return False
+    return True
+
+
+def _has_lone_ampersand(command: str) -> bool:
+    """True if `command` has a background operator: a single `&` outside quotes.
+
+    `ls & rm -rf x` runs both; the chain splitter only knew `&&`, `||`, `;` and
+    newline, so the lone form classified as one safe-prefixed read. Not flagged:
+    `&&`, the redirect forms (`2>&1`, `>&2`, `&>file`, `<&3`) and the `|&` pipe.
+    """
+    in_single = in_double = escape = False
+    i = 0
+    n = len(command)
+    while i < n:
+        c = command[i]
+        if escape:
+            escape = False
+        elif c == "\\":
+            escape = True
+        elif c == "'" and not in_double:
+            in_single = not in_single
+        elif c == '"' and not in_single:
+            in_double = not in_double
+        elif c == "&" and not in_single and not in_double:
+            prev = command[i - 1] if i else ""
+            nxt = command[i + 1] if i + 1 < n else ""
+            if nxt == "&":
+                i += 2
+                continue
+            if prev in ("<", ">", "|") or nxt == ">":
+                i += 1
+                continue
+            return True
+        i += 1
+    return False
+
+
 def _has_dangerous_operators(command: str) -> bool:
     """Check for dangerous shell operators (excluding &&, ||, ; handled in chain check).
 
@@ -2828,6 +2965,8 @@ def _has_dangerous_operators(command: str) -> bool:
     executes no command (shape-3 over-gate, 2026-08-16).
     """
     scan = _mask_arithmetic_expansions(command) if "$((" in command else command
+    if _has_lone_ampersand(scan):
+        return True
     for operator in DANGEROUS_SHELL_OPERATORS:
         if operator in ("&&", "||", ";"):
             continue
@@ -2988,11 +3127,8 @@ def is_safe_bash_command(tool_input: dict) -> bool:
     # so a single-quoted `'$(rm)'` literal is conservatively gated too) — this runs
     # before the pipe check, so it also covers `echo "$(rm)" | cat`. Heredoc bodies
     # are excluded (their delimiter governs expansion), matching _is_segment_safe.
-    _sub_body = command.split("<<")[0] if "<<" in command else command
-    for _inner in _extract_command_substitutions(_sub_body):
-        _inner_clean = _inner.strip()
-        if _inner_clean and not _is_command_text_safe(_inner_clean):
-            return False
+    if not _substitutions_are_safe(command):
+        return False
 
     # Single command. A trailing pipe can smuggle an executor
     # (`empirica goals-list | sh`), so a piped command is NOT safe on the bare
@@ -3322,9 +3458,12 @@ def is_safe_remote_command(command: str) -> bool:
     """
     command_stripped = command.lstrip()
 
-    # --- ssh-add, ssh-keygen, ssh-agent: local key management, always safe ---
-    if command_stripped.startswith(("ssh-add", "ssh-keygen", "ssh-agent", "ssh -T")):
-        return True
+    # --- ssh-add, ssh-keygen, ssh-agent: only their LISTING forms are reads. The old
+    # blanket True admitted `ssh-agent bash -c ...`, `ssh-keygen -f k` (writes a key)
+    # and `ssh -T host 'rm -rf x'` (the remote command was never inspected).
+    local_key_tool = _classify_local_ssh_tool(command_stripped)
+    if local_key_tool is not None:
+        return local_key_tool
 
     # --- ssh-copy-id: modifies remote, always praxic ---
     if command_stripped.startswith("ssh-copy-id"):
@@ -3345,6 +3484,57 @@ def is_safe_remote_command(command: str) -> bool:
     return False  # Unknown remote command type
 
 
+def _classify_local_ssh_tool(command: str) -> bool | None:
+    """Classify ssh-add / ssh-keygen / ssh-agent. None when `command` is none of them.
+
+    Read-only forms only: `ssh-add -l|-L`, and `ssh-keygen` that lists a fingerprint
+    (`-l`) or finds a host (`-F`) with nothing that generates, removes or rehashes.
+    """
+    parts = command.split()
+    if not parts:
+        return None
+    tool, args = parts[0], parts[1:]
+    if tool == "ssh-agent":
+        return False
+    if tool == "ssh-add":
+        return bool(args) and all(a in ("-l", "-L") for a in args)
+    if tool != "ssh-keygen":
+        return None
+    listing = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-l", "-F"):
+            listing = True
+        if a in ("-f", "-F", "-E"):
+            i += 1  # consume the value
+        elif a not in ("-l", "-v"):
+            return False
+        i += 1
+    return listing
+
+
+def _ssh_option_runs_local_program(parts: list[str]) -> bool:
+    """True if an ssh option BEFORE the host makes ssh run a local program: `-F <file>`
+    (a config can set ProxyCommand) or `-o ProxyCommand|LocalCommand|...`."""
+    with_arg = set("BbcDEeFIiJLlmOopRSWw")
+    local_opts = ("proxycommand", "localcommand", "permitlocalcommand", "knownhostscommand")
+    i = 1
+    while i < len(parts):
+        tok = parts[i]
+        if not tok.startswith("-") or len(tok) < 2:
+            return False  # reached the host
+        letter = tok[1]
+        if letter == "F":
+            return True
+        if letter == "o":
+            value = tok[2:] if len(tok) > 2 else (parts[i + 1] if i + 1 < len(parts) else "")
+            if any(opt in value.lower() for opt in local_opts):
+                return True
+        i += 2 if (letter in with_arg and len(tok) == 2) else 1
+    return False
+
+
 def _classify_ssh(command: str) -> bool:
     """
     Extract the remote command from an SSH invocation and classify it.
@@ -3361,6 +3551,8 @@ def _classify_ssh(command: str) -> bool:
     parts = command.split()
     if len(parts) < 2:
         return True  # Just 'ssh' alone, harmless
+    if _ssh_option_runs_local_program(parts):
+        return False
 
     # SSH options that consume the NEXT argument
     ssh_opts_with_arg = set("BbcDEeFIiJLlmOopRSWw")
@@ -3697,7 +3889,19 @@ def _is_safe_pipe_segment(segment_clean: str, *, is_first: bool) -> bool:
     # arbitrary-exec SOURCE (`python3 -c '…' | cat` must stay praxic).
     if is_first:
         return False
-    return any(segment_clean.startswith(target) for target in SAFE_PIPE_TARGETS)
+    # Whole-word match: a bare `startswith("tr")` also matched `truncate`, `trash`.
+    for target in SAFE_PIPE_TARGETS:
+        word = target.strip()
+        if segment_clean != word and not segment_clean.startswith(word + " "):
+            continue
+        if word in ("python3 -c", "python -c"):
+            # The standalone path vets `python3 -c`; the receiver slot did not, so
+            # `| python3 -c 'os.remove(...)'` was a read.
+            return is_safe_python_command(segment_clean)
+        if word == "tee /dev/stderr":
+            return segment_clean == word  # any further argument is a file it WRITES
+        return True
+    return False
 
 
 def is_safe_pipe_chain(command: str) -> bool:
@@ -5047,32 +5251,55 @@ def _check_auto_proceed(
     return None
 
 
+def _parse_check_time(check_timestamp) -> datetime | None:
+    """The CHECK's time as a naive LOCAL datetime, or None when it cannot be read.
+
+    The store writes an epoch float. An ISO string is accepted too; an offset (including Z) is honoured and converted to
+    local time, where this used to strip it and read UTC as local, misplacing the CHECK by the machine's UTC offset.
+    """
+    try:
+        if isinstance(check_timestamp, bool):
+            return None
+        if isinstance(check_timestamp, (int, float)) or (
+            isinstance(check_timestamp, str) and check_timestamp.strip().replace(".", "", 1).isdigit()
+        ):
+            return datetime.fromtimestamp(float(check_timestamp))
+        if isinstance(check_timestamp, str) and check_timestamp.strip():
+            parsed = datetime.fromisoformat(check_timestamp.strip().replace("Z", "+00:00"))
+            return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
+    except (ValueError, OverflowError, OSError):
+        pass
+    return None
+
+
 def _check_expiry_and_compact(check_timestamp, empirica_root: Path | None) -> tuple | None:
     """Check optional CHECK expiry and compact invalidation.
 
     Returns (decision, reason) if CHECK is expired/invalidated, or None to continue.
     """
-    check_time = None
+    # Each switch is independent. check_time used to be parsed only inside the expiry
+    # branch, so COMPACT_INVALIDATION alone never saw it and never denied.
+    expiry_on = os.getenv("EMPIRICA_SENTINEL_CHECK_EXPIRY", "false").lower() == "true"
+    compact_on = os.getenv("EMPIRICA_SENTINEL_COMPACT_INVALIDATION", "false").lower() == "true"
+    if not (expiry_on or compact_on):
+        return None
 
-    if os.getenv("EMPIRICA_SENTINEL_CHECK_EXPIRY", "false").lower() == "true":
-        try:
-            if isinstance(check_timestamp, (int, float)) or (
-                isinstance(check_timestamp, str) and check_timestamp.replace(".", "").isdigit()
-            ):
-                check_time = datetime.fromtimestamp(float(check_timestamp))
-            else:
-                check_time = datetime.fromisoformat(check_timestamp.replace("Z", "+00:00").replace("+00:00", ""))
-            age_minutes = (datetime.now() - check_time).total_seconds() / 60
+    check_time = _parse_check_time(check_timestamp)
+    if check_time is None:
+        # An opted-in check that cannot read the CHECK's time must not quietly switch itself off:
+        # that read as 'no expiry, no compaction' to anyone who turned the switches on. A fresh CHECK
+        # rewrites the timestamp, so the denial heals itself.
+        return ("deny", "CHECK timestamp unreadable. Run CHECK again to refresh it.")
 
-            if age_minutes > MAX_CHECK_AGE_MINUTES:
-                return ("deny", f"CHECK expired ({age_minutes:.0f}min). Refresh epistemic state.")
-        except Exception:
-            pass
+    if expiry_on:
+        age_minutes = (datetime.now() - check_time).total_seconds() / 60
+        if age_minutes > MAX_CHECK_AGE_MINUTES:
+            return ("deny", f"CHECK expired ({age_minutes:.0f}min). Refresh epistemic state.")
 
-    if os.getenv("EMPIRICA_SENTINEL_COMPACT_INVALIDATION", "false").lower() == "true":
+    if compact_on:
         if empirica_root:
             last_compact = get_last_compact_timestamp(empirica_root.parent)
-            if last_compact and check_time and last_compact > check_time:
+            if last_compact and last_compact > check_time:
                 return ("deny", "Context compacted. Recalibrate with fresh CHECK.")
 
     return None

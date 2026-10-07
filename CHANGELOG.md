@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Vendored empirica hooks follow core 1.14.9.** The sentinel gate now denies a
+  CHECK whose timestamp it cannot read when expiry or compact checks are on, and
+  honours timezone offsets in it. No other hook changed.
+- **TUI unit tests render a fixed version.** Snapshots no longer go stale on a
+  patch release.
+
 ## [0.160.2] - 2026-10-06
 
 ### Fixed
