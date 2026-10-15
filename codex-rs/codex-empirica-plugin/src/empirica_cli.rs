@@ -11,6 +11,7 @@
 use std::ffi::OsStr;
 use std::io::Read;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -30,6 +31,10 @@ const CC_FALLBACK_HOOKS_DIR: &str = "~/.claude/plugins/local/empirica/hooks";
 
 /// Interpreter used when the empirica CLI's own cannot be resolved.
 const FALLBACK_PYTHON: &str = "python3";
+
+/// Oldest Python the vendored hooks import under: they evaluate `X | None`
+/// annotations at import time, which Python 3.9 rejects.
+const MIN_PYTHON: (u32, u32) = (3, 10);
 
 /// How much of the `empirica` script to read when looking for its shebang.
 /// A console script's shebang (pip's two-line `/bin/sh` form included) sits
@@ -122,11 +127,52 @@ pub fn run_hook_script(script: &str, input_json: &str) -> Result<HookOutput> {
         .wait_with_output()
         .context("wait for empirica hook subprocess")?;
 
+    let exit_code = output.status.code().unwrap_or(-1);
+
+    // 0 is success and 2 is a deliberate block. Anything else is a crash, and
+    // the commonest one on macOS is the system Python 3.9 failing to import the
+    // hooks. Ask the interpreter its version only then, so the happy path pays
+    // for no extra process.
+    if !matches!(exit_code, 0 | 2)
+        && let Some(message) = unsupported_python(&interpreter)
+    {
+        anyhow::bail!(message);
+    }
+
     Ok(HookOutput {
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        exit_code: output.status.code().unwrap_or(-1),
+        exit_code,
     })
+}
+
+/// Why `interpreter` cannot run the vendored hooks, if it is older than
+/// [`MIN_PYTHON`]. `None` when it is new enough or cannot be asked.
+fn unsupported_python(interpreter: &Path) -> Option<String> {
+    let output = Command::new(interpreter)
+        .args([
+            "-c",
+            "import sys; print(sys.version_info[0], sys.version_info[1])",
+        ])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut parts = stdout.split_whitespace().map(str::parse::<u32>);
+    let version = (parts.next()?.ok()?, parts.next()?.ok()?);
+    if version >= MIN_PYTHON {
+        return None;
+    }
+    Some(format!(
+        "{} is Python {}.{}, but the empirica hooks need Python {}.{} or newer. \
+         Install empirica where it gets its own interpreter (`pipx install empirica` \
+         or `uv tool install empirica`) so `empirica` is on PATH, or put a newer \
+         python3 first on PATH.",
+        interpreter.display(),
+        version.0,
+        version.1,
+        MIN_PYTHON.0,
+        MIN_PYTHON.1,
+    ))
 }
 
 /// Resolve the directory containing the empirica hook Python scripts.
@@ -348,6 +394,40 @@ mod tests {
             .expect("PATH");
 
         pretty_assertions::assert_eq!(hook_interpreter(&path_var), python);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsupported_python_names_an_interpreter_older_than_the_hooks_need() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let [old, current] = [("3 9", "python39"), ("3 12", "python312")].map(|(version, name)| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\necho {version}\n")).expect("write stub");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod stub");
+            path
+        });
+
+        pretty_assertions::assert_eq!(
+            (
+                unsupported_python(&old),
+                unsupported_python(&current),
+                unsupported_python(&dir.path().join("missing")),
+            ),
+            (
+                Some(format!(
+                    "{} is Python 3.9, but the empirica hooks need Python 3.10 or newer. \
+                     Install empirica where it gets its own interpreter (`pipx install empirica` \
+                     or `uv tool install empirica`) so `empirica` is on PATH, or put a newer \
+                     python3 first on PATH.",
+                    old.display()
+                )),
+                None,
+                None,
+            )
+        );
     }
 
     #[test]

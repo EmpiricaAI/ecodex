@@ -8,10 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **A too-old Python now says so.** The hooks need Python 3.10 or newer, but
+  when `empirica` was not on PATH the launcher fell back to the system
+  `python3`, which on macOS is 3.9. The gate then crashed on an import and the
+  denial showed a raw traceback. A crashing hook now has its interpreter's
+  version checked, and a too-old one is named with what to install.
+
 ### Changed
 - **Vendored empirica hooks follow core 1.14.9.** The sentinel gate now denies a
   CHECK whose timestamp it cannot read when expiry or compact checks are on, and
   honours timezone offsets in it. No other hook changed.
+- **Security updates.** `openssl` (seven advisories, five high), `cmov` and
+  `serde_with` are bumped within their compatible ranges, and the npm tooling
+  lockfile pins the fixed `undici`, `hono`, `qs`, `fast-uri`, `browserslist`,
+  `ip-address`, `js-yaml` and `proxy-addr`. Advisories that need a breaking
+  upgrade (`gix`, `hickory`, `jsonwebtoken`, `opentelemetry_sdk`,
+  `aws-smithy-json`) are still open.
 - **TUI unit tests render a fixed version.** Snapshots no longer go stale on a
   patch release.
 
