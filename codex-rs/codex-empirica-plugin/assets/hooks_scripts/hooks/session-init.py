@@ -21,6 +21,7 @@ from pathlib import Path
 
 # Import shared utilities from plugin lib
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from instance_clash import live_claude_pid
 from project_resolver import _find_git_root, find_project_root, get_instance_id, has_valid_db
 
 
@@ -1041,8 +1042,24 @@ def _check_active_session_files(project_root: Path) -> dict:
     return {}
 
 
-def _find_best_orphaned_transaction(empirica_dir: Path) -> tuple:
-    """Find the most recent open transaction file in .empirica dir.
+def _owner_is_alive(tx_data: dict, own_claude_session_id: str | None) -> bool:
+    """Does a RUNNING claude other than this one own this transaction?
+
+    A transaction records the claude session that opened it, and Claude Code keeps a file per running session
+    (lib/instance_clash.live_claude_pid). This session's own transaction is not another's, however alive it is
+    (a resume); one with no recorded owner, or whose owner is gone, is an orphan. Never raises.
+    """
+    owner = tx_data.get("claude_session_id")
+    if not owner or owner == own_claude_session_id:
+        return False
+    try:
+        return live_claude_pid(owner) is not None
+    except Exception:
+        return False
+
+
+def _find_best_orphaned_transaction(empirica_dir: Path, own_claude_session_id: str | None = None) -> tuple:
+    """Find the most recent open transaction file in .empirica dir that nobody else is running.
 
     Returns (tx_file, tx_data) or (None, None) if none found.
     """
@@ -1055,7 +1072,7 @@ def _find_best_orphaned_transaction(empirica_dir: Path) -> tuple:
                 continue
             with open(tx_file) as f:
                 tx_data = json.load(f)
-            if tx_data.get("status") == "open":
+            if tx_data.get("status") == "open" and not _owner_is_alive(tx_data, own_claude_session_id):
                 best_tx = (tx_file, tx_data)
                 best_mtime = mtime
         except Exception:
@@ -1065,11 +1082,12 @@ def _find_best_orphaned_transaction(empirica_dir: Path) -> tuple:
     return None, None
 
 
-def _adopt_orphaned_transaction(project_root: Path) -> dict:
+def _adopt_orphaned_transaction(project_root: Path, own_claude_session_id: str | None = None) -> dict:
     """Check for orphaned open transactions and re-key them to the new instance.
 
     After machine/terminal/tmux restart, instance-keyed files are stale but
-    transaction files survive. Adopt and re-key them.
+    transaction files survive. Adopt and re-key them. A transaction whose owning
+    claude session is still running is a sibling's, not an orphan: it is left where it is.
     """
     empirica_dir = project_root / ".empirica"
     if not empirica_dir.exists():
@@ -1082,7 +1100,7 @@ def _adopt_orphaned_transaction(project_root: Path) -> dict:
     except ImportError:
         new_suffix = ""
 
-    tx_file, tx_data = _find_best_orphaned_transaction(empirica_dir)
+    tx_file, tx_data = _find_best_orphaned_transaction(empirica_dir, own_claude_session_id)
     if not tx_file or not tx_data:
         return {}
 
@@ -1157,7 +1175,7 @@ def _detect_existing_session(claude_session_id: str, project_root: Path) -> dict
     if found:
         return found
 
-    found = _adopt_orphaned_transaction(project_root)
+    found = _adopt_orphaned_transaction(project_root, claude_session_id)
     if found:
         return found
 
@@ -1193,7 +1211,7 @@ def _try_cwd_adoption() -> tuple:
     return None, False
 
 
-def _prefer_cwd_on_startup(project_root, cwd_root, suffix):
+def _prefer_cwd_on_startup(project_root, cwd_root, suffix, own_claude_session_id=None):
     """STARTUP EXCEPTION (ARCHITECTURE.md; KNOWN_ISSUES 11.26): on a fresh
     'startup' event the user's CWD is explicit intent and must override a
     stale instance-file binding left by a *different* conversation that
@@ -1220,8 +1238,16 @@ def _prefer_cwd_on_startup(project_root, cwd_root, suffix):
     try:
         if tx_file.exists():
             with open(tx_file) as f:
-                if json.load(f).get("status") == "open":
-                    return project_root  # open tx authoritative (11.26)
+                tx = json.load(f)
+            # Authoritative (11.26) means the CONTINUING loop: this session's own transaction. One owned by a
+            # DIFFERENT claude session is not ours, alive or not (a brand-new startup cannot be continuing it); it is
+            # that practice's to resume or adopt when someone starts there. Honouring it bound this session to the
+            # wrong practice and the session row was written into that practice's database (NLE, reproduced in a
+            # sandbox). A transaction with no recorded owner, or an unknown caller, keeps the old reading.
+            owner = tx.get("claude_session_id")
+            foreign = bool(owner and own_claude_session_id and owner != own_claude_session_id)
+            if tx.get("status") == "open" and not foreign:
+                return project_root
     except Exception:
         pass
 
@@ -1233,6 +1259,17 @@ def _prefer_cwd_on_startup(project_root, cwd_root, suffix):
         )
         return Path(cwd_root)
     return project_root
+
+
+def _adopt_caller_identity(claude_session_id: str | None) -> None:
+    """Tell every resolver who is calling: this SessionStart payload's claude session id.
+
+    path_resolver lets a foreign-owned open transaction stop pinning a session to its project only when the caller's
+    id (CLAUDE_CODE_SESSION_ID) is known, and a SessionStart hook did not carry it, so the stale practice's database
+    kept winning and session-create wrote the new session there. The payload is authoritative about who is starting.
+    """
+    if claude_session_id:
+        os.environ["CLAUDE_CODE_SESSION_ID"] = str(claude_session_id)
 
 
 def _run_stale_cleanup(claude_session_id: str) -> int:
@@ -1754,6 +1791,18 @@ def _calibration_block(project_root) -> str:
         return ""
 
 
+def _session_start_event(hook_input: dict) -> str:
+    """'resume' or 'startup', from the SessionStart payload.
+
+    Claude Code sends the discriminator as `source` (startup | resume | clear | compact); main() read `type`, which is absent, so every
+    start looked like a startup and `claude --resume` could never reach the resume path. `source` is read first (as in
+    _unpersisted_reason), `type` is kept for harnesses that send it. Only an exact 'resume' changes behaviour: clear, compact, an unknown
+    value or none all keep the startup handling they always had.
+    """
+    raw = hook_input.get("source") or hook_input.get("type") or "startup"
+    return "resume" if str(raw).strip().lower() == "resume" else "startup"
+
+
 def main():
     """Main session init logic.
 
@@ -1771,7 +1820,8 @@ def main():
         pass
 
     claude_session_id = hook_input.get("session_id")
-    event_type = hook_input.get("type", "startup")
+    _adopt_caller_identity(claude_session_id)
+    event_type = _session_start_event(hook_input)
     is_resume = event_type == "resume"
 
     # CWD-FIRST ADOPTION on startup
@@ -1790,7 +1840,9 @@ def main():
         if event_type == "startup":
             from project_resolver import _get_instance_suffix
 
-            project_root = _prefer_cwd_on_startup(project_root, _find_git_root() or Path.cwd(), _get_instance_suffix())
+            project_root = _prefer_cwd_on_startup(
+                project_root, _find_git_root() or Path.cwd(), _get_instance_suffix(), claude_session_id
+            )
 
     os.chdir(project_root)
     ai_id = _resolve_ai_id_for_session(project_root)

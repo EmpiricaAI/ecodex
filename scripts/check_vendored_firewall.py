@@ -84,13 +84,24 @@ def _any_if_test_contains_literal_false(tree: ast.Module) -> bool:
     every structural node while removing the behaviour — demonstrated live
     against this guard's structural checks (2026-08-21, exit 0 with the
     escape hatch dead). Any literal False inside an `if` test is dead code at
-    best and a disabled security path at worst; either way it must not pass."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.If):
-            for sub in ast.walk(node.test):
-                if isinstance(sub, ast.Constant) and sub.value is False:
-                    return True
-    return False
+    best and a disabled security path at worst; either way it must not pass.
+
+    A False passed to a call, positional or keyword, is data to the callee and
+    not a disabled branch, so call-argument subtrees are skipped: core 1.14.11
+    writes `if not (_is_safe_pipe_segment(seg, is_first=False) or ...)`."""
+    return any(
+        _literal_false_outside_call_args(node.test)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+    )
+
+
+def _literal_false_outside_call_args(node: ast.AST) -> bool:
+    if isinstance(node, ast.Constant):
+        return node.value is False
+    if isinstance(node, ast.Call):
+        return _literal_false_outside_call_args(node.func)
+    return any(_literal_false_outside_call_args(child) for child in ast.iter_child_nodes(node))
 
 
 def check(path: Path = SENTINEL) -> list[str]:

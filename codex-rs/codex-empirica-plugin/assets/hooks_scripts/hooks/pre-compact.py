@@ -15,9 +15,10 @@ Writes a UNIFIED breadcrumbs git note combining task context + epistemic state.
 
 import json
 import os
-import signal
+import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -249,11 +250,28 @@ def _write_compact_handoff(project_root, claude_session_id):
         pass  # Handoff write failure is non-fatal
 
 
-def _detect_empirica_session():
-    """Auto-detect latest Empirica session (no env var needed).
+def _snapshot_identity(claude_session_id, empirica_session) -> dict:
+    """Who this snapshot belongs to, so post-compact restores its own and not whichever was written last."""
+    return {"claude_session_id": claude_session_id, "empirica_session_id": empirica_session}
+
+
+def _detect_empirica_session(claude_session_id=None):
+    """Detect this compaction's Empirica session.
+
+    The claude session that is compacting has an active_work file naming its Empirica session: that is identity.
+    Only without it does this fall back to the latest active session for the ai_id, which is recency across
+    every instance in the project and can be a sibling's.
 
     Returns session ID string or None.
     """
+    if claude_session_id:
+        try:
+            with open(Path.home() / ".empirica" / f"active_work_{claude_session_id}.json") as f:
+                own = json.load(f).get("empirica_session_id")
+            if own:
+                return own
+        except Exception:
+            pass
     try:
         from empirica.utils.session_resolver import InstanceResolver as R
 
@@ -274,69 +292,6 @@ def _detect_empirica_session():
 
 
 STASH_TAG = "empirica: pre-compact"
-
-
-def _stash_uncommitted_work(empirica_session):
-    """Stash uncommitted work before snapshot.
-
-    Returns the created stash's commit sha, or None if nothing was stashed.
-
-    The sha — not a bool — is the return value because the restore must pop
-    the stash THIS hook created. `git stash pop` with no argument takes the
-    top of the stack, and in a shared checkout (several instances, one working
-    tree) another instance's stash can land on top between push and pop. Popping
-    by position would then restore someone else's work over this tree and leave
-    ours buried.
-    """
-    try:
-        status_result = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=os.getcwd(), capture_output=True, text=True, timeout=5
-        )
-        if not status_result.stdout.strip():
-            return None
-        stash_msg = f"{STASH_TAG} {empirica_session[:8]} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        result = subprocess.run(
-            ["git", "stash", "push", "-m", stash_msg, "--include-untracked"],
-            cwd=os.getcwd(),
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return None
-        sha = subprocess.run(
-            ["git", "rev-parse", "--verify", "-q", "refs/stash"],
-            cwd=os.getcwd(),
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return sha.stdout.strip() or None
-    except Exception:
-        pass
-    return None
-
-
-def _find_stash_ref(sha):
-    """Return the stash@{n} that currently holds `sha`, or None.
-
-    Positions shift as other stashes are pushed or dropped, so the ref is
-    resolved at restore time rather than assumed to still be stash@{0}.
-    """
-    try:
-        listing = subprocess.run(
-            ["git", "stash", "list", "--format=%H"],
-            cwd=os.getcwd(),
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        for index, line in enumerate(listing.stdout.splitlines()):
-            if line.strip() == sha:
-                return f"stash@{{{index}}}"
-    except Exception:
-        pass
-    return None
 
 
 def _recover_orphaned_stashes():
@@ -496,27 +451,6 @@ File contents read during this session are available via Read tool — do NOT in
     return compact_guidance, has_open_transaction
 
 
-def _restore_stash(stash_sha):
-    """Pop the stash identified by `stash_sha`. Returns True on success.
-
-    Idempotent: a sha no longer on the stack has already been restored, which
-    is success, not failure — so calling this twice (finally-block after a
-    happy-path call, say) is harmless.
-    """
-    if not stash_sha:
-        return False
-    try:
-        ref = _find_stash_ref(stash_sha)
-        if ref is None:
-            return True
-        pop_result = subprocess.run(
-            ["git", "stash", "pop", ref], cwd=os.getcwd(), capture_output=True, text=True, timeout=10
-        )
-        return pop_result.returncode == 0
-    except Exception:
-        return False
-
-
 def _trace(outcome: str, **fields) -> None:
     """One JSON line per run to ~/.empirica/precompact.log, whatever the exit.
 
@@ -537,9 +471,19 @@ def _trace(outcome: str, **fields) -> None:
         pass
 
 
+def _read_hook_input() -> dict:
+    """The JSON object Claude Code sends on stdin; {} when it is missing, unparseable or not an object."""
+    try:
+        parsed = json.loads(sys.stdin.read())
+    except Exception as e:
+        _trace("bad_hook_input", error=f"{type(e).__name__}: {str(e)[:200]}")
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def main():
     # Read hook input from stdin (provided by Claude Code)
-    hook_input = json.loads(sys.stdin.read())
+    hook_input = _read_hook_input()
 
     trigger = hook_input.get("trigger", "auto")  # 'auto' or 'manual'
     claude_session_id = hook_input.get("session_id")
@@ -552,9 +496,11 @@ def main():
         sys.exit(0)
     os.chdir(project_root)
 
-    # STEP -1: restore anything a previous run stashed and was killed before
-    # popping. Must happen BEFORE _gather_git_context, or the breadcrumbs note
-    # records a clean tree that is only clean because the work is still stashed.
+    # STEP -1: restore a stash an OLDER version of this hook left behind (it used to stash the tree and pop it
+    # afterwards; a kill between the two orphaned the stash). This hook no longer stashes anything. Kept for one
+    # more release so a seat that still holds such a stash gets its tree back. Must happen BEFORE
+    # _gather_git_context, or the breadcrumbs note records a clean tree that is only clean because the work is
+    # still stashed.
     recovered = _recover_orphaned_stashes()
 
     # STEP 0: Extract task context + git state
@@ -563,7 +509,7 @@ def main():
     _write_compact_handoff(project_root, claude_session_id)
 
     # Auto-detect latest Empirica session
-    empirica_session = _detect_empirica_session()
+    empirica_session = _detect_empirica_session(claude_session_id)
     if not empirica_session:
         _trace("no_empirica_session", trigger=trigger, claude_session_id=claude_session_id, project_root=project_root)
         print(json.dumps({}), file=sys.stdout)
@@ -575,49 +521,139 @@ def main():
     # compact encoded a compaction-as-loss model into goal state (and fought
     # the migration-038 simplified lifecycle). Manual `goals-mark-stale`
     # remains available for genuine staleness triage.
-    # The stash and its pop are a single coupled lifecycle: from here to the
-    # `finally` the user's working tree exists ONLY inside that stash, so every
-    # way out of this function has to go through the restore. Before this was
-    # made total, three `sys.exit(2)` paths and the harness timeout each left
-    # the tree empty and the stash orphaned — silently, and while reporting
-    # "stash: saved+restored".
-    stash_sha = _stash_uncommitted_work(empirica_session)
-    _install_stash_guard(stash_sha)
+    # This hook never touches the working tree. It used to stash uncommitted work "before snapshot" and pop it
+    # afterwards; nothing consumed the stash, project-bootstrap ran after it and recorded a clean tree, it emptied
+    # a shared checkout for up to ~25 s, and every way work was ever lost here (a skipped pop, someone else's
+    # stash popped, SIGKILL) existed only because of it (David, 2026-10-13).
+    return _main_guarded(
+        recovered=recovered,
+        trigger=trigger,
+        empirica_session=empirica_session,
+        last_task=last_task,
+        git_context=git_context,
+        project_root=project_root,
+        claude_session_id=claude_session_id,
+    )
+
+
+#: When this process started. The 25 s budget counts from here, not from the capture step: the git calls and the stash
+#: check before it spend the same 30 s the harness gives the whole hook.
+_PROCESS_START = time.monotonic()
+
+#: Wall-clock this hook allows itself. The harness kills it at 30 s (settings.json); staying under means a slow step
+#: degrades the snapshot instead of ending in an uncatchable SIGKILL.
+HOOK_BUDGET_SECONDS = 25
+
+#: Longest a single bootstrap call may take, whatever the budget has left.
+BOOTSTRAP_MAX_SECONDS = 20
+
+
+# One line, column 0, one scalar. ``\s`` would cross the newline and read the NEXT key as the id of an empty value.
+_PROJECT_ID_LINE = re.compile(
+    r"""^project_id:[ \t]*(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s#'"&*!~|>\[{][^\s#]*))[ \t]*(?:\#.*)?\r?$""",
+    re.MULTILINE,
+)
+
+
+def _practice_project_id(project_root) -> str | None:
+    """The project UUID the practice already declares, so bootstrap need not rediscover it.
+
+    Without it bootstrap resolves through the active-instance mapping and then the git ``origin`` remote, and a practice
+    with neither fails even though this hook is standing in its root.
+    """
     try:
-        return _main_guarded(
-            stash_sha=stash_sha,
+        text = (Path(project_root) / ".empirica" / "project.yaml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    found = _PROJECT_ID_LINE.search(text)
+    if not found:
+        return None
+    value = next(group for group in found.groups() if group)
+    # A scalar that is not an id (null, true, an anchor or a phrase) is no project id: bootstrap would be told a name that
+    # does not exist and fail, where the old route would have resolved the practice on its own.
+    if value.lower() in ("null", "true", "false") or not re.fullmatch(r"[\w.-]+", value):
+        return None
+    return value
+
+
+def _failure_text(result) -> str:
+    """Why a CLI call failed. The CLI prints its diagnostic on stdout, so stderr alone logs an empty string."""
+    return (
+        (result.stderr or "").strip()[:300] or (result.stdout or "").strip()[:300] or f"exit code {result.returncode}"
+    )
+
+
+def _capture_bootstrap(ai_id, project_id, empirica_session, deadline) -> tuple[dict | None, str | None]:
+    """Run project-bootstrap. Returns (breadcrumbs, None) on success, (None, why) on any failure; never raises."""
+    timeout = min(BOOTSTRAP_MAX_SECONDS, deadline - time.monotonic() - 1)
+    if timeout < 2:
+        return None, "no time budget left for project-bootstrap"
+    cmd = ["empirica", "project-bootstrap", "--ai-id", ai_id, "--include-live-state", "--trigger", "pre_compact"]
+    if project_id:
+        cmd += ["--project-id", project_id]
+    if empirica_session:
+        cmd += ["--session-id", empirica_session]
+    cmd += ["--output", "json"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=os.getcwd())
+    except subprocess.TimeoutExpired:
+        return None, f"project-bootstrap timed out (>{int(timeout)}s)"
+    except Exception as e:
+        return None, f"project-bootstrap could not run: {type(e).__name__}: {str(e)[:200]}"
+    if result.returncode != 0:
+        return None, f"project-bootstrap failed: {_failure_text(result)}"
+    try:
+        bootstrap = json.loads(result.stdout) if result.stdout else {}
+    except json.JSONDecodeError:
+        return None, f"project-bootstrap printed output that is not JSON: {result.stdout[:200]!r}"
+    if not isinstance(bootstrap, dict) or bootstrap.get("ok") is False:
+        return None, f"project-bootstrap refused: {_failure_text(result)}"
+    breadcrumbs = bootstrap.get("breadcrumbs", bootstrap)
+    return (breadcrumbs, None) if isinstance(breadcrumbs, dict) else (None, "project-bootstrap returned no breadcrumbs")
+
+
+def _main_guarded(
+    *,
+    recovered,
+    trigger,
+    empirica_session,
+    last_task,
+    git_context,
+    project_root,
+    claude_session_id=None,
+    deadline=None,
+):
+    """Capture context, then ALWAYS let compaction proceed.
+
+    Context capture is optional work. A failure in it is reported (trace, snapshot ``capture_status``, the summarizer's
+    guidance) and never turned into a veto: exit code 2 here made every retry of a compaction hit the same failure
+    (#415). Whatever the capture could not do, the goals, artifacts and git notes still carry the work.
+    """
+    deadline = deadline if deadline is not None else _PROCESS_START + HOOK_BUDGET_SECONDS
+    try:
+        _capture_and_report(
             recovered=recovered,
             trigger=trigger,
             empirica_session=empirica_session,
             last_task=last_task,
             git_context=git_context,
             project_root=project_root,
+            claude_session_id=claude_session_id,
+            deadline=deadline,
         )
-    finally:
-        # Idempotent: a no-op when the happy path already popped it.
-        _restore_stash(stash_sha)
+    except Exception as e:
+        _trace("error", error=f"{type(e).__name__}: {str(e)[:300]}", session=empirica_session)
+        message = (
+            f"Empirica pre-compact capture failed ({type(e).__name__}: {str(e)[:200]}). Goals, artifacts and git notes "
+            "persist; in the summary, preserve the current task, decisions made and open questions."
+        )
+        print(json.dumps({"systemMessage": message}), file=sys.stdout)
+    sys.exit(0)
 
 
-def _install_stash_guard(stash_sha):
-    """Pop the stash on SIGTERM — the harness's hook-timeout signal.
-
-    SIGKILL cannot be caught; `_recover_orphaned_stashes` on the next run is
-    what covers that case.
-    """
-    if not stash_sha:
-        return
-
-    def _handler(signum, frame):
-        _restore_stash(stash_sha)
-        sys.exit(143)
-
-    try:
-        signal.signal(signal.SIGTERM, _handler)
-    except (ValueError, OSError):
-        pass  # not the main thread, or no signal support — finally still covers exits
-
-
-def _main_guarded(*, stash_sha, recovered, trigger, empirica_session, last_task, git_context, project_root):
+def _capture_and_report(
+    *, recovered, trigger, empirica_session, last_task, git_context, project_root, claude_session_id, deadline
+):
     practice_db = Path(project_root) / ".empirica" / "sessions" / "sessions.db"
     budget_report = _run_context_budget_triage(empirica_session, db_path=practice_db if practice_db.exists() else None)
     active_transaction, hook_counters = _capture_transaction_state(project_root, empirica_session)
@@ -639,137 +675,152 @@ def _main_guarded(*, stash_sha, recovered, trigger, empirica_session, last_task,
             ai_id = None
     ai_id = ai_id or "claude-code"
 
+    breadcrumbs, bootstrap_error = _capture_bootstrap(
+        ai_id, _practice_project_id(project_root), empirica_session, deadline
+    )
+    capture_status = "complete" if breadcrumbs is not None else "degraded"
+    if bootstrap_error:
+        _trace("bootstrap_failed", error=bootstrap_error, session=empirica_session)
+        breadcrumbs = {"session_id": empirica_session}
+
+    # Save snapshot to .empirica/ref-docs
+    ref_docs_dir = Path.cwd() / ".empirica" / "ref-docs"
+    ref_docs_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    snapshot_path = ref_docs_dir / f"pre_summary_{timestamp}.json"
+
+    live_state = breadcrumbs.get("live_state", {})
+    fallback_vectors = live_state.get("vectors", {}) if live_state else {}
+
+    snapshot = {
+        "type": "pre_summary_snapshot",
+        "timestamp": timestamp,
+        **_snapshot_identity(claude_session_id, empirica_session),
+        "session_id": breadcrumbs.get("session_id"),
+        "trigger": trigger,
+        "capture_status": capture_status,
+        "bootstrap_error": bootstrap_error,
+        "vectors_canonical": fresh_vectors,
+        "vectors_source": "assess-state" if fresh_vectors else "live_state_fallback",
+        "checkpoint": fresh_vectors or fallback_vectors,
+        "live_state": live_state,
+        "assess_error": assess_error,
+        "breadcrumbs_summary": {
+            "findings_count": len(breadcrumbs.get("findings", [])),
+            "unknowns_count": len(breadcrumbs.get("unknowns", [])),
+            "goals_count": len(breadcrumbs.get("goals", [])),
+            "dead_ends_count": len(breadcrumbs.get("dead_ends", [])),
+        },
+        "context_budget": budget_report,
+        "active_transaction": active_transaction,
+        "hook_counters": hook_counters,
+        "last_task": last_task,
+        "git_context": git_context,
+    }
+
+    with open(snapshot_path, "w") as f:
+        json.dump(snapshot, f, indent=2)
+    _trace(
+        "snapshot_written", path=str(snapshot_path), trigger=trigger, session=empirica_session, status=capture_status
+    )
+
+    # Write unified breadcrumbs git note
+    session_id_for_notes = breadcrumbs.get("session_id") or empirica_session
+    git_notes_written = _write_unified_breadcrumbs_note(
+        session_id=session_id_for_notes,
+        timestamp=timestamp,
+        vectors=fresh_vectors or fallback_vectors,
+        snapshot_filename=snapshot_path.name,
+        breadcrumbs_summary=snapshot["breadcrumbs_summary"],
+        last_task=last_task,
+        git_context=git_context,
+    )
+
+    display_vectors = fresh_vectors or fallback_vectors
+    vector_source = "canonical" if fresh_vectors else "fallback"
+    compact_guidance, has_open_transaction = _build_compact_guidance(breadcrumbs, active_transaction, display_vectors)
+    if bootstrap_error:
+        compact_guidance += (
+            f"\nContext capture was DEGRADED ({bootstrap_error}). Goals, artifacts and git notes still persist; "
+            "preserve the current task, decisions made and open questions in the summary."
+        )
+
+    print(json.dumps({"systemMessage": compact_guidance}), file=sys.stdout)
+
+    # The banner is cosmetic and goes to stderr. If stderr is closed or its reader is gone, the write must not fall into the
+    # guard, which would print a SECOND JSON document after the one already on stdout.
     try:
-        result = subprocess.run(
-            [
-                "empirica",
-                "project-bootstrap",
-                "--ai-id",
-                ai_id,
-                "--include-live-state",
-                "--trigger",
-                "pre_compact",
-                "--output",
-                "json",
-            ],
-            capture_output=True,
-            text=True,
-            # The harness gives this hook 30s TOTAL (settings.json). Handing all
-            # 30 to one subprocess leaves nothing to pop the stash with, so the
-            # timeout that fires is the harness's SIGKILL rather than our own
-            # catchable TimeoutExpired. Keep headroom.
-            timeout=20,
-            cwd=os.getcwd(),
+        _print_banner(
+            breadcrumbs=breadcrumbs,
+            trigger=trigger,
+            capture_status=capture_status,
+            bootstrap_error=bootstrap_error,
+            git_notes_written=git_notes_written,
+            recovered=recovered,
+            has_open_transaction=has_open_transaction,
+            vector_source=vector_source,
+            display_vectors=display_vectors,
+            snapshot_name=snapshot_path.name,
         )
+    except Exception as e:
+        _trace("banner_failed", error=f"{type(e).__name__}: {str(e)[:200]}", session=empirica_session)
 
-        if result.returncode != 0:
-            _trace("bootstrap_failed", rc=result.returncode, stderr=result.stderr[:300], session=empirica_session)
-            print(json.dumps({"stopReason": f"project-bootstrap failed: {result.stderr[:200]}"}), file=sys.stdout)
-            sys.exit(2)
 
-        bootstrap = json.loads(result.stdout) if result.stdout else {}
-        breadcrumbs = bootstrap.get("breadcrumbs", bootstrap)
-
-        # Save snapshot to .empirica/ref-docs
-        ref_docs_dir = Path.cwd() / ".empirica" / "ref-docs"
-        ref_docs_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-        snapshot_path = ref_docs_dir / f"pre_summary_{timestamp}.json"
-
-        live_state = breadcrumbs.get("live_state", {})
-        fallback_vectors = live_state.get("vectors", {}) if live_state else {}
-
-        snapshot = {
-            "type": "pre_summary_snapshot",
-            "timestamp": timestamp,
-            "session_id": breadcrumbs.get("session_id"),
-            "trigger": trigger,
-            "vectors_canonical": fresh_vectors,
-            "vectors_source": "assess-state" if fresh_vectors else "live_state_fallback",
-            "checkpoint": fresh_vectors or fallback_vectors,
-            "live_state": live_state,
-            "assess_error": assess_error,
-            "breadcrumbs_summary": {
-                "findings_count": len(breadcrumbs.get("findings", [])),
-                "unknowns_count": len(breadcrumbs.get("unknowns", [])),
-                "goals_count": len(breadcrumbs.get("goals", [])),
-                "dead_ends_count": len(breadcrumbs.get("dead_ends", [])),
-            },
-            "context_budget": budget_report,
-            "active_transaction": active_transaction,
-            "hook_counters": hook_counters,
-            "last_task": last_task,
-            "git_context": git_context,
-        }
-
-        with open(snapshot_path, "w") as f:
-            json.dump(snapshot, f, indent=2)
-        _trace("snapshot_written", path=str(snapshot_path), trigger=trigger, session=empirica_session)
-
-        # Write unified breadcrumbs git note
-        session_id_for_notes = breadcrumbs.get("session_id") or empirica_session
-        git_notes_written = _write_unified_breadcrumbs_note(
-            session_id=session_id_for_notes,
-            timestamp=timestamp,
-            vectors=fresh_vectors or fallback_vectors,
-            snapshot_filename=snapshot_path.name,
-            breadcrumbs_summary=snapshot["breadcrumbs_summary"],
-            last_task=last_task,
-            git_context=git_context,
-        )
-
-        restored = _restore_stash(stash_sha)
-
-        display_vectors = fresh_vectors or fallback_vectors
-        vector_source = "canonical" if fresh_vectors else "fallback"
-        compact_guidance, has_open_transaction = _build_compact_guidance(
-            breadcrumbs, active_transaction, display_vectors
-        )
-
-        print(json.dumps({"systemMessage": compact_guidance}), file=sys.stdout)
-
-        # Print user-visible message to stderr
-        session_id_str = breadcrumbs.get("session_id", "Unknown")
-        session_display = session_id_str[:8] if session_id_str else "Unknown"
-        notes_msg = "✓" if git_notes_written else "✗"
-        # Keyed on the POP, not on the push. Reporting "restored" because a
-        # stash was created is the unfalsifiable-success shape: it reads
-        # identically whether the tree came back or is still sitting in the
-        # stash. When it did not come back, print the recovery command — the
-        # user cannot act on a status they were not given.
-        if not stash_sha:
-            stash_msg = ""
-        elif restored:
-            stash_msg = " (stash: saved+restored)"
-        else:
-            stash_msg = " (stash: ORPHANED — your tree is in `git stash list`; recover with `git stash pop`)"
-        if recovered:
-            stash_msg += f"\n   Recovered an orphaned stash from a previous run: {recovered}"
-        tx_state_msg = "OPEN (carrying through)" if has_open_transaction else "CLOSED (vectors historical)"
-        print(
-            f"""
-📸 Empirica: Pre-compact snapshot saved — compaction is lossless (goals/artifacts/git-notes persist)
+def _print_banner(
+    *,
+    breadcrumbs,
+    trigger,
+    capture_status,
+    bootstrap_error,
+    git_notes_written,
+    recovered,
+    has_open_transaction,
+    vector_source,
+    display_vectors,
+    snapshot_name,
+):
+    session_id_str = breadcrumbs.get("session_id", "Unknown")
+    session_display = session_id_str[:8] if session_id_str else "Unknown"
+    notes_msg = "✓" if git_notes_written else "✗"
+    stash_msg = f"\n   Recovered an orphaned stash from an older run: {recovered}" if recovered else ""
+    tx_state_msg = "OPEN (carrying through)" if has_open_transaction else "CLOSED (vectors historical)"
+    headline = (
+        "📸 Empirica: Pre-compact snapshot saved — compaction is lossless (goals/artifacts/git-notes persist)"
+        if capture_status == "complete"
+        else "⚠️  Empirica: Pre-compact snapshot saved DEGRADED — compaction proceeds (goals/artifacts/git-notes persist)"
+    )
+    error_msg = f"\n   Bootstrap: {bootstrap_error}" if bootstrap_error else ""
+    print(
+        f"""
+{headline}
    Session: {session_display}...
    Trigger: {trigger}
    Transaction: {tx_state_msg}
-   Vectors: {vector_source} ({len(display_vectors)} captured)
-   Snapshot: {snapshot_path.name}
+   Vectors: {vector_source} ({len(display_vectors)} captured){error_msg}
+   Snapshot: {snapshot_name}
    Git notes: {notes_msg}{stash_msg}
 """,
-            file=sys.stderr,
-        )
+        file=sys.stderr,
+    )
 
-        sys.exit(0)
 
-    except subprocess.TimeoutExpired:
-        _trace("bootstrap_timeout", session=empirica_session)
-        print(json.dumps({"stopReason": "project-bootstrap timed out (>30s)"}), file=sys.stdout)
-        sys.exit(2)
-    except Exception as e:
-        _trace("error", error=f"{type(e).__name__}: {str(e)[:300]}", session=empirica_session)
-        print(json.dumps({"stopReason": f"pre-compact error: {str(e)[:200]}"}), file=sys.stdout)
-        sys.exit(2)
+def _entrypoint() -> None:
+    """Run the hook so that NOTHING it does can end in a veto or a stack trace.
+
+    Exit code 2 is the only code that blocks compaction, and the other non-zero codes print a traceback into the user's
+    terminal for work that is optional. Whatever escapes ``main`` (bad stdin, a failure before the guarded body, an
+    interrupt) is recorded in the trace and ends as a clean exit 0.
+    """
+    try:
+        main()
+    except SystemExit as e:
+        if e.code in (None, 0):
+            raise
+        _trace("nonzero_exit_suppressed", code=e.code)
+    except BaseException as e:
+        _trace("error", error=f"{type(e).__name__}: {str(e)[:300]}")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    _entrypoint()

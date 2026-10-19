@@ -674,7 +674,7 @@ def main():
 
     # Stage 3: Load state
     phase_state = _get_session_phase_state(empirica_session)
-    pre_snapshot = _load_pre_snapshot()
+    pre_snapshot = _load_pre_snapshot(claude_session_id, empirica_session)
     pre_vectors, pre_reasoning, active_transaction, hook_counters = _extract_pre_snapshot_data(pre_snapshot)
     # The snapshot is a cache; the reflexes table is the record. Never restore
     # a transaction the table says is closed, and say so when the snapshot
@@ -827,14 +827,46 @@ def _get_session_phase_state(session_id: str) -> dict:
         }
 
 
-def _load_pre_snapshot():
-    """Load the most recent pre-compact snapshot"""
+def _snapshot_owner(snapshot: dict) -> tuple[set, set]:
+    """(claude session ids, empirica session ids) a pre-compact snapshot says it belongs to.
+
+    Stamped at the top level since the identity fix; older snapshots carry the owner only inside the
+    transaction they captured.
+    """
+    transaction = snapshot.get("active_transaction")
+    transaction = transaction if isinstance(transaction, dict) else {}
+    claude_ids = {snapshot.get("claude_session_id"), transaction.get("claude_session_id")} - {None}
+    empirica_ids = {snapshot.get("empirica_session_id"), snapshot.get("session_id"), transaction.get("session_id")} - {
+        None
+    }
+    return claude_ids, empirica_ids
+
+
+def _load_pre_snapshot(claude_session_id: str | None = None, empirica_session: str | None = None):
+    """Load the pre-compact snapshot of THIS session.
+
+    The newest file in ref-docs is whichever instance compacted last, so with two live instances in one project
+    each read the other's vectors and open transaction. With an identity to match, a snapshot is taken only if it
+    says it is ours; snapshots that say they are someone else's are skipped, and one that names nobody (written
+    before the identity stamp) is the fallback. Without an identity the newest is loaded, as before.
+    """
     try:
         ref_docs_dir = Path.cwd() / ".empirica" / "ref-docs"
         snapshots = sorted(ref_docs_dir.glob("pre_summary_*.json"), reverse=True)
-        if snapshots:
-            with open(snapshots[0]) as f:
-                return json.load(f)
+        legacy = None
+        for path in snapshots:
+            with open(path) as f:
+                data = json.load(f)
+            if not (claude_session_id or empirica_session):
+                return data
+            claude_ids, empirica_ids = _snapshot_owner(data)
+            if (claude_session_id and claude_session_id in claude_ids) or (
+                empirica_session and empirica_session in empirica_ids
+            ):
+                return data
+            if not claude_ids and not empirica_ids and legacy is None:
+                legacy = data
+        return legacy
     except Exception:
         pass
     return None
@@ -935,22 +967,30 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
         _resolved_clause = " AND (is_resolved IS NULL OR is_resolved = 0)" if _findings_has_resolved else ""
         cursor.execute(
             f"""
-            SELECT finding, impact, created_timestamp
+            SELECT finding, impact, created_timestamp, id
             FROM project_findings
             WHERE project_id = ?{_resolved_clause}
             ORDER BY created_timestamp DESC LIMIT 10
         """,
             (project_id,),
         )
+        # `id` and `created_timestamp` are what epistemic_summarizer ranks on (relevance is looked up by id, recency
+        # read from the timestamp). Pools without them scored 0.0 relevance and neutral recency for every item.
         for row in cursor.fetchall():
             context["recent_findings"].append(
-                {"finding": row[0], "impact": row[1], "when": str(row[2])[:19] if row[2] else None}
+                {
+                    "id": row[3],
+                    "finding": row[0],
+                    "impact": row[1],
+                    "created_timestamp": row[2],
+                    "when": str(row[2])[:19] if row[2] else None,
+                }
             )
 
         # 3. Unresolved unknowns (open questions you need to address)
         cursor.execute(
             """
-            SELECT unknown, impact, created_timestamp
+            SELECT unknown, impact, created_timestamp, id
             FROM project_unknowns
             WHERE project_id = ? AND is_resolved = 0
             ORDER BY impact DESC, created_timestamp DESC LIMIT 10
@@ -958,12 +998,14 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
             (project_id,),
         )
         for row in cursor.fetchall():
-            context["open_unknowns"].append({"unknown": row[0], "impact": row[1]})
+            context["open_unknowns"].append(
+                {"id": row[3], "unknown": row[0], "impact": row[1], "created_timestamp": row[2]}
+            )
 
         # 4. Critical dead ends (mistakes to avoid)
         cursor.execute(
             """
-            SELECT approach, why_failed, created_timestamp
+            SELECT approach, why_failed, created_timestamp, id
             FROM project_dead_ends
             WHERE project_id = ?
             ORDER BY created_timestamp DESC LIMIT 5
@@ -972,7 +1014,7 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
         )
         for row in cursor.fetchall():
             context["critical_dead_ends"].append(
-                {"approach": row[0], "why_failed": row[1], "created_timestamp": row[2] if len(row) > 2 else None}
+                {"id": row[3], "approach": row[0], "why_failed": row[1], "created_timestamp": row[2]}
             )
 
         # 5. Session context (what was happening)

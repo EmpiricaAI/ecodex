@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Vendored empirica hooks follow core 1.14.11.** Compaction restores its own
+  session's snapshot rather than the newest in the project; a start in one
+  practice no longer binds to another practice's open transaction; SessionStart
+  adopts only a transaction nobody alive owns; pre-compact no longer stashes the
+  working tree and never vetoes compaction; the EWM loader reads the single-user
+  protocol that `/ewm-interview` writes; and the Sentinel guards gained the
+  variation families an independent review found. Two new lib modules the hooks
+  import, `instance_clash` and `deploy_gap_cache`, are vendored with them.
+- **Firewall drift-guard reads call arguments as data.** A `False` passed to a
+  call inside an `if` test no longer counts as a disabled branch; `if False and
+  (...)` is still caught.
+
 ## [0.160.3] - 2026-10-15
 
 ### Fixed

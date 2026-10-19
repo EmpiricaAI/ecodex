@@ -44,8 +44,8 @@ def test_disabled_in_place_if_false_fails(tmp_path):
     mutated = tmp_path / "sentinel-gate.py"
     text = guard.SENTINEL.read_text(encoding="utf-8")
     patched, n = re.subn(
-        r"(\n    if )\((\n        tool_name in NOETIC_TOOLS)",
-        r"\1False and (\2",
+        r"(\n    if )(_is_noetic_tool\([^)]*\))",
+        r"\1False and \2",
         text,
         count=1,
     )
@@ -53,3 +53,20 @@ def test_disabled_in_place_if_false_fails(tmp_path):
     mutated.write_text(patched, encoding="utf-8")
     failures = guard.check(mutated)
     assert any("literal False" in f for f in failures), failures
+
+
+@pytest.mark.parametrize(
+    ("source", "flagged"),
+    [
+        ("if False and (x or y):\n    pass\n", True),
+        ("if not (f(seg, is_first=False) or g(seg)):\n    pass\n", False),
+        ("if f(False):\n    pass\n", False),
+        ("if x is False:\n    pass\n", True),
+    ],
+)
+def test_a_false_passed_as_a_call_argument_is_data_not_a_disabled_branch(
+    source: str, flagged: bool
+) -> None:
+    import ast
+
+    assert guard._any_if_test_contains_literal_false(ast.parse(source)) is flagged

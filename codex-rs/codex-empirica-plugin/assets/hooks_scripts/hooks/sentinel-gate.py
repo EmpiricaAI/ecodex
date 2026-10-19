@@ -31,6 +31,7 @@ Related but NOT consumed here:
 
 import json
 import os
+import shlex
 import sys
 import time
 from datetime import datetime
@@ -689,6 +690,7 @@ def _get_domain_scaled_thresholds(
     domain: str | None,
     criticality: str | None,
     project_path: str | None = None,
+    work_type: str | None = None,
 ) -> float:
     """Scale uncertainty threshold based on domain criticality (B1 Wave 2).
 
@@ -709,7 +711,7 @@ def _get_domain_scaled_thresholds(
             project_path=Path(project_path) if project_path else None,
         )
         key = DomainKey(
-            work_type=domain or "code",
+            work_type=work_type or "code",
             domain=domain or "default",
             criticality=criticality or "medium",
         )
@@ -1848,10 +1850,13 @@ def _atomic_write_counters(counters: dict, counters_path: Path) -> None:
             json.dump(counters, tf, indent=2)
         os.replace(tmp, str(counters_path))
     except BaseException:
+        # Clean up the temp file, then let the failure (or the interrupt) through: swallowing it made
+        # a counter that never persisted look like one that did.
         try:
             os.unlink(tmp)
         except OSError:
             pass
+        raise
 
 
 def _stamp_blocked_presence(claude_session_id: str | None, tool_input: dict | None) -> None:
@@ -1887,7 +1892,8 @@ def _stamp_blocked_presence(claude_session_id: str | None, tool_input: dict | No
             "--status",
             "blocked",
             "--session-pid",
-            str(os.getppid()),
+            # ruling-shape runs this gate as a child and names Claude Code here; getppid() would be ruling-shape
+            os.environ.get("EMPIRICA_HOOK_PARENT_PID") or str(os.getppid()),
             "--output",
             "json",
         ]
@@ -1922,9 +1928,8 @@ def _try_increment_tool_count(
 
     Returns (tool_call_count, avg_turns) or (0, 0) if no transaction.
     """
-    from empirica.utils.session_resolver import InstanceResolver as R
 
-    suffix = R.instance_suffix()
+    suffix = _instance_suffix()
     empirica_session_id = _resolve_empirica_session_id(claude_session_id)
 
     tx_path = _locate_transaction_file(claude_session_id, suffix, empirica_session_id)
@@ -1977,7 +1982,10 @@ def _try_increment_tool_count(
 
         _atomic_write_counters(counters, counters_path)
         return count, avg
-    except Exception:
+    except Exception as exc:
+        # Still non-fatal to the gate, but not silent: without the counters the autonomy and goalless
+        # nudges never fire and nothing says why.
+        print(f"sentinel-gate: tool counters not recorded: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 0, 0
 
 
@@ -2010,27 +2018,40 @@ def _compute_nudge(count: int, avg: int) -> str:
     return ""
 
 
+# Allow reasons the model must see: the gate failed open, could not run, or is unconvinced.
+_ALLOW_REASONS_FOR_THE_MODEL = ("WARNING:", "ADVISORY:", "Sentinel error (fail-open)", "sentinel inactive")
+
+
+def _allow_reason_needs_the_model(reason: str) -> bool:
+    return any(marker in reason for marker in _ALLOW_REASONS_FOR_THE_MODEL)
+
+
 def respond(decision: str, reason: str = "") -> None:
     """Output in Claude Code's expected format. Appends nudges on allow."""
     global _autonomy_nudge, _goalless_nudge, _remote_ops_nudge, _worktype_nudge, _file_relevance_nudge
     full_reason = reason
     show_nudge = False
-    if decision == "allow" and (
-        _autonomy_nudge or _goalless_nudge or _remote_ops_nudge or _worktype_nudge or _file_relevance_nudge
-    ):
-        nudges = " | ".join(
+    nudges = ""
+    if decision == "allow":
+        # An allow reason that says the gate is blind, failed open or is unconvinced is for the model
+        # too: Claude Code drops permissionDecisionReason on allow, so it rides with the nudges.
+        # Routine reasons ("Safe Bash ...") fire on every call and stay silent.
+        parts = [reason] if _allow_reason_needs_the_model(reason) else []
+        parts += [
             n
-            for n in [
+            for n in (
                 _autonomy_nudge,
                 _goalless_nudge,
                 _remote_ops_nudge,
                 _worktype_nudge,
                 _file_relevance_nudge,
-            ]
+            )
             if n
-        )
-        full_reason = f"{reason} | {nudges}"
-        show_nudge = True
+        ]
+        if parts:
+            nudges = " | ".join(parts)
+            full_reason = f"{reason} | {nudges}" if reason and reason not in parts else nudges
+            show_nudge = True
 
     output: dict = {
         "hookSpecificOutput": {
@@ -2235,12 +2256,31 @@ _TOOL_DANGEROUS_FLAGS: dict[str, frozenset[str]] = {
     # fd -x/-X run a command per result (find -exec equivalent)
     "fd": frozenset({"-x", "-X", "--exec", "--exec-batch"}),
     "fdfind": frozenset({"-x", "-X", "--exec", "--exec-batch"}),
-    # sort -o / --output writes to a file
-    "sort": frozenset({"-o", "--output"}),
-    # yq -i edits YAML in place
-    "yq": frozenset({"-i", "--inplace", "--in-place"}),
+    # sort -o / --output writes to a file; see the later entry for --compress-program
+    # yq -i edits YAML in place; see the later entry for the split forms
     # ast-grep rewrites source in place
     "ast-grep": frozenset({"-U", "--update-all", "--rewrite"}),
+    # yq -s / --split-exp writes one file per result
+    "yq": frozenset({"-i", "--inplace", "--in-place", "-s", "--split-exp"}),
+    # a preprocessor or pager option names a PROGRAM the tool will run
+    "rg": frozenset({"--pre", "--hostname-bin"}),
+    "ag": frozenset({"--pager"}),
+    "ack": frozenset({"--pager"}),
+    "bat": frozenset({"--pager"}),
+    "man": frozenset({"-P", "--pager", "-H", "--html"}),
+    # linters and analyzers: fix in place, write reports, create stubs, install packages
+    "ruff": frozenset({"--fix", "--fix-only", "--unsafe-fixes", "--add-noqa", "--output-file"}),
+    "pip-audit": frozenset({"--fix", "-o", "--output"}),
+    "pyright": frozenset({"--createstub"}),
+    "mypy": frozenset({"--install-types", "--junit-xml"}),
+    "flake8": frozenset({"--output-file"}),
+    "pylint": frozenset({"--output"}),
+    "radon": frozenset({"-O", "--output-file"}),
+    # output-to-file options on otherwise read-only listers
+    "tree": frozenset({"-o"}),
+    "info": frozenset({"-o", "--output"}),
+    "scc": frozenset({"-o", "--output"}),
+    "sort": frozenset({"-o", "--output", "--compress-program"}),
 }
 
 # awk family writes via print/printf > "file" INSIDE its program (the
@@ -2407,6 +2447,427 @@ def _git_ref_command_mutates(cmd: str) -> bool:
     return False
 
 
+_AWK_PIPE_OR_WRITE_RE = re.compile(r"(?:print|printf)[^;\n{}]*(?:\||>>?)|\|&|\|\s*getline")
+
+
+def _awk_runs_or_writes(stripped: str) -> bool:
+    """awk programs can pipe to a command, read from one (`"cmd" | getline`), redirect to a computed
+    target, load a program file, or (gawk) edit in place. A `|` inside a regex is not one of these:
+    the pipe forms are recognised by what stands around them."""
+    if re.search(r"system\s*\(", stripped) or _AWK_WRITE_RE.search(stripped):
+        return True
+    # A `|` or `>` inside a string literal or a parenthesised comparison is data, not a pipe or a redirect.
+    bare = re.sub(r"\([^()]*\)", "()", re.sub(r'"(?:\\.|[^"\\])*"', '""', stripped))
+    if _AWK_PIPE_OR_WRITE_RE.search(bare):
+        return True
+    for tok in _tool_tokens(stripped)[1:]:
+        if tok in ("-f", "--file", "-i", "--include", "inplace") or tok.startswith(("--file=", "--include=")):
+            return True
+    return False
+
+
+def _tool_tokens(stripped: str) -> list[str]:
+    try:
+        return shlex.split(stripped)
+    except ValueError:
+        return stripped.split()
+
+
+def _skip_delimited(script: str, i: int, delim: str) -> int:
+    """Index just after the closing `delim` (backslash escapes the next character)."""
+    n = len(script)
+    while i < n:
+        if script[i] == "\\":
+            i += 2
+            continue
+        if script[i] == delim:
+            return i + 1
+        i += 1
+    return n
+
+
+def _sed_skip_address(script: str, i: int) -> int:
+    """Skip a sed address: numbers, $, ranges, steps, negation, /re/ and \\cREc, with I/M flags."""
+    n = len(script)
+    while i < n:
+        c = script[i]
+        if c.isdigit() or c in "$,~+! \t":
+            i += 1
+        elif c == "/" or (c == "\\" and i + 1 < n):
+            delim = "/" if c == "/" else script[i + 1]
+            i = _skip_delimited(script, i + (1 if c == "/" else 2), delim)
+            while i < n and script[i] in "IM":
+                i += 1
+        else:
+            break
+    return i
+
+
+def _sed_script_writes_or_execs(script: str) -> bool:
+    """True if a sed script has a w/W/e command or an s///w or s///e flag (GNU sed). A small parser,
+    not a regex: `s/we/ew/` is a substitution, not a write."""
+    i, n = 0, len(script)
+    while i < n:
+        if script[i] in " \t\n;{}":
+            i += 1
+            continue
+        i = _sed_skip_address(script, i)
+        if i >= n:
+            break
+        cmd = script[i]
+        i += 1
+        if cmd in "wWe":
+            return True
+        if cmd == "s":
+            if i >= n:
+                return True
+            delim = script[i]
+            i = _skip_delimited(script, _skip_delimited(script, i + 1, delim), delim)
+            while i < n and script[i] not in ";}\n ":
+                if script[i] in "we":
+                    return True
+                i += 1
+        elif cmd == "y":
+            if i >= n:
+                return True
+            delim = script[i]
+            i = _skip_delimited(script, _skip_delimited(script, i + 1, delim), delim)
+        elif cmd in "aicrR:#":
+            nl = script.find("\n", i)
+            i = n if nl < 0 else nl
+        elif cmd in "bBtT":
+            while i < n and script[i] not in ";\n":
+                i += 1
+    return False
+
+
+def _sed_runs_or_writes(stripped: str) -> bool:
+    """Collect the script(s) the way sed reads its command line: `-e X`, `-eX`, a cluster ending in `e`, `--expression=X`,
+    or the first operand when there is no -e; `-f`/`--file` is a script file this check cannot read. Options that take
+    a value (`-l N`, `--line-length N`) must not have the value mistaken for the script."""
+    toks = _tool_tokens(stripped)[1:]
+    scripts: list[str] = []
+    have_script = False
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        if tok in ("--file",) or tok.startswith("--file="):
+            return True
+        if tok == "--expression":
+            have_script = True
+            if i + 1 < len(toks):
+                scripts.append(toks[i + 1])
+            i += 2
+            continue
+        if tok.startswith("--expression="):
+            have_script = True
+            scripts.append(tok.split("=", 1)[1])
+        elif tok == "--line-length":
+            i += 2
+            continue
+        elif tok.startswith("--"):
+            pass
+        elif tok.startswith("-") and len(tok) > 1:
+            consumed = 1
+            for pos, ch in enumerate(tok[1:], 1):
+                if ch == "f":
+                    return True
+                if ch in "el":
+                    attached = tok[pos + 1 :]
+                    if attached:
+                        value = attached
+                    else:
+                        value = toks[i + 1] if i + 1 < len(toks) else ""
+                        consumed = 2
+                    if ch == "e":
+                        have_script = True
+                        scripts.append(value)
+                    break
+            i += consumed
+            continue
+        elif not have_script and not scripts:
+            scripts.append(tok)
+            have_script = True
+        i += 1
+    return any(_sed_script_writes_or_execs(s) for s in scripts)
+
+
+_CURL_WRITE_OR_SEND_LONG = frozenset(
+    {
+        "--output",
+        "--remote-name",
+        "--remote-name-all",
+        "--output-dir",
+        "--upload-file",
+        "--data",
+        "--data-raw",
+        "--data-binary",
+        "--data-urlencode",
+        "--data-ascii",
+        "--form",
+        "--form-string",
+        "--json",
+        "--config",
+        "--dump-header",
+        "--cookie-jar",
+        "--trace",
+        "--trace-ascii",
+        "--stderr",
+        "--create-dirs",
+        "--ftp-create-dirs",
+        "--libcurl",
+    }
+)
+_CURL_WRITE_OR_SEND_SHORT = frozenset("oOTdFKDc")
+
+
+def _curl_method(tok: str, nxt: str) -> tuple[str, int] | None:
+    """(method, tokens consumed) when `tok` sets the request method, else None."""
+    if tok in ("--request", "-X"):
+        return nxt, 2
+    if tok.startswith("--request="):
+        return tok.split("=", 1)[1], 1
+    if tok.startswith("-X") and len(tok) > 2:
+        return tok[2:], 1
+    return None
+
+
+def _curl_writes_or_sends(stripped: str) -> bool:
+    """curl writes a file (-o/-O/-D/-c/--trace), sends a body (-d/-F/-T/--json) or uses a non-GET
+    method, or loads a config file that can do any of it. `-o /dev/null` is a status probe."""
+    toks = _tool_tokens(stripped)[1:]
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        nxt = toks[i + 1] if i + 1 < len(toks) else ""
+        method = _curl_method(tok, nxt)
+        if method is not None:
+            if method[0].upper() not in ("GET", "HEAD"):
+                return True
+            i += method[1]
+            continue
+        if tok == "--output=/dev/null":
+            i += 1
+            continue
+        if tok in ("-o", "--output") and nxt == "/dev/null":
+            i += 2
+            continue
+        if tok.startswith("--"):
+            if tok.split("=", 1)[0] in _CURL_WRITE_OR_SEND_LONG:
+                return True
+        elif tok.startswith("-") and len(tok) > 1:
+            if tok.endswith("o") and nxt == "/dev/null" and not any(c in "OTdFKDc" for c in tok[1:]):
+                i += 2
+                continue
+            if any(c in _CURL_WRITE_OR_SEND_SHORT for c in tok[1:]):
+                return True
+            if tok.endswith("X") and nxt.upper() not in ("GET", "HEAD"):  # a cluster ending in X takes the method
+                return True
+        i += 1
+    return False
+
+
+_WGET_WRITE_OR_SEND = frozenset(
+    {
+        "-o",
+        "--output-file",
+        "-a",
+        "--append-output",
+        "-P",
+        "--directory-prefix",
+        "--post-data",
+        "--post-file",
+        "--method",
+        "--body-data",
+        "--body-file",
+        "-m",
+        "--mirror",
+        "-r",
+        "--recursive",
+        "-b",
+        "--background",
+        "-e",
+        "--execute",
+        "--output-document",
+        "--save-cookies",
+        "--warc-file",
+    }
+)
+
+
+def _wget_writes_or_sends(stripped: str) -> bool:
+    for tok in _tool_tokens(stripped)[1:]:
+        if tok.startswith("-O") and tok != "-O-":
+            return True
+        if tok.split("=", 1)[0] in _WGET_WRITE_OR_SEND:
+            return True
+    return False
+
+
+def _gh_api_mutates(stripped: str) -> bool:
+    """`gh api` is a GET unless a field, an input file or a method says otherwise. GraphQL always POSTs a query;
+    it mutates when the text says `mutation` or the query comes from a file.
+
+    Short flags may be attached (`-XDELETE`, `-ftitle=x`, `-Fquery=@m.gql`). An explicit `-X GET` makes `-f`/`-F`
+    query parameters, not a body.
+    """
+    toks = _tool_tokens(stripped)
+    if len(toks) < 3 or toks[1] != "api":
+        return False
+    rest = toks[2:]
+    method = "GET"
+    explicit_method = False
+    has_field = False
+    from_file = False
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        value = None
+        if tok in ("-X", "--method"):
+            value = rest[i + 1] if i + 1 < len(rest) else ""
+            i += 1
+        elif tok.startswith("--method="):
+            value = tok.split("=", 1)[1]
+        elif tok.startswith("-X") and len(tok) > 2:
+            value = tok[2:]
+        if value is not None:
+            method, explicit_method = value.upper(), True
+        elif tok in ("--input",) or tok.startswith("--input="):
+            return True
+        elif tok in ("-f", "-F", "--field", "--raw-field") or tok.startswith(("--field=", "--raw-field=")):
+            has_field = True
+            val = rest[i + 1] if i + 1 < len(rest) and "=" not in tok else tok
+            from_file = from_file or "@" in val
+        elif tok[:2] in ("-f", "-F") and len(tok) > 2:
+            has_field = True
+            from_file = from_file or "@" in tok
+        i += 1
+    if "graphql" in rest:
+        return "mutation" in stripped.lower() or from_file
+    if method != "GET":
+        return True
+    return has_field and not explicit_method
+
+
+_GIT_OUTPUT_VERBS = frozenset({"diff", "log", "show", "shortlog", "grep", "blame", "range-diff"})
+
+
+def _git_read_verb_writes(stripped: str) -> bool:
+    """`git diff|log|show --output=FILE` writes a file; `git grep -O<cmd>` runs a pager program."""
+    toks = _normalize_git_globals(stripped).split()
+    if len(toks) < 2 or toks[0] != "git" or toks[1] not in _GIT_OUTPUT_VERBS:
+        return False
+    for tok in toks[2:]:
+        if tok == "--output" or tok.startswith("--output="):
+            return True
+        if toks[1] == "grep" and (tok.startswith("-O") or tok.startswith("--open-files-in-pager")):
+            return True
+    return False
+
+
+def _positional_output_file(stripped: str, valued: frozenset[str]) -> bool:
+    """`xxd IN OUT` and `uniq IN OUT` write OUT. Two or more positionals means an output file."""
+    toks = _tool_tokens(stripped)[1:]
+    positional = 0
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        if tok in valued:
+            i += 2
+            continue
+        if not tok.startswith("-") or tok == "-":
+            positional += 1
+        i += 1
+    return positional >= 2
+
+
+_XXD_VALUED = frozenset({"-c", "-g", "-l", "-o", "-s", "-n", "-cols", "-groupsize", "-len", "-seek"})
+_UNIQ_VALUED = frozenset({"-f", "-s", "-w"})
+_HOSTNAME_READS = frozenset(
+    {"-f", "--fqdn", "-s", "--short", "-i", "--ip-address", "-I", "--all-ip-addresses", "-a", "--alias"}
+    | {"-d", "--domain", "-A", "--all-fqdns", "-y", "--yp", "--nis", "-V", "--version", "-h", "--help"}
+)
+
+
+def _mount_changes_state(stripped: str) -> bool:
+    """Bare `mount` and `mount -l|-t TYPE` list; anything else mounts, remounts or binds."""
+    toks = _tool_tokens(stripped)[1:]
+    i = 0
+    while i < len(toks):
+        if toks[i] in ("-t", "--types"):
+            i += 2
+            continue
+        if toks[i] not in ("-l", "--show-labels", "-h", "--help", "-V", "--version"):
+            return True
+        i += 1
+    return False
+
+
+def _date_sets_the_clock(stripped: str) -> bool:
+    """`date -s`, `--set` and a bare MMDDhhmm positional set the system clock; `+FORMAT` and -d/-r read."""
+    toks = _tool_tokens(stripped)[1:]
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        if tok in ("-d", "--date", "-r", "--reference", "-f", "--file"):
+            i += 2
+            continue
+        if tok == "-s" or tok.startswith("--set"):
+            return True
+        if tok.startswith("-"):
+            i += 1
+            continue
+        if not tok.startswith("+"):
+            return True
+        i += 1
+    return False
+
+
+def _tool_mode_mutates(stripped: str, head: str) -> bool:
+    """Tool-specific write/exec modes that a flag set cannot express (programs, positionals, methods)."""
+    if head in _AWK_NAMES:
+        return _awk_runs_or_writes(stripped)
+    if head in _SED_NAMES:
+        return _sed_runs_or_writes(stripped) or _sed_edits_in_place(stripped)
+    if head == "curl":
+        return _curl_writes_or_sends(stripped)
+    if head == "wget":
+        return _wget_writes_or_sends(stripped)
+    if head == "gh":
+        return _gh_api_mutates(stripped)
+    if head == "git":
+        return _git_read_verb_writes(stripped)
+    if head == "xxd":
+        return _positional_output_file(stripped, _XXD_VALUED)
+    if head == "uniq":
+        return _positional_output_file(stripped, _UNIQ_VALUED)
+    if head == "mount":
+        return _mount_changes_state(stripped)
+    if head == "hostname":
+        return any(tok not in _HOSTNAME_READS for tok in _tool_tokens(stripped)[1:])
+    if head == "date":
+        return _date_sets_the_clock(stripped)
+    if head == "mypy":  # --html-report, --xml-report, --any-exprs-report, ...: each writes a directory
+        return any(tok.split("=", 1)[0].endswith("-report") for tok in _tool_tokens(stripped)[1:])
+    return False
+
+
+def _sort_short_output(stripped: str) -> bool:
+    """`sort -ofile` and clusters like `-ro` name an output file through the short form; GNU sort also accepts any
+    unambiguous prefix of a long option (`--out`, `--compress-prog`)."""
+    for tok in _tool_tokens(stripped)[1:]:
+        name = tok.split("=", 1)[0]
+        if (
+            name.startswith("--")
+            and len(name) >= 5
+            and ("--output".startswith(name) or "--compress-program".startswith(name))
+        ):
+            return True
+        if tok.startswith("-") and not tok.startswith("--") and len(tok) > 1 and "o" in tok[1:]:
+            return True
+    return False
+
+
 def _has_dangerous_tool_flags(cmd: str) -> bool:
     """True if ``cmd`` is a safe-prefixed tool invoked with a mutating/exec flag
     its prefix would otherwise wave through (the membrane-hole class).
@@ -2417,14 +2878,16 @@ def _has_dangerous_tool_flags(cmd: str) -> bool:
     positional output, and combined short flags like ``-iX`` — both degrade to
     "needs CHECK" at worst if ever extended, never a silent allow elsewhere.
     """
-    stripped = cmd.lstrip()
+    # `2>/dev/null` and `2>&1` are not arguments: left in, `date +%s 2>/dev/null` read as a clock set and `uniq -c f 2>&1`
+    # as an output file.
+    stripped = SAFE_REDIRECT_PATTERN.sub("", cmd.lstrip()).strip()
     head = stripped.split(" ", 1)[0]
     if head == "git" and _git_ref_command_mutates(stripped):
         return True
-    if head in _AWK_NAMES:
-        return "system(" in stripped or bool(_AWK_WRITE_RE.search(stripped))
-    if head in _SED_NAMES:
-        return _sed_edits_in_place(stripped)
+    if _tool_mode_mutates(stripped, head):
+        return True
+    if head == "sort" and _sort_short_output(stripped):
+        return True
     if head in _NVIDIA_SMI_NAMES:
         # Inverted sense: dangerous unless recognised as a read. See the
         # allowlist-not-denylist note above — the mutating set is large and one
@@ -3324,7 +3787,66 @@ _SQLITE_SAFE_META = (
     ".DATABASES",
     ".FULLSCHEMA",
 )
-_SQLITE_SAFE_SQL = ("SELECT", "WITH", "PRAGMA", "EXPLAIN", "ANALYZE")
+#: ANALYZE writes sqlite_stat tables and PRAGMA has setters, so neither is a read as a bare word.
+_SQLITE_SAFE_SQL = ("SELECT", "WITH", "EXPLAIN")
+#: PRAGMAs that only report. Anything else (journal_mode=, user_version=, optimize, wal_checkpoint,
+#: incremental_vacuum, writable_schema, ...) is refused, as is any PRAGMA written with `=`.
+_SQLITE_READ_PRAGMAS = frozenset(
+    {
+        "TABLE_INFO",
+        "TABLE_XINFO",
+        "TABLE_LIST",
+        "INDEX_LIST",
+        "INDEX_INFO",
+        "INDEX_XINFO",
+        "FOREIGN_KEY_LIST",
+        "FOREIGN_KEY_CHECK",
+        "DATABASE_LIST",
+        "COLLATION_LIST",
+        "FUNCTION_LIST",
+        "MODULE_LIST",
+        "PRAGMA_LIST",
+        "COMPILE_OPTIONS",
+        "INTEGRITY_CHECK",
+        "QUICK_CHECK",
+        "SCHEMA_VERSION",
+        "USER_VERSION",
+        "PAGE_COUNT",
+        "PAGE_SIZE",
+        "FREELIST_COUNT",
+        "JOURNAL_MODE",
+        "ENCODING",
+        "APPLICATION_ID",
+        "DATA_VERSION",
+        "FOREIGN_KEYS",
+        "SYNCHRONOUS",
+        "CACHE_SIZE",
+        "BUSY_TIMEOUT",
+        "LOCKING_MODE",
+        "TEMP_STORE",
+    }
+)
+#: Pragmas that read bare and SET when given a value, in `=` or parenthesised form.
+_SQLITE_PRAGMAS_THAT_SET_WITH_PARENS = frozenset(
+    {"SCHEMA_VERSION", "USER_VERSION", "PAGE_SIZE", "JOURNAL_MODE", "ENCODING", "APPLICATION_ID"}
+    | {"FOREIGN_KEYS", "SYNCHRONOUS", "CACHE_SIZE", "BUSY_TIMEOUT", "LOCKING_MODE", "TEMP_STORE"}
+)
+
+
+def _sqlite_pragma_is_read(piece: str) -> bool:
+    match = re.fullmatch(r"PRAGMA\s+(?:\w+\.)?(\w+)\s*(\(.*\))?\s*", piece, re.DOTALL)
+    if not match:
+        return False  # `=`, a trailing clause, anything this does not recognise
+    name, args = match.group(1), match.group(2)
+    if name not in _SQLITE_READ_PRAGMAS:
+        return False
+    return not (args and name in _SQLITE_PRAGMAS_THAT_SET_WITH_PARENS)
+
+
+def _sqlite_piece_is_read(piece: str) -> bool:
+    if piece.startswith("PRAGMA"):
+        return _sqlite_pragma_is_read(piece)
+    return any(piece.startswith(sql) for sql in _SQLITE_SAFE_SQL)
 
 
 def _is_safe_sqlite_statement(statement: str) -> bool:
@@ -3350,8 +3872,13 @@ def _is_safe_sqlite_statement(statement: str) -> bool:
         ):
             return False
 
+    # Every `;`-separated statement is judged, not just the first: `SELECT 1; PRAGMA user_version=5` is a write.
     head = code.strip()
-    return any(head.startswith(m) for m in _SQLITE_SAFE_META) or any(head.startswith(sql) for sql in _SQLITE_SAFE_SQL)
+    sql_only = "\n".join(line for line in code.splitlines() if not line.strip().startswith("."))
+    pieces = [p.strip() for p in sql_only.split(";") if p.strip()]
+    if not all(_sqlite_piece_is_read(p) for p in pieces):
+        return False
+    return bool(pieces) or any(head.startswith(m) for m in _SQLITE_SAFE_META)
 
 
 def is_safe_python_command(command: str) -> bool:
@@ -3399,13 +3926,52 @@ def is_safe_python_command(command: str) -> bool:
         "OS.RMDIR(",
         "OS.MAKEDIRS(",
         "OS.MKDIR(",
-        # Subprocess / shell execution
-        "SUBPROCESS.RUN(",
-        "SUBPROCESS.CALL(",
-        "SUBPROCESS.POPEN(",
-        "OS.SYSTEM(",
-        "OS.POPEN(",
+        # Subprocess / shell execution: the module itself, however it is imported or called
+        "SUBPROCESS",
+        "OS.SYSTEM",
+        "OS.POPEN",
         "OS.EXEC",
+        "OS.SPAWN",
+        "OS.POSIX_SPAWN",
+        "OS.FORK",
+        "OS.KILL",
+        "PTY.SPAWN",
+        # More file mutation: rename/replace/link/chmod/truncate, pathlib mutators, from-imports that
+        # hide the module name from the attribute checks above
+        "OS.RENAME",
+        "OS.REPLACE(",
+        "OS.REMOVEDIRS(",
+        "OS.SYMLINK(",
+        "OS.LINK(",
+        "OS.CHMOD(",
+        "OS.CHOWN(",
+        "OS.TRUNCATE(",
+        "OS.UTIME(",
+        "OS.WRITE(",
+        ".TOUCH(",
+        ".MKDIR(",
+        ".UNLINK(",
+        ".RMDIR(",
+        ".RENAME(",
+        ".SYMLINK_TO(",
+        ".HARDLINK_TO(",
+        ".CHMOD(",
+        ".TRUNCATE(",
+        ".WRITELINES(",
+        "FROM SHUTIL",
+        "FROM OS IMPORT",
+        "IMPORT OS AS",
+        "IMPORT SHUTIL AS",
+        "TEMPFILE.",
+        # Reaching the above indirectly, or the network and native code
+        "IMPORTLIB",
+        "CTYPES",
+        "IMPORT SOCKET",
+        "FROM SOCKET",
+        "URLLIB.REQUEST",
+        "HTTP.CLIENT",
+        "__BUILTINS__",
+        "GLOBALS(",
         # Network mutation
         "REQUESTS.POST(",
         "REQUESTS.PUT(",
@@ -3648,12 +4214,25 @@ def _is_remote_cmd_safe(remote_cmd: str) -> bool:
     if not remote_cmd:
         return True
 
-    # Handle chains within the remote command: cmd1 && cmd2 && cmd3
-    # (split outside quotes — `;` etc. inside a quoted string is not a chain op)
+    # The outer classifier looks for redirects, background operators and substitutions OUTSIDE
+    # quotes, and the remote command usually arrives INSIDE them, so none of those checks has seen
+    # this text. Run them here, on the remote command itself: `ssh h "cat f > /etc/x"` and
+    # `ssh h "ls & rm -rf x"` were reads.
+    if _has_lone_ampersand(remote_cmd) or _has_dangerous_redirects(remote_cmd):
+        return False
+    if not _substitutions_are_safe(remote_cmd):
+        return False
+
+    # Handle chains within the remote command: cmd1 && cmd2 ; cmd3 || cmd4
+    # (split outside quotes — `;` etc. inside a quoted string is not a chain op). Split on EVERY operator and
+    # judge every segment: the first operator found used to decide, so `ls ; rm x && echo` was judged by its
+    # `&&` halves and the `rm` rode in the first one.
+    chain_segments = [remote_cmd]
     for chain_op in ("&&", "||", ";"):
-        if _contains_outside_quotes(remote_cmd, chain_op):
-            segments = [s.strip() for s in _split_outside_quotes(remote_cmd, chain_op)]
-            return all(_is_single_remote_cmd_safe(seg) for seg in segments if seg)
+        chain_segments = [part for seg in chain_segments for part in _split_outside_quotes(seg, chain_op)]
+    chain_segments = [s.strip() for s in chain_segments if s.strip()]
+    if len(chain_segments) > 1:
+        return all(_is_remote_cmd_safe(seg) for seg in chain_segments)
 
     # Handle pipes within the remote command
     if _contains_outside_quotes(remote_cmd, "|"):
@@ -3663,11 +4242,13 @@ def _is_remote_cmd_safe(remote_cmd: str) -> bool:
         # First segment must be safe, rest must be safe pipe targets
         if not _is_single_remote_cmd_safe(segments[0]):
             return False
+        # Receivers are judged as the local pipe path judges them: whole-word targets and the
+        # tool-flag guard (a bare startswith let `| truncate` ride on `tr`, `| tee /dev/stderr
+        # /tmp/out` on `tee /dev/stderr`).
         for seg in segments[1:]:
             seg = seg.strip()
-            if not any(seg.startswith(t) for t in SAFE_PIPE_TARGETS):
-                if not _is_single_remote_cmd_safe(seg):
-                    return False
+            if not (_is_safe_pipe_segment(seg, is_first=False) or _is_single_remote_cmd_safe(seg)):
+                return False
         return True
 
     return _is_single_remote_cmd_safe(remote_cmd)
@@ -3685,6 +4266,11 @@ def _is_single_remote_cmd_safe(cmd: str) -> bool:
     # cd is always safe
     if cmd_clean.startswith("cd "):
         return True
+
+    # Every prefix below names a COMMAND WORD; a write or exec flag on it (`find -delete`,
+    # `sed -i`, `sort -o`, `journalctl --vacuum-size`) makes it something else, as locally.
+    if _has_dangerous_tool_flags(cmd_clean) or _journalctl_mutates(cmd_clean):
+        return False
 
     # Docker inspection commands (common in remote infra work)
     docker_safe = (
@@ -3719,11 +4305,55 @@ def _is_single_remote_cmd_safe(cmd: str) -> bool:
     if cmd_clean.startswith("journalctl"):
         return True
 
-    # Check standard SAFE_BASH_PREFIXES
-    for prefix in SAFE_BASH_PREFIXES:
-        if cmd_clean.startswith(prefix) or (prefix.endswith(" ") and cmd_clean == prefix.rstrip()):
-            return True
+    # Standard safe prefixes, through the same matcher the local path uses (word boundary, git
+    # globals, env unwrapping) rather than a bare startswith.
+    return _matches_safe_prefix(cmd_clean)
 
+
+_JOURNALCTL_MUTATING = (
+    "--vacuum",
+    "--rotate",
+    "--flush",
+    "--sync",
+    "--relinquish-var",
+    "--smart-relinquish-var",
+    "--setup-keys",
+    "--update-catalog",
+)
+
+
+def _journalctl_mutates(cmd: str) -> bool:
+    """`journalctl --vacuum-size=…` / `--rotate` / `--flush` change the journal; plain reads do not."""
+    if not cmd.startswith("journalctl"):
+        return False
+    return any(flag in cmd for flag in _JOURNALCTL_MUTATING)
+
+
+def _rsync_runs_a_program(parts: list[str]) -> bool:
+    """`-e/--rsh CMD` runs CMD locally (only ssh is trusted, judged as ssh is); `--rsync-path` runs one remotely."""
+    i = 1
+    while i < len(parts):
+        tok = parts[i]
+        value: str | None = None
+        if tok in ("-e", "--rsh"):
+            value = parts[i + 1] if i + 1 < len(parts) else ""
+            i += 1
+        elif tok.startswith("--rsh="):
+            value = tok.split("=", 1)[1]
+        elif tok.startswith("-") and not tok.startswith("--") and "e" in tok[1:]:
+            tail = tok[tok.index("e") + 1 :]  # -e in a cluster (-avze): its value is the rest, or the next token
+            if tail:
+                value = tail
+            else:
+                value = parts[i + 1] if i + 1 < len(parts) else ""
+                i += 1
+        elif tok == "--rsync-path" or tok.startswith("--rsync-path="):
+            return True
+        if value is not None:
+            shell = _tool_tokens(value)
+            if not shell or shell[0] != "ssh" or _ssh_option_runs_local_program(shell):
+                return True
+        i += 1
     return False
 
 
@@ -3734,14 +4364,22 @@ def _classify_rsync(command: str) -> bool:
     Noetic: --dry-run/-n, downloading (remote→local)
     Praxic: uploading (local→remote), --delete
     """
-    parts = command.split()
+    parts = _tool_tokens(command)
 
-    # --dry-run or -n → always noetic (just showing what would happen)
-    if "--dry-run" in parts or "-n" in parts:
+    # The remote shell and the remote-side program are PROGRAMS, run even under --dry-run.
+    if _rsync_runs_a_program(parts):
+        return False
+
+    # --dry-run or -n (also inside a cluster such as -avn) → noetic: just showing what would happen
+    if "--dry-run" in parts or any(p.startswith("-") and not p.startswith("--") and "n" in p[1:] for p in parts):
         return True
 
-    # --delete is always destructive → praxic
-    if "--delete" in parts or "--delete-before" in parts or "--delete-after" in parts:
+    # Anything that deletes or writes beyond the transfer is praxic: --delete and its -before/-after/
+    # -during/-delay/-excluded forms, --del, the sources removed after sending, and batch files.
+    if any(
+        p == "--del" or p.split("=", 1)[0].startswith(("--delete", "--remove-", "--write-batch", "--only-write-batch"))
+        for p in parts
+    ):
         return False
 
     # Determine direction by finding src and dest arguments
@@ -3824,6 +4462,8 @@ def _classify_scp(command: str) -> bool:
     Praxic: uploading (local→remote)
     """
     parts = command.split()
+    if _scp_runs_a_program(parts):
+        return False
 
     # SCP options that consume next argument
     scp_opts_with_arg = set("cFiloPSs")
@@ -3847,9 +4487,38 @@ def _classify_scp(command: str) -> bool:
     # Last arg is destination
     dest = non_option_args[-1]
 
-    # If destination contains ':' (and isn't an absolute path) → uploading → praxic
-    # Otherwise → downloading or local copy → noetic
-    return not (":" in dest and not dest.startswith("/"))
+    # Only a DOWNLOAD is a read: a remote source, a local destination. An upload writes the remote;
+    # a copy between two local paths writes here, and rsync already judged that praxic.
+    def is_remote(arg: str) -> bool:
+        return ":" in arg and not arg.startswith(("/", "."))
+
+    return not is_remote(dest) and any(is_remote(src) for src in non_option_args[:-1])
+
+
+def _scp_runs_a_program(parts: list[str]) -> bool:
+    """scp `-S program` replaces ssh; `-F config` and `-o ProxyCommand=` make ssh run a local program.
+
+    Scanned with scp's own option letters: -P is a PORT here (ssh's scan treated `-P` as a flag, took `22` for the host
+    and stopped, so a ProxyCommand after it was never seen)."""
+    with_value = set("cFiJloPS")
+    i = 1
+    while i < len(parts):
+        tok = parts[i]
+        if not tok.startswith("-") or len(tok) < 2:
+            i += 1
+            continue
+        letter = tok[1]
+        if letter in ("S", "F"):
+            return True
+        if letter == "o":
+            value = tok[2:] if len(tok) > 2 else (parts[i + 1] if i + 1 < len(parts) else "")
+            if any(
+                opt in value.lower()
+                for opt in ("proxycommand", "localcommand", "permitlocalcommand", "knownhostscommand")
+            ):
+                return True
+        i += 2 if (letter in with_value and len(tok) == 2) else 1
+    return False
 
 
 def _is_safe_pipe_segment(segment_clean: str, *, is_first: bool) -> bool:
@@ -4132,9 +4801,8 @@ def _detect_subagent(claude_session_id: str) -> bool:
         # TIGHTENED CHECK (fixes #68): Don't just check if active_session exists —
         # verify its session matches the current transaction. Stale active_session
         # files from other projects/sessions cause false positive subagent detection.
-        from empirica.utils.session_resolver import InstanceResolver as R
 
-        _as_suffix = R.instance_suffix()
+        _as_suffix = _instance_suffix()
         _as_file = Path.home() / ".empirica" / f"active_session{_as_suffix}"
         if _as_file.exists():
             # Read the active_session to get its empirica_session_id
@@ -4731,9 +5399,7 @@ def _handle_no_preflight(tool_name: str, tool_input: dict, session_id: str, env_
     pre_tx_nudge = ""
     counter_file = None
     try:
-        from empirica.utils.session_resolver import InstanceResolver as R
-
-        suffix = R.instance_suffix()
+        suffix = _instance_suffix()
         counter_file = Path.home() / ".empirica" / f"pre_tx_calls{suffix}.json"
         count = 0
         if counter_file.exists():
@@ -5034,6 +5700,45 @@ def _resolve_empirica_root(claude_session_id: str | None) -> Path | None:
         sys.exit(0)
 
 
+_INSTANCE_SUFFIX: str | None = None
+
+
+def _instance_suffix() -> str:
+    """The instance suffix, resolved once per hook process.
+
+    The environment it is derived from cannot change during one hook call, and resolving it costs ~60 ms on a
+    seat without tmux (a tty/process walk), which five call sites each paid in turn.
+    """
+    global _INSTANCE_SUFFIX
+    if _INSTANCE_SUFFIX is None:
+        from empirica.utils.session_resolver import InstanceResolver as R
+
+        _INSTANCE_SUFFIX = R.instance_suffix()
+    return _INSTANCE_SUFFIX
+
+
+def _peek_work_type(claude_session_id: str | None) -> None:
+    """Load the open transaction's work_type into the module global BEFORE anything classifies a command.
+
+    The global was assigned only inside _read_transaction_state, which the authorization pipeline reaches after
+    the noetic firewall has run, so the firewall judged every Bash command with work_type None (the infra, config,
+    debug and remote-ops expansions never applied there, and the 'set work_type=remote-ops' nudge fired on
+    transactions that had set it). A read of one small file; any failure leaves the global as it was.
+    """
+    global _current_work_type
+    try:
+        tx = _locate_transaction_file(
+            claude_session_id, _instance_suffix(), _resolve_empirica_session_id(claude_session_id)
+        )
+        if tx:
+            with open(tx) as f:
+                data = json.load(f)
+            if data.get("status") == "open":
+                _current_work_type = data.get("work_type") or None
+    except Exception:
+        pass
+
+
 def _read_transaction_state(
     empirica_root: Path | None, claude_session_id: str | None, tool_name: str, tool_input: dict
 ) -> dict:
@@ -5057,9 +5762,7 @@ def _read_transaction_state(
     if not empirica_root:
         return result
 
-    from empirica.utils.session_resolver import InstanceResolver as R
-
-    suffix = R.instance_suffix()
+    suffix = _instance_suffix()
     result["suffix"] = suffix
     empirica_session_id = _resolve_empirica_session_id(claude_session_id)
     tx_file = _find_transaction_file(empirica_root, suffix, empirica_session_id)
@@ -5239,6 +5942,7 @@ def _check_auto_proceed(
         _current_domain,
         _current_criticality,
         project_path=str(Path(tx_file).parent.parent) if tx_file else None,
+        work_type=_current_work_type or None,
     )
     if raw_know >= _dyn_know and raw_unc <= _domain_unc:
         _domain_info = ""
@@ -5443,10 +6147,22 @@ def _check_proportionality_budget(hook_input: dict, tool_name: str) -> str | Non
     except (OSError, json.JSONDecodeError):
         return None
 
+    # A state file that is not a dict of numbers is not a budget: clear it and allow, so one
+    # corrupt file does not raise (and fail the hook open) on every Read/Grep/Glob.
+    try:
+        armed_at = float(data.get("armed_at", 0))
+        count = int(data.get("tool_count", 0)) + 1
+        limit = int(data.get("limit", 5))
+    except (AttributeError, TypeError, ValueError):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
+
     # Stale armings shouldn't block forever. 1h timeout matches the
     # implicit "this turn" framing — if the model hasn't acted on the
     # block within an hour, the conversational context is gone.
-    armed_at = data.get("armed_at", 0)
     if time.time() - armed_at > 3600:
         try:
             path.unlink()
@@ -5454,8 +6170,6 @@ def _check_proportionality_budget(hook_input: dict, tool_name: str) -> str | Non
             pass
         return None
 
-    count = int(data.get("tool_count", 0)) + 1
-    limit = int(data.get("limit", 5))
     data["tool_count"] = count
     try:
         path.write_text(json.dumps(data))
@@ -5495,6 +6209,10 @@ def main():
 
     global _hook_claude_session_id
     _hook_claude_session_id = hook_input.get("session_id")
+
+    # The transaction's work_type before ANY classification: the recovery exemption below, the firewall and the
+    # remote-ops nudge all classify Bash commands, and each depends on it.
+    _peek_work_type(hook_input.get("session_id"))
 
     _track_tool_usage(hook_input, tool_name, tool_input)
     _set_file_relevance_nudge(tool_name, tool_input, hook_input.get("session_id"))
