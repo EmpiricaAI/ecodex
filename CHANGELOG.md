@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.160.4] - 2026-10-19
+
 ### Changed
 - **Vendored empirica hooks follow core 1.14.11.** Compaction restores its own
   session's snapshot rather than the newest in the project; a start in one
@@ -1043,7 +1045,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.3...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.4...HEAD
+[0.160.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.3...v0.160.4
 [0.160.3]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.2...v0.160.3
 [0.160.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.1...v0.160.2
 [0.160.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.0...v0.160.1
