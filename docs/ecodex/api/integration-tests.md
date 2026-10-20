@@ -26,7 +26,10 @@ entry, the translator routes and both companion binaries.
 ## Running a hook by hand
 
 `codex-empirica-plugin` reads a codex hook payload on stdin, exactly as codex
-sends it. Payload schemas are in `codex-rs/hooks/schema/generated/`.
+sends it. Payload schemas for the twelve upstream events are in
+`codex-rs/hooks/schema/generated/`; the two ecodex events (`TaskCompleted`,
+`PostToolUseFailure`) are shaped by their request structs in
+`codex-rs/hooks/src/events/`.
 
 ```sh
 # The typed handlers
@@ -73,7 +76,8 @@ are properties of codex, so they hold until upstream changes them.
   the install root is `<codex_home>/plugins/cache/<marketplace>/<plugin>/<version>/`;
   the key is `<plugin>@<marketplace>`, each segment alphanumeric, dash or
   underscore (`utils/plugins/src/plugin_namespace.rs`,
-  `plugin/src/plugin_id.rs`). The empirica plugin is `empirica@empiricaAI`.
+  `core-plugin-common/src/plugin_id.rs`). The empirica plugin is
+  `empirica@empiricaAI`.
 - **codex's only lock on plugin state is system-wide.** codex reads managed
   requirements from `/etc/codex/requirements.toml` on Unix and
   `%ProgramData%\OpenAI\Codex\requirements.toml` on Windows
