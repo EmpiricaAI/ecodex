@@ -74,6 +74,12 @@ SUCCESS_MARKERS = [
     "passed",
 ]
 
+# The CLI reports its own success as JSON. A result that says `"ok": true` is work that landed whatever the process exit
+# code was (a later command in the same line failed), and recording it taught later sessions to avoid a working verb
+# (prop_bxjntibm defect 5). A nested `"ok": false` anywhere in the same output keeps it a failure.
+_OK_TRUE = re.compile(r'"ok"\s*:\s*true')
+_OK_FALSE = re.compile(r'"ok"\s*:\s*false')
+
 
 def _is_interesting_failure(tool_name: str, error: str) -> bool:
     """Is this failure worth recording as a permanent epistemic dead-end?
@@ -90,6 +96,8 @@ def _is_interesting_failure(tool_name: str, error: str) -> bool:
     # If the output shows the work landed, the command did not fail in the sense that
     # matters — something later in the same invocation did.
     if any(marker in error for marker in SUCCESS_MARKERS):
+        return False
+    if _OK_TRUE.search(error) and not _OK_FALSE.search(error):
         return False
     # Short errors are usually transient
     return len(error) >= 20
@@ -136,6 +144,7 @@ _SECRET_KEY_NAMES = [
 
 _SHAPE_PATTERNS = (
     (re.compile(r"\bctx_[A-Za-z0-9_\-]{8,}"), "ctx_<redacted>"),
+    (re.compile(r"\btk_[A-Za-z0-9]{20,}"), "tk_<redacted>"),
     (re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"), "sk-<redacted>"),
     (re.compile(r"\bghp_[A-Za-z0-9]{16,}"), "ghp_<redacted>"),
     (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "github_pat_<redacted>"),

@@ -379,6 +379,30 @@ SAFE_BASH_PREFIXES = (
     # Hardware inspection (read forms only — _nvidia_smi_is_read_only gates the
     # write side, which includes --gpu-reset, on the same binary)
     "nvidia-smi",
+    # Platform and container inspection. A read is a read in any work_type, and the same verb has to survive a pipe, a
+    # chain segment and a `$(...)` body, which the infra-only list never did (empirica.philipp.empirica-mesh-support,
+    # prop_iivc7beoyjh4rh4fhohff74uim). Read SUBCOMMANDS only, each with a trailing space so `docker psx` and
+    # `launchctl listx` are not the verb: `launchctl` also has bootstrap/bootout/kickstart, `plutil` has -convert and
+    # -replace, `pmset` and `defaults` have setters, `docker` has exec/run/rm, and `diskutil` has erase/mount.
+    # `plutil` and `pmset` are further guarded by flag in _tool_mode_mutates.
+    "launchctl list ",
+    "launchctl print ",
+    "sw_vers ",
+    "system_profiler ",
+    "scutil --get ",
+    "vm_stat ",
+    "diskutil list ",
+    "diskutil info ",
+    "pmset -g ",
+    "plutil -p ",
+    "plutil -lint ",
+    "defaults read ",
+    "docker ps ",
+    "docker images ",
+    "docker inspect ",
+    "docker logs ",
+    "docker network ls ",
+    "docker volume ls ",
     # Text pipeline (read-only, pure stdout — no native write mode)
     "cut ",
     "tr ",
@@ -552,36 +576,10 @@ INFRA_SAFE_PREFIXES = (
     "vmstat",
     "iostat",
     "dmesg",
-    # macOS counterparts. Every OS-specific entry here was Linux, so on a darwin
-    # fleet work_type=infra gated exactly the read-only recon this tuple exists
-    # to permit: a bare `launchctl list` was denied while `systemctl list-units`
-    # passed. The asymmetry was precise — `vmstat` (Linux) present, `vm_stat`
-    # (darwin) absent — and all eight verbs below had zero occurrences anywhere
-    # in this file. Reported by empirica.philipp.empirica-mesh-support after
-    # hitting it live during a fleet check.
-    #
-    # Scoped to read-only SUBCOMMANDS, not bare binaries: `launchctl` also has
-    # bootstrap/bootout/kickstart and `plutil` has -convert, so `launchctl ` and
-    # `plutil ` as prefixes would permit mutation. `diskutil` likewise — list and
-    # info only, never erase/partition/mount.
-    "launchctl list",
-    "launchctl print",
-    "sw_vers",
-    "system_profiler",
-    "scutil --get",
-    "vm_stat",
-    "diskutil list",
-    "diskutil info",
-    "pmset -g",
-    "plutil -p",
-    "plutil -lint",
-    # Docker inspection (not mutation)
-    "docker ps",
-    "docker images",
-    "docker logs",
-    "docker inspect",
-    "docker network ls",
-    "docker volume ls",
+    # The macOS counterparts (launchctl list/print, sw_vers, pmset -g, plutil -p, ...) and the docker read verbs
+    # (ps, images, inspect, logs, network ls, volume ls) moved to SAFE_BASH_PREFIXES: they are reads in every
+    # work_type and must work inside pipes, chains and substitutions, which this list never covered. What stays
+    # here is inspection that streams or that a work_type reasonably scopes.
     "docker stats",
     "docker compose ps",
     "docker compose logs",
@@ -1883,6 +1881,8 @@ def _stamp_blocked_presence(claude_session_id: str | None, tool_input: dict | No
     try:
         import subprocess
 
+        env_pid = os.environ.get("EMPIRICA_HOOK_PARENT_PID") or ""
+        parent_pid = env_pid if env_pid.isascii() and env_pid.isdigit() else str(os.getppid())
         cmd = [
             "empirica",
             "practitioner",
@@ -1892,13 +1892,21 @@ def _stamp_blocked_presence(claude_session_id: str | None, tool_input: dict | No
             "--status",
             "blocked",
             "--session-pid",
-            # ruling-shape runs this gate as a child and names Claude Code here; getppid() would be ruling-shape
-            os.environ.get("EMPIRICA_HOOK_PARENT_PID") or str(os.getppid()),
+            # ruling-shape runs this gate as a child and names Claude Code here; getppid() would be ruling-shape. The
+            # value comes from the environment and lands in a child's argv, so only a pid is accepted: anything else
+            # falls back to our own parent rather than becoming an argument.
+            parent_pid,
             "--output",
             "json",
         ]
+        # A value that begins with '-' is read by argparse as an option and the whole write is refused, so a question
+        # such as "- which one?" silently lost the stamp. Strip the leading dashes; nothing left means no flag.
+        pending = pending.lstrip("-").strip() if pending else None
         if pending:
             cmd += ["--pending-question", pending]
+        # List-form argv, no shell. The pid is digits-only and the question cannot begin with '-' (both enforced above and
+        # tested), so nothing in cmd can become an option or a shell word.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
@@ -2823,6 +2831,37 @@ def _date_sets_the_clock(stripped: str) -> bool:
     return False
 
 
+#: `plutil -p` and `-lint` read; every other mode edits or converts a plist, and `-o` names an output file for any of them.
+_PLUTIL_WRITE_FLAGS = frozenset({"-o", "-replace", "-insert", "-remove", "-convert", "-extract", "-create"})
+#: What `pmset -g` is documented to report. An ALLOWLIST: a setting name (`sleep`, `womp`), a case variant or a stray
+#: selector after `-g` is not a query and gates, rather than being guessed harmless.
+_PMSET_QUERIES = frozenset(
+    {"-g", "live", "custom", "cap", "sched", "ups", "batt", "ps", "log", "rawlog", "therm", "thermlog", "assertions"}
+    | {"powerstate", "stats", "systemstate", "adapter", "history", "historydetailed", "trace", "everything"}
+    | {"accessories", "sleepstates", "measurements", "userclients", "uuid", "ac"}
+)
+#: Spellings only the SHELL expands: `$'...'` / `$"..."`, brace expansion and a backslash. The guards below read the command with
+#: shlex, which does none of that, so `plutil -p x $'-convert'` shows them a harmless word while bash runs `-convert`.
+_SHELL_SPELLED = re.compile(r"""\$['"]|\{[^}]*[,]|\{[^}]*\.\.[^}]*\}|\\""")
+
+
+def _pmset_sets_state(stripped: str) -> bool:
+    """`pmset -g [query words]` reports; anything else, or a word that is not a query, changes or may change power state."""
+    toks = _tool_tokens(stripped)[1:]
+    if not toks or toks[0] != "-g":
+        return True
+    return any(tok not in _PMSET_QUERIES for tok in toks[1:])
+
+
+def _plist_or_power_tool_mutates(stripped: str, head: str) -> bool:
+    """`plutil` outside its read modes, `pmset` outside a `-g` query, or either spelled so only the shell sees the flag."""
+    if _SHELL_SPELLED.search(stripped):
+        return True
+    if head == "plutil":
+        return any(tok in _PLUTIL_WRITE_FLAGS for tok in _tool_tokens(stripped)[1:])
+    return _pmset_sets_state(stripped)
+
+
 def _tool_mode_mutates(stripped: str, head: str) -> bool:
     """Tool-specific write/exec modes that a flag set cannot express (programs, positionals, methods)."""
     if head in _AWK_NAMES:
@@ -2847,6 +2886,8 @@ def _tool_mode_mutates(stripped: str, head: str) -> bool:
         return any(tok not in _HOSTNAME_READS for tok in _tool_tokens(stripped)[1:])
     if head == "date":
         return _date_sets_the_clock(stripped)
+    if head in ("plutil", "pmset"):
+        return _plist_or_power_tool_mutates(stripped, head)
     if head == "mypy":  # --html-report, --xml-report, --any-exprs-report, ...: each writes a directory
         return any(tok.split("=", 1)[0].endswith("-report") for tok in _tool_tokens(stripped)[1:])
     return False
@@ -2943,6 +2984,62 @@ def _normalize_git_globals(cmd: str) -> str:
 _ENV_PREFIX_RE = re.compile(r"env(?:\s+|$)")
 _ENV_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s*")
 
+#: Variables that change WHAT RUNS rather than what a program reads: the search path, the dynamic loader, shell and
+#: interpreter start-up files, and the editors, pagers and helper commands that git and friends exec. `env PATH=/tmp/evil ls`
+#: ran /tmp/evil/ls and `PATH=/tmp/evil; ls` did the same across a chain, both classified safe (goal 59854adc). HOME and
+#: XDG_CONFIG_HOME are here because git reads `core.pager`, aliases and hooks from the config they point at.
+_EXEC_ENV_NAMES = frozenset(
+    {"PATH", "IFS", "ENV", "BASH_ENV", "SHELLOPTS", "BASHOPTS", "PS4", "PROMPT_COMMAND", "CDPATH", "GLOBIGNORE"}
+    | {"PAGER", "MANPAGER", "EDITOR", "VISUAL", "LESSOPEN", "LESSCLOSE", "BROWSER", "SSH_ASKPASS", "HOME", "SHELL"}
+    | {"TERMINFO", "TERMINFO_DIRS", "ZDOTDIR", "INPUTRC", "MAKEFLAGS", "CC", "CXX", "CFLAGS", "LDFLAGS", "GCONV_PATH"}
+    | {"LOCPATH", "NLSPATH", "HOSTALIASES", "RESOLV_HOST_CONF", "GLIBC_TUNABLES"}
+)
+#: Families, not enumerations: `GIT_TRACE*` APPENDS to any path it is given, `GIT_DIR` points git at a repository whose config
+#: can name a pager or fsmonitor to exec, `RIPGREP_CONFIG_PATH` can carry `--pre=<program>`. A denylist is never complete; a
+#: variable no one has listed yet is the residual risk of letting any assignment through at all.
+_EXEC_ENV_PREFIXES = (
+    "LD_",
+    "DYLD_",
+    "PYTHON",
+    "NODE_",
+    "NPM_",
+    "PERL",
+    "RUBY",
+    "GIT_",
+    "CARGO_",
+    "RUST",
+    "PIP_",
+    "BASH_",
+    "JAVA",
+    "_JAVA",
+    "XDG_",
+    "RIPGREP_",
+    "BAT_",
+    "GH_",
+    "LESS",
+    # Cloud and infrastructure CLIs read a config or credential helper from the path these name, and the config can name a
+    # program to run (a kubeconfig exec plugin, a docker credential helper, a pager). The infra work types allow these CLIs.
+    "KUBE",
+    "AWS_",
+    "AZURE_",
+    "GOOGLE_",
+    "CLOUDSDK_",
+    "GCLOUD",
+    "DOCKER_",
+    "SYSTEMD_",
+    "PSQL",
+    "PG",
+    "TF_",
+    "TERRAFORM_",
+    "ANSIBLE_",
+    "HELM_",
+    "VAULT_",
+)
+
+
+def _env_name_changes_execution(name: str) -> bool:
+    return name in _EXEC_ENV_NAMES or name.startswith(_EXEC_ENV_PREFIXES)
+
 
 #: Commands that are safe ONLY as written, with nothing after them. A prefix entry cannot say that: `claude --version`
 #: as a prefix also matched `claude --version -p 'rm -rf x'` and `claude --version-evil`.
@@ -2974,6 +3071,8 @@ def _matches_safe_prefix(cmd: str) -> bool:
             assign = _ENV_ASSIGN_RE.match(rest)
             if not assign:
                 break
+            if _env_name_changes_execution(assign.group(0).split("=", 1)[0]):
+                return False
             rest = rest[assign.end() :]
         rest = rest.strip()
         return True if not rest else is_safe_bash_command({"command": rest})
@@ -3165,7 +3264,8 @@ def _is_inert_shape(stripped: str) -> bool:
     # substitution in the RHS was already extracted+validated upstream (chain path
     # strips subs to a placeholder before this call; single-command path validates
     # them in is_safe_bash_command), so a quoted RHS here carries only inert data.
-    return bool(re.match(r"""^[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'[^']*'|\S*)$""", stripped))
+    assignment = re.match(r"""^([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S*)$""", stripped)
+    return bool(assignment) and not _env_name_changes_execution(assignment.group(1))
 
 
 # Benign command wrappers that prefix a real command without altering its
@@ -3563,7 +3663,167 @@ def _strip_sql_literals(sql: str) -> str:
     return "".join(out)
 
 
+_HEREDOC_OPERATOR = re.compile(r"""<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|\\?([A-Za-z_][A-Za-z0-9_]*))""")
+
+
+def _skip_heredoc_bodies(command: str, i: int, pending: list[tuple[str, bool]]) -> tuple[int, list[str]]:
+    """Consume each pending heredoc's body starting at ``i``. Returns the new index and any fail-closed markers.
+
+    Fail closed: if this scan disagreed with bash about where a body ends, the difference is a hidden command, so an
+    unterminated body leaves a marker word no allowlist knows and the whole command gates.
+    """
+    n, markers = len(command), []
+    for word, dash in pending:
+        terminated = False
+        while i < n:
+            end = command.find("\n", i)
+            line = command[i : end if end != -1 else n]
+            i = end + 1 if end != -1 else n
+            if (line.lstrip("\t") if dash else line) == word:
+                terminated = True
+                break
+        if not terminated:
+            markers.append("\n__unterminated_heredoc__")
+    return i, markers
+
+
+def _arithmetic_end(command: str, i: int) -> int:
+    """Index just past the ``$((...))`` that starts at ``i``; ``<<`` inside it is a shift, not a heredoc."""
+    depth, j, n = 0, i, len(command)
+    while j < n:
+        if command.startswith("((", j):
+            depth += 1
+            j += 2
+        elif command.startswith("))", j) and depth:
+            depth -= 1
+            j += 2
+            if not depth:
+                break
+        else:
+            j += 1
+    return j
+
+
+#: What a surviving `<<` becomes in the text handed to the classifier. Its blind cuts at `<<` hid every line after a double
+#: angle that was not a heredoc: a comment, `${x//<</y}`, a here-string, arithmetic, a quoted pattern.
+_DOUBLE_ANGLE_WORD = "__double_angle__"
+
+
+def _balanced_end(command: str, i: int, opener: str, closer: str, skip: int) -> int:
+    """Index just past the span that opens at ``i`` (``skip`` characters of introducer), or -1 when it never closes."""
+    depth, j, n = 1, i + skip, len(command)
+    while j < n:
+        if command[j] == opener:
+            depth += 1
+        elif command[j] == closer:
+            depth -= 1
+            if not depth:
+                return j + 1
+        j += 1
+    return -1
+
+
+#: Spans whose contents are NOT shell syntax of the surrounding line, so a `<<WORD` inside is a shift or a pattern, not a
+#: heredoc: `${x//<<E/y}`, `$[1<<n]`, `((n = 1<<n))`. `$((`..`))` has its own scanner.
+_VERBATIM_SPANS = (("${", "{", "}", 2), ("$[", "[", "]", 2))
+
+
+def _verbatim_span_end(command: str, i: int) -> int:
+    """0 when no verbatim span starts at ``i``; the index past it when it does; minus the index of its end-of-text when it
+    never closes (the caller then fails closed)."""
+    if command.startswith("((", i):
+        end = _balanced_end(command, i, "(", ")", 1)  # `((` closes at the matching `))`
+        return end if end != -1 else -len(command)
+    for introducer, opener, closer, skip in _VERBATIM_SPANS:
+        if command.startswith(introducer, i):
+            end = _balanced_end(command, i, opener, closer, skip)
+            return end if end != -1 else -len(command)
+    return 0
+
+
+def _starts_a_comment(command: str, i: int) -> bool:
+    """`#` begins a comment only at the start of a word, as in bash (`a#b` and `$#` do not)."""
+    return command[i] == "#" and (i == 0 or command[i - 1] in " \t\n;&|()<>")
+
+
+def _strip_heredocs(command: str) -> str:
+    """What the shell would actually run, with heredoc operators, bodies and here-string operators taken out and no `<<` left.
+
+    ``cat <<E <(touch x)`` keeps its ``<(touch x)`` and ``cat <<E\\nx\\nE\\ntouch y`` keeps its ``touch y``. The classifier
+    used to cut the segment at ``<<`` (to keep a body out of its operator scans), which also hid every argument after the
+    operator, every command after the terminator line, and everything after any `<<` that was not a heredoc. Quote-,
+    escape- and comment-aware; ``<<<`` and ``$((1 << 3))`` are not heredocs. An unterminated body gates the whole command.
+    """
+    out: list[str] = []
+    pending: list[tuple[str, bool]] = []
+    i, n = 0, len(command)
+    in_single = in_double = False
+    while i < n:
+        c = command[i]
+        if c == "\n" and pending and not in_single and not in_double:
+            out.append("\n")
+            i, markers = _skip_heredoc_bodies(command, i + 1, pending)
+            out.extend(markers)
+            pending = []
+            continue
+        if c == "\\" and not in_single and i + 1 < n:
+            out.append(command[i : i + 2])
+            i += 2
+            continue
+        if c == "'" and not in_double:
+            in_single = not in_single
+        elif c == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and not in_double:
+            if _starts_a_comment(command, i):
+                # A comment is inert and ends at the newline (a backslash does not continue it). It is DROPPED, not copied:
+                # the classifier's own quote tracking does not know about comments, so an apostrophe in one swallowed every
+                # later line.
+                end = command.find("\n", i)
+                i = n if end == -1 else end
+                continue
+            if command.startswith("$((", i):
+                end = _arithmetic_end(command, i)
+                out.append(command[i:end])
+                i = end
+                continue
+            span_end = _verbatim_span_end(command, i)
+            if span_end:
+                out.append(command[i:span_end] if span_end > 0 else "\n__unterminated_expansion__")
+                i = abs(span_end)
+                continue
+            if command.startswith("<<<", i):
+                i += 3
+                continue
+            match = _HEREDOC_OPERATOR.match(command, i)
+            if match:
+                word = next(g for g in (match.group(2), match.group(3), match.group(4)) if g is not None)
+                pending.append((word, match.group(1) == "-"))
+                i = match.end()
+                continue
+        out.append(c)
+        i += 1
+    if pending:  # the operator line is the last line: there is no body at all
+        out.append("\n__unterminated_heredoc__")
+    return "".join(out).replace("<<", _DOUBLE_ANGLE_WORD)
+
+
 def is_safe_bash_command(tool_input: dict) -> bool:
+    """Safe (noetic) means the old classifier says so AND the same command with its heredocs removed says so.
+
+    The second half only ever tightens: it closes the hole where a heredoc operator hid the arguments after it and the
+    commands after its terminator line from every check (goal 59854adc). A heredoc that FEEDS an executor stays gated by
+    the first half, because the body is then the program.
+    """
+    command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+    if ("<<" in command or "#" in command) and not _is_safe_bash_text(
+        {**tool_input, "command": _strip_heredocs(command)}
+    ):
+        return False
+    return _is_safe_bash_text(tool_input)
+
+
+def _is_safe_bash_text(tool_input: dict) -> bool:
     """Check if a Bash command is in the safe (noetic) whitelist.
 
     When work_type is infra/config/debug, expands the whitelist with
