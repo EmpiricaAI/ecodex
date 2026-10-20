@@ -1,0 +1,2 @@
+# pattern:location — why it's intentional (and what would reverse it)
+fallback-masks-primary:codex-rs/codex-empirica-plugin/src/empirica_cli.rs:unsupported_python — .ok()? means "could not ask the interpreter its version" and returns None so the caller keeps the hook's real exit code; reverse if the version probe becomes the gate itself
