@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Vendored empirica hooks follow core 1.14.12.** The Sentinel no longer lets a
+  heredoc, a comment or a double angle bracket hide text from the gate, treats
+  execution-changing variables as non-inert, and knows macOS and docker read
+  verbs in every work type and inside pipes, chains and substitutions;
+  credentials never reach stored artifact text; a tool result that reports
+  `ok: true` is not recorded as a dead end; and the statusline reads its
+  budget figure from the right field.
+- **Docs aligned with the code.** Eleven docs under `docs/ecodex/` corrected
+  against HEAD: hook payload fields and event counts, the skill namespace, the
+  discovery filter's full rule set, the legacy Hugging Face profile error, and
+  what the output translator does for the events that only `run-hook` serves.
+- **Two committed insta scratch files removed** and `*.pending-snap` ignored.
+
 ### Security
 - **`rustls` 0.23.46 and `quinn-proto` 0.11.19.** Clears nine advisories reachable
   from the translator's HTTP stack. The three remaining `zip` advisories need the
