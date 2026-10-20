@@ -51,8 +51,11 @@ The profile ships at
 ecodex session writes it to `$CODEX_HOME/huggingface.config.toml` (default
 `~/.codex/`) when that file is missing, on every install channel; the source
 installer copies the same file. An existing file is left alone. Profile-v2
-selection uses this separate file; a legacy `[profiles.huggingface]` table in the
-main config is not selected by `-p huggingface` on current ecodex.
+selection uses this separate file only: if the main `config.toml` still holds a
+legacy `profile = "huggingface"` selector or a `[profiles.huggingface]` table,
+`-p huggingface` refuses to load and names the file to clean up
+(`codex-rs/config/src/loader/mod.rs`). Move those settings into
+`huggingface.config.toml` and delete the legacy entries.
 
 To seed it by hand from a source checkout:
 
