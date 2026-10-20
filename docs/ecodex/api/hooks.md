@@ -115,13 +115,17 @@ typed events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 unknown fields, and turns an empty flat output into
 `{continue: true, hookSpecificOutput: {hookEventName}}`.
 
-For any other event name — the seven reached only through `run-hook` — the
-translator emits a bare `{continue: true}` and discards the rest, so on those
-events only the exit code reaches codex. Today's scripts on those events emit
-`{continue: true, message: …}`, which codex would not read anyway; what is
-lost is `pre-compact.py`'s `systemMessage` (codex would show it as a hook
-warning) and a script's ability to stop the event with `continue: false`.
-Carrying those two fields through the fall-through arm is open work.
+For every other event name — the seven reached only through `run-hook` — it
+whitelists the four fields every codex output schema accepts (`continue`,
+`stopReason`, `systemMessage`, `suppressOutput`), so `pre-compact.py`'s
+`systemMessage` reaches codex's hook warnings and a script can stop an event
+with `continue: false`. `SubagentStart` also carries `context` as
+`hookSpecificOutput.additionalContext`, `SubagentStop` carries
+`decision: "block"` and its `reason`, and `Interrupt` passes only
+`systemMessage`, the one field its schema takes. `SessionEnd`, `TaskCompleted`
+and `PostToolUseFailure` read no stdout at all, so for them the exit code is
+the whole contract. A CC-only field such as `message` is dropped on every
+event.
 
 ## Fail-open vs fail-closed semantics
 

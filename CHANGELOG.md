@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **Hook output on the `run-hook` events reaches codex.** The output translator
+  used to reduce every event it had no typed arm for to a bare
+  `{continue: true}`, so on PreCompact, PostCompact, SubagentStart,
+  SubagentStop and the rest a script's `systemMessage` or `continue: false`
+  never arrived. It now passes the universal fields every codex output schema
+  accepts, carries SubagentStart context and SubagentStop block decisions, and
+  sends Interrupt only the `systemMessage` its schema takes.
+
 ## [0.160.5] - 2026-10-20
 
 ### Changed

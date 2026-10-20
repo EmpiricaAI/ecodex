@@ -16,6 +16,10 @@
 //! | PreToolUse         | `{continue, decision?:"block"|"approve", stopReason?, suppressOutput?}` | `{continue, hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision?, permissionDecisionReason?, additionalContext?}}`  |
 //! | PostToolUse        | `{continue, context?, decision?:"block"}`        | `{continue, hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext}, decision?}`          |
 //! | Stop               | `{continue, decision?:"block", reason?}`         | `{continue, decision?:"block", reason?, stopReason?}` (already-compatible, light pass-through)       |
+//! | SubagentStart      | `{continue, context?}`                           | `{continue, …universal, hookSpecificOutput?:{hookEventName:"SubagentStart",additionalContext}}`      |
+//! | SubagentStop       | `{continue, decision?:"block", reason?}`         | `{continue, …universal, decision?:"block", reason?}`                                                  |
+//! | Interrupt          | `{systemMessage?}`                               | `{systemMessage?}` (the only field its schema takes)                                                  |
+//! | anything else      | `{continue, stopReason?, systemMessage?, suppressOutput?}` | the same four universal fields, whitelisted (PreCompact, PostCompact, PermissionRequest; inert on SessionEnd, TaskCompleted and PostToolUseFailure, which read no stdout) |
 //!
 //! Unknown CC fields are dropped silently. Empty-context flat outputs become
 //! `{continue: true}` with no hookSpecificOutput.
@@ -40,7 +44,10 @@ pub fn translate(event: &str, cc_output: &str) -> String {
         "pre-tool-use" | "PreToolUse" => translate_pre_tool_use(&cc),
         "post-tool-use" | "PostToolUse" => translate_post_tool_use(&cc),
         "stop" | "Stop" => translate_stop(&cc),
-        _ => json!({"continue": true}),
+        "subagent-start" | "SubagentStart" => translate_subagent_start(&cc),
+        "subagent-stop" | "SubagentStop" => translate_subagent_stop(&cc),
+        "interrupt" | "Interrupt" => translate_interrupt(&cc),
+        _ => Value::Object(translate_universal(&cc)),
     };
     serde_json::to_string(&codex).unwrap_or_else(|_| r#"{"continue":true}"#.to_string())
 }
@@ -214,22 +221,83 @@ fn translate_post_tool_use(cc: &Value) -> Value {
     Value::Object(out)
 }
 
-fn translate_stop(cc: &Value) -> Value {
-    // Stop's codex schema is mostly compatible with CC: continue, decision,
-    // reason, stopReason, suppressOutput, systemMessage all permitted.
-    // Whitelist-pass through to drop unknown fields.
+/// The four fields every codex hook output schema accepts — `continue`,
+/// `stopReason`, `suppressOutput`, `systemMessage` — whitelisted out of the CC
+/// output. This is the whole translation for events with no event-specific
+/// output (PreCompact, PostCompact, PermissionRequest) and the base for the
+/// Stop and subagent arms. Before this arm existed the fall-through emitted a
+/// bare `{continue: true}`, so `pre-compact.py`'s `systemMessage` (compaction
+/// guidance codex lists as a hook warning) never arrived and no script could
+/// stop an event with `continue: false`. SessionEnd, TaskCompleted and
+/// PostToolUseFailure read no stdout at all, so the extra fields are inert
+/// there rather than rejected.
+fn translate_universal(cc: &Value) -> Map<String, Value> {
     let mut out = Map::new();
     out.insert("continue".into(), json!(pluck_continue(cc)));
-    if cc.get("decision").and_then(Value::as_str) == Some("block") {
-        out.insert("decision".into(), json!("block"));
-    }
-    for key in ["reason", "stopReason", "systemMessage"] {
-        if let Some(v) = cc.get(key).and_then(Value::as_str) {
+    for key in ["stopReason", "systemMessage"] {
+        if let Some(v) = cc
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
             out.insert(key.into(), json!(v));
         }
     }
     if cc.get("suppressOutput").and_then(Value::as_bool) == Some(true) {
         out.insert("suppressOutput".into(), json!(true));
+    }
+    out
+}
+
+/// `decision: "block"` plus its `reason`, the shape Stop and SubagentStop
+/// share with CC. Inserted only when the script actually blocked.
+fn insert_block_decision(cc: &Value, out: &mut Map<String, Value>) {
+    if cc.get("decision").and_then(Value::as_str) == Some("block") {
+        out.insert("decision".into(), json!("block"));
+        if let Some(reason) = cc.get("reason").and_then(Value::as_str) {
+            out.insert("reason".into(), json!(reason));
+        }
+    }
+}
+
+fn translate_stop(cc: &Value) -> Value {
+    // Stop's codex schema is the universal set plus decision/reason.
+    let mut out = translate_universal(cc);
+    insert_block_decision(cc, &mut out);
+    Value::Object(out)
+}
+
+fn translate_subagent_start(cc: &Value) -> Value {
+    // Same contract as SessionStart (it is dispatched through the same path
+    // in codex): the universal set plus `hookSpecificOutput.additionalContext`.
+    // Today's subagent-start.py emits `{continue, message}`, so nothing is
+    // carried yet; the arm is here so a context-emitting script is not lost.
+    let mut out = translate_universal(cc);
+    if let Some(ctx) = pluck_context_or_additional(cc) {
+        out.insert(
+            "hookSpecificOutput".into(),
+            json!({"hookEventName": "SubagentStart", "additionalContext": ctx}),
+        );
+    }
+    Value::Object(out)
+}
+
+fn translate_subagent_stop(cc: &Value) -> Value {
+    let mut out = translate_universal(cc);
+    insert_block_decision(cc, &mut out);
+    Value::Object(out)
+}
+
+fn translate_interrupt(cc: &Value) -> Value {
+    // Interrupt's output schema has exactly one property; even `continue`
+    // would be rejected.
+    let mut out = Map::new();
+    if let Some(v) = cc
+        .get("systemMessage")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        out.insert("systemMessage".into(), json!(v));
     }
     Value::Object(out)
 }
@@ -556,9 +624,62 @@ mod tests {
     fn unknown_event_returns_continue_true() {
         let out = translate("UnknownEvent", r#"{"context":"ignored"}"#);
         let v = parse(&out);
-        assert_eq!(v["continue"], json!(true));
-        // No hookSpecificOutput for events we don't know how to translate.
-        assert!(v.get("hookSpecificOutput").is_none());
+        assert_eq!(v, json!({"continue": true}));
+    }
+
+    #[test]
+    fn fall_through_passes_the_universal_fields_and_drops_the_rest() {
+        // pre-compact.py's compaction guidance and a script's stop both
+        // reach codex now; CC's `message` and `context` never were valid here.
+        let out = translate(
+            "PreCompact",
+            r#"{"continue":false,"stopReason":"snapshot failed","systemMessage":"compact guidance","suppressOutput":true,"message":"drop","context":"drop"}"#,
+        );
+        assert_eq!(
+            parse(&out),
+            json!({
+                "continue": false,
+                "stopReason": "snapshot failed",
+                "systemMessage": "compact guidance",
+                "suppressOutput": true
+            })
+        );
+    }
+
+    #[test]
+    fn subagent_start_carries_context_in_hook_specific_output() {
+        let out = translate(
+            "SubagentStart",
+            r#"{"continue":true,"context":"child session abc","message":"drop"}"#,
+        );
+        assert_eq!(
+            parse(&out),
+            json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "SubagentStart",
+                    "additionalContext": "child session abc"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn subagent_stop_block_passes_decision_and_reason() {
+        let out = translate(
+            "SubagentStop",
+            r#"{"continue":true,"decision":"block","reason":"rollup rejected","regulation":{"x":1}}"#,
+        );
+        assert_eq!(
+            parse(&out),
+            json!({"continue": true, "decision": "block", "reason": "rollup rejected"})
+        );
+    }
+
+    #[test]
+    fn interrupt_emits_only_system_message() {
+        let out = translate("Interrupt", r#"{"continue":true,"systemMessage":"noted"}"#);
+        assert_eq!(parse(&out), json!({"systemMessage": "noted"}));
     }
 
     #[test]
