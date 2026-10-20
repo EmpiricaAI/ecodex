@@ -54,8 +54,9 @@ the empirica CLI.
 
 ### Cargo
 
-`cargo install` builds only the `ecodex` binary. Install the plugin binary, the
-translator and the empirica CLI too:
+`cargo install` of `codex-cli` builds the `ecodex` binary (and upstream's
+`logs_client` helper), not the plugin binary or the translator. Install those
+and the empirica CLI too:
 
 ```sh
 cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli
@@ -261,10 +262,12 @@ Older ecodex builds used the first `python3` on `PATH` instead, which cannot see
 a pipx or Homebrew empirica: update ecodex.
 
 **"No CHECK, and no grounded claims declared at PREFLIGHT" right after a PREFLIGHT that declared claims**
-The claims were not recorded. Core stores a claim only when its text is under
-the key `claim`; an item keyed `statement` (the falsifier shape) is dropped
-silently. The PREFLIGHT response echoes what it recorded under
-`claims.declared` — if that is empty or short, fix the shape
+The claims were not recorded. Current core takes the claim text under
+`claim`, `statement` or `text` and lists any item it could not store under
+`claims.skipped` in the PREFLIGHT response; an older core stored only `claim`
+and dropped a `statement`-keyed item (the falsifier shape) silently. Either
+way the response echoes what it recorded under `claims.declared` — if that is
+empty or short, fix the shape
 (`{"claim": …, "grounding": "ran", "scope": …, "count": N}`) and re-run
 PREFLIGHT, or submit CHECK. This is the Sentinel working, not a broken hook: a
 hook failure reads *Hook failed · <Event>* in the TUI.
