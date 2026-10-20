@@ -10,7 +10,7 @@ The harness is built, installed (v0.1.0), and verified running. All infra blocke
 - **ecodex-lab practice**: project created + session came up clean. `ai_id=ecodex-lab`, project_id `810e03fc-514f-457c-ae25-9c72a1e68162`, folder `~/empirical-ai/ecodex-lab/`. (Created via the `project-switch` + `session-create` workaround; the auto-init bug that forced that is now FIXED in empirica — see below.)
 - **Kimi path (preferred model — easier to guide)**: translator binary built (`codex-rs/target/release/codex-empirica-translator`), config at `~/.codex/upstreams.toml` (kimi/anthropic). Start it: `set -a; . ~/.codex/.env; set +a; <translator-bin> --upstreams-config ~/.codex/upstreams.toml --bind 127.0.0.1:18080`. Verified live: `/v1/responses` → Kimi → HTTP 200. KIMI_API_KEY is in `~/.codex/.env`. NOTE: it's a foreground/manual start — re-launch it if the box rebooted.
 - **empirica-server (Ollama) fallback**: live at `http://empirica-server:11434/v1` (qwen3.6:35b etc.) if Kimi is down.
-- **cortex MCP**: FIXED — use `url = "https://cortex.getempirica.com/mcp/"` (trailing slash REQUIRED). Already updated in `~/.codex/config.toml` + `docs/ecodex/integrations/cross-ai-mesh.md`.
+- **cortex MCP**: FIXED — use `url = "https://cortex.getempirica.com/mcp/"` (trailing slash REQUIRED). Already updated in `~/.codex/config.toml` + `docs/ecodex/cross-ai-mesh.md`.
 
 ## What got FIXED at source this session (all 3 mesh round-trips closed)
 - cortex MCP 405 → cortex `b1f5ff0` (streamable_http `/mcp` endpoint). Verified live.

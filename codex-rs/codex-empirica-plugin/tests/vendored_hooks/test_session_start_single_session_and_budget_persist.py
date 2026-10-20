@@ -1,4 +1,5 @@
-"""One empirica session per codex SessionStart, and budget persistence that never re-resolves a path.
+"""One empirica session per codex SessionStart, and budget persistence that never
+re-resolves a path.
 
 Pins, against the VENDORED hooks, the two fixes empirica 1.14.8 made after David's
 2026-10-04/05 reports (goal 1c7051bb):
@@ -81,7 +82,9 @@ def _run_post_compact_main(payload: dict) -> tuple[bool, str]:
 @pytest.mark.parametrize("source", ["startup", "resume", "clear", "fork"])
 def test_post_compact_skips_every_non_compact_session_start(source):
     reached, stdout = _run_post_compact_main({"session_id": "thread-1", "source": source})
-    assert reached is False, f"source={source} must not reach practice resolution or session creation"
+    assert reached is False, (
+        f"source={source} must not reach practice resolution or session creation"
+    )
     result = json.loads(stdout)
     assert result["ok"] is True and result["skipped"] is True
     assert source in result["reason"]
@@ -104,7 +107,9 @@ def test_post_compact_acts_on_a_compaction():
 )
 def test_post_compact_never_drops_a_payload_it_cannot_judge(payload):
     reached, _ = _run_post_compact_main(payload)
-    assert reached is True, "no usable `source` means we cannot tell; a compaction must not be dropped"
+    assert reached is True, (
+        "no usable `source` means we cannot tell; a compaction must not be dropped"
+    )
 
 
 # --- session-init: persist into the db the hook holds, or say why not ---------------------
@@ -146,17 +151,22 @@ def test_budget_db_is_none_without_a_root_or_without_the_file(session_init, tmp_
     assert session_init._budget_db_path(_practice(tmp_path, with_db=False)) is None
 
 
-def test_budget_db_honours_an_explicit_override_the_resolver_would_use(session_init, tmp_path, monkeypatch):
+def test_budget_db_honours_an_explicit_override_the_resolver_would_use(
+    session_init, tmp_path, monkeypatch
+):
     override = tmp_path / "ci-sessions.db"
     override.write_bytes(b"")
     monkeypatch.setenv("EMPIRICA_SESSION_DB", str(override))
     assert session_init._budget_db_path(None) == override
 
 
-def test_unpersisted_reason_names_the_cause_source_and_cwd_without_blaming_the_install(session_init, tmp_path):
+def test_unpersisted_reason_names_the_cause_source_and_cwd_without_blaming_the_install(
+    session_init, tmp_path
+):
     no_root = session_init._unpersisted_reason(None, {"source": "compact"}, "/work/thing")
     assert no_root == (
-        "budget state not persisted: practice root unknown for this SessionStart (source=compact, cwd=/work/thing)"
+        "budget state not persisted: practice root unknown for this SessionStart "
+        "(source=compact, cwd=/work/thing)"
     )
     root = _practice(tmp_path, with_db=False)
     no_db = session_init._unpersisted_reason(root, {"type": "resume"}, "/work/thing")
@@ -164,7 +174,9 @@ def test_unpersisted_reason_names_the_cause_source_and_cwd_without_blaming_the_i
     unknown = session_init._unpersisted_reason(None, {}, "/work/thing")
     assert "source=unknown" in unknown
     for text in (no_root, no_db, unknown):
-        assert "project-init" not in text, "inside an initialised practice that remedy is wrong and reads as a broken install"
+        assert "project-init" not in text, (
+            "inside an initialised practice that remedy is wrong and reads as a broken install"
+        )
 
 
 def test_without_a_db_path_the_budget_is_not_persisted_and_the_resolver_never_speaks(
@@ -172,13 +184,18 @@ def test_without_a_db_path_the_budget_is_not_persisted_and_the_resolver_never_sp
 ):
     monkeypatch.chdir(tmp_path)  # not a git repository, no practice
     monkeypatch.delenv("EMPIRICA_SESSION_DB", raising=False)
-    reason = "budget state not persisted: practice root unknown for this SessionStart (source=compact, cwd=x)"
+    reason = (
+        "budget state not persisted: practice root unknown for this SessionStart "
+        "(source=compact, cwd=x)"
+    )
     with patch.object(
         real_budget_module.ContextBudgetManager,
         "persist_state",
         side_effect=AssertionError("persist_state must not be reached without a db path"),
     ):
-        summary = session_init._init_context_budget("sess-1", {}, db_path=None, unpersisted_reason=reason)
+        summary = session_init._init_context_budget(
+            "sess-1", {}, db_path=None, unpersisted_reason=reason
+        )
     assert "error" not in summary, summary
     assert summary["persist"] == f"skipped: {reason}"
     assert "Cannot determine" not in json.dumps(summary)
@@ -189,7 +206,11 @@ def test_with_a_db_path_the_hook_passes_that_path_through(
 ):
     monkeypatch.delenv("EMPIRICA_SESSION_DB", raising=False)
     db = _practice(tmp_path, with_db=True) / ".empirica" / "sessions" / "sessions.db"
-    with patch.object(real_budget_module.ContextBudgetManager, "persist_state", return_value=True) as persist:
-        summary = session_init._init_context_budget("sess-1", {"goals": [{"objective": "ship"}]}, db_path=db)
+    with patch.object(
+        real_budget_module.ContextBudgetManager, "persist_state", return_value=True
+    ) as persist:
+        summary = session_init._init_context_budget(
+            "sess-1", {"goals": [{"objective": "ship"}]}, db_path=db
+        )
     persist.assert_called_once_with(db_path=db)
     assert summary["persist"] == "persisted"
