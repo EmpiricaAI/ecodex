@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Security
+- **`rustls` 0.23.46 and `quinn-proto` 0.11.19.** Clears nine advisories reachable
+  from the translator's HTTP stack. The three remaining `zip` advisories need the
+  9.x line, a breaking upgrade upstream owns.
+
 ## [0.160.4] - 2026-10-19
 
 ### Changed
