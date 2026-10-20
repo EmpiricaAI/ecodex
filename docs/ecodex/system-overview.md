@@ -45,7 +45,7 @@ This doc walks each layer, then traces a session through all three.
 ### Where it lives
 
 ```
-codex-rs/            # the Rust workspace: 152 crates, almost all upstream
+codex-rs/            # the Rust workspace: about 160 crates, almost all upstream
 sdk/python/          # Python SDK (upstream)
 sdk/python-runtime/  # Python runtime (upstream)
 codex-cli/           # upstream npm wrapper (ecodex publishes its own under npm/)
@@ -92,8 +92,10 @@ event in `hooks.json`. It runs the matching vendored Python hook with the
 interpreter of the `empirica` CLI on PATH (from that script's shebang), sets the
 hook's identity (`EMPIRICA_INSTANCE_ID` from codex's thread id,
 `EMPIRICA_HARNESS=codex`), and translates the hook's output into the shape codex
-accepts (`translate_output.rs`). `src/empirica_cli.rs` is the single subprocess
-boundary.
+accepts (`translate_output.rs`). `src/empirica_cli.rs` is the subprocess
+boundary for the hooks; the only other child processes the plugin spawns are
+`git init` and `empirica project-init`, from the practice bootstrap
+(`src/practice_bootstrap.rs`).
 
 | codex event | Hooks | What happens |
 |---|---|---|
@@ -106,7 +108,9 @@ boundary.
 | `PreCompact` / `PostCompact` | `pre-compact`, `post-compact` | Carries epistemic state across a compaction |
 | `SessionEnd`, `TaskCompleted`, `SubagentStart` / `SubagentStop` | `session-end-postflight`, `task-completed`, `subagent-*` | Closes the measurement loop; ties tasks and subagents to Empirica goals |
 
-`PermissionRequest` is wired to a no-op for now.
+`PermissionRequest` and `Interrupt` have no `hooks.json` entry. The binary
+accepts a `permission-request` subcommand as a no-op, so an entry can be added
+without a new handler.
 
 **Why a subprocess per hook.** Empirica's Python stays canonical, and a hook
 behaves exactly as it does under Claude Code. The cost is 30–270 hook fires per
