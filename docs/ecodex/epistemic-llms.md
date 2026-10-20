@@ -30,7 +30,7 @@ Models in ecodex's curated picker (`/model` → arrow keys) are chosen to span t
 
 1M context, agent-tuned. Reached through the translator's `kimi` route (chat protocol, `api.moonshot.cn`; international accounts point the route at `api.moonshot.ai`); API key, metered. `kimi-k2.7-code-highspeed` is the faster 256K variant.
 
-**Strengths:** Very strong tool-call reliability — Kimi was tuned for agent workflows specifically. 256K context is comfortable for codebase exploration. Routes via the empirica translator so the protocol surface is clean.
+**Strengths:** Very strong tool-call reliability — Kimi was tuned for agent workflows specifically. The 1M context is ample for codebase exploration, and the 256K highspeed variant still is. Routes via the empirica translator so the protocol surface is clean.
 
 **Behavioral notes:**
 - Tends toward **investigation-as-procrastination** under hypothesis-bearing prompts (e.g. "check on X, I think it's Y"). Will read 5–30 files before testing the hypothesis directly. The investigation-proportionality budget (default 5 reads after a hypothesis marker) is a corrective.
@@ -173,7 +173,7 @@ Google's flagship general model, 1M context.
 
 ### When you want frontier reasoning
 
-**Claude Opus 4.7** (via OpenRouter) for the hard stuff. **DeepSeek Reasoner** for cost-effective reasoning depth.
+**Claude Opus 4.7** (via OpenRouter) for the hard stuff. **DeepSeek V4 Pro** (`deepseek-v4-pro`) for cost-effective reasoning depth.
 
 ### When you want offline + private
 
