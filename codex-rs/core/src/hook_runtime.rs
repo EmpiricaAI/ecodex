@@ -329,10 +329,10 @@ pub(crate) async fn run_post_tool_use_hooks(
     outcome
 }
 
-/// ecodex addition (goal f0004294): fires SessionEnd at the start of
-/// session shutdown. Symmetric to SessionStart. Plugin handlers run
-/// final POSTFLIGHT + curate the rollout while session state is still
-/// live (before abort_all_tasks / conversation shutdown).
+/// ecodex addition (goal f0004294): fires SessionEnd as the last step of
+/// session shutdown, after the tasks are aborted and the conversation, hook
+/// engine and MCP runtime are down. Symmetric to SessionStart. Plugin handlers
+/// run the final POSTFLIGHT and curate the rollout against a quiesced session.
 /// ecodex addition (goal f0004294): fires when a tool invocation fails.
 /// Sibling to `run_post_tool_use_hooks` — same shape minus the success-only
 /// `tool_response`, plus `error_message` + `duration_ms` for plugin handlers
