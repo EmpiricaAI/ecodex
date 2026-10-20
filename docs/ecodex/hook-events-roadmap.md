@@ -24,7 +24,7 @@ what the plugin's `hooks.json` wires today:
 | `PermissionRequest` | When a tool needs permission | none (subcommand accepted, no handler) |
 | `PostToolUse` | After a successful tool invocation | `tool-failure.py` (canonical) + `entity-extractor.py` + `truncation-legibility.py` |
 | `PreCompact` | Just before compaction runs | `pre-compact.py` |
-| `PostCompact` | Just after compaction (`success: bool`) | `post-compact.py` |
+| `PostCompact` | Just after compaction (`trigger: manual \| auto`, same as PreCompact) | `post-compact.py` |
 | `SessionStart` | New, resumed, cleared, forked or post-compaction session (`source` says which) | `session-init.py` + `ewm-protocol-loader.py` + `post-compact.py` + `session-monitor-arm.py` |
 | `SessionEnd` | Session shutdown | `session-end-postflight.py` |
 | `UserPromptSubmit` | User submits a prompt | `tool-router.py` + `context-shift-tracker.py` |
@@ -51,9 +51,14 @@ rather than dispatching inline.
 
 ### The 5 converged events — dispatched via `hook_runtime.rs`
 
-- **`SessionEnd`** — `run_session_end_hooks(sess)`, called from
-  `codex-rs/core/src/session/handlers.rs` during shutdown (before
-  `abort_all_tasks`).
+- **`SessionEnd`** — `run_session_end_hooks(sess)`, the last call in
+  `shutdown_session_runtime` (`codex-rs/core/src/session/handlers.rs`): it
+  runs after the tasks are aborted and the conversation, the hook engine's
+  async tasks and the MCP runtime are shut down, so the handler sees a quiesced
+  session and a flushed transcript. It still runs — the synchronous SessionEnd
+  path does not use the async runner the shutdown closes
+  (`session_end_flushes_transcript_and_ignores_control_output` in
+  `core/tests/suite/hooks.rs` covers it).
 - **`PreCompact` / `PostCompact`** — `run_pre_compact_hooks()` /
   `run_post_compact_hooks()`, fired around the compaction task so all
   compaction implementations get the events. PreCompact awaits synchronously
@@ -67,8 +72,9 @@ rather than dispatching inline.
   **parent's** session when a subagent thread is spawned.
 - **`SubagentStop`** — selected as `StopHookTarget::SubagentStop` inside the
   turn-stop dispatch path (`run_turn_stop_hooks`); fires in the **subagent's
-  own** session when it self-reports done. Plugins correlate parent→child via
-  `child_thread_id` (Start) + `session_id` (Stop).
+  own** session when it self-reports done. Both payloads carry `agent_id` and
+  `agent_type` (the Stop adds `agent_transcript_path`); plugins correlate
+  parent→child on `agent_id`. `SubagentStart`'s `session_id` is the parent's.
 
 ### The 2 ecodex-divergent events — fired from lifecycle sites via `hook_runtime.rs` helpers
 
@@ -80,9 +86,11 @@ rather than dispatching inline.
 - **`PostToolUseFailure`** — fires from **`codex-rs/core/src/tools/registry.rs`**
   (the tool-failure branch, `ecodex addition (goal f0004294)`), calling
   `run_post_tool_use_failure_hooks(..)` in `hook_runtime.rs` — the failure-branch
-  sibling to `run_post_tool_use_hooks`. Carries `tool_name` + `tool_input` +
-  `error_message` + `duration_ms` so `tool-failure.py` can record the failed
-  approach as a dead-end artifact.
+  sibling to `run_post_tool_use_hooks`. Carries `tool_name`, `error_message`
+  and `duration_ms` so `tool-failure.py` can record the failed approach as a
+  dead-end artifact; `tool_input` is present but `null` (the failure site no
+  longer has the arguments in scope), so the dead-end names the tool, not the
+  call.
 
 > These file pointers describe the current dispatch mechanism; exact line
 > numbers drift with refactors, so locate the fire sites by the
