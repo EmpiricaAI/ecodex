@@ -98,3 +98,6 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
+
+# insta inline-snapshot scratch files; never commit them
+*.pending-snap
