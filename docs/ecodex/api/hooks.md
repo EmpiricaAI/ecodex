@@ -58,14 +58,17 @@ same shape as Claude Code's `settings.json` hook block:
 The shipped `hooks.json` wires twelve events — upstream's `PreToolUse`,
 `PostToolUse`, `SessionStart`, `UserPromptSubmit`, `Stop`, `PreCompact`,
 `PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop` and ecodex's
-`TaskCompleted`, `PostToolUseFailure` — with seventeen commands in all;
+`TaskCompleted`, `PostToolUseFailure` — with eighteen commands in all;
 `PostToolUse`, `SessionStart` and `UserPromptSubmit` fan out to several
 scripts. `docs/ecodex/hook-events-roadmap.md` lists the script behind each
 event. `PermissionRequest` and `Interrupt` have no entry.
 
 ## Stdin payload (codex format)
 
-Per `codex-rs/hooks/schema/generated/`. PreToolUse example:
+Per `codex-rs/hooks/schema/generated/` for the twelve upstream events. The two
+ecodex events have no generated schema; their shape is the request struct in
+`codex-rs/hooks/src/events/task_completed.rs` and
+`post_tool_use_failure.rs`. PreToolUse example:
 
 ```json
 {
@@ -83,8 +86,11 @@ Per `codex-rs/hooks/schema/generated/`. PreToolUse example:
 ```
 
 Other events follow the same envelope plus their own fields: `SessionStart`
-carries `source` (`startup | resume | clear | compact | fork`), `PostCompact`
-carries `success`, `SubagentStart` carries the child thread id, and so on.
+carries `source` (`startup | resume | clear | compact | fork`), `PreCompact` and
+`PostCompact` carry `trigger` (`manual | auto`), `SubagentStart` and
+`SubagentStop` carry `agent_id` and `agent_type` (the Stop adds
+`agent_transcript_path`), `PostToolUseFailure` carries `error_message` and
+`duration_ms` with `tool_input` null, and so on.
 
 Every hook subprocess also receives `EMPIRICA_INSTANCE_ID` set to the codex
 thread id, which the Python side uses to key per-session state.
@@ -102,10 +108,20 @@ thread id, which the Python side uses to key per-session state.
 Empirica's scripts emit Claude Code's flat output shape
 (`{continue, context, decision, suppressOutput}`); codex validates each event's
 output against a strict `additionalProperties: false` schema. Every handler
-therefore routes script output through `src/translate_output.rs`, which maps
-`context` to `hookSpecificOutput.additionalContext`, `decision: "block"` on
-`PreToolUse` to `permissionDecision: "deny"`, drops unknown fields, and turns
-an empty flat output into `{continue: true}`.
+therefore routes script output through `src/translate_output.rs`. For the five
+typed events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
+`Stop`) it maps `context` to `hookSpecificOutput.additionalContext`,
+`decision: "block"` on `PreToolUse` to `permissionDecision: "deny"`, drops
+unknown fields, and turns an empty flat output into
+`{continue: true, hookSpecificOutput: {hookEventName}}`.
+
+For any other event name — the seven reached only through `run-hook` — the
+translator emits a bare `{continue: true}` and discards the rest, so on those
+events only the exit code reaches codex. Today's scripts on those events emit
+`{continue: true, message: …}`, which codex would not read anyway; what is
+lost is `pre-compact.py`'s `systemMessage` (codex would show it as a hook
+warning) and a script's ability to stop the event with `continue: false`.
+Carrying those two fields through the fall-through arm is open work.
 
 ## Fail-open vs fail-closed semantics
 
@@ -147,7 +163,8 @@ The other handlers (`post-tool-use`, `session-start`, `user-prompt-submit`,
 failures (script-file pre-check, spawn errors), and these handlers translate
 `Err` → `ExitCode::SUCCESS` (fail open) so the plugin's own brokenness doesn't
 strand the user. A **script-emitted** block (script exits 2 with stderr, or
-stdout JSON says deny) is a deliberate decision and propagates verbatim.
+stdout JSON says deny on one of the five typed events) is a deliberate decision
+and propagates verbatim.
 
 ## Interpreter and script location
 
