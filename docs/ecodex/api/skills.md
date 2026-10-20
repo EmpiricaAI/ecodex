@@ -71,7 +71,9 @@ samples (`codex-rs/skills/src/assets/samples/`). No translation between hosts.
 ```
 
 Codex discovers each subdirectory's `SKILL.md` and registers it as a callable
-skill scoped to the plugin's namespace (`empirica:<skill-name>`).
+skill scoped to the plugin's namespace, which is the manifest `name` verbatim:
+`empirica@empiricaAI:<skill-name>` (`codex-rs/core-plugins/src/loader.rs` sets
+the namespace, `ext/skills/src/loader/namespace.rs` qualifies the name).
 
 ## Source of truth and sync
 
