@@ -60,7 +60,7 @@ seed; `models.user.json` cannot add or remove picker rows.
 |---|---|
 | `slug` | Exact model id as the provider/OpenRouter names it |
 | `display_name`, `description` | What the picker and `ecodex models list` show |
-| `evidence` | How the slug and context window were checked (a live `/v1/models` probe, a model page) — required for a picker entry |
+| `evidence` | How the slug and context window were checked (a live `/v1/models` probe, a model page). Every picker entry carries one by policy; the loader does not enforce it |
 | `picker` | `{provider, category, order}` — the `model_providers.<id>` the picker switches to (must be built in or in `config.toml.default`), one of `cloud_coding | cloud_reasoning | local_open_weights | cloud_router`, and the position |
 | `context_window` | Tokens; overrides the conservative family default |
 | `supports_tools` | Function/tool calling (a hard requirement for the agent loop) |
@@ -109,15 +109,22 @@ recognized coding family. See `integrations/providers.md` for config blocks.
 A provider's `/v1/models` typically lists hundreds of models — embeddings,
 audio, vision, base checkpoints. `refresh` keeps a discovered slug **only** if:
 
-1. it's already an exact curated-seed entry, **or**
+1. it's already an exact curated-seed entry (the seed always wins), **or**
 2. its family is in the curated-families allowlist
    (`kimi, qwen, deepseek, gpt-oss, glm, minimax, mistral, mixtral, devstral,
    codestral`) **and** it carries no non-coding marker
-   (`ocr, vision, -vl, embed, rerank, audio, tts, image, -base, guard, …`).
+   (`ocr, vision, -vl, embed, rerank, audio, tts, image, -base, guard, …`),
+   no unstable-variant marker (`-exp`, `-preview`, `-rc`, `-beta`, `-alpha`,
+   `distill`, `-thinking-`, `-nightly`, …) and no trailing dated snapshot
+   token (`-2512`, `-0324`).
 
-This drops general-chat families (gemma/llama/phi) and non-coding variants
-(`glm-ocr`, `qwen-vl`, `qwen-embedding`) so the registry stays curated. To
-widen, edit `CURATED_FAMILIES` in `models-manager/src/curated_seed.rs`.
+Slugs that survive are then collapsed to the latest slug per model line and
+provider, so a provider listing `qwen3-coder`, `qwen3-coder-preview` and
+`qwen3-coder-0324` contributes one entry. This drops general-chat families
+(gemma/llama/phi), non-coding variants (`glm-ocr`, `qwen-vl`,
+`qwen-embedding`) and dated or experimental pins so the registry stays
+curated. To widen, edit `CURATED_FAMILIES` and the marker lists in
+`models-manager/src/curated_seed.rs`.
 
 ## Maintaining the seed
 
