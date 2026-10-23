@@ -111,9 +111,10 @@ jobs:
       # left release.yml unloadable for six hours on 2026-10-23 (every push
       # produced a zero-job failed run; a tag would have shipped no binaries).
       # Scoped to the workflows ecodex owns. The rest of .github/workflows is
-      # upstream codex's, carried by the merge and not run here; some reference
-      # reusable workflows ecodex does not carry, which is upstream's drift, not
-      # a gate for this fork.
+      # upstream codex's, carried by each merge and not run here. One of them
+      # (python-sdk-cli-release.yml, dispatch-only) `uses:` a reusable workflow
+      # that ecodex pruned in ddb9bb1d76, so it can never run here; it stays
+      # because deleting upstream files costs a conflict on every sync.
       - name: Lint workflow files (actionlint)
         run: |
           set -euo pipefail
