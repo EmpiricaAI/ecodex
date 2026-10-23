@@ -106,6 +106,16 @@ jobs:
       - name: Check the empirica-core pin matches the vendored commit
         run: python3 scripts/check_empirica_core_pin.py
 
+      # Workflow files are checked against GitHub's expression-context rules,
+      # which a YAML parse cannot see: a job-level `if:` that read `matrix`
+      # left release.yml unloadable for six hours on 2026-10-23 (every push
+      # produced a zero-job failed run; a tag would have shipped no binaries).
+      - name: Lint workflow files (actionlint)
+        run: |
+          set -euo pipefail
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12 "$RUNNER_TEMP"
+          "$RUNNER_TEMP/actionlint" -color
+
       - name: Run hermetic vendored-hook tests
         run: |
           python3 -m venv "$RUNNER_TEMP/vendored-hooks-venv"

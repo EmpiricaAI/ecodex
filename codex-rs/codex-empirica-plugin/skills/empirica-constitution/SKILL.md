@@ -185,9 +185,10 @@ other projects: `local` (default) stays in this project, `shared` is visible
 across the org's projects (Cortex tenancy), `public` to anyone with a Cortex
 account. The pull side is `empirica project-search --task "..." --global`, which
 queries the `global_learnings` Qdrant collection where high-confidence
-shared/public artifacts are promoted; it does not yet walk every project's own
-collection. Share liberally what has ecosystem-wide value (security patterns,
-cross-repo bugs, reusable lessons); keep tactical work `local`.
+shared/public artifacts are promoted and also walks the other projects registered
+on this machine; mesh-wide (other machines, other tenants) retrieval is
+`cortex investigate`. Share liberally what has ecosystem-wide value (security
+patterns, cross-repo bugs, reusable lessons); keep tactical work `local`.
 
 ### Orphan accumulation
 
@@ -395,7 +396,7 @@ policy is exactly the drift the second corollary names.
 - **Session state lost** → `empirica project-bootstrap`.
 - **Semantic search comes back empty** → `empirica project-embed`, and confirm the
   query returns something it should before trusting an empty answer.
-- **Cross-practice search missing** → `empirica project-search --global`.
+- **Cross-practice search missing** → `empirica project-search --global` (this machine's practices + promoted shared/public artifacts); `cortex investigate` for the mesh.
 
 ---
 

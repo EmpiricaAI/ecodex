@@ -101,7 +101,11 @@ echo
 
 # ── GATING: format, lint, tests (things we own) ──────────────────────
 run_gate "rustfmt --check"        cargo fmt --check "${PURE_PKGS[@]}"
-run_gate "clippy -D warnings"     env RUST_MIN_STACK=16777216 cargo clippy "${OWNED_PKGS[@]}" --all-targets -- -D warnings
+# --no-deps: lint only the owned crates. Without it clippy also lints every
+# upstream workspace crate they depend on (app-server, core, ...), so upstream
+# lint debt under a new toolchain gates ecodex releases (0.164.0 + rustc 1.99.1:
+# one let_and_return in app-server/src/message_processor.rs).
+run_gate "clippy -D warnings"     env RUST_MIN_STACK=16777216 cargo clippy "${OWNED_PKGS[@]}" --all-targets --no-deps -- -D warnings
 run_gate "owned-crate tests"      env RUST_MIN_STACK=16777216 cargo test "${PURE_PKGS[@]}"
 
 if [[ "${QUICK}" -eq 1 ]]; then

@@ -38,33 +38,62 @@ permissions:
   contents: write
 
 jobs:
+  # Selects the build matrix. A job-level `if:` cannot see `matrix` (GitHub
+  # evaluates it before the strategy expands, and rejects the file at parse
+  # time), so the subset filter lives here and `build` consumes the result.
+  plan:
+    name: select targets
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: Pick targets
+        id: pick
+        env:
+          REQUESTED: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          # Runners: macos-14 = Apple Silicon standard hosted (x86_64-apple-darwin
+          # cross-compiles there; macos-13 Intel runners are scarce/deprecated);
+          # ubuntu-22.04 = older glibc (2.35) host for broad forward-compat;
+          # ubuntu-24.04-arm = native ARM hosted runner (GA).
+          #
+          # cargo_jobs caps parallel rustc processes. The release profile (thin LTO +
+          # line-tables debuginfo) peaks at ~14 GB RSS with 4 jobs on v0.164.0, which
+          # is the whole budget of a 16 GB standard Linux runner: the x86_64 job died
+          # three times (SIGTERM 143 / "operation was canceled", no OOM line) 20-29 min
+          # into the tui phase before this cap. 2 jobs trades ~20 min for headroom.
+          # macOS standard runners expose 3 cores; 3 is their default, stated explicitly.
+          all='[
+            {"target": "aarch64-apple-darwin",      "runner": "macos-14",         "cargo_jobs": 3},
+            {"target": "x86_64-apple-darwin",       "runner": "macos-14",         "cargo_jobs": 3},
+            {"target": "x86_64-unknown-linux-gnu",  "runner": "ubuntu-22.04",     "cargo_jobs": 2},
+            {"target": "aarch64-unknown-linux-gnu", "runner": "ubuntu-24.04-arm", "cargo_jobs": 2}
+          ]'
+          if [ -z "${REQUESTED// /}" ]; then
+            selected="$(jq -c . <<<"$all")"
+          else
+            # Exact names only, comma-separated; an unknown name is an error, not a silent skip.
+            wanted="$(tr ',' '\n' <<<"$REQUESTED" | sed 's/^ *//;s/ *$//' | grep -v '^$' | jq -R . | jq -sc .)"
+            unknown="$(jq -r --argjson all "$all" '.[] | select(. as $t | ($all | map(.target) | index($t)) == null)' <<<"$wanted")"
+            if [ -n "$unknown" ]; then
+              echo "unknown target(s) in inputs.targets: $unknown" >&2
+              exit 1
+            fi
+            selected="$(jq -c --argjson w "$wanted" '[.[] | select(.target as $t | ($w | index($t)) != null)]' <<<"$all")"
+          fi
+          echo "selected: $selected"
+          echo "matrix=$selected" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.target }}
+    needs: plan
     runs-on: ${{ matrix.runner }}
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.targets == '' || contains(inputs.targets, matrix.target) }}
     timeout-minutes: 180   # cold-cache release build incl. codex-code-mode-host's v8 dep is slow on 2-core runners; aarch64-apple-darwin needed >120 for v0.157.2
     strategy:
       fail-fast: false
       matrix:
-        # cargo_jobs caps parallel rustc processes. The release profile (thin LTO +
-        # line-tables debuginfo) peaks at ~14 GB RSS with 4 jobs on v0.164.0, which
-        # is the whole budget of a 16 GB standard Linux runner: the x86_64 job died
-        # three times (SIGTERM 143 / "operation was canceled", no OOM line) 20-29 min
-        # into the tui phase before this cap. 2 jobs trades ~20 min for headroom.
-        # macOS standard runners expose 3 cores; 3 is their default, stated explicitly.
-        include:
-          - target: aarch64-apple-darwin
-            runner: macos-14         # Apple Silicon, standard hosted
-            cargo_jobs: 3
-          - target: x86_64-apple-darwin
-            runner: macos-14         # cross-compile x86_64 on Apple Silicon (macos-13 Intel runners are scarce/deprecated)
-            cargo_jobs: 3
-          - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-22.04     # older glibc (2.35) host = broad forward-compat
-            cargo_jobs: 2
-          - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm # native ARM hosted runner (GA)
-            cargo_jobs: 2
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout ${{ inputs.tag || github.ref_name }}
         uses: actions/checkout@v4
