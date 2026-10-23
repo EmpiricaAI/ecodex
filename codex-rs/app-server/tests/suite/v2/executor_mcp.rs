@@ -37,7 +37,7 @@ use rmcp::model::CallToolResult;
 use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
 use rmcp::model::ServerCapabilities;
-use rmcp::model::ServerInfo;
+use rmcp::model::ServerConfig;
 use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
 use rmcp::service::RequestContext;
@@ -1310,6 +1310,11 @@ startup_timeout_sec = 10
         McpServerOauthLoginCompletedNotification {
             name: OAUTH_MCP_SERVER_NAME.to_string(),
             thread_id: Some(selected_thread.clone()),
+            login_id: Some(
+                response
+                    .login_id
+                    .expect("login response should contain an ID")
+            ),
             success: true,
             error: None,
         }
@@ -1502,8 +1507,8 @@ startup_timeout_sec = 10
 struct ExecutorHttpMcpServer;
 
 impl ServerHandler for ExecutorHttpMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn list_tools(

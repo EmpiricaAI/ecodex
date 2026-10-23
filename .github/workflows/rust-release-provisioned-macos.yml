@@ -117,7 +117,7 @@ jobs:
 
   verify:
     needs: sign
-    runs-on: macos-15-xlarge
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     environment:
       name: codesigning
@@ -129,7 +129,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15-xlarge
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
     env:
       TARGET: ${{ matrix.target }}
       PROVISIONED_MACOS: "true"

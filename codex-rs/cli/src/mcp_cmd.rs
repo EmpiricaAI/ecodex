@@ -8,6 +8,7 @@ use anyhow::bail;
 use clap::ArgGroup;
 use clap::builder::TypedValueParser;
 use codex_config::types::AppToolApproval;
+use codex_config::types::McpServerAuth;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerOAuthConfig;
 use codex_config::types::McpServerTransportConfig;
@@ -28,6 +29,7 @@ use codex_mcp::McpRuntimeContext;
 use codex_mcp::apply_http_headers_helper;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::discover_supported_scopes;
+use codex_mcp::ema_auth_scope;
 use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_callback;
 use codex_mcp::resolve_oauth_scopes;
@@ -36,6 +38,7 @@ use codex_rmcp_client::McpOAuthCallbackMode;
 use codex_rmcp_client::McpOAuthClientRegistration;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::StreamableHttpRedirectMode;
+use codex_rmcp_client::delete_enterprise_oauth_tokens;
 use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::resolve_mcp_oauth_callback_url;
 use codex_utils_cli::CliConfigOverrides;
@@ -255,7 +258,8 @@ impl McpCli {
                 run_get(&config, args).await?;
             }
             McpSubcommand::Add(args) => {
-                run_add(&config_overrides, args).await?;
+                let config = cloud_config::load_config(&config_overrides, loader_overrides).await?;
+                run_add(&config, args).await?;
             }
             McpSubcommand::Remove(args) => {
                 run_remove(&config_overrides, args).await?;
@@ -290,15 +294,7 @@ async fn validate_profile_v2_migration(
     Ok(())
 }
 
-async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
-    // Validate any provided overrides even though they are not currently applied.
-    let overrides = config_overrides
-        .parse_overrides()
-        .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides)
-        .await
-        .context("failed to load configuration")?;
-
+async fn run_add(config: &Config, add_args: AddArgs) -> Result<()> {
     let AddArgs {
         name,
         transport_args,
@@ -306,7 +302,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     validate_server_name(&name)?;
 
-    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
+    let codex_home = &config.codex_home;
 
     let (transport, oauth_client_id, oauth_client_secret, client_registration, oauth_resource) =
         match transport_args {
@@ -448,13 +444,13 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         tools: HashMap::new(),
     };
 
-    let mut servers = load_global_mcp_servers(&codex_home)
+    let mut servers = load_global_mcp_servers(codex_home)
         .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
     let credential_name = new_entry.oauth_credential_name(&name);
     servers.insert(name.clone(), new_entry);
 
-    ConfigEditsBuilder::new(&codex_home)
+    ConfigEditsBuilder::new(codex_home)
         .replace_mcp_servers(&servers)
         .apply()
         .await
@@ -639,6 +635,36 @@ async fn run_logout(config: &Config, logout_args: LogoutArgs) -> Result<()> {
         .get(&name)
         .ok_or_else(|| anyhow!("No MCP server named '{name}' found in configuration."))?;
 
+    if matches!(server.auth, McpServerAuth::EmaAuth) {
+        let auth_manager =
+            AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await?;
+        let auth = auth_manager.auth().await;
+        let scope = ema_auth_scope(auth.as_ref())
+            .context("Sign in to your Codex account before removing enterprise authorization")?;
+        // Cleanup must remain available even when this server is no longer eligible
+        // for EMA (for example, after disabling the feature or changing its transport).
+        let profile = config
+            .mcp_enterprise_managed_auth
+            .as_ref()
+            .context("EMA logout requires a trusted enterprise IdP profile")?;
+        let idp = &profile.idp;
+        let credential_name = idp.credential_name(&scope);
+        match delete_enterprise_oauth_tokens(
+            &credential_name,
+            &idp.issuer,
+            config.auth_keyring_backend_kind(),
+        )
+        .await
+        {
+            Ok(true) => println!(
+                "Removed the shared enterprise authorization used by EMA MCP servers (selected via '{name}')."
+            ),
+            Ok(false) => println!("No shared enterprise authorization is stored."),
+            Err(_) => return Err(anyhow!("failed to delete enterprise authorization")),
+        }
+        return Ok(());
+    }
+
     let url = match &server.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => url.clone(),
         _ => bail!("OAuth logout is only supported for streamable_http transports."),
@@ -667,7 +693,8 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await?;
     let auth = auth_manager.auth().await;
     let mcp_servers = mcp_manager.configured_servers(config).await;
-    let effective_mcp_servers = mcp_manager.effective_servers(config, auth.as_ref()).await;
+    let runtime_config = mcp_manager.runtime_config(config).await;
+    let effective_mcp_servers = codex_mcp::effective_mcp_servers(&runtime_config, auth.as_ref());
 
     let mut entries: Vec<_> = mcp_servers.iter().collect();
     entries.sort_by_key(|(name, _)| *name);
@@ -684,6 +711,8 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
         auth.as_ref(),
+        Some(&auth_manager),
+        &runtime_config.ema_state,
         &runtime_context,
     )
     .await;

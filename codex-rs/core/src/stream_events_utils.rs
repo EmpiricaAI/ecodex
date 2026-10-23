@@ -66,7 +66,7 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
         let combined = content
             .iter()
             .filter_map(|ci| match ci {
-                codex_protocol::models::ContentItem::OutputText { text } => Some(text.as_str()),
+                codex_protocol::models::ContentItem::OutputText { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<String>();
@@ -231,6 +231,7 @@ pub(crate) struct HandleOutputCtx {
     pub step_context: Arc<StepContext>,
     pub turn_store: Arc<ExtensionData>,
     pub tool_runtime: ToolCallRuntime,
+    pub defer_tool_dispatch: bool,
     pub cancellation_token: CancellationToken,
 }
 
@@ -291,7 +292,7 @@ pub(crate) async fn finalize_non_tool_response_item(
                     Some(combined)
                 };
                 let defers_mailbox_delivery_to_next_turn =
-                    !matches!(agent_message.phase, Some(MessagePhase::Commentary))
+                    matches!(agent_message.phase, Some(MessagePhase::FinalAnswer) | None)
                         && last_agent_message.is_some();
                 (
                     agent_message.memory_citation.clone(),
@@ -347,11 +348,22 @@ pub(crate) async fn handle_output_item_done(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_future: InFlightFuture<'static> = Box::pin(
-                ctx.tool_runtime
-                    .clone()
-                    .handle_tool_call(call, cancellation_token),
-            );
+            let runtime = ctx.tool_runtime.clone();
+            // handle_tool_call dispatches immediately, not when its future is polled.
+            // Defer for post-model hooks or to cancel buffered calls during mailbox drains.
+            let tool_future: InFlightFuture<'static> = if ctx.defer_tool_dispatch {
+                Box::pin(async move {
+                    if cancellation_token.is_cancelled() {
+                        // The call is already in history; resume needs its output even if we never dispatch.
+                        let output =
+                            ToolCallRuntime::aborted_response(&call, /*elapsed_secs*/ None);
+                        return Ok(output.into_response());
+                    }
+                    runtime.handle_tool_call(call, cancellation_token).await
+                })
+            } else {
+                Box::pin(runtime.handle_tool_call(call, cancellation_token))
+            };
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
@@ -438,28 +450,8 @@ pub(crate) async fn handle_non_tool_response_item(
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<TurnItem> {
-    let item_type = match item {
-        ResponseItem::AdditionalTools { .. } => "additional_tools",
-        ResponseItem::Message { .. } => "message",
-        ResponseItem::AgentMessage { .. } => "agent_message",
-        ResponseItem::Reasoning { .. } => "reasoning",
-        ResponseItem::LocalShellCall { .. } => "local_shell_call",
-        ResponseItem::FunctionCall { .. } => "function_call",
-        ResponseItem::ToolSearchCall { .. } => "tool_search_call",
-        ResponseItem::FunctionCallOutput { .. } => "function_call_output",
-        ResponseItem::CustomToolCall { .. } => "custom_tool_call",
-        ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output",
-        ResponseItem::ToolSearchOutput { .. } => "tool_search_output",
-        ResponseItem::WebSearchCall { .. } => "web_search_call",
-        ResponseItem::ImageGenerationCall { .. } => "image_generation_call",
-        ResponseItem::Compaction { .. } => "compaction",
-        ResponseItem::ConfigurationUpdate { .. } => "configuration_update",
-        ResponseItem::CompactionTrigger { .. } => "compaction_trigger",
-        ResponseItem::ContextCompaction { .. } => "context_compaction",
-        ResponseItem::Other => "other",
-    };
     debug!(
-        item_type,
+        item_type = item.item_type(),
         item_id = item.id().map(ResponseItemId::as_str),
         "Output item"
     );
@@ -532,7 +524,7 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
 ) -> bool {
     match item {
         ResponseItem::Message { role, phase, .. } => {
-            if role != "assistant" || matches!(phase, Some(MessagePhase::Commentary)) {
+            if role != "assistant" || !matches!(phase, Some(MessagePhase::FinalAnswer) | None) {
                 return false;
             }
             // Treat `None` like final-answer text so untagged providers default

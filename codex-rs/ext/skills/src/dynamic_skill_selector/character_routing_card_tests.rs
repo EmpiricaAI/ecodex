@@ -5,6 +5,7 @@ use codex_skills::SkillInterface;
 use codex_skills::SkillMetadata;
 use codex_skills::SkillToolDependency;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
 use crate::catalog::SkillAuthority;
@@ -34,7 +35,7 @@ fn host_interface_metadata_makes_unlisted_workflow_discoverable() {
         }),
         dependencies: None,
         policy: None,
-        path_to_skills_md: path,
+        path_to_skills_md: PathUri::from_abs_path(&path),
         scope: SkillScope::User,
         pinned: false,
         plugin_id: None,
@@ -42,6 +43,7 @@ fn host_interface_metadata_makes_unlisted_workflow_discoverable() {
     });
     let snapshot = HostSkillsSnapshot::new(std::sync::Arc::new(outcome));
     let catalog = SkillCatalog {
+        is_partial: false,
         entries: vec![SkillCatalogEntry::new(
             SkillPackageId(resource.clone()),
             SkillAuthority::new(SkillSourceKind::Host, "host"),

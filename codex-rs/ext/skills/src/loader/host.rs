@@ -152,7 +152,7 @@ impl HostSkillRoot {
 pub(crate) struct HostSkillRootSnapshot {
     pub(crate) root: AbsolutePathBuf,
     pub(crate) skills: Vec<SkillMetadata>,
-    pub(crate) skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
+    pub(crate) skill_discovery_path_by_path: Arc<HashMap<PathUri, PathUri>>,
     pub(crate) errors: Vec<SkillError>,
     pub(crate) file_system: Arc<dyn ExecutorFileSystem>,
     pub(crate) is_agent_plugin: bool,
@@ -185,7 +185,7 @@ async fn load_skills_under_root(
     root: &AbsolutePathBuf,
 ) -> (
     Vec<SkillMetadata>,
-    Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
+    Arc<HashMap<PathUri, PathUri>>,
     Vec<SkillError>,
 ) {
     let file_system = skill_root.file_system.as_ref();
@@ -361,8 +361,10 @@ async fn load_skills_under_root(
         });
         match result {
             Ok(skill) => {
-                skill_discovery_path_by_path
-                    .insert(skill.path_to_skills_md.clone(), discovery_path);
+                skill_discovery_path_by_path.insert(
+                    skill.path_to_skills_md.clone(),
+                    PathUri::from_abs_path(&discovery_path),
+                );
                 loaded_skills.push(skill);
             }
             Err(message) if skill_root.scope != SkillScope::System => {
@@ -428,7 +430,7 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-        path_to_skills_md: path.clone(),
+        path_to_skills_md: path_uri.clone(),
         scope,
         pinned,
         plugin_id: plugin_identity.map(|identity| identity.plugin_id.clone()),

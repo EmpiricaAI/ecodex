@@ -1,16 +1,13 @@
 ---
 source: tui/src/startup_draft_tests.rs
-assertion_line: 808
 expression: frames
 ---
 before onboarding: hidden (0x0 viewport)
 ---
 after onboarding:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
+  >_ OpenAI Codex (v<VERSION>)
      loading
-
-  Pull up a prompt.
 
 
 › Ask Codex to do anything

@@ -30,7 +30,6 @@ use std::sync::Weak;
 
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::AdditionalPermissionProfile;
-use codex_tools::UnifiedExecShellMode;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_path_uri::PathUri;
 use rand::Rng;
@@ -43,7 +42,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
-use crate::shell::ShellType;
+use crate::shell::ShellInvocation;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use codex_core_plugins::PluginMetricsSidecar;
 
@@ -62,10 +61,6 @@ pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
 }
 
 pub(crate) use errors::UnifiedExecError;
-pub(crate) use process::NoopSpawnLifecycle;
-#[cfg(unix)]
-pub(crate) use process::SpawnLifecycle;
-pub(crate) use process::SpawnLifecycleHandle;
 pub(crate) use process::UnifiedExecProcess;
 pub(crate) use stdin_approval::TerminalPermissions;
 pub(crate) use stdin_approval::TerminalSandboxSource;
@@ -113,7 +108,7 @@ impl UnifiedExecContext {
 #[derive(Debug)]
 pub(crate) struct ExecCommandRequest {
     pub command: Vec<String>,
-    pub shell_type: ShellType,
+    pub shell: ShellInvocation,
     pub hook_command: String,
     pub process_id: i32,
     pub yield_time_ms: u64,
@@ -121,7 +116,6 @@ pub(crate) struct ExecCommandRequest {
     pub cwd: PathUri,
     pub sandbox_cwd: PathUri,
     pub turn_environment: TurnEnvironment,
-    pub shell_mode: UnifiedExecShellMode,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,

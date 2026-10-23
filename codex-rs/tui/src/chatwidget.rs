@@ -260,6 +260,7 @@ use crate::tui::FrameRequester;
 mod activity_groups;
 mod activity_presentation;
 mod command_lifecycle;
+mod config_panel;
 mod connector_mentions;
 mod connectors;
 mod constructor;
@@ -300,6 +301,7 @@ mod misalignment_policy;
 pub(crate) use misalignment_policy::MisalignmentReview;
 pub(crate) use misalignment_policy::MisalignmentTurnSource;
 mod pets;
+pub(crate) use self::pets::ConfiguredPetLoadGeneration;
 mod session_flow;
 mod session_header;
 use self::session_header::SessionHeader;
@@ -310,6 +312,7 @@ mod hooks;
 mod interaction;
 pub(crate) use interaction::KeyEventAction;
 mod skills;
+mod slash_command_args;
 mod slash_dispatch;
 mod worktree_picker;
 use self::skills::collect_tool_mentions;
@@ -323,9 +326,11 @@ use self::plugins::PluginListFetchState;
 use self::plugins::PluginsCacheState;
 mod plan_implementation;
 use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
+mod model_command;
 mod model_popup_state;
 mod model_popups;
 mod notifications;
+pub(crate) mod quick_dials;
 mod session_model_selection;
 use self::notifications::Notification;
 pub(crate) use self::session_model_selection::AstraModelPickerAction;
@@ -360,6 +365,7 @@ mod realtime_settings;
 mod realtime_split_flap;
 pub(crate) use realtime::MAX_REPLAY_TRANSCRIPT_CELLS;
 pub(crate) use realtime::MAX_TRANSCRIPT_BYTES;
+pub(crate) use realtime::RealtimeFailureCause;
 pub(crate) use realtime::RealtimeTranscriptRecord;
 pub(crate) use realtime::is_private_realtime_agent_item;
 pub(crate) use realtime::realtime_delegation_display_text;
@@ -387,10 +393,11 @@ use self::status_state::StatusIndicatorState;
 use self::status_state::StatusState;
 use self::status_state::TerminalTitleStatusKind;
 mod status_controls;
+mod status_surface_commands;
 mod status_surfaces;
+use self::status_surface_commands::StatusSurfaceOverrides;
 mod streaming;
 use self::status_surfaces::CachedProjectRootName;
-mod thread_title_status;
 mod thread_usage;
 pub(crate) use self::thread_usage::ThreadUsageOutcome;
 mod tool_lifecycle;
@@ -518,13 +525,14 @@ pub(crate) enum ExternalEditorState {
 pub(crate) struct ChatWidget {
     pub(crate) empty_state_animation:
         std::cell::RefCell<crate::empty_state_animation::EmptyStateAnimation>,
-    pub(crate) cyber_policy_notice: crate::daybreak::NoticeCache,
+    pub(crate) daybreak_enabled: bool,
     app_event_tx: AppEventSender,
     codex_op_target: CodexOpTarget,
     bottom_pane: BottomPane,
     transcript: TranscriptState,
     config: Config,
     pub(crate) local_settings: crate::local_settings::LocalSettings,
+    pub(crate) config_panel_tui: codex_config::types::Tui,
     raw_output_mode: bool,
     /// Runtime value resolved by core. `config.service_tier` remains the explicit user choice.
     effective_service_tier: Option<String>,
@@ -539,7 +547,12 @@ pub(crate) struct ChatWidget {
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,
     model_popup_request_id: Option<uuid::Uuid>,
+    /// An app event has been queued to open the permissions picker, but no view exists yet.
+    pub(crate) permission_popup_pending: bool,
     permission_popup_request_id: Option<uuid::Uuid>,
+    permission_discovery: Option<crate::permission_discovery::PermissionDiscovery>,
+    inline_permission_profile_selection:
+        Option<permission_discovery::InlinePermissionProfileSelection>,
     worktree_popup_request_id: Option<uuid::Uuid>,
     permission_profiles_menu_opened: bool,
     model_popup_model_ids: Vec<String>,
@@ -587,6 +600,7 @@ pub(crate) struct ChatWidget {
     // Remember the account's Reserve entry notice across chats and transient banner refreshes.
     luna_reserve_notice_account_id: Option<String>,
     pub(crate) warning_display_state: WarningDisplayState,
+    pub(crate) rendered_selection: std::cell::RefCell<crate::rendered_selection::RenderedSelection>,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     add_credits_nudge_email_in_flight: Option<rate_limits::PendingCreditsNudge>,
     adaptive_chunking: AdaptiveChunkingPolicy,
@@ -597,13 +611,15 @@ pub(crate) struct ChatWidget {
     pending_stream_consolidations: usize,
     /// Copy feedback is discarded with its originating conversation.
     pending_clipboard: Option<clipboard::PendingCopy>,
+    /// Legacy terminals report auto-repeat as new presses; suppress the burst after a slow paste.
+    suppress_image_paste_until: Instant,
     copy_last_response_binding: Vec<KeyBinding>,
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, AgentMetadata>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<SkillMetadata>,
-    skills_initial_state: Option<HashMap<AbsolutePathBuf, bool>>,
+    skills_initial_state: Option<HashMap<PathUri, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_lifecycle: TurnLifecycleState,
@@ -656,6 +672,7 @@ pub(crate) struct ChatWidget {
     pub(crate) pet_http_client: codex_http_client::RouteAwareClientPool,
     // Ambient companion rendered over the transcript area, never inside the footer rows.
     ambient_pet: Option<crate::pets::AmbientPet>,
+    configured_pet_load_generation: ConfiguredPetLoadGeneration,
     pet_picker_preview_state: crate::pets::PetPickerPreviewState,
     pet_picker_preview_pet: Option<crate::pets::AmbientPet>,
     pet_picker_preview_request_id: u64,
@@ -693,9 +710,13 @@ pub(crate) struct ChatWidget {
     safety_buffering_source: UserMessageSource,
     /// Main chat-surface bindings resolved from `tui.keymap.chat`.
     chat_keymap: ChatKeymap,
+    /// Whether the preset submenu owns the next key.
+    quick_dial_menu: bool,
+    /// Ignore a held key after it dismisses the preset submenu.
+    quick_dial_menu_key_guard: Option<crate::activation_key_guard::ActivationKeyGuard>,
     permission_shortcut_pending: bool,
     // Pending notification to show when unfocused on next Draw
-    pending_notification: Option<Notification>,
+    pub(crate) pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
     /// must occur before `quit_shortcut_expires_at`.
     quit_shortcut_expires_at: Option<Instant>,
@@ -735,6 +756,8 @@ pub(crate) struct ChatWidget {
     // On cancel or persist-failure the inner value is restored to config;
     // on confirm the outer is set to `None` to end the session.
     terminal_title_setup_original_items: Option<Option<Vec<String>>>,
+    // Explicit per-thread layout choices made through `/title` and `/statusline`.
+    status_surface_overrides: StatusSurfaceOverrides,
     // Baseline instant used to animate spinner-prefixed title statuses.
     terminal_title_animation_origin: Instant,
     // The foreground loop refreshes the title at this deadline without drawing a frame.
@@ -1023,7 +1046,11 @@ impl ChatWidget {
             self.thread_id
                 .is_some_and(|thread_id| thread_id.to_string() == request_thread_id)
         }) && self.interrupts.remove_resolved_prompt(request);
+        let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
         let removed_visible = self.bottom_pane.dismiss_app_server_request(request);
+        if removed_visible && had_modal_or_popup && self.bottom_pane.no_modal_or_popup_active() {
+            self.on_modal_or_popup_closed();
+        }
         if removed_deferred || removed_visible {
             self.request_redraw();
         }
@@ -1088,7 +1115,7 @@ impl ChatWidget {
                     ..Default::default()
                 },
             ],
-            ..SelectionViewParams::picker()
+            ..SelectionViewParams::confirmation()
         });
     }
 
@@ -1196,6 +1223,17 @@ impl ChatWidget {
         }
         self.refresh_status_line_if_workspace_headline_due();
         self.refresh_thread_usage_if_settlement_due();
+        self.refresh_terminal_program_status();
+    }
+
+    pub(crate) fn refresh_terminal_program_status(&self) {
+        let status = self.desired_program_status();
+        if let Err(err) = crate::terminal_program_status::set_terminal_program_status(
+            status,
+            self.iterm_session_detail(status),
+        ) {
+            tracing::debug!(error = %err, "failed to set terminal program status");
+        }
     }
 
     fn flush_active_cell(&mut self) {
@@ -1737,6 +1775,10 @@ impl ChatWidget {
         self.bottom_pane.composer_is_empty() && !self.bottom_pane.is_in_paste_burst()
     }
 
+    pub(crate) fn composer_is_vim_enabled(&self) -> bool {
+        self.bottom_pane.composer_is_vim_enabled()
+    }
+
     #[cfg(test)]
     pub(crate) fn is_task_running_for_test(&self) -> bool {
         self.bottom_pane.is_task_running()
@@ -1942,6 +1984,10 @@ impl ChatWidget {
             .as_ref()
             .map(|ti| ti.total_token_usage.clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn last_turn_id(&self) -> Option<&str> {
+        self.turn_lifecycle.last_turn_id.as_deref()
     }
 
     pub(crate) fn thread_id(&self) -> Option<ThreadId> {

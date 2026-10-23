@@ -47,7 +47,7 @@ use rmcp::model::ListResourcesResult;
 use rmcp::model::ListToolsResult;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ServerCapabilities;
-use rmcp::model::ServerInfo;
+use rmcp::model::ServerConfig;
 use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
 use rmcp::service::RequestContext;
@@ -373,6 +373,15 @@ async fn oauth_login_validates_callback_issuer_and_uses_http_headers_helper(
     )
     .await??;
     assert_eq!(
+        completed.login_id.as_deref(),
+        Some(
+            response
+                .login_id
+                .as_deref()
+                .expect("login response should contain an ID")
+        )
+    );
+    assert_eq!(
         (
             completed.name.as_str(),
             completed.thread_id,
@@ -630,10 +639,20 @@ async fn oauth_login_automatically_selects_callback_specific_cimd_without_metada
     )
     .await??;
     assert_eq!(
+        completed.login_id.as_deref(),
+        Some(
+            response
+                .login_id
+                .as_deref()
+                .expect("login response should contain an ID")
+        )
+    );
+    assert_eq!(
         completed,
         McpServerOauthLoginCompletedNotification {
             name: "cimd".to_string(),
             thread_id: None,
+            login_id: response.login_id,
             success: true,
             error: None,
         }
@@ -1210,7 +1229,7 @@ struct McpStatusServer {
 }
 
 impl ServerHandler for McpStatusServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let mut capabilities = ServerCapabilities::builder().enable_tools().build();
         capabilities.extensions = Some(BTreeMap::from([(
             "openai/settings".to_string(),
@@ -1219,7 +1238,7 @@ impl ServerHandler for McpStatusServer {
             )
             .expect("settings capability is a JSON object"),
         )]));
-        ServerInfo::new(capabilities).with_server_info(
+        ServerConfig::new(capabilities).with_server_info(
             Implementation::new("lookup-server", "1.0.0").with_title("Lookup Server"),
         )
     }
@@ -1255,8 +1274,8 @@ struct SlowInventoryServer {
 }
 
 impl ServerHandler for SlowInventoryServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()

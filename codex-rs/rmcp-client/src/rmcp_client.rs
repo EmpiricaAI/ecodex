@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::PoisonError;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -21,6 +22,7 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::HttpClient;
 use codex_keyring_store::DefaultKeyringStore;
+use codex_otel::auth_storage::AuthStorageOriginator;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use http::HeaderMap;
@@ -98,6 +100,7 @@ use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
 use crate::stdio_server_launcher::StdioServerTransport;
+use crate::tool_list_changes::track_tool_list_changes;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
@@ -168,6 +171,7 @@ enum TransportRecipe {
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
         pinned_credential_store: Arc<OnceLock<ResolvedOAuthCredentialStore>>,
+        originator: AuthStorageOriginator,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
         redirect_mode: StreamableHttpRedirectMode,
@@ -385,6 +389,7 @@ pub struct ToolWithConnectorId {
 }
 
 pub struct ListToolsWithConnectorIdResult {
+    pub meta: Option<serde_json::Value>,
     pub next_cursor: Option<String>,
     pub tools: Vec<ToolWithConnectorId>,
 }
@@ -406,9 +411,15 @@ pub struct RmcpClient {
     initialize_context: Mutex<Option<InitializeContext>>,
     session_recovery_lock: Semaphore,
     elicitation_pause_state: ElicitationPauseState,
+    tool_list_revision: Arc<AtomicU64>,
 }
 
 impl RmcpClient {
+    /// Tool catalog invalidation sequence, ordered before subsequent responses.
+    pub fn tool_list_revision(&self) -> crate::ToolListRevision {
+        crate::ToolListRevision(Arc::clone(&self.tool_list_revision))
+    }
+
     /// Requests server-side read-only filtering and invocation checks for every tool request.
     pub fn with_read_only_tools(mut self, requires_read_only_tools: bool) -> Self {
         self.requires_read_only_tools = requires_read_only_tools;
@@ -446,6 +457,7 @@ impl RmcpClient {
             initialize_context: Mutex::new(None),
             session_recovery_lock: Semaphore::new(/*permits*/ 1),
             elicitation_pause_state: ElicitationPauseState::new(),
+            tool_list_revision: Arc::default(),
         })
     }
 
@@ -520,6 +532,7 @@ impl RmcpClient {
             requires_read_only_tools: false,
             session_recovery_lock: Semaphore::new(/*permits*/ 1),
             elicitation_pause_state: ElicitationPauseState::new(),
+            tool_list_revision: Arc::default(),
         })
     }
 
@@ -608,6 +621,7 @@ impl RmcpClient {
             store_mode,
             keyring_backend_kind,
             pinned_credential_store: Arc::new(OnceLock::new()),
+            originator: AuthStorageOriginator::current(),
             http_client,
             auth_provider,
             redirect_mode,
@@ -626,6 +640,7 @@ impl RmcpClient {
             requires_read_only_tools: false,
             session_recovery_lock: Semaphore::new(/*permits*/ 1),
             elicitation_pause_state: ElicitationPauseState::new(),
+            tool_list_revision: Arc::default(),
         })
     }
 
@@ -736,6 +751,7 @@ impl RmcpClient {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(ListToolsWithConnectorIdResult {
+            meta: result.meta.map(|meta| serde_json::json!(meta)),
             next_cursor: result.next_cursor,
             tools,
         })
@@ -1144,6 +1160,7 @@ impl RmcpClient {
                 store_mode,
                 keyring_backend_kind,
                 pinned_credential_store,
+                originator,
                 http_client,
                 auth_provider,
                 redirect_mode,
@@ -1179,13 +1196,18 @@ impl RmcpClient {
                     let oauth_keyring_backend_kind = *keyring_backend_kind;
                     let pinned_credential_store = Arc::clone(pinned_credential_store);
 
-                    tokio::task::spawn_blocking(move || -> Result<Option<ResolvedOAuthTokens>> {
+                    // Recovery can run after the startup scope ends, even when startup found
+                    // no credentials and therefore could not pin a store with this attribution.
+                    let originator = *originator;
+                    let load = move || -> Result<Option<ResolvedOAuthTokens>> {
                         if let Some(store) = pinned_credential_store.get().copied() {
                             // Rebuilds reread the source selected during first construction. Only
                             // initial construction below evaluates configured store policy.
                             return store
                                 .load(&DefaultKeyringStore, &oauth_server_name, &oauth_url)
-                                .map(|tokens| tokens.map(|tokens| ResolvedOAuthTokens { tokens, store }));
+                                .map(|tokens| {
+                                    tokens.map(|tokens| ResolvedOAuthTokens { tokens, store })
+                                });
                         }
 
                         match resolve_oauth_tokens_from_store_policy(
@@ -1214,9 +1236,12 @@ impl RmcpClient {
                                 Ok(None)
                             }
                         }
-                    })
-                    .await
-                    .map_err(|error| anyhow!("OAuth credential loading task failed: {error}"))??
+                    };
+                    tokio::task::spawn_blocking(move || originator.sync_scope(load))
+                        .await
+                        .map_err(|error| {
+                            anyhow!("OAuth credential loading task failed: {error}")
+                        })??
                 } else {
                     None
                 };
@@ -1334,19 +1359,31 @@ impl RmcpClient {
         let (transport, oauth_runtime) = match pending_transport {
             PendingTransport::InProcess { transport } => (
                 client_service
-                    .serve_with_lifecycle(transport, lifecycle)
+                    .serve_with_lifecycle(
+                        track_tool_list_changes(transport, Arc::clone(&self.tool_list_revision)),
+                        lifecycle,
+                    )
                     .boxed(),
                 None,
             ),
             PendingTransport::Stdio { transport } => (
                 client_service
-                    .serve_with_lifecycle(*transport, lifecycle)
+                    .serve_with_lifecycle(
+                        track_tool_list_changes(*transport, Arc::clone(&self.tool_list_revision)),
+                        lifecycle,
+                    )
                     .boxed(),
                 None,
             ),
             PendingTransport::StreamableHttp { transport } => (
                 client_service
-                    .serve_with_lifecycle(capture_event_notifications(transport), lifecycle)
+                    .serve_with_lifecycle(
+                        track_tool_list_changes(
+                            capture_event_notifications(transport),
+                            Arc::clone(&self.tool_list_revision),
+                        ),
+                        lifecycle,
+                    )
                     .boxed(),
                 None,
             ),
@@ -1355,13 +1392,19 @@ impl RmcpClient {
                 oauth_runtime,
             } => (
                 client_service
-                    .serve_with_lifecycle(transport, lifecycle)
+                    .serve_with_lifecycle(
+                        track_tool_list_changes(transport, Arc::clone(&self.tool_list_revision)),
+                        lifecycle,
+                    )
                     .boxed(),
                 Some(oauth_runtime),
             ),
             PendingTransport::StreamableHttpWithAccessTokenOnly { transport } => (
                 client_service
-                    .serve_with_lifecycle(transport, lifecycle)
+                    .serve_with_lifecycle(
+                        track_tool_list_changes(transport, Arc::clone(&self.tool_list_revision)),
+                        lifecycle,
+                    )
                     .boxed(),
                 None,
             ),

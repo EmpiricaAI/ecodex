@@ -1,15 +1,12 @@
 ---
 source: tui/src/startup_draft_tests.rs
-assertion_line: 297
 expression: "snapshots.join(\"\\n---\\n\")"
 ---
 resume lookup fallback:
 before:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
+  >_ OpenAI Codex (v<VERSION>)
      loading
-
-  Pull up a prompt.
   Resuming session…
 
 › draft while loading
@@ -17,10 +14,8 @@ before:
 
 after:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
+  >_ OpenAI Codex (v<VERSION>)
      loading
-
-  Pull up a prompt.
 
 
 › draft while loading
@@ -30,10 +25,8 @@ after:
 fork lookup fallback:
 before:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
+  >_ OpenAI Codex (v<VERSION>)
      loading
-
-  Pull up a prompt.
   Forking session…
 
 › draft while loading
@@ -41,10 +34,8 @@ before:
 
 after:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
+  >_ OpenAI Codex (v<VERSION>)
      loading
-
-  Pull up a prompt.
 
 
 › draft while loading
@@ -56,10 +47,8 @@ before:
 hidden while picker owns input
 after:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
+  >_ OpenAI Codex (v<VERSION>)
      loading
-
-  Pull up a prompt.
 
 
 › Ask Codex to do anything
@@ -71,10 +60,8 @@ before:
 hidden while picker owns input
 after:
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
+  >_ OpenAI Codex (v<VERSION>)
      loading
-
-  Pull up a prompt.
 
 
 › Ask Codex to do anything

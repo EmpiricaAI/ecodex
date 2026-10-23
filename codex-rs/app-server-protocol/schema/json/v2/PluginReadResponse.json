@@ -110,6 +110,8 @@
     },
     "HookEventName": {
       "enum": [
+        "preModelRequest",
+        "postModelRequest",
         "preToolUse",
         "permissionRequest",
         "postToolUse",
@@ -125,6 +127,9 @@
         "taskCompleted",
         "postToolUseFailure"
       ],
+      "type": "string"
+    },
+    "LegacyAppPathString": {
       "type": "string"
     },
     "PluginAuthPolicy": {
@@ -1022,7 +1027,7 @@
         "path": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/LegacyAppPathString"
             },
             {
               "type": "null"

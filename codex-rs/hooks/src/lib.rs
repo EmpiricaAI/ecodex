@@ -1,4 +1,5 @@
 mod config_rules;
+mod context;
 mod declarations;
 mod engine;
 pub(crate) mod events;
@@ -21,9 +22,12 @@ pub use engine::dispatcher::hook_handler_type_label;
 pub use events::common::SubagentHookContext;
 /// Hook event names as they appear in hooks JSON and config files.
 ///
-/// The first 12 (incl. SessionEnd + Interrupt) are codex-stock; the last 2
-/// (TaskCompleted / PostToolUseFailure) are ecodex divergences upstream lacks.
-pub const HOOK_EVENT_NAMES: [&str; 14] = [
+/// The first 14 (incl. PreModelRequest/PostModelRequest, SessionEnd + Interrupt)
+/// are codex-stock; the last 2 (TaskCompleted / PostToolUseFailure) are ecodex
+/// divergences upstream lacks.
+pub const HOOK_EVENT_NAMES: [&str; 16] = [
+    "PreModelRequest",
+    "PostModelRequest",
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
@@ -60,6 +64,7 @@ pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 10] = [
     "PostToolUseFailure",
 ];
 
+pub use context::HookContext;
 pub use events::compact::PostCompactRequest;
 pub use events::compact::PreCompactOutcome;
 pub use events::compact::PreCompactRequest;
@@ -94,6 +99,7 @@ pub use events::user_prompt_submit::UserPromptSubmitRequest;
 pub use legacy_notify::legacy_notify_json;
 pub use mcp::HookMcpCall;
 pub use mcp::HookMcpExecutor;
+pub use mcp::HookMcpOutput;
 pub use registry::HookListOutcome;
 pub use registry::Hooks;
 pub use registry::HooksConfig;
@@ -114,6 +120,8 @@ pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
         HookEventName::PostToolUse => "post_tool_use",
         HookEventName::PreCompact => "pre_compact",
         HookEventName::PostCompact => "post_compact",
+        HookEventName::PreModelRequest => "pre_model_request",
+        HookEventName::PostModelRequest => "post_model_request",
         HookEventName::SessionStart => "session_start",
         HookEventName::SessionEnd => "session_end",
         HookEventName::UserPromptSubmit => "user_prompt_submit",
@@ -139,3 +147,7 @@ pub fn hook_key(
         hook_event_key_label(event_name)
     )
 }
+
+pub use events::model_request::ModelRequestHookEvent;
+pub use events::model_request::ModelRequestHookInput;
+pub use events::model_request::ModelRequestStatus;

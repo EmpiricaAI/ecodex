@@ -80,6 +80,7 @@ mod tests {
             supports_websockets: false,
             supports_openai_builtin_tools: true,
             supports_standalone_web_search: false,
+            capabilities: None,
             include_internal_metadata: false,
         };
 

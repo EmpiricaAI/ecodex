@@ -9,7 +9,7 @@ before:
 
   ∴ ecodex (v0.1.0)  ·  turtles all the way down
 
-  Visit https://chatgpt.com/codex/settings/usage for up-to-date
+  Visit https://chatgpt.com/settings/usage for up-to-date
   information on rate limits and credits
 
   Model:        gpt-5.1-codex-max (reasoning none, summaries auto)
@@ -30,7 +30,7 @@ before:
 
 
 
-Ctrl+Space select
+⌃space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
  q close · f3 find · esc browse prompts
 
@@ -41,7 +41,7 @@ after:
 
   ∴ ecodex (v0.1.0)  ·  turtles all the way down
 
-  Visit https://chatgpt.com/codex/settings/usage for up-to-date
+  Visit https://chatgpt.com/settings/usage for up-to-date
   information on rate limits and credits
 
   Model:         gpt-5.1-codex-max (reasoning none, summaries auto)
@@ -62,6 +62,6 @@ next message
 
 
 
-Ctrl+Space select
+⌃space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
  q close · f3 find · esc browse prompts

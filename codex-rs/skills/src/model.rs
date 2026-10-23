@@ -13,7 +13,7 @@ pub struct SkillMetadata {
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
     /// Path to the SKILL.md file that declares this skill.
-    pub path_to_skills_md: AbsolutePathBuf,
+    pub path_to_skills_md: PathUri,
     pub scope: SkillScope,
     /// ecodex extension: when true, the skill body is re-injected by
     /// `build_initial_context` on every call (session start AND post-compact
@@ -65,11 +65,10 @@ impl EnvironmentSkillMetadata {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SkillPolicy {
     pub allow_implicit_invocation: Option<bool>,
-    // TODO: Enforce product gating in Codex skill selection/injection instead of only parsing and
-    // storing this metadata.
     pub products: Vec<Product>,
 }
 
@@ -83,12 +82,14 @@ pub struct SkillInterface {
     pub default_prompt: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SkillDependencies {
     pub tools: Vec<SkillToolDependency>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SkillToolDependency {
     pub r#type: String,
     pub value: String,

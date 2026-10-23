@@ -1,14 +1,13 @@
 ---
 source: tui/src/startup_draft_tests.rs
-assertion_line: 206
 expression: "frames.join(\"\\n---\\n\").replace(crate::version::CODEX_CLI_VERSION, \"<VERSION>\")"
 ---
 terminal_app_over_ssh=false, owned=true
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
+  >_ OpenAI Codex (v<VERSION>)
      loading
 
-  Pull up a prompt.
+
 
 
 
@@ -23,10 +22,8 @@ terminal_app_over_ssh=false, owned=true
 ---
 terminal_app_over_ssh=true, owned=false
 
-  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
+  >_ OpenAI Codex (v<VERSION>)
      loading
-
-  Pull up a prompt.
 
 
 › Ask Codex to do anything

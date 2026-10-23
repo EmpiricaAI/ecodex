@@ -25,6 +25,7 @@ codex-utils-image = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-redacted-string = { workspace = true }
 codex-utils-string = { workspace = true }
+derive_more = { workspace = true, features = ["debug"] }
 encoding_rs = { workspace = true }
 gix-url = { workspace = true }
 globset = { workspace = true }
@@ -54,6 +55,9 @@ wildmatch = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = { workspace = true }
 seccompiler = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
