@@ -109,9 +109,13 @@ impl ToolExecutor<ToolInvocation> for MonitorHandler {
             match action {
                 MonitorAction::Arm(options) => {
                     let monitor_id =
-                        spawn_monitor(session.clone(), options).await.map_err(|err| {
-                            FunctionCallError::RespondToModel(format!("monitor arm failed: {err}"))
-                        })?;
+                        spawn_monitor(session.clone(), options)
+                            .await
+                            .map_err(|err| {
+                                FunctionCallError::RespondToModel(format!(
+                                    "monitor arm failed: {err}"
+                                ))
+                            })?;
                     let text = serde_json::json!({
                         "ok": true,
                         "monitor_id": monitor_id,
@@ -233,14 +237,13 @@ fn monitor_tool_spec() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "monitor".to_string(),
-        description:
-            "Arm a watch on a background subprocess. On each line matching the regex \
+        description: "Arm a watch on a background subprocess. On each line matching the regex \
              `pattern`, a <task-notification> message is injected into your pending \
              input. Use for sub-second wake on cortex mesh events (held ntfy \
              connection) or any long-running stream you want to react to. Returns \
              {monitor_id} from arm; pair with kill to disarm. persistent=true keeps \
              the watch armed across multiple matches."
-                .to_string(),
+            .to_string(),
         strict: false,
         defer_loading: None,
         parameters,

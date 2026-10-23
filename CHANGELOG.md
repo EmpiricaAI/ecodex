@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Upstream base is codex 0.164.0** (`rust-v0.164.0`, 935 upstream commits since
+  0.160.0). Notable upstream changes riding in: new `PreModelRequest` and
+  `PostModelRequest` hook events beside ecodex's `TaskCompleted` and
+  `PostToolUseFailure`; plugin hook approval bound to plugin contents; `zip`
+  9.0.0, which clears the last three advisories; sandbox hardening for
+  case-variant paths and replaceable symlinks; the network proxy checks
+  permission before DNS. Upstream dropped the `namespace_tools` provider
+  capability; function-only providers still receive no namespace tools, so the
+  translator path behaves as before. The TUI no longer carries a personality
+  override.
+
 ### Fixed
 - **Hook output on the `run-hook` events reaches codex.** The output translator
   used to reduce every event it had no typed arm for to a bare

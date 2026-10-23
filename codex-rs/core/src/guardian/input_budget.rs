@@ -167,17 +167,21 @@ pub(crate) async fn finalize(
         session.get_prompt_base_instructions().await,
         session.current_window_uses_incremental_tools(step).await,
     );
-    let request = session.services.model_client.load().build_responses_request(
-        &prompt,
-        model,
-        /*effort*/ None,
-        ReasoningSummary::None,
-        /*service_tier*/ None,
-        &session
-            .responses_metadata(step, CodexResponsesRequestKind::Turn)
-            .await,
-        /*include_internal*/ true,
-    )?;
+    let request = session
+        .services
+        .model_client
+        .load()
+        .build_responses_request(
+            &prompt,
+            model,
+            /*effort*/ None,
+            ReasoningSummary::None,
+            /*service_tier*/ None,
+            &session
+                .responses_metadata(step, CodexResponsesRequestKind::Turn)
+                .await,
+            /*include_internal*/ true,
+        )?;
     let mut existing = super::request_budget::estimate_request_tokens(&request)
         .max(usize::try_from(session.get_total_token_usage().await).unwrap_or(usize::MAX));
     // These reminders are appended after the accepted input. Reserve their full

@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/hooks_browser_view.rs
+assertion_line: 933
 expression: text
 ---
 
@@ -9,9 +10,9 @@ expression: text
 
   Event               Active/Installed
 ↑
-  SubagentStart       0/0
-  SubagentStop        0/0
   Stop                0/0
+  TaskCompleted       0/0
+  PostToolUseFailure  0/0
   Interrupt           0/0
   PreModelRequest     0/0
 › PostModelRequest    0/0

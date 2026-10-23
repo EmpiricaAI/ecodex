@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/hooks_browser_view.rs
+assertion_line: 906
 expression: "render_lines(&view, 112)"
 ---
                                                                                                                 
@@ -8,11 +9,11 @@ expression: "render_lines(&view, 112)"
                                                                                                                 
   Event                 Installed   Active      Description                                                     
 ↑                                                                                                               
-  SessionEnd            0           0           Right before a session ends                                     
-  UserPromptSubmit      0           0           When the user submits a prompt                                  
   SubagentStart         0           0           When a subagent is created                                      
   SubagentStop          0           0           Right before a subagent ends its turn                           
   Stop                  0           0           Right before Codex ends its turn                                
+  TaskCompleted         0           0           When the agent declares task completion                         
+  PostToolUseFailure    0           0           When a tool invocation fails                                    
   Interrupt             0           0           Right before an interrupted turn is aborted                     
   PreModelRequest       0           0           Before a model request                                          
 › PostModelRequest      0           0           After a model request, including failures                       

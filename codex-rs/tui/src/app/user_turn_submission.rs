@@ -165,7 +165,8 @@ pub(super) async fn try_submit_user_turn(
             model.to_string(),
             // ecodex T78: this UserTurn path carries no inline provider override;
             // provider swaps flow via OverrideTurnContext -> thread/settings.
-            /*model_provider*/ None,
+            /*model_provider*/
+            None,
             effort.clone(),
             *summary,
             service_tier.clone(),

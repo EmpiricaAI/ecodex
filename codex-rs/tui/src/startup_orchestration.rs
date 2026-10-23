@@ -480,6 +480,7 @@ pub(super) async fn run_main_inner(
             /*explicit_provider*/ None,
             model.as_deref(),
             /*configured_provider*/ "",
+            /*configured_base_url*/ None,
         )
         .map(str::to_string)
     });
@@ -523,10 +524,16 @@ pub(super) async fn run_main_inner(
     } else {
         model_provider_override.as_deref()
     };
+    let configured_base_url = config
+        .model_providers
+        .get(&config.model_provider_id)
+        .and_then(|provider| provider.base_url.as_deref())
+        .unwrap_or_default();
     if let Some(openai) = crate::ecodex_curated_models::startup_provider_override(
         explicit_provider,
         config.model.as_deref(),
         &config.model_provider_id,
+        Some(configured_base_url),
     ) {
         overrides.model_provider = Some(openai.to_string());
         config = startup_draft

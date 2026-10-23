@@ -1840,48 +1840,51 @@ impl Session {
                 // provider hot-swap can replace it without a restart.
                 model_client: arc_swap::ArcSwap::from_pointee(
                     ModelClient::new(
-                    Some(Arc::clone(&auth_manager)),
-                    if config.features.enabled(Feature::UseAgentIdentity) {
-                        AgentIdentityAuthPolicy::ChatGptAuth
-                    } else {
-                        AgentIdentityAuthPolicy::JwtOnly
-                    },
-                    thread_id,
-                    session_configuration.provider.info().clone(),
-                    session_configuration.session_source.clone(),
-                    session_configuration.originator.clone(),
-                    config.model_verbosity,
-                    config.features.enabled(Feature::ContentItemKinds),
-                    reasoning_effort_override_enabled,
-                    config.features.enabled(Feature::EnableRequestCompression),
-                    config.features.enabled(Feature::RuntimeMetrics),
-                    Self::build_model_client_beta_features_header(config.as_ref()),
-                    /*concurrent_reasoning_summaries_enabled*/
-                    config
-                        .features
-                        .enabled(Feature::ConcurrentReasoningSummaries),
-                    config.features.enabled(Feature::OutputTokenReplay),
-                    attestation_provider,
-                    config.http_client_factory(),
-                    workspace_routing.as_ref().clone(),
-                    extensions.model_request_contributors().to_vec(),
-                )
-                .with_executed_tool_calls(executed_tool_calls.clone())
-                .with_restored_history(matches!(
-                    &initial_history,
-                    InitialHistory::Resumed(_) | InitialHistory::Forked(_)
-                ))
-                .with_session_context(
-                    prompt_cache_key,
-                    crate::guardian::prompt_cache_key_override_for_review_session(
-                        &session_configuration.session_source,
-                        session_configuration.parent_thread_id,
+                        Some(Arc::clone(&auth_manager)),
+                        if config.features.enabled(Feature::UseAgentIdentity) {
+                            AgentIdentityAuthPolicy::ChatGptAuth
+                        } else {
+                            AgentIdentityAuthPolicy::JwtOnly
+                        },
+                        thread_id,
+                        session_configuration.provider.info().clone(),
+                        session_configuration.session_source.clone(),
+                        session_configuration.originator.clone(),
+                        config.model_verbosity,
+                        config.features.enabled(Feature::ContentItemKinds),
+                        reasoning_effort_override_enabled,
+                        config.features.enabled(Feature::EnableRequestCompression),
+                        config.features.enabled(Feature::RuntimeMetrics),
+                        Self::build_model_client_beta_features_header(config.as_ref()),
+                        /*concurrent_reasoning_summaries_enabled*/
+                        config
+                            .features
+                            .enabled(Feature::ConcurrentReasoningSummaries),
+                        config.features.enabled(Feature::OutputTokenReplay),
+                        attestation_provider,
+                        config.http_client_factory(),
+                        workspace_routing.as_ref().clone(),
+                        extensions.model_request_contributors().to_vec(),
                     )
-                    .or(fork_cache_key),
-                    tx_event.clone(),
-                    codex_responses_headers,
-                    crate::cyber_access_program::ApiKeyCyberAccessPrograms::from_config(&config),
-                )),
+                    .with_executed_tool_calls(executed_tool_calls.clone())
+                    .with_restored_history(matches!(
+                        &initial_history,
+                        InitialHistory::Resumed(_) | InitialHistory::Forked(_)
+                    ))
+                    .with_session_context(
+                        prompt_cache_key,
+                        crate::guardian::prompt_cache_key_override_for_review_session(
+                            &session_configuration.session_source,
+                            session_configuration.parent_thread_id,
+                        )
+                        .or(fork_cache_key),
+                        tx_event.clone(),
+                        codex_responses_headers,
+                        crate::cyber_access_program::ApiKeyCyberAccessPrograms::from_config(
+                            &config,
+                        ),
+                    ),
+                ),
                 executed_tool_calls: executed_tool_calls.clone(),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(
                     thread_id,
@@ -1894,9 +1897,7 @@ impl Session {
                 monitor_registry: Arc::new(crate::monitor::MonitorRegistry::new()),
                 // ecodex addition: native ntfy mesh wake-listener slot; filled
                 // best-effort after construction (see `try_start_mesh_listener`).
-                ntfy_listener_registry: Arc::new(
-                    crate::ntfy_listener::NtfyListenerRegistry::new(),
-                ),
+                ntfy_listener_registry: Arc::new(crate::ntfy_listener::NtfyListenerRegistry::new()),
                 tool_search_handler_cache: Default::default(),
                 turn_environments: Arc::clone(&turn_environments),
             };

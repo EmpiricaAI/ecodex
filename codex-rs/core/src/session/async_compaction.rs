@@ -177,7 +177,8 @@ pub(crate) async fn wait_for_pending(
         if attempt.history_version != state.history.history_version()
             || attempt.model_slug != model.slug
             || attempt.compaction_hash != model.comp_hash
-            || attempt.auth_owner_generation != sess.services.model_client.load().auth_owner_generation()
+            || attempt.auth_owner_generation
+                != sess.services.model_client.load().auth_owner_generation()
         {
             return None;
         }

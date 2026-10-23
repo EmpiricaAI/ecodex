@@ -215,10 +215,7 @@ pub async fn spawn_monitor(
                 content: vec![ContentItem::InputText { text: notification }],
                 phase: None,
             };
-            if let Err(returned) = session_for_task
-                .inject_response_items(vec![item])
-                .await
-            {
+            if let Err(returned) = session_for_task.inject_response_items(vec![item]).await {
                 session_for_task
                     .queue_response_items_for_next_turn(returned)
                     .await;

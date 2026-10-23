@@ -878,7 +878,8 @@ fn normalize_command_hook(
                         .components()
                         .zip(source_path.components().skip(1))
                         .any(|(publisher, plugin)| {
-                            publisher.as_os_str() == "empiricaAI" && plugin.as_os_str() == "empirica"
+                            publisher.as_os_str() == "empiricaAI"
+                                && plugin.as_os_str() == "empirica"
                         });
                 if is_bundled_empirica_hook {
                     tracing::debug!("{msg}");

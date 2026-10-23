@@ -1,8 +1,9 @@
 ---
 source: tui/src/app/tests/new_session_tests.rs
+assertion_line: 187
 expression: "normalize_snapshot_paths(render_bottom_popup(&app.chat_widget, 80))"
 ---
-  >_ OpenAI Codex (v0.0.0)
+  ∴ ecodex (v0.1.0)  ·  turtles all the way down
      /tmp/project
 
 

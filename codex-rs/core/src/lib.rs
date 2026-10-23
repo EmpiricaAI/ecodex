@@ -15,9 +15,9 @@ pub(crate) mod monitor;
 // ecodex native mesh wake-listener — holds the ntfy stream in-harness
 // (transport only; cortex_* comms stay over MCP). Replaces the Python
 // `empirica loop listen` subprocess to drop the version-drift coupling.
-pub(crate) mod ntfy_listener;
 mod client_common;
 mod model_request;
+pub(crate) mod ntfy_listener;
 mod realtime_context;
 mod realtime_conversation;
 mod realtime_history;

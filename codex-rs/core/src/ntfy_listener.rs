@@ -82,7 +82,9 @@ pub(crate) enum NtfyConfigError {
     },
     #[error("ntfy config incomplete — missing: {0}")]
     Incomplete(String),
-    #[error("could not resolve ai_id (no .empirica/project.yaml ai_id, no EMPIRICA_AI_ID, no project dir name)")]
+    #[error(
+        "could not resolve ai_id (no .empirica/project.yaml ai_id, no EMPIRICA_AI_ID, no project dir name)"
+    )]
     UnresolvedAiId,
 }
 
@@ -577,12 +579,23 @@ async fn run_stream_once(
             // carries CONTENT rather than an instruction the model may ignore.
             let inbox_digest = fetch_inbox_digest(&config.ai_id_tag).await;
             match inbox_digest {
-                Some(_) => info!(target: "ntfy_listener", "inbox digest fetched — wake carries message content"),
-                None => info!(target: "ntfy_listener", "inbox poll empty/unavailable — falling back to instruction wake"),
+                Some(_) => {
+                    info!(target: "ntfy_listener", "inbox digest fetched — wake carries message content")
+                }
+                None => {
+                    info!(target: "ntfy_listener", "inbox poll empty/unavailable — falling back to instruction wake")
+                }
             }
-            let item = build_wake_item(&env, &config.ai_id, &config.ai_id_tag, inbox_digest.as_deref());
+            let item = build_wake_item(
+                &env,
+                &config.ai_id,
+                &config.ai_id_tag,
+                inbox_digest.as_deref(),
+            );
             match session.inject_response_items(vec![item]).await {
-                Ok(()) => info!(target: "ntfy_listener", "inject_response_items returned Ok (maybe_start_turn should fire if idle)"),
+                Ok(()) => {
+                    info!(target: "ntfy_listener", "inject_response_items returned Ok (maybe_start_turn should fire if idle)")
+                }
                 Err(returned) => {
                     info!(target: "ntfy_listener", "inject_response_items returned Err — queuing for next turn");
                     session.queue_response_items_for_next_turn(returned).await;

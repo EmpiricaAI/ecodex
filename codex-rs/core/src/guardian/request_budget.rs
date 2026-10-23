@@ -142,15 +142,19 @@ pub(crate) async fn prepare_prompt(
             .input
             .extend(restored.iter().map(|envelope| envelope.item.clone()));
     }
-    let request = session.services.model_client.load().build_responses_request(
-        prompt,
-        model,
-        /*effort*/ None,
-        codex_protocol::config_types::ReasoningSummary::None,
-        /*service_tier*/ None,
-        metadata,
-        /*include_internal*/ true,
-    )?;
+    let request = session
+        .services
+        .model_client
+        .load()
+        .build_responses_request(
+            prompt,
+            model,
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            metadata,
+            /*include_internal*/ true,
+        )?;
     let total = estimate_request_tokens(&request);
     if total > maximum {
         session

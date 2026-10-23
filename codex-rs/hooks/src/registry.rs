@@ -13,14 +13,14 @@ use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
+use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
+use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::session_end::SessionEndOutcome;
 use crate::events::session_end::SessionEndRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
-use crate::events::post_tool_use_failure::PostToolUseFailureOutcome;
-use crate::events::post_tool_use_failure::PostToolUseFailureRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
 use crate::events::task_completed::TaskCompletedOutcome;
@@ -307,10 +307,7 @@ impl Hooks {
         self.engine.preview_task_completed(request)
     }
 
-    pub async fn run_task_completed(
-        &self,
-        request: TaskCompletedRequest,
-    ) -> TaskCompletedOutcome {
+    pub async fn run_task_completed(&self, request: TaskCompletedRequest) -> TaskCompletedOutcome {
         self.engine.run_task_completed(request).await
     }
 

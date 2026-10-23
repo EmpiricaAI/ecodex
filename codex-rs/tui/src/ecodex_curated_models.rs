@@ -56,12 +56,34 @@ pub(crate) fn startup_provider_override(
     explicit_provider: Option<&str>,
     model: Option<&str>,
     configured_provider: &str,
+    configured_base_url: Option<&str>,
 ) -> Option<&'static str> {
     if explicit_provider.is_some() {
         return None;
     }
     let openai = codex_model_provider_info::openai_direct_provider(model?)?;
-    (configured_provider != openai).then_some(openai)
+    if configured_provider == openai {
+        return None;
+    }
+    // Only a chat-only bridge cannot serve an OpenAI-family model, and the
+    // migration prompt only ever left such a pair behind. Bedrock Mantle,
+    // Azure, or a local server running `gpt-oss` pair a GPT model with their
+    // own provider on purpose, so a configured provider is kept unless it is
+    // the ecodex translator. `None` means the provider is not resolved yet
+    // (`-m gpt-…` before the config loads), where the model alone decides.
+    match configured_base_url {
+        None => Some(openai),
+        Some(base_url) => is_translator_endpoint(base_url).then_some(openai),
+    }
+}
+
+/// The ecodex translator's default listen address, as the shipped
+/// `config.toml` and `translator-upstreams.toml` write it.
+fn is_translator_endpoint(base_url: &str) -> bool {
+    let host = base_url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+    host.starts_with("localhost:18080") || host.starts_with("127.0.0.1:18080")
 }
 
 /// Convert a curated entry to a `ModelPreset` so it can merge into the
@@ -129,24 +151,66 @@ mod tests {
 
     #[test]
     fn startup_provider_override_routes_only_unrouted_openai_models() {
+        const TRANSLATOR: Option<&str> = Some("http://localhost:18080/v1");
         // config pairs a GPT model with the translator (the migration-prompt case)
         assert_eq!(
             startup_provider_override(
                 /*explicit_provider*/ None,
                 Some("gpt-6-sol"),
-                "mistral"
+                "mistral",
+                TRANSLATOR
+            ),
+            Some("openai")
+        );
+        // `-m gpt-…` before the config is loaded: the model alone decides
+        assert_eq!(
+            startup_provider_override(
+                /*explicit_provider*/ None,
+                Some("gpt-6-sol"),
+                "",
+                /*configured_base_url*/ None
             ),
             Some("openai")
         );
         // already on openai: nothing to change
         assert_eq!(
-            startup_provider_override(/*explicit_provider*/ None, Some("gpt-6-sol"), "openai"),
+            startup_provider_override(
+                /*explicit_provider*/ None,
+                Some("gpt-6-sol"),
+                "openai",
+                /*configured_base_url*/ Some("")
+            ),
             None
         );
         // an explicit provider (--oss, -c model_provider=) always wins
         assert_eq!(
-            startup_provider_override(Some("mistral"), Some("gpt-6-sol"), "mistral"),
+            startup_provider_override(Some("mistral"), Some("gpt-6-sol"), "mistral", TRANSLATOR),
             None
+        );
+        // a provider that serves OpenAI models itself keeps the pair as written:
+        // Bedrock Mantle (GovCloud), Azure, a local server running gpt-oss
+        assert_eq!(
+            [
+                startup_provider_override(
+                    /*explicit_provider*/ None,
+                    Some("gpt-5.5"),
+                    "amazon-bedrock",
+                    Some("https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1")
+                ),
+                startup_provider_override(
+                    /*explicit_provider*/ None,
+                    Some("gpt-5.5"),
+                    "azure",
+                    Some("https://example.openai.azure.com/openai")
+                ),
+                startup_provider_override(
+                    /*explicit_provider*/ None,
+                    Some("gpt-oss:20b"),
+                    "ollama",
+                    Some("http://localhost:11434/v1")
+                ),
+            ],
+            [None, None, None]
         );
         // non-OpenAI models and router slugs keep their provider
         assert_eq!(
@@ -154,15 +218,17 @@ mod tests {
                 startup_provider_override(
                     /*explicit_provider*/ None,
                     Some("devstral-latest"),
-                    "mistral"
+                    "mistral",
+                    TRANSLATOR
                 ),
                 startup_provider_override(
                     /*explicit_provider*/ None,
                     Some("openai/gpt-5.2-codex"),
-                    "openrouter"
+                    "openrouter",
+                    Some("https://openrouter.ai/api/v1")
                 ),
                 startup_provider_override(
-                    /*explicit_provider*/ None, /*model*/ None, "mistral"
+                    /*explicit_provider*/ None, /*model*/ None, "mistral", TRANSLATOR
                 ),
             ],
             [None, None, None]

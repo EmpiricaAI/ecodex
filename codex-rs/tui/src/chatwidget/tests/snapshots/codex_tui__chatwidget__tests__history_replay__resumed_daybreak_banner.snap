@@ -1,10 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/history_replay.rs
-assertion_line: 111
+assertion_line: 125
 expression: history
 ---
 
-  >_ OpenAI Codex (v<VERSION>)
+  ∴ ecodex (v<VERSION>)  ·  turtles all the way down
      /home/user/project
 
 • Daybreak is on for new turns.
