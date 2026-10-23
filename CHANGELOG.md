@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Empirica hooks re-vendored from core 1.14.13** (`c6fe4db80244`). `session-init.py` drops the canonical-loop auto-install path that core retired (the loop pickup hooks were already on ecodex's retired list, so no wiring changes). The `empirica-constitution` skill gains core's two new §III-b sections, *Split before you log* and *Provenance and visibility*, ported into ecodex's curated copy. Core's new Claude-Code-host scripts (Chrome MCP health check, ENP cron watcher, agent generator) are not vendored.
+- **Release workflow**: `cargo build --jobs` is capped at 2 on the Linux runners (the 0.164.0 x86_64 job hit the 16 GB runner memory ceiling four attempts running), and `workflow_dispatch` takes an optional `targets` subset so one target can be rebuilt against an existing tag.
+
 ## [0.164.0] - 2026-10-23
 
 ### Changed
