@@ -24,6 +24,11 @@ on:
         description: "Existing tag to build + attach binaries to (e.g. v0.2.6)"
         required: true
         type: string
+      targets:
+        description: "Optional comma-separated subset of matrix targets to rebuild (e.g. x86_64-unknown-linux-gnu). Empty = all four. Lets one failed target be redone without repeating the 2h macOS builds."
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: release-binaries-${{ github.ref_name }}-${{ inputs.tag }}
@@ -36,19 +41,30 @@ jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.targets == '' || contains(inputs.targets, matrix.target) }}
     timeout-minutes: 180   # cold-cache release build incl. codex-code-mode-host's v8 dep is slow on 2-core runners; aarch64-apple-darwin needed >120 for v0.157.2
     strategy:
       fail-fast: false
       matrix:
+        # cargo_jobs caps parallel rustc processes. The release profile (thin LTO +
+        # line-tables debuginfo) peaks at ~14 GB RSS with 4 jobs on v0.164.0, which
+        # is the whole budget of a 16 GB standard Linux runner: the x86_64 job died
+        # three times (SIGTERM 143 / "operation was canceled", no OOM line) 20-29 min
+        # into the tui phase before this cap. 2 jobs trades ~20 min for headroom.
+        # macOS standard runners expose 3 cores; 3 is their default, stated explicitly.
         include:
           - target: aarch64-apple-darwin
             runner: macos-14         # Apple Silicon, standard hosted
+            cargo_jobs: 3
           - target: x86_64-apple-darwin
             runner: macos-14         # cross-compile x86_64 on Apple Silicon (macos-13 Intel runners are scarce/deprecated)
+            cargo_jobs: 3
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04     # older glibc (2.35) host = broad forward-compat
+            cargo_jobs: 2
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm # native ARM hosted runner (GA)
+            cargo_jobs: 2
     steps:
       - name: Checkout ${{ inputs.tag || github.ref_name }}
         uses: actions/checkout@v4
@@ -75,7 +91,7 @@ jobs:
           CARGO_TERM_COLOR: always
         run: |
           set -euo pipefail
-          cargo build --release --target ${{ matrix.target }} \
+          cargo build --release --jobs ${{ matrix.cargo_jobs }} --target ${{ matrix.target }} \
             -p codex-cli -p codex-empirica-plugin -p codex-empirica-translator
 
       - name: Fetch upstream codex-code-mode-host
