@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.164.1] - 2026-10-24
+
 ### Changed
 - **Empirica hooks re-vendored from core 1.14.13** (`c6fe4db80244`). `session-init.py` drops the canonical-loop auto-install path that core retired (the loop pickup hooks were already on ecodex's retired list, so no wiring changes). The `empirica-constitution` skill gains core's two new §III-b sections, *Split before you log* and *Provenance and visibility*, ported into ecodex's curated copy. Core's new Claude-Code-host scripts (Chrome MCP health check, ENP cron watcher, agent generator) are not vendored.
 - **Release workflow**: `cargo build --jobs` is capped at 2 on the Linux runners (the 0.164.0 x86_64 job died three attempts running at the 16 GB runner memory ceiling before a fourth passed), and `workflow_dispatch` takes an optional `targets` subset so one target can be rebuilt against an existing tag. The subset filter runs in a `plan` job that emits the matrix: the first cut of this change put it in a job-level `if:` reading `matrix`, which GitHub rejects at parse time, and `release.yml` was unloadable on main for six hours (every push produced a zero-job failed run). CI now lints workflow files with actionlint.
@@ -1098,7 +1100,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.0...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.1...HEAD
+[0.164.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.0...v0.164.1
 [0.164.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.5...v0.164.0
 [0.160.5]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.4...v0.160.5
 [0.160.4]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.3...v0.160.4
