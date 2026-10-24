@@ -148,7 +148,7 @@ empirica provision-practice <name> \
   --tenant <tenant> --org <org> \
   [--base-path <dir>] \
   [--forgejo-owner <owner> --forgejo-host <ssh-url>] \
-  [--no-cortex]
+  [--no-cortex --substrate local]
 ```
 
 Where the flags come from the answers:
@@ -159,8 +159,12 @@ Where the flags come from the answers:
 | Practices live in `~/empirica` | omit `--base-path` |
 | Code lives on Forgejo | `--forgejo-owner` + `--forgejo-host` (ask for both — they are not guessable) |
 | Code lives on GitHub / GitLab / local | omit the Forgejo flags |
-| Not on the mesh / standalone | `--no-cortex` |
-| On the mesh | omit `--no-cortex`; `--tenant` / `--org` default from the current directory's project.yaml |
+| Not on the mesh / standalone | `--no-cortex --substrate local` |
+| On the mesh | omit both; `--tenant` / `--org` default from the current directory's project.yaml |
+
+`--substrate` is what `project.yaml` records about where the practice's state lives.
+Pass `local` explicitly for a standalone practice: an empirica older than 1.14.7
+records `cortex` for a `--no-cortex` provision unless told otherwise.
 
 These commands write outside the workspace, so ecodex asks for approval before each
 one runs. Say that before the first one, so the prompt is expected.
@@ -183,6 +187,10 @@ practice, each starting ecodex in its own directory.
 
 Skip this phase when Phase 6 left no practices (none provisioned and none already
 existed), or when `empirica cockpit --help` fails: that empirica has no cockpit.
+
+Draft the profile yourself, as below. Don't use `provision-practice --cockpit-profile`:
+it writes `launch: claude` for every practice, so each pane would start Claude Code
+instead of ecodex.
 
 **Detect before asking.**
 
@@ -212,9 +220,11 @@ projects:
   - name: <ai_id>
     path: <proj_dir from Phase 6>
     launch: bash -ic 'ecodex; exec bash'
+    resume: bash -ic 'ecodex resume --last; exec bash'
   - name: <ai_id 2>
     path: <proj_dir from Phase 6>
     launch: bash -ic 'ecodex; exec bash'
+    resume: bash -ic 'ecodex resume --last; exec bash'
 
 groups:
   - name: <domain>
@@ -230,8 +240,12 @@ What each choice is for:
   the path from the name; a practice that was already there may live elsewhere.
 - **`launch: bash -ic 'ecodex; exec bash'`.** `-i` loads the user's shell profile,
   which is usually what puts `empirica` on `PATH`. `exec bash` leaves a shell behind
-  when ecodex exits, so the pane stays open; `ecodex resume --last` picks the
-  session back up in place.
+  when ecodex exits, so the pane stays open.
+- **`resume: bash -ic 'ecodex resume --last; exec bash'`.** This is what
+  `empirica cockpit refresh` runs to bring a dead pane back. Without it the cockpit
+  re-runs `launch:` and the pane starts a fresh session. `resume --last` picks the
+  most recent session in the pane's own directory, so each practice gets its own
+  conversation back, and it starts fresh when that directory has none yet.
 - **No `instance_id:`.** ecodex sets its own practitioner identity, its thread id,
   for every shell and hook it runs, so an id bound by the cockpit would be replaced
   anyway.
