@@ -47,8 +47,9 @@ work with peer practices (*Working with peer practices*), and how to report
 - **Semantic search comes back empty** → `empirica project-embed`, and confirm the
   query returns something it should before trusting an empty answer.
 - **Cross-practice search missing** → `empirica project-search --global` (this
-  machine's practices plus promoted shared and public artifacts); `cortex investigate`
-  for the mesh.
+  machine's practices plus promoted shared and public artifacts); for the mesh, the
+  Cortex `investigate` MCP tool, when Cortex is connected (the `cortex` CLI has no
+  such command).
 
 ---
 

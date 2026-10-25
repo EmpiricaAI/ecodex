@@ -19,10 +19,11 @@ use futures::StreamExt;
 use serde::Deserialize;
 use tracing::error;
 
-/// ecodex extension: `pinned: true` in SKILL.md frontmatter keeps framework
-/// skills ambient (re-injected at session start + post-compact). Parsed
-/// locally since upstream's shared frontmatter parser (`codex_skills`)
-/// doesn't carry this field. Mirrors core-skills::loader's own copy.
+/// ecodex extension: `pinned: true` in SKILL.md frontmatter marks a framework
+/// skill, which the skills catalog tells the model to read early and again
+/// after a compaction (the body is not injected). Parsed locally since
+/// upstream's shared frontmatter parser (`codex_skills`) doesn't carry this
+/// field.
 #[derive(Debug, Default, Deserialize)]
 struct SkillFrontmatter {
     #[serde(default)]
@@ -410,9 +411,9 @@ async fn parse_skill_file(
         short_description,
     } = parse_skill_frontmatter_metadata(&contents, || default_skill_name(path))
         .map_err(|error| error.to_string())?;
-    // ecodex: `pinned: true` in SKILL.md frontmatter keeps framework skills
-    // ambient (re-injected at session start + post-compact). Parsed here since
-    // upstream's frontmatter parser doesn't carry it.
+    // ecodex: `pinned: true` in SKILL.md frontmatter marks a framework skill
+    // (see catalog_prompt.rs). Parsed here since upstream's frontmatter parser
+    // doesn't carry it.
     let pinned = extract_frontmatter(&contents)
         .and_then(|frontmatter| serde_yaml::from_str::<SkillFrontmatter>(&frontmatter).ok())
         .map(|parsed| parsed.pinned)

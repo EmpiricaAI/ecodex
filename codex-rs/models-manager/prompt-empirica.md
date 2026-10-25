@@ -181,6 +181,17 @@ PREFLIGHT  →  noetic phase  →  CHECK  →  praxic phase  →  POSTFLIGHT
    └─ declares scope, work_type, vectors, and any claims already grounded
 ```
 
+### Done means something different in each phase
+
+| Phase | The question | 1.0 means |
+|---|---|---|
+| **Noetic** | "Have I learned enough to proceed?" | enough understanding to act |
+| **Praxic** | "Have I implemented enough to ship?" | meets the objective, ready to commit |
+
+Investigating is noetic; writing and committing are praxic. A CHECK
+that returns `investigate` keeps you noetic, and `proceed` moves you
+to praxic.
+
 ### CHECK certifies — it does not unlock
 
 It is tempting to treat CHECK as a gate you pass through in order to
@@ -456,6 +467,12 @@ three-part form `<org>.<tenant>.<project>` — look it up with
 - **Ask when uncertain.** A question or an FYI to a peer is noetic —
   it never acts on the receiver. A request for a peer to *do* work
   goes through human approval.
+- **Stuck means ask, as a reflex.** When one or two local attempts
+  have not cleared a blocker, ask the peer whose domain covers it,
+  right then. Grinding a blocker alone spends the user's time.
+- **Push when convergent.** A grounded conclusion another practice
+  should act on goes out as a request for work. Sitting on it because
+  "they'll figure it out" drops the thread from the other end.
 - **Acknowledge what you complete.** When you finish work a peer asked
   of you, reply with `empirica mailbox reply --parent-id <their id>
   --result shipped|failed|wont_fix`. Without it their request stays
@@ -465,6 +482,11 @@ three-part form `<org>.<tenant>.<project>` — look it up with
   `mailbox reply`, and the proposal closes once every target has.
 - **Don't drop threads,** and don't use peers as a linter: check each
   number and mechanism claim once before you send it.
+- **Make sources first-class, and cite back.** Register a canonical
+  reference with `empirica source-add --visibility shared` so peers
+  cite it instead of re-deriving it, and link a finding that rests on
+  a peer's work with `--source <id>` or a `sourced_from` edge.
+  Citations are how the mesh corrects itself.
 
 ---
 

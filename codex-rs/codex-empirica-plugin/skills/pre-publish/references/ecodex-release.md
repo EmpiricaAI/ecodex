@@ -59,18 +59,25 @@ started yet". `scripts/release.sh` already passes `--repo` for the same reason.
    failed target with `gh workflow run release.yml -R EmpiricaAI/ecodex -f
    tag=v<version> -f targets=<target>` rather than repeating all four. The x86_64 Linux build runs
    near the runner's memory ceiling, which is why its `cargo_jobs` is low; an
-   out-of-memory kill there reads as a dead rustc, not a compile error.
-4. **Homebrew.** When all four `ecodex-<target>.tar.gz` archives and their
-   `.sha256` files are on the release, run `scripts/sync-homebrew.sh <version> --tap
-   <homebrew-tap checkout>`. Compare each sha256 in the filled formula with the
-   published `.sha256` file before committing, because the formula is what users
-   install. Commit the tap as `ecodex <version>` and push it.
+   out-of-memory kill there reads as a dead rustc, not a compile error. The same
+   push starts CI on the release commit itself, which is not the README commit
+   step 1 waited on: wait for that run by its id too.
+4. **Check the archives.** When all four `ecodex-<target>.tar.gz` archives and
+   their `.sha256` files are on the release, download each pair into a scratch
+   directory (`gh release download v<version> -R EmpiricaAI/ecodex --dir <dir>`) and
+   run `sha256sum -c` on every `.sha256` file there. The Homebrew formula is filled
+   from those `.sha256` files, so comparing the formula with them proves nothing;
+   hashing the archives does.
 5. **Verify the install:** `./scripts/release.sh --explicit <version>
    --force-version --skip-commit --skip-tag --skip-changelog --verify-install`
    installs the published release into a scratch prefix and checks that it is an
    integrated ecodex: the version, the plugin and config written on first start,
-   and the companion binaries.
-6. **Commit the filled formula** `packaging/homebrew/ecodex.filled.rb` on `main`.
+   and the companion binaries. It installs from the GitHub release, so it runs
+   before the tap is pushed.
+6. **Homebrew.** `scripts/sync-homebrew.sh <version> --tap <homebrew-tap checkout>`
+   fills the formula and copies it into the tap. Commit the tap as `ecodex
+   <version>` and push it; this is what Homebrew users install.
+7. **Commit the filled formula** `packaging/homebrew/ecodex.filled.rb` on `main`.
 
 ## What shipped, read from where it shipped
 

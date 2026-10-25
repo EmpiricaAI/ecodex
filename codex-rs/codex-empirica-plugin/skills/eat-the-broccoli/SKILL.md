@@ -12,8 +12,9 @@ version: 2.11.0
         already carries them; a link that resolves only inside the broccoli repo
         is broken here)
      Sync: copy empirica's skills/eat-the-broccoli/SKILL.md over this file, put
-     this notice back, run `python3 scripts/setup-codex.py` and clear its flags.
-     The catalog itself is harness-agnostic: it is not edited for any host. -->
+     this notice back, and run `python3 scripts/setup-codex.py`. The catalog
+     is not edited for any host, so a scan flag on one of its rows is expected
+     (some incident rows name Claude Code); only this notice is ecodex's. -->
 
 # Eat the Broccoli 🥦
 
