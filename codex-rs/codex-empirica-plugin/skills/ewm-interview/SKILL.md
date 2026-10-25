@@ -145,8 +145,8 @@ Only on an affirmative:
 
 ```bash
 empirica provision-practice <name> \
-  --tenant <tenant> --org <org> \
   [--base-path <dir>] \
+  [--tenant <tenant> --org <org>] \
   [--forgejo-owner <owner> --forgejo-host <ssh-url>] \
   [--no-cortex --substrate local]
 ```
@@ -159,8 +159,8 @@ Where the flags come from the answers:
 | Practices live in `~/empirica` | omit `--base-path` |
 | Code lives on Forgejo | `--forgejo-owner` + `--forgejo-host` (ask for both — they are not guessable) |
 | Code lives on GitHub / GitLab / local | omit the Forgejo flags |
-| Not on the mesh / standalone | `--no-cortex --substrate local` |
-| On the mesh | omit both; `--tenant` / `--org` default from the current directory's project.yaml |
+| Not on the mesh / standalone | `--no-cortex --substrate local`, and no `--tenant` / `--org` |
+| On the mesh | omit both; `--tenant` / `--org` default from the current directory's project.yaml, so pass them only when this practice belongs to a different tenant or org |
 
 `--substrate` is what `project.yaml` records about where the practice's state lives.
 Pass `local` explicitly for a standalone practice: an empirica older than 1.14.7
@@ -188,9 +188,18 @@ practice, each starting ecodex in its own directory.
 Skip this phase when Phase 6 left no practices (none provisioned and none already
 existed), or when `empirica cockpit --help` fails: that empirica has no cockpit.
 
-Draft the profile yourself, as below. Don't use `provision-practice --cockpit-profile`:
-it writes `launch: claude` for every practice, so each pane would start Claude Code
-instead of ecodex.
+Draft the profile yourself, as below. `provision-practice --cockpit-profile <profile>`
+can write one too, but only one shape: a tmux layout with an `empirica tui` window and
+one window per practice, with no ghostty or alacritty window and no grouped panes.
+Offer it only when that is exactly what the user wants, and then pass both commands,
+because without `--launch` it starts Claude Code in every pane and its default
+`--resume` only fits a launch that is not wrapped in a shell:
+
+```bash
+empirica provision-practice <name> --cockpit-profile <profile> \
+  --launch "bash -ic 'ecodex; exec bash'" \
+  --resume "bash -ic 'ecodex resume --last; exec bash'"
+```
 
 **Detect before asking.**
 
