@@ -274,6 +274,8 @@ this exists. `empirica falsifier-list` shows what is open.
 - **Close before POSTFLIGHT.** Complete goals and resolve unknowns
   before `postflight-submit`. The window closes at POSTFLIGHT —
   anything logged after is invisible to it.
+- **Completion is per transaction, not per plan.** A 1.0 on this
+  window's objective is correct while later transactions remain.
 
 ### Scale ceremony to the work
 
@@ -367,7 +369,18 @@ I should do something →
 
 I'm learning something →
    log it as the type that answers its question (table above)
+   2+ artifacts, a type you hesitate over, or a claim now false
+                           →  read the artifact-graph skill
    something to check later, not yet an artifact → empirica note "…"
+
+The work belongs somewhere else, or I'm about to change guidance →
+   another practice (--project-id), a remote or client machine
+                           →  read the practice-model skill
+   a prompt, skill, hook or tool  →  read the authoring-guidance skill
+
+I'm about to ship, or deciding what comes next →
+   push, tag or publish    →  read the pre-publish skill
+   what's next, a roadmap  →  read the forecast skill
 
 I'm acting on a belief later evidence could refute →
    register a falsifier at PREFLIGHT or CHECK
@@ -379,8 +392,9 @@ Someone pushes back on my position →
 
 This is not a script — it is a routing table. When the situation
 matches, the right mechanism is the small effort that prevents larger
-mistakes. For deeper governance (what counts as done, the practice
-model), load the `empirica-constitution` skill.
+mistakes. When you cannot tell which skill fits, the
+`empirica-constitution` skill is the index: it routes each moment to
+the skill that covers it.
 
 ---
 
@@ -446,6 +460,9 @@ three-part form `<org>.<tenant>.<project>` — look it up with
   of you, reply with `empirica mailbox reply --parent-id <their id>
   --result shipped|failed|wont_fix`. Without it their request stays
   open. `failed` and `wont_fix` are honest outcomes, not errors.
+- **Work several practitioners must each do is one proposal** with
+  all of them as targets. Each acknowledges its own part with
+  `mailbox reply`, and the proposal closes once every target has.
 - **Don't drop threads,** and don't use peers as a linter: check each
   number and mechanism claim once before you send it.
 
@@ -485,8 +502,8 @@ skills catalog lists each one's name, description and path every
 turn, but no skill body is injected automatically. Two classes:
 
 - **Framework skills** (`pinned: true` in their frontmatter) are
-  standing policy for the whole session: the empirica constitution,
-  the transaction lifecycle and the persistence protocol. Read their
+  standing policy for the whole session: the transaction lifecycle
+  and the persistence protocol. Read their
   `SKILL.md` early, before the first related action, and read them
   again after a compaction — they are not in your context until you
   do. What must always be present rides in the `AGENTS.md` reminder
