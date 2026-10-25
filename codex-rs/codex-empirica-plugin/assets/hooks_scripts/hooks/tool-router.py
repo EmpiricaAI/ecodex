@@ -1024,6 +1024,45 @@ def _hook_output(context_parts: list[str]) -> dict:
     return {"continue": True, "context": text}
 
 
+_WAKE_MARKER = (
+    "[wake]"  # what wake_instance types; empirica.core.cockpit.instance_actions.WAKE_MARKER is the other copy
+)
+
+_WAKE_HEADER = """## ⏰ Wake turn — this prompt was a wake, not a request
+
+The listener service gave you this turn because your practice has mail. Do these, in order, then stop:
+1. Read and react to the pending messages below per the mailbox protocol (`empirica mailbox show <id>`, `empirica mailbox reply`).
+2. If your mesh Monitor is not running (it expires after 30 minutes), re-arm it: run `empirica listener on --dry-run --output json`,
+   start the Monitor with the `next_step` args it returns, then `empirica listener arm <monitor_task_id>`.
+3. Run `empirica mailbox poll` once more: events written while no Monitor was running are not delivered to a new one.
+Then stop. A wake is meant to be cheap: do not start unrelated work and do not write a status report.
+"""
+
+
+def _wake_inbox_context() -> str:
+    """The pending-inbox block for a wake turn, or "" when there is nothing to say.
+
+    A wake (cockpit `wake_instance`, or the listener's WakeScheduler) types the marker `[wake]` and Enter; the prompt carries no
+    instruction. (A blank prompt is accepted too, though Claude Code starts no turn for one.) The SessionStart hook already knows how to render the inbox, so this loads that builder from the sibling
+    file instead of keeping a second copy. It runs ONLY for a wake prompt: this router is on every prompt's path and the poll is a
+    subprocess. Any failure (missing file, no project, poll error, empty inbox) returns "": a wake turn must not be made worse by the
+    check.
+    """
+    try:
+        import importlib.util
+
+        loader = Path(__file__).with_name("ewm-protocol-loader.py")
+        spec = importlib.util.spec_from_file_location("ewm_protocol_loader", loader)
+        if spec is None or spec.loader is None:
+            return ""
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        lead = mod._build_pending_inbox_lead()
+    except Exception:
+        return ""
+    return f"{_WAKE_HEADER}\n{lead}" if lead else ""
+
+
 def main():
     """Main hook handler."""
     try:
@@ -1035,7 +1074,8 @@ def main():
 
     # Every user prompt resets the proportionality budget, short ones and slash commands included; only a prompt that carries
     # a hypothesis re-arms it. This runs BEFORE the early return below, or "yes" / "go" would leave the old budget counting.
-    is_command_or_short = len(prompt) < 10 or prompt.startswith("/")
+    is_wake = prompt.strip() in ("", _WAKE_MARKER)
+    is_command_or_short = is_wake or len(prompt) < 10 or prompt.startswith("/")
     proportionality_check = None if is_command_or_short else build_investigation_proportionality_check(prompt)
     budget_armed = _sync_proportionality_budget(input_data.get("session_id", ""), proportionality_check)
     if proportionality_check:
@@ -1043,7 +1083,9 @@ def main():
 
     # Skip very short prompts or commands
     if is_command_or_short:
-        print(json.dumps({"continue": True}))
+        # A blank prompt or the wake marker is a wake: the short prompts that are neither "yes" nor a command. See _wake_inbox_context.
+        wake = _wake_inbox_context() if is_wake else ""
+        print(json.dumps(_hook_output([wake] if wake else [])))
         return
 
     # Get current epistemic state

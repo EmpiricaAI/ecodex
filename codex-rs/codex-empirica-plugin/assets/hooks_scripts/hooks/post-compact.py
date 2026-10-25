@@ -269,14 +269,38 @@ def _resolve_project_and_setup(claude_session_id: str) -> tuple:
     return project_root, instance_id
 
 
-def _try_memory_swap(claude_session_id: str) -> None:
-    """Attempt memory swap for cross-project CWD mismatch. Non-fatal."""
+def _launch_cwd() -> str | None:
+    """The directory the harness started this hook in, or None if it was deleted underneath it."""
+    try:
+        return os.getcwd()
+    except OSError:
+        return None
+
+
+def _try_memory_swap(claude_session_id: str, harness_cwd: str | None) -> None:
+    """Attempt memory swap for cross-project CWD mismatch. Non-fatal.
+
+    ``harness_cwd`` is the directory the hook was launched in, captured BEFORE
+    _resolve_project_and_setup chdir'd to the practice: after the chdir the process
+    cwd is the active project, so the swap would compare it against itself. None (the launch directory is gone) skips the swap:
+    the process cwd is no substitute.
+
+    Opt-in (``EMPIRICA_MEMORY_SWAP=1``). The swap never fired before it was given the real harness cwd, so switching it on for every
+    compaction is a behaviour change with a first real use's worth of edge cases (symlinks, an unreadable original, an interrupted
+    restore), not a bug fix. A restore at session end is unconditional: it only acts when a swap is recorded."""
+    if os.environ.get("EMPIRICA_MEMORY_SWAP", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return
+    if harness_cwd is None:
+        print("memory swap skipped: the launch directory is gone", file=sys.stderr)
+        return
     try:
         from empirica.utils.memory_swap import maybe_swap_for_active_transaction
 
-        swap_result = maybe_swap_for_active_transaction(claude_session_id=claude_session_id)
-        if swap_result.get("action") == "swapped":
-            print(f"{swap_result.get('message', '')}", file=sys.stderr)
+        swap_result = maybe_swap_for_active_transaction(
+            claude_session_id=claude_session_id, harness_cwd=Path(harness_cwd)
+        )
+        if swap_result.get("action") in ("swapped", "restored") or not swap_result.get("ok", True):
+            print(f"memory swap: {swap_result.get('action')}: {swap_result.get('message', '')}", file=sys.stderr)
     except Exception as e:
         print(f"memory swap failed (non-fatal): {e}", file=sys.stderr)
 
@@ -649,9 +673,11 @@ def main():
         print(json.dumps({"ok": True, "skipped": True, "reason": f"SessionStart source={source} is not a compaction"}))
         sys.exit(0)
 
-    # Stage 1: Resolve project and setup environment
+    # Stage 1: Resolve project and setup environment. The harness cwd must be read first:
+    # _resolve_project_and_setup chdirs away from it.
+    harness_cwd = _launch_cwd()
     project_root, instance_id = _resolve_project_and_setup(claude_session_id)
-    _try_memory_swap(claude_session_id)
+    _try_memory_swap(claude_session_id, harness_cwd)
 
     # Stage 2: Find active session
     empirica_session = _get_empirica_session(claude_session_id=claude_session_id)
