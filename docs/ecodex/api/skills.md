@@ -1,13 +1,14 @@
 # codex-empirica-plugin — Skills
 
 The empirica plugin registers a curated skill set with codex. Skills are loaded
-from `./skills/` (referenced by the manifest's `skills` field).
+from `./skills/`, which the manifest's `skills` field points at, and are compiled
+into the plugin binary, so every ecodex release ships the set it was built with.
 
 ## Registered skills
 
-Ten skills. Eight are carried over from the Claude Code empirica plugin and
-de-Clauded in place for a model-agnostic host; `diagnose` and `onboard` are
-ecodex's own.
+Twelve skills. Ten come from the Claude Code empirica plugin: nine were adapted in
+place for a model-agnostic host, and `eat-the-broccoli` is carried verbatim because
+its catalog names no host. `diagnose` and `onboard` are ecodex's own.
 
 | Skill | Pinned | Purpose |
 |---|---|---|
@@ -17,15 +18,22 @@ ecodex's own.
 | `code-audit` | | Structured code-quality investigation producing Empirica artifacts |
 | `code-docs-align` | | Verify docs, docstrings, comments and ref-docs match the code |
 | `dispatch-agent` | | Spawn subagents with inherited Empirica context |
+| `eat-the-broccoli` | | Quality sweep: deterministic tooling plus a pattern catalog for failures that pass every test |
+| `pre-publish` | | Ordered gates before a push, tag or release: scope, deterministic tier, independent sweep with every finding traced, hot path, gaps, CI on the exact commit, cut and verify |
 | `ewm-interview` | | Interview the user to generate `workflow-protocol.yaml` |
 | `render` | | Render markdown with ASCII diagrams to themed SVG via mdview |
 | `diagnose` | | Run `empirica diagnose --frontend ecodex` (plugin install, hooks, Sentinel, statusline, translator, providers) and triage each failure with the user |
 | `onboard` | | First-run orchestrator: composes `empirica diagnose --frontend ecodex`, `empirica onboard --ai-id` and ecodex's self-provisioning, then covers what diagnose does not — local model-server probe, model-metadata check, model smoke test, plain-vs-ecosystem mode, per-project practice setup, sandbox network check |
 
+`pre-publish` carries two reference files beside its `SKILL.md`:
+`references/sweep-brief.md`, the brief each read-only reviewer gets, and
+`references/ecodex-release.md`, ecodex's own release procedure. For any other
+project the skill tells the model to use that project's release doc instead.
+
 ## Format
 
 Each skill is a directory under `skills/` containing a `SKILL.md` file with YAML
-frontmatter:
+frontmatter, plus any files its body refers to by relative path:
 
 ```markdown
 ---
@@ -43,7 +51,9 @@ metadata:
 
 The loader (`codex-rs/ext/skills/src/loader/host.rs`, fields on
 `codex-rs/skills/src/model.rs::SkillMetadata`) parses `name`, `description`,
-`metadata.short-description`, and `pinned`:
+`metadata.short-description`, and `pinned`. `name` is capped at 64 characters and
+`description` at 1024 (`codex-rs/skills/src/interface.rs`); the description is what
+the skills catalog shows the model every turn, so it carries the trigger phrases.
 
 - **`pinned: true`** marks a *framework* skill: session-wide standing policy
   rather than a per-task tool. The body is **not** auto-injected — the skills
@@ -75,20 +85,33 @@ skill scoped to the plugin's namespace, which is the manifest `name` verbatim:
 `empirica@empiricaAI:<skill-name>` (`codex-rs/core-plugins/src/loader.rs` sets
 the namespace, `ext/skills/src/loader/namespace.rs` qualifies the name).
 
+The directory is embedded at build time and written into the plugin cache on the
+first session start after an upgrade. A skill edited in the repo therefore reaches
+a running install only through a new build; sessions already running keep the
+copy they loaded.
+
 ## Source of truth and sync
 
 Skills are a **snapshot layer**, unlike the hooks. The vendored hooks under
 `assets/hooks_scripts/` are re-synced verbatim from empirica by
 `scripts/setup-codex.py` and never edited in place; the skills were vendored
-once from the empirica plugin and then de-Clauded here, so edits made in
+from the empirica plugin and then adapted here, so edits made in
 `codex-rs/codex-empirica-plugin/skills/` are durable and must not be
 overwritten by a copy from upstream. `setup-codex.py` deliberately keeps
-`skills/` out of its sync map and only *scans* it, flagging any Claude-ism
-(a regression or a newly vendored skill) in its report.
+`skills/` out of its sync map and only *scans* it, flagging any host-specific
+wording (a regression or a newly vendored skill) in its report.
 
 To pick up a new or changed skill from empirica: copy that one skill in by hand,
-de-Claude it, run `python3 scripts/setup-codex.py` and clear what it flags, and
-commit on `main`. `diagnose` and `onboard` have no upstream counterpart.
+adapt it, run `python3 scripts/setup-codex.py` and clear what it flags, and commit
+on `main`. Two exceptions:
+
+- **`eat-the-broccoli`** is not adapted. Copy empirica's file over it, put back
+  the vendor notice at its top, which records the adaptations a sync must
+  re-apply, and run the scan.
+- **`pre-publish`** keeps ecodex's `references/ecodex-release.md`, which has no
+  upstream counterpart. Empirica's own release reference is not bundled.
+
+`diagnose` and `onboard` have no upstream counterpart.
 
 ## Not included
 

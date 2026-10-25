@@ -5,7 +5,8 @@
 # tooling) wired for ecodex. Run it before a release, after a refactor, or when
 # something smells off. Phase 2 (the pattern hunt — races, stale caches, silent
 # fallbacks, membrane misses) is NOT automatable; load the skill for that:
-#   ~/.claude/plugins/local/empirica/skills/eat-the-broccoli/SKILL.md
+#   codex-rs/codex-empirica-plugin/skills/eat-the-broccoli/SKILL.md (bundled in
+#   ecodex; Claude Code carries the same skill in the empirica plugin)
 #
 # SCOPE — this is a FORK. Most of codex-rs is upstream openai/codex code we don't
 # maintain, so the GATING checks scope to the crates ecodex actually owns

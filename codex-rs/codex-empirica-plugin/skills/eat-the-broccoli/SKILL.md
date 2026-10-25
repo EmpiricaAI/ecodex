@@ -1,0 +1,273 @@
+---
+name: eat-the-broccoli
+description: "Use when the user says '/eat-the-broccoli', 'eat the broccoli', 'full quality sweep', 'pre-release audit', 'run the deep tests', or asks to hunt for gaps / membrane misses / stubs / dead code / silent failures / the bugs that pass tests but are still broken. A tiered quality-and-pattern audit: deterministic tooling (lint, types, tests, deps, dead-code, silent-failure) PLUS a learned-pattern hunt for the hard, judgment-requiring failure classes that tools can't catch. Works in any repo or stack. Levels: quick / standard / deep. Scope: changed / module / repo."
+version: 2.7.0
+---
+
+<!-- Vendored from https://github.com/EmpiricaAI/broccoli by way of the empirica
+     plugin's copy — edit upstream, not here. -->
+<!-- VENDOR ADAPTATIONS (re-apply on every sync — upstream does not carry them):
+     1. this notice
+     2. repo-relative links rewritten to absolute upstream URLs (empirica's copy
+        already carries them; a link that resolves only inside the broccoli repo
+        is broken here)
+     Sync: copy empirica's skills/eat-the-broccoli/SKILL.md over this file, put
+     this notice back, run `python3 scripts/setup-codex.py` and clear its flags.
+     The catalog itself is harness-agnostic: it is not edited for any host. -->
+
+# Eat the Broccoli 🥦
+
+The thorough quality sweep you run before a release, after a refactor, or when
+something just *smells* off. Two halves:
+
+1. **Deterministic tooling** — lint, types, tests, dependency CVEs, dead code,
+   silent failures. Catches the *known* categories.
+2. **The pattern hunt** — a checklist of the *hard* failure classes that pass
+   every test and still ship broken: races, stale caches, silent fallbacks,
+   null-masking, deploy-staleness. Tools can't catch these; only a trained eye
+   plus a *"is this by design?"* check can.
+
+> **Portable by design.** The deterministic half is tool-agnostic — wire in your
+> stack's linter / typechecker / scanner. The pattern hunt needs no tooling at
+> all; it's a structured way of looking.
+
+---
+
+## Two dials: depth × scope
+
+| Depth | digs into | Scope | covers |
+|---|---|---|---|
+| **quick** | lint + fast tests + dep-audit | **changed** | the diff vs your base branch |
+| **standard** | + dead-code, silent-failure, contract guards, pattern hunt | **module** | one subsystem / path |
+| **deep** | + full pattern hunt, docs/contract accuracy, multi-pass | **repo** | everything |
+
+Pick any combination — `quick × changed` is a pre-commit reflex; `deep × repo`
+is a pre-release gate. **State the level + scope you chose, and say what you
+skipped** — silent truncation reads as "covered everything."
+
+> **Forks & monorepos:** when most of the tree is upstream/vendored, `repo`
+> scope drowns in code you don't own. Default to `changed` or your owned
+> packages — here the scope dial is load-bearing, not optional.
+
+---
+
+## Phase 1 — Deterministic tooling
+
+Run your stack's equivalent of each. Skip what you don't have; the sweep still
+works.
+
+| Dimension | Tools |
+|---|---|
+| Lint / style | ruff, eslint, golangci-lint, clippy |
+| Types | pyright, tsc, mypy, `cargo check` |
+| Tests | pytest, jest, go test, cargo test |
+| Dependency CVEs | pip-audit, npm audit, cargo-audit |
+| Dead code | vulture, ts-prune, cargo-machete |
+| Silent failures | bare `except:` / empty `catch {}` / discarded `Result` |
+| Contract guards | your CLI / API contract tests |
+| **Test freshness** | mutation testing (mutmut, Stryker, cargo-mutants); or grep for assertion-free tests, tautological asserts, and hand-built fixtures whose schema has drifted from the real one |
+
+**On that last row — coverage does not cover it.** Coverage asks *"was this line
+executed?"*; test freshness asks *"could this test have failed?"* Those come apart
+badly in fast iterative work, because tests written against yesterday's contract
+keep passing against today's code and **actively guard the drift**: a green
+assertion that the API returns 422 is indistinguishable from a green assertion that
+it should. Fixtures are the sharpest edge — a hand-built schema that has fallen
+behind the real one makes fixture and code agree with each other and disagree with
+production, so the suite is green precisely where it is blind. *If a defect
+survives a green suite, the suite is a suspect, not an alibi.*
+
+### Tooling by language
+
+Concrete per-stack tool choices (Python, Rust) live in
+[references/stacks.md](https://github.com/EmpiricaAI/broccoli/blob/master/references/stacks.md) — consult it when wiring a stack, not
+while hunting. **The pattern hunt below is language-agnostic** and ports verbatim
+across any stack.
+
+**Reading silent failures:** a truly-silent swallow (`except: pass`, empty
+`catch {}`, `let _ = fallible()`) is the dangerous one. A broad catch that *logs
+or re-raises* is often deliberate degradation — flag the **new** ones, and any
+with no log and no re-raise, not the absolute count.
+
+---
+
+## Phase 2 — The pattern hunt 🥦 (the part that earns the name)
+
+Tools find known categories. These are the **structural** failures that pass
+tests and still ship broken. Each is a place where **broken and by-design look
+identical** — so each row carries the disambiguator that tells them apart.
+
+**The one meta-question:** *"This looks intentional — is it actually?"* When you
+find a smell, check the intent (a comment, a test, a doc, or ask). When it
+resolves to "yes, by design," **record that verdict** (an inline annotation or a
+`.broccoli-accept` line — see below) so you don't re-litigate it next sweep.
+
+*Worked example.* You spot a function returning `[]` on a DB timeout
+(**fallback-masks-primary**). Check the intent: does it log or raise? It logs
+nothing → **❌ broken** — callers can't tell "no rows" from "DB down." If instead
+it logged a warning and returned `[]` as a *documented* degraded mode →
+**✅ by design**: record it with the reason, move on.
+
+### A. State & timing
+| Smell | ✅ by design if | ❌ broken if |
+|---|---|---|
+| **Race / shared mutable state** — >1 writer to one key/file | single-writer guaranteed, or the key carries the writer's durable id | two writers share a proxy key → last-write-wins clobber |
+| **Stale cache** — value resolved once, reused | the value is immutable for that lifetime | it's ephemeral/locational but frozen at init (location, clock, "current X") |
+| **Idempotency miss** — a retried / redelivered op | dedup-key / set-semantics make replay harmless | it increments / appends / re-sends on replay |
+| **Off-by-one window** — a since/until, threshold, range | inclusive/exclusive matches intent | the event you need lands exactly on the excluded edge |
+| **Coupled-lifecycle orphan** — two things that must live/die together | bound, or a reaper cleans orphans | orphans pile up silently (a handle without its resource; a record opened, never closed) |
+
+### B. Failure visibility
+| Smell | ✅ by design if | ❌ broken if |
+|---|---|---|
+| **Empty/null masking** — a field empty because something broke upstream | the empty has a *contract* (declared nullable) | a count no longer matches its list; a `.get(k, default)` ate a missing key |
+| **Default masks dropped intent** — a param with a default, *or one the interface accepts and no code reads* | the default is a real sensible value, and every accepted param is consumed somewhere | it silently absorbs a value that *was* supplied but got dropped. Harsher variant: the arg parser advertises a flag the handler never reads — documented, accepted, discarded, no error. *An advertised no-op is worse than a missing feature: the missing one fails loudly and teaches* |
+| **Fallback masks primary failure** — a degraded path | it logs/flags that it engaged | "it works" actually means "fallback works, primary silently dead" |
+| **Partial success as success** — a multi-step op, one rollup status | rollup is AND-of-all + per-item surfaced | a mid-step failure is swallowed by the final OK |
+| **Unfalsifiable success** — no distinct signal for worked-vs-failed | success and failure produce *different* legible output | both look the same (empty output, silence). *Ask: if this failed, could I tell?* |
+| **Proxy read as evidence** — a status, version, path or env var taken as proof of a *different* fact | the reading answers the question actually asked — the registry for "did it publish", a digest for "is this content current", the tool's own credential resolution for "can this run" | it answers a narrower neighbouring question and nothing says so. Four in one day: a CI job's `success` read as published (two channels shipped nothing behind six green ticks); `CARGO_REGISTRY_TOKEN`/`CHOCOLATEY_API_KEY` unset read as *no credential exists* while the token sat in `credentials.toml` / `choco apikey`; `gh secret list` empty read as *the secret never existed* when it was simply not shared with that repo; a version header read as content. *The proxy USUALLY agrees — that is what makes it attractive and the disagreement invisible. The reading is not noisy, it is precise and about the wrong thing* |
+| **Unsatisfiable predicate** — a check whose condition cannot be met on any input the producer actually emits | the check has been observed firing *and* not firing on real data | it matched a shape nobody produces, so it fires on everything (or nothing) forever, and its opposite branch is unreachable code. A "narrow breadth" nudge tested `isinstance(v, (int,float))` against a dict-of-dicts: it warned on every transaction including ones that did the right thing, and its positive branch had never executed once. *A check that cannot pass is training, not feedback — and what it trains is dismissal of every signal printed beside it* |
+| **Wrong-domain scan** — an analyzer pointed at a subject it wasn't written for | the tool declares its scope and refuses (or reports NOT APPLICABLE, **counted separately from passes**) when the subject doesn't match | it runs happily and emits specific, plausible, entirely false findings — checks resolving *their own* project's symbols against *another* repo reported 13 dead enum values that don't exist there. *Zero-files-scanned is loud; wrong-tree-scanned is silent, and the silent one is strictly worse* |
+| **Verb that always fails** — an operation that errors on every single call | the failure is surfaced where someone acts on it | it fails *loudly* every time and therefore leaves **no trace in the data it was meant to change** — callers quietly fall back to another path, and no audit of the output can find it because nothing was ever written. A batch-resolve targeting a table that never existed was dead for its whole life across two independent installs. *Ask "has this verb ever successfully written anything?" — a zero-success verb and an unused verb are identical in the code and opposite in meaning* |
+| **Query result treated as a cohort** — rows returned together, given one diagnosis and one remedy | the query's predicate IS the class — every row needs the same fix *because* of what the predicate selected | the rows share only the predicate, and remediation differs per row. Five identities revoked at `oauth=0` read as five broken migrations; they were three people never onboarded (for whom zero is *correct*), one provisioning artifact, and one machine identity no consent flow can serve. Same shape twice: "three of five keys are floored" — two dormant, needing deletion, and one a machine identity needing a service account. *The fix is not a better query. Ask what each row is FOR, per row, and ask whoever owns that surface* |
+| **Negative assertion without a positive control** — a test/check that proves something is *absent* | the same call is shown to return *something* — assert a positive result first, then the absence within it | the channel was dead and absence proved nothing. A filtered-out record "verified absent" by grepping output that was actually a usage error. *An absence observed through an instrument not shown to be live is not evidence* |
+| **Vacuous green — control proves the detector, enumerator empty** — a scan whose control/positive case fires (so the machinery is trusted) but the set it actually iterates is empty | the enumerator is shown non-empty on real input — count what it *walked*, not just that the detector *can* fire | the control fires on a fixture while the live enumerator yields zero, so every run is green because nothing was examined. A detector proven on a hand-built positive case sits beside a `for item in items:` where `items` is always empty and never executes once in production — the passing control is exactly what stops anyone looking. *A working detector and an empty enumerator both report success; only counting what was walked tells them apart* |
+
+### C. Boundaries & contracts
+| Smell | ✅ by design if | ❌ broken if |
+|---|---|---|
+| **Classifier blind spot / membrane miss** — a matcher on crossing data | it sees through wrappers / chains / quotes / encodings | a wrapped or chained variant slips a start-anchored match |
+| **Encoding / quoting mangle** — data crossing CLI↔shell, JSON↔DB, wire↔local | the boundary escapes / validates explicitly | it assumes clean input (quotes, newlines, unicode, `"0.7"` vs `0.7`) |
+| **Schema drift** — code assumes a shape the migration didn't produce | the unused shape is intentionally deprecated-but-kept | the code path is silently dead against the real schema |
+| **One predicate, two questions** — a check written for one question reused for a second that *looks* identical | both questions genuinely have the same answer for every state, including the edge ones | they diverge on a state neither caller thought about — "what may I delete?" and "what exists?" agree everywhere except on things that are **archived**, so an existence test borrowed from a deletion allow-list judged every archived referent missing and a routine prune destroyed live links |
+| **Trust-the-input** — consuming upstream data unvalidated | validated at the boundary | it assumes well-formed and NoneTypes three calls later |
+| **Two-sources-of-truth drift** — a copy of a load-bearing thing | one is generated from the other | both are hand-maintained and have diverged |
+| **Invisible dependency** — coupling that doesn't appear in the import list | dependencies are declared where a reviewer looks for them (imports, manifest, injected params) | the coupling is through *symbols the logic resolves at runtime*, so a portability review by import-list clears it. Three checks were audited for portability by reading imports; only one declared its dependency there, and the other two shipped and produced false findings against a foreign repo. *Reviewing coupling by reading imports finds only the coupling that chose to be visible* |
+| **Else-branch mis-route at N+1** — `if A … else B` standing in for an enumerable set | the else is a genuine catch-all whose behaviour is right for anything not-A | it's a correct default for the *two* types that existed and silently mis-files the third. Adding a type to a dispatch map would have written invalidated dead-ends into the *unknowns* store — correct in SQLite, wrong in the canonical log, surfacing only on a rebuild months later. *An `else` covering an enumerable set is a bug scheduled for whenever the set grows* |
+| **Projection omits what storage holds** — an object/DTO/serializer mirroring a record | the field is deliberately withheld (secret, internal counter) and that's declared somewhere | the column exists, internal queries read it, and consumers reading it off the object get `AttributeError`/`undefined`. *Tell: every test asserts on the behaviour the field ENABLES, none reads it back off the object* |
+| **Semantic drift** — one word, different meanings across components | one canonical definition, referenced | each component quietly means its own thing (`id`, `session`, `scope`, "done") |
+| **Decision downgraded across a boundary** — a deny/soft decision crossing into a consumer with a *narrower* vocabulary | it degrades to the **floor** (deny / fail-closed) | it silently downgrades to *allow* — the three below |
+| ↳ *exit-code / status mismatch* — a host maps a subprocess code to a decision, defaulting on any unrecognized value | the default is the safe one (fail-closed) | unsafe default — a *crashed* gate fails open (e.g. "anything ≠ 2 ⇒ allow") |
+| ↳ *reason-less deny dropped* — a consumer drops a deny when a required field (reason/message) is empty | *(never by design)* | an empty-reason deny silently becomes allow |
+| ↳ *advisory unsupported downstream* — an upstream soft decision (ask/warn) the consumer can't express | it degrades to the floor (deny) | it silently downgrades to allow (no middle ⇒ must fail safe) |
+
+### D. Indistinguishable incompleteness
+
+**An incomplete result that is indistinguishable from a complete one.** Not wrong
+answers — incomplete ones that *look* complete. Every instance passes its own
+checks; the caller reads a partial truth as the whole one and builds on it. The
+class only becomes visible when someone re-derives the total through a different
+surface — so hunt it deliberately:
+
+| Smell | ✅ by design if | ❌ broken if |
+|---|---|---|
+| **Silent truncation** — a bounded read (limit / page size / cap) over a collection | the response carries the *source-side* total (`total`, `points_count`) next to the page, and the caller checks it or pages to exhaustion | the default cap truncates seamlessly — a 201-chunk source at `max=200` joins into a string indistinguishable from complete; a `limit=500` scroll against 3 847 points reads as "not found" |
+| **Completeness signal computed from the wrong side** — `has_more` / `is_last` derived after filtering | derived from *source cursor exhaustion* | derived from the filtered page length — heavy filtering drives it false while whole pages go unread |
+| **Abbreviated identity on a consumer surface** — an id/hash truncated for display where something downstream keys on it | the abbreviation is display-only, clearly non-canonical, full value adjacent | a consumer parses the rendered form as the identity — exact-match joins silently return 0-of-N. *Never abbreviate an identity value where a consumer reads it* |
+| **Absence asserted from a defaulting read** — `.get(k, default)` / optional accessors make *missing key* and *null value* identical | absence claims are made with an explicit key-presence check (`k in row`), after enumerating every candidate field in the schema you already printed | a `.get()` default becomes "present but null"; a capability is declared absent while the sibling field that provides it sits in the same output |
+| **Column younger than the rows it is read across** — a NULL / absent field taken as a recorded verdict of *nothing here* | the field is shown to have existed, and to have been writable, across the whole period being read — check the migration date against the rows' timestamps before reading its absence as an answer | the column was added after those rows were written and deliberately not backfilled, so its NULL is a fact about the schema's age and was never measuring them. A `resolution_kind` NULL across 1,267 closed records was read as *closed with no judgement recorded*; every one of them carried a written reason, and the column postdated the lot by a day. *The query is correct, the column is real, and the population is wrong by construction — so the result is precise, reproducible, and about rows the field never saw. Worse, it survived one round of checking: it was produced BY a correction, and a correction carries the authority of having looked. "Not recorded" splits into not-true, not-known and NOT-ASKED — only the third is invisible from the data* |
+| **Absence claimed from a truncated enumerator** — an existence/absence conclusion drawn from a capped read (`ls … \| head`, `LIMIT n`, one unpaginated page) | you counted the enumerator against the cap first, or queried the authoritative registry (`list-unit-files`, the index) directly | the cap silently hid the item on the next line — an `ls ~/.config/… \| head` reported a systemd unit *absent* that was there all along, and a whole plan built on "it does not exist." *Absence from a bounded read is unfalsifiable by construction; prove it from a count or the registry, never a truncated view* |
+| **Shared-method corroboration** — N independent parties "confirm" a result, each using the same read/tool/query | the verifiers differ in *method* (different endpoint, different field, one reads the store while another runs the code) — agreement across identical methods is one datapoint, not N | three seats independently "verified" non-participation in a shared record; all three had filtered the same response on a key the schema never had. The agreement felt like corroboration and hardened the false conclusion each seat would have questioned alone. *Consensus inherits every defect of the method that produced it — replication is only evidence when the methods are independent* |
+| **Green suite pins the defect** — a test asserts the exact (buggy) surface form | tests assert the *contract property* (completeness checkable, identity full-length) | the suite encodes the wrong assumption — the defect stays green until an end-to-end known-answer check catches it. *When a defect survives a green suite, the suite is a suspect, not an alibi* |
+| **Exemption reports clean forever** — a checker/validator that SKIPS a case (unsupported scheme, unknown type, "not our concern") | the exemption is *narrow and named*, and skipped items are reported as **skipped**, not folded into the pass count | the skip is silent, so the case can never fail — a `file://` source exempted from a link-rot check reported clean while pointing at nothing, for as long as the exemption stood. *False negatives from an exemption are invisible by construction: you cannot see what was never checked* |
+| **Lexical matcher over a NATURAL language** — a checker keyed on words or phrases (negation markers, antonym pairs, risk words, "TODO"-alikes) rather than on a grammar | the language is FORMAL — SQL, an AST, an enum, a config schema — where the spec is finite and published, a token's denotation does not drift, and a miss is a findable parser bug | the vocabulary can never be enumerated, so misses are invisible and **zero hits reads as "nothing to find"**. A negation-marker + antonym-pair contradiction detector fired **0 times across 9 064 779 pairs of 6 704 real artifacts** — and its own docstring's motivating example did not fire either, because `blocks` vs `block` is inflection and there was no stemmer. *The tell: "can I enumerate the tokens and be done?" Over a formal grammar yes; over natural language never — and an unfinishable list produces false negatives by construction. Prefer a signal the system already produces from BEHAVIOUR over one you must read text to infer* |
+| **Enablement is a catch-up, not a start** — flipping on a scanner/rail with pre-existing scheduled state | enabling re-arms stale `next_run_at` (or drains explicitly, in dependency order) | every overdue row fires at once in table order — cadences execute in *reverse* of how their cron strings read |
+
+**The counter-move for the whole class:** verify through the surface the
+*consumer* actually reads (not the producer's internals, not your test's
+mock), and design responses so completeness is checkable *from the response
+itself*. A partial read must be self-evidently partial.
+
+### E. Environment & control flow
+| Smell | ✅ by design if | ❌ broken if |
+|---|---|---|
+| **Deploy-staleness** — installed/copied artifact vs source | hash/mtime match, or a single source of truth | the box runs old code while source is "fixed" (the #1 recurring root cause) |
+| **Metadata version read as running code** — a staleness call from recorded metadata (pip `dist-info`, lockfile, manifest) rather than the live artifact | the metadata provably tracks the artifact (non-editable install, freshly written) | under an editable/develop install the recorded version lags the loaded code — `pip show` said `1.13.14` while `import` resolved the newer develop tree, and a daemon was declared "frozen" on a version that was never its running code. *Read the import path / process / served endpoint, not the manifest* |
+| **Config/env divergence** — behavior depends on env / version / run-context | the dependency is declared + checked with a clear error | assumed present (works interactively, absent in CI / cron / a peer's box) |
+| **Authority on the wrong field** — a gate / filter / recipient check | keyed on the source of truth | keyed on a proxy that *usually* agrees |
+| **Gate wrong about whether the channel CAN run** — a precondition check that gates on one location for a credential or capability | it consults the same resolution the tool itself uses, or falls through to it | it checks one env var while the tool reads a config file, so a *present* credential reads as absent and the step skips. Hard-failing does NOT fix this one — it converts a silent non-publish into a confident refusal, because the premise was never examined. *Sibling of the row above and strictly worse: that one is keyed on a proxy for the ANSWER, this one on a proxy for the QUESTION* |
+| **Gate gates its own escape** — a guard blocking its own clear-path | the recovery action is always-open *before* the gate | the verb that would clear the deny is itself denied |
+| **Unrecoverable gate** — a deny with a "do X first" message | doing X actually satisfies it | the satisfaction window closed before X can run |
+| **Dead branch by construction** — a path an earlier check already decided | intentional belt-and-suspenders | genuinely unreachable (shadowed by a prior return) |
+| **Cause outside the call graph** — a failure whose root cause is a shared resource (disk, inodes, fds, ports, memory) exhausted by something the failing code never touches | the exhaustion surfaces AS ITSELF — a legible `ENOSPC`/`EMFILE` naming the resource, so the reader looks outside | the runtime translates it into an ordinary-looking failure in innocent code. Test fixtures leaking `mkdtemp()` dirs filled a shared 24G `/tmp`; the symptom was 5 failures + 3 errors in a suite nobody had touched, and an hour went into debugging that suite. Clearing `/tmp` alone turned it green with zero code change. *Every other row here describes a defect reachable from the failing code. This one is not in the call graph at all, so the signal points at the wrong file **by construction** — no amount of reading the named code can find it.* **Check `df` / `ulimit -n` / the port table BEFORE the code whenever failures appear somewhere your change did not reach** |
+
+> **This table is living.** When a new class of issue bites you, add a row with
+> its disambiguator — every incident becomes a permanent future check. Found one
+> we're missing? **PR it** (see Contributing).
+
+---
+
+## Phase 3 — Triage, verdict, record
+
+1. **Real issue** → log it (an issue, a TODO, your tracker).
+2. **Confirmed by-design** → **record the verdict** (an inline annotation or a `.broccoli-accept` line) so the next sweep skips it.
+3. **Rank by blast radius, then cut.** Sort findings by the damage the failure would do, not by how many you found — a sweep with 8 prioritized findings gets acted on; one with 30 gets skimmed and ignored. Calibrate severity to the *stated* context: a missing backup is a 🟢 note for a scratch script and a 🔴 blocker for a billing path. Never grade an MVP against an enterprise checklist — that's noise wearing a badge.
+4. **Roll up a verdict:** 🟢 **GREEN** (ship) · 🟡 **YELLOW** (ship + logged follow-ups) · 🔴 **RED** (blockers — name them).
+5. Re-runs are idempotent: track counts over time. A *rising* silent-failure / debt count is the signal, not the absolute number.
+
+### Output contract
+
+Every sweep ends with these four blocks, in this order. A finding nobody can act
+on is the same as no finding.
+
+```
+VERDICT   🟢 GREEN | 🟡 YELLOW | 🔴 RED        — one line, blockers named if RED
+
+FINDINGS  ranked by blast radius, not by discovery order
+          <pattern-name> · <file:line> · <why it is broken, not just what it is>
+          severity calibrated to the STATED context, not to an absolute bar
+
+COUNTS    silent-failures · accepted (.broccoli-accept) · new-since-last-run
+          the trend is the signal; the absolute number is not
+
+NOT COVERED   what this sweep could not check, and why
+```
+
+**That last block is not optional, and it is the one people drop.** A sweep that
+reports only what it found is indistinguishable from a sweep that found
+everything — precisely the failure family in §D, aimed at this skill's own output.
+Tooling you don't have, paths you skipped, a scope of `changed` when the risk is
+repo-wide, a language the linter doesn't parse: name it. *An audit silent about
+its own blind spots converts "unknown" into "clean" in the reader's head.*
+
+### The `.broccoli-accept` file
+
+One confirmed by-design finding per line — a `.gitignore` for false alarms, so
+the next sweep stays quiet on what you've already judged:
+
+```
+# pattern:location — why it's intentional (and what would reverse it)
+fallback-masks-primary:db/cache.py:fetch — logged degraded mode; reverse if callers start trusting []
+blind-except:sync/git_notes.py — non-fatal best-effort write; errors visible upstream
+```
+
+Keep the *why*. A verdict without a reason is just a mute button — and the next
+person (or the next you) can't tell a real judgment from a silenced alarm.
+
+---
+
+## Contributing
+
+The pattern hunt is meant to **grow across languages and harnesses** — that's the
+whole point. Hit a failure class that isn't here? Open a PR with a row:
+
+```
+| **Name** — the smell | ✅ by design if … | ❌ broken if … |
+```
+
+Real war stories make the best rows. The catalog gets sharper every time someone
+adds the bug that just bit them.
+
+---
+
+## Why "broccoli"?
+
+Because it's the work you know you should do and skip anyway. This makes it a
+single command, gives the boring-but-load-bearing checks a place to live, and —
+once a verdict is recorded — means you never chew the same stalk twice. 🥦
+
+---
+
+*Want the deterministic checks bundled into one command, and by-design verdicts
+recorded for you so they compound across a team? See
+[INTEGRATIONS.md](https://github.com/EmpiricaAI/broccoli/blob/master/INTEGRATIONS.md).*

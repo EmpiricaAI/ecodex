@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+- **`pre-publish` and `eat-the-broccoli` skills** in the bundled plugin. `pre-publish` is the ordered release gate sequence from core (scope, deterministic tier, an independent read-only sweep with one `spawn_agent` subagent per area, every finding traced, hot-path timing, gaps, CI on the exact commit, cut and verify), with `references/ecodex-release.md` carrying ecodex's own cut: the README stamp, `release.sh`, the release run, the Homebrew sha256 check, `--verify-install` and the filled formula. `eat-the-broccoli` is the pattern catalog its sweep applies, carried verbatim from core's vendored copy of EmpiricaAI/broccoli. `scripts/broccoli.sh` now points at the bundled skill.
+
+### Changed
+- **`ewm-interview` skill**: Phase 6 provisions a standalone practice with `--no-cortex --substrate local`, and Phase 7 gives each practice in the cockpit profile a `resume:` line (`ecodex resume --last`) so a cockpit refresh resumes the pane's ecodex session. It warns against `provision-practice --cockpit-profile`, which writes `launch: claude` for every practice.
+
+### Fixed
+- **The plugin bundle rebuilds when a file is added to it.** `include_dir` tracks the bytes of files it already embeds but, on stable Rust, not which files a directory holds, so a new skill or hook script was left out of local builds and tests until something else forced a rebuild. A `build.rs` now registers the three embedded directories and every entry in them with cargo, as upstream's skills crate does. Release builds were not affected, because the version bump rebuilds every crate.
+
 ## [0.164.1] - 2026-10-24
 
 ### Changed
