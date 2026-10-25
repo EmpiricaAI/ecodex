@@ -988,15 +988,17 @@ impl Session {
         let plugin_outcome = plugins_manager
             .plugins_for_config(&config.plugins_config_input())
             .await;
+        let current_permissions = session_configuration.permission_profile_state.snapshot();
         if let Some(enriched) = enrich_permission_profile_with_plugin_writable_roots(
-            session_configuration
-                .permission_profile_state
-                .permission_profile(),
+            current_permissions.permission_profile(),
             &plugin_outcome,
             config.cwd.as_path(),
         ) && let Err(err) = session_configuration
             .permission_profile_state
-            .set_legacy_permission_profile(enriched)
+            .set_permission_profile_snapshot(plugin_enriched_permission_snapshot(
+                &current_permissions,
+                enriched,
+            ))
         {
             tracing::warn!(
                 "ignoring plugin-declared writable_roots: constraint validation \
@@ -5920,6 +5922,29 @@ fn enrich_permission_profile_with_plugin_writable_roots(
     )
 }
 
+/// ecodex: the snapshot to install once plugin writable roots have extended
+/// the session's concrete permissions. It keeps the active profile identity
+/// and the profile's declared workspace roots: a legacy snapshot would drop
+/// both, and a client that checks the new session against its configured
+/// profile (the TUI's working-directory change and managed-worktree fork)
+/// would then refuse the session. Upstream pairs a modified profile with its
+/// identity the same way in `set_permission_profile_projection`.
+fn plugin_enriched_permission_snapshot(
+    current: &PermissionProfileSnapshot,
+    enriched: PermissionProfile,
+) -> PermissionProfileSnapshot {
+    match current.active_permission_profile() {
+        Some(active_permission_profile) => {
+            PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                enriched,
+                active_permission_profile,
+                current.profile_workspace_roots().to_vec(),
+            )
+        }
+        None => PermissionProfileSnapshot::legacy(enriched),
+    }
+}
+
 /// Builds hook configuration for one config snapshot, including any enabled plugin hooks.
 async fn build_hooks_config(
     config: &Config,
@@ -5965,3 +5990,7 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "world_state_item_tests.rs"]
 mod world_state_item_tests;
+
+#[cfg(test)]
+#[path = "plugin_writable_roots_tests.rs"]
+mod plugin_writable_roots_tests;

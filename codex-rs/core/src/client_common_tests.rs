@@ -272,6 +272,8 @@ fn serializes_flex_service_tier_when_set() {
 fn tool_call_history(call_name: &str, output_name: Option<&str>) -> Vec<ResponseItem> {
     vec![
         ResponseItem::FunctionCall {
+            encrypted_content: None,
+            status: None,
             id: None,
             name: call_name.to_string(),
             namespace: None,
