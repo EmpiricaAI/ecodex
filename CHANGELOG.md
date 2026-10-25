@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.164.2] - 2026-10-25
+
 ### Added
 - **`pre-publish` and `eat-the-broccoli` skills** in the bundled plugin. `pre-publish` is the ordered release gate sequence from core (scope, deterministic tier, an independent read-only sweep with one `spawn_agent` subagent per area, every finding traced, hot-path timing, gaps, CI on the exact commit, cut and verify), with `references/ecodex-release.md` carrying ecodex's own cut: the README stamp, `release.sh`, the release run, the Homebrew sha256 check, `--verify-install` and the filled formula. `eat-the-broccoli` is the pattern catalog its sweep applies, carried verbatim from core's vendored copy of EmpiricaAI/broccoli (2.11.0, as of core 1.14.15). `scripts/broccoli.sh` now points at the bundled skill.
 - **`forecast` skill**, from core 1.14.15: turns "what comes next" into graded predictions, each with an evidence kind, a capped confidence and a falsifier; asks at most three questions through `request_user_input`, each with a predicted answer; creates planned goals only after the user confirms; and gardens past predictions.
@@ -1113,7 +1115,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.1...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.2...HEAD
+[0.164.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.1...v0.164.2
 [0.164.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.0...v0.164.1
 [0.164.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.5...v0.164.0
 [0.160.5]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.4...v0.160.5
