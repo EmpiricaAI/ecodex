@@ -7,6 +7,11 @@ upstream syncs is a patch bump. Derive the version from that file before you nam
 it to anyone. Commands run from the repo root on `main`. Cut only on the owner's
 explicit go for this version.
 
+**Name the repository on every `gh` call: `-R EmpiricaAI/ecodex`.** This checkout
+has an `upstream` remote, and with no default set `gh` resolves to openai/codex. A
+`gh run list` aimed there returns an empty list that reads exactly like "CI has not
+started yet". `scripts/release.sh` already passes `--repo` for the same reason.
+
 ## Gates (the skill's steps 2 to 7)
 
 - **`./scripts/broccoli.sh`** is the deterministic tier for what ecodex owns:
@@ -40,8 +45,8 @@ explicit go for this version.
 ## Cut
 
 1. **Stamp the README** "latest release" link with the new version, commit, push,
-   and wait for CI on that commit: `gh run list --commit <full sha>`, then
-   `gh run watch <run id>`.
+   and wait for CI on that commit: `gh run list -R EmpiricaAI/ecodex --commit
+   <full sha>`, then `gh run watch -R EmpiricaAI/ecodex <run id>`.
 2. **`./scripts/release.sh --explicit <version> --push --publish-crates`** bumps the
    workspace version, refreshes `Cargo.lock`, rolls the changelog's `[Unreleased]`
    section, commits, tags, pushes, and publishes the owned crates. Add `--dry-run`
@@ -49,10 +54,10 @@ explicit go for this version.
    its own credential store as well as `CARGO_REGISTRY_TOKEN`, so an unset variable
    does not mean there is no token. Never print the token or write it into a file.
 3. **The tag push runs `release.yml`**: a plan job, then four builds (Linux and
-   macOS, x86_64 and aarch64). Find the run with `gh run list --workflow
-   release.yml` and wait on its id; the macOS builds take longest. Rebuild one
-   failed target with `gh workflow run release.yml -f tag=v<version> -f
-   targets=<target>` rather than repeating all four. The x86_64 Linux build runs
+   macOS, x86_64 and aarch64). Find the run with `gh run list -R EmpiricaAI/ecodex
+   --workflow release.yml` and wait on its id; the macOS builds take longest. Rebuild one
+   failed target with `gh workflow run release.yml -R EmpiricaAI/ecodex -f
+   tag=v<version> -f targets=<target>` rather than repeating all four. The x86_64 Linux build runs
    near the runner's memory ceiling, which is why its `cargo_jobs` is low; an
    out-of-memory kill there reads as a dead rustc, not a compile error.
 4. **Homebrew.** When all four `ecodex-<target>.tar.gz` archives and their
@@ -70,7 +75,7 @@ explicit go for this version.
 ## What shipped, read from where it shipped
 
 - The GitHub release carries four archives and four `.sha256` files:
-  `gh release view v<version> --json assets`.
+  `gh release view v<version> -R EmpiricaAI/ecodex --json assets`.
 - crates.io carries `codex-empirica-plugin` and `codex-empirica-translator` at the
   version.
 - The tap's `Formula/ecodex.rb` carries the version and the same four sha256.
