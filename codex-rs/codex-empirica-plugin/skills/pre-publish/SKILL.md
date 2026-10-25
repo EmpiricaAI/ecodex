@@ -71,6 +71,19 @@ than improvising them at the cut.
   never ends.
 - **Do not publish on a go you inferred.** Tag and push only on the owner's explicit
   word for this release.
+- **A claim about current code cites HEAD, not a report.** A public forecast item
+  described a gap a peer had reported against older vendored copies; the repo had
+  fixed it three weeks earlier. For each claim in a README, roadmap or changelog,
+  run the command that shows it today (`git log -S<symbol> --since=<report date>`,
+  a count, a grep) and write its evidence kind beside it.
+- **Run the toolchain you claim.** A linter that targets an old language version but
+  parses with the newest grammar passed a 3.12-only Python f-string through lint,
+  format and a 3.14 suite, and CI broke on 3.11. Build and test on the oldest
+  version you declare, or on the pinned one. If a gate reports that the floor was
+  not checked, say so in the report instead of reading silence as clean.
+- **A falsifier tests the prediction it guards, and someone outside can evaluate
+  it.** Write the claim as the check's own sentence; if you cannot, they are two
+  claims.
 
 ## Report
 

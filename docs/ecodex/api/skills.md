@@ -6,9 +6,10 @@ into the plugin binary, so every ecodex release ships the set it was built with.
 
 ## Registered skills
 
-Twelve skills. Ten come from the Claude Code empirica plugin: nine were adapted in
-place for a model-agnostic host, and `eat-the-broccoli` is carried verbatim because
-its catalog names no host. `diagnose` and `onboard` are ecodex's own.
+Thirteen skills. Eleven come from the Claude Code empirica plugin: ten were adapted
+in place for a model-agnostic host, and `eat-the-broccoli` is carried verbatim
+because its catalog is written for any host. `diagnose` and `onboard` are ecodex's
+own.
 
 | Skill | Pinned | Purpose |
 |---|---|---|
@@ -20,6 +21,7 @@ its catalog names no host. `diagnose` and `onboard` are ecodex's own.
 | `dispatch-agent` | | Spawn subagents with inherited Empirica context |
 | `eat-the-broccoli` | | Quality sweep: deterministic tooling plus a pattern catalog for failures that pass every test |
 | `pre-publish` | | Ordered gates before a push, tag or release: scope, deterministic tier, independent sweep with every finding traced, hot path, gaps, CI on the exact commit, cut and verify |
+| `forecast` | | Turn "what comes next" into graded predictions: evidence kind, capped confidence, at most three questions with predicted answers, planned goals only after the user confirms, and gardening of past predictions |
 | `ewm-interview` | | Interview the user to generate `workflow-protocol.yaml` |
 | `render` | | Render markdown with ASCII diagrams to themed SVG via mdview |
 | `diagnose` | | Run `empirica diagnose --frontend ecodex` (plugin install, hooks, Sentinel, statusline, translator, providers) and triage each failure with the user |
@@ -107,7 +109,8 @@ on `main`. Two exceptions:
 
 - **`eat-the-broccoli`** is not adapted. Copy empirica's file over it, put back
   the vendor notice at its top, which records the adaptations a sync must
-  re-apply, and run the scan.
+  re-apply, and run the scan. Its catalog rows tell real incidents, some of which
+  name Claude Code, so the scan flags it by design.
 - **`pre-publish`** keeps ecodex's `references/ecodex-release.md`, which has no
   upstream counterpart. Empirica's own release reference is not bundled.
 
