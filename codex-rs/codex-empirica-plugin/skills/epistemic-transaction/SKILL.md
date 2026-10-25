@@ -128,7 +128,7 @@ server is turned on. It is off by default, because the CLI does the same job.
 A bug you found in the code is a `finding`; *you* shipping it is a `mistake`.
 Something you have not verified is an `assumption`; something you know you don't
 know is an `unknown`. Defaulting everything to `finding` is the most common way this
-layer degrades — the `empirica-constitution` skill (§III-b) has the full table.
+layer degrades — the `artifact-graph` skill has the full table.
 
 ```bash
 empirica log-artifacts - << 'EOF'

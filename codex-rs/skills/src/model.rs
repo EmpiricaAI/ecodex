@@ -15,11 +15,10 @@ pub struct SkillMetadata {
     /// Path to the SKILL.md file that declares this skill.
     pub path_to_skills_md: PathUri,
     pub scope: SkillScope,
-    /// ecodex extension: when true, the skill body is re-injected by
-    /// `build_initial_context` on every call (session start AND post-compact
-    /// recovery), not just on first explicit mention. Use for framework
-    /// skills (e.g. epistemic constitution, transaction lifecycle) that
-    /// need to remain ambient context across compactions.
+    /// ecodex extension: marks a framework skill (e.g. the transaction
+    /// lifecycle, the persistence protocol). The skills catalog tells the
+    /// model to read a framework skill's SKILL.md early and again after a
+    /// compaction; the body itself is not injected.
     pub pinned: bool,
     pub plugin_id: Option<String>,
     pub remote_plugin_id: Option<String>,

@@ -1,402 +1,54 @@
 ---
 name: empirica-constitution
 description: >
-  Empirica deep governance — phase-aware completion, the cognitive immune system,
-  the turtle principle, the typed artifact graph, and the practice model. Load this
-  when the base prompt's operational routing isn't enough — when you need the *why*
-  underneath the mechanism choice, or when "what counts as done" / "what is this
-  practice" is the question. Triggers: 'empirica constitution', 'practice model',
-  'what counts as done', 'completion question', 'cognitive immune', 'turtle
-  principle', or any uncertainty about the framework's deeper rules.
-pinned: true
+  Index of Empirica's deeper rules and the moment each applies. Load this when you
+  are unsure which Empirica mechanism or skill fits a situation; it routes you to the
+  one that does. Triggers: 'empirica constitution', 'which skill', 'where does this
+  belong', or any uncertainty about the framework's deeper rules.
 ---
 
-<!-- ECODEX VENDOR ADAPTATION: ecodex is self-provisioning, so recovery uses the
-ecodex diagnostic/installer path (`empirica diagnose --frontend ecodex`) rather than
-another harness's setup writer. Re-apply this adaptation if the snapshot is
-refreshed. -->
+<!-- ECODEX VENDOR ADAPTATION: this index routes only to skills bundled in ecodex,
+and it keeps the recovery steps under "When the machinery itself breaks", which
+core's index dropped, because their ecodex path (`empirica diagnose --frontend
+ecodex`) is ecodex's own. Re-apply both when the snapshot is refreshed. -->
 
-# Empirica Constitution — Deep Governance
+# Empirica Constitution (index)
 
-The layer underneath the base prompt's operational routing: the questions it leaves
-out so it stays small.
+The base prompt is the always-present layer. This is the map to everything deeper,
+organised by the MOMENT you need it, so no part of it has to be read at session
+start to be useful.
 
-- **What counts as done?** Phase-aware completion (§I)
-- **How do lessons interact with new findings?** Cognitive immune system (§II)
-- **Are the rules self-applicable?** The turtle principle (§III)
-- **How should artifacts be TYPED and CONNECTED?** The graph is the artifact (§III-b)
-- **What IS a practice, vs a model, a directory or a project?** (§IV)
-- **How do practices relate as a team?** Mesh discipline (§V)
-- **How is sustained multi-practice coordination held, and why is it gated?** (§VI)
-- **Tool, skill or prompt — which one is this?** (§VII)
-- **When the machinery itself breaks** (§VIII)
-
-**What lives elsewhere.**
-
-| You need | Go to |
+| The moment | Read the skill |
 |---|---|
-| Transaction lifecycle, PREFLIGHT/CHECK/POSTFLIGHT payloads | base prompt *Transactions*, then the `epistemic-transaction` skill |
-| Which action needs CHECK | base prompt *The Sentinel — noetic firewall* |
-| Which mechanism for which question | base prompt *Constitution — which mechanism when* |
-| Mesh mechanics — addressing, mailbox, acks | base prompt *Working with peer practices* |
-| Position under pushback | the `epistemic-persistence-protocol` skill |
-
-Artifact **typing and graph discipline** is §III-b below — this document owns it.
-Practice and project routing is §IV.
-
----
-
-## §I. Phase-aware completion
-
-"Done" means different things in each phase, and conflating them is common:
-
-| Phase | Question | 1.0 means |
-|---|---|---|
-| **NOETIC** | "Have I learned enough to proceed?" | Sufficient understanding to transition |
-| **PRAXIC** | "Have I implemented enough to ship?" | Meets the stated objective, ready to commit |
-
-Investigating → NOETIC. Writing code → PRAXIC. CHECK returned `investigate` →
-NOETIC; `proceed` → PRAXIC.
-
-**CHECK CERTIFIES — it does not unlock.** The word *gate* misleads: a gate is
-something you pass through *in order to* proceed, so the instinct becomes "submit
-one and move on". CHECK is where you state what the next actions rest on, so an
-empty CHECK is not a formality completed — it is a certificate signed blank.
-
-Two routes into praxic, **both correct**:
-
-| Situation | Route |
-|---|---|
-| Still need to investigate | investigate → `check-submit` with `claims` → praxic |
-| **Already grounded before the window opened** — you read the files first, the normal order, since noetic work is ungated | declare `claims` in **PREFLIGHT** → praxic directly, **no CHECK** |
-
-One claim grounded by `read`, or by `ran` with a `scope` and a `count`, certifies
-the transaction. `retrieved` and `assumed` do not — our own artifacts are testimony,
-not observation — and an unscoped `ran` does not, because a true measurement applied
-past the population it covered adjudicates `held` and no confidence gate sees it.
-
-**Skipping CHECK when genuinely grounded is the correct path, not a shortcut.** You
-skip it by naming what you rely on and how you know it, which is a positive recorded
-act. The tell for the unlock instinct is the clock: a CHECK submitted moments after
-its PREFLIGHT had nothing between them to certify. If you cannot name what you
-learned in that gap, you are signing a blank certificate — skip it and put the
-grounding in PREFLIGHT instead.
-
-**Assessing completion:** ask the phase-appropriate question; if you cannot name a
-concrete blocker, it is done *for this phase*; and don't confuse "more could be
-done" with "not complete".
-
-**Completion is per-transaction, not per-plan.** A 1.0 on this transaction's
-objective is correct even when later transactions remain.
-
----
-
-## §II. The cognitive immune system
-
-**Lessons are antibodies. Findings are antigens.**
-
-When `finding-log` fires, related lessons have their confidence mechanically
-reduced — floor 0.3, so lessons never fully die. Fresh evidence outranks stored
-knowledge without the history being lost.
-
-The discipline implication: if a finding contradicts a lesson you would expect to
-apply here, that lesson's confidence has *already* been adjusted. Trust the freshest
-evidence; reach for the lesson through `project-search` only when its decay-adjusted
-confidence still clears the threshold.
-
----
-
-## §III. The turtle principle
-
-"Turtles all the way down" — the same epistemic rules at every meta-layer.
-
-- The Sentinel monitors using the same 13 vectors it monitors you with.
-- Goals about goal-management are themselves goals.
-- This constitution governs itself: if a section is wrong, fix it through the same
-  find–log–decide cycle as any other work.
-- Auditing skills is itself skill usage, and gets the same
-  PREFLIGHT/CHECK/POSTFLIGHT treatment.
-
-Don't bypass measurement for meta-work. The loop closes by being load-bearing at
-every level.
-
----
-
-## §III-b. The graph is the artifact
-
-The epistemic layer is a **typed graph**, and both words carry weight. Two failure
-modes degrade it, and both are silent — nothing errors, the graph simply stops being
-able to answer.
-
-### Type collapse
-
-Every type answers a different question. Flatten them and retrieval returns a pile
-you cannot reason over, because you can no longer tell what was *observed* from what
-was *believed*, *chosen*, or *got wrong*.
-
-| Type | Answers | Commonly mistyped as |
-|---|---|---|
-| **finding** | What is true that I did not know? | — (the sink everything wrongly drains into) |
-| **unknown** | What do I know I don't know? *(resolvable — resolve it)* | a finding phrased as a question |
-| **assumption** | What am I taking for granted, unchecked? | a finding you feel confident about |
-| **decision** | What did I choose, over what, and what reverses it? | a finding about how the system works |
-| **mistake** | What did **I** do wrong, and what prevents a repeat? | a finding — but a bug in the code is a finding; *shipping* it is a mistake |
-| **dead_end** | What approach genuinely does not work? | a transient failure or a tool hiccup |
-| **falsifier** | What OBSERVATION would refute a belief I am acting on? *(registered before the evidence, in the `falsifiers` array at PREFLIGHT/CHECK; names its parent artifact)* | a claim — but a claim dies at POSTFLIGHT and a falsifier outlives it, which is the point |
-
-**The two confusions worth naming.** A defect in the code is a **finding**; *you*
-shipping it is a **mistake**. Something unverified is an **assumption**; something
-you know you don't know is an **unknown**. And an inference sitting inside an
-observation is **two** artifacts: what you observed is the finding, what you supplied
-is an assumption, edged to it.
-
-**Measured symptom:** a day's work logged **25 findings, 4 mistakes, 2 decisions, 0
-unknowns, 0 assumptions** — while the practitioner repeatedly reported non-zero
-uncertainty in its vectors. The uncertainty was real; the typing was not done.
-**Vector uncertainty with no `unknown` or `assumption` behind it is an unsupported
-claim** — exactly the divergence calibration exists to surface.
-
-### Split before you log
-
-Scan your own artifact for proper nouns, identities, versions, attributions —
-anything a reader could act on that you did not directly observe — and ask of
-each: did I *observe* this, or *supply* it? Supplied is an assumption however
-confident you are. Proper nouns bind hardest, because a name is what a reader can
-least check and is most likely to act on.
-
-An artifact is read as a unit, so a tag on the WHOLE of it cannot mark part of it:
-`epistemic_source`, a confidence, a caveat in the prose are all honest and none
-stops a reader lifting the name out of the sentence. Split, and the wrong half
-retracts without losing the right one. **The types already carry this** — when it
-goes wrong the typing failed, not the vocabulary, so the answer is gardening and
-never a new field.
-
-### Provenance and visibility
-
-`--epistemic-source {intuition|search|mixed}` on every `*-log` (and
-`data.epistemic_source` in `log-artifacts` payloads) tags how you arrived at the
-artifact; POSTFLIGHT's calibration reflection counts intuition against search per
-transaction. It is visibility only (no routing rule yet). Be honest: vectors
-asserted high while every artifact is intuition-tagged is the rubber-stamp CHECK
-pattern the substrate exists to expose.
-
-`--visibility {public,shared,local}` is the opt-in for being discoverable from
-other projects: `local` (default) stays in this project, `shared` is visible
-across the org's projects (Cortex tenancy), `public` to anyone with a Cortex
-account. The pull side is `empirica project-search --task "..." --global`, which
-queries the `global_learnings` Qdrant collection where high-confidence
-shared/public artifacts are promoted and also walks the other projects registered
-on this machine; mesh-wide (other machines, other tenants) retrieval is
-`cortex investigate`. Share liberally what has ecosystem-wide value (security
-patterns, cross-repo bugs, reusable lessons); keep tactical work `local`.
-
-### Orphan accumulation
-
-**An artifact connected to nothing is barely worth logging.** It cannot be swept,
-re-evaluated, or invalidated alongside its premises. CHECK enforces a connectivity
-floor for the artifacts of the current transaction.
-
-Measured the same day: **9 of 25 findings had any edge at all**; 2 were resolved.
-That is a list wearing a graph's clothes.
-
-- **Most edges should point at PRIOR artifacts**, not only within the batch you are
-  writing. All-internal edges build one disconnected island per transaction.
-- **Pick the relation that carries meaning** — `evidence`, `grounded_by`,
-  `caused_by`, `invalidates`, `resolves`, `sourced_from`. `related` asserts almost
-  nothing; reach for it last.
-- **`log-artifacts` / `resolve-artifacts` / `delete-artifacts` are the default path**
-  because they operate relationally. Single `*-log` verbs stay correct for one
-  genuinely standalone artifact — the exception, not the habit.
-
-### Closing the loop, and the retraction gap
-
-Resolve unknowns when answered. Invalidate what new evidence kills. Supersede what
-you replaced. **A graph that only grows is an archive, not a model of what you
-believe now** — and stale artifacts actively mis-steer retrieval rather than sitting
-inert, because what survives compaction is the graph, and the graph is what comes
-back to you.
-
-**Retraction is the move practices reliably skip.** Closing what is *done* and
-retracting what was *wrong* feel similar and are not: the first records progress,
-the second records error.
-
-| Kind | Means |
-|---|---|
-| `stale` | it was true when written and has aged |
-| `superseded --superseded-by <id>` | a newer artifact replaced it |
-| `retracted` | **it was wrong** |
-| `mistyped` | it was another type wearing a finding's clothes |
-
-Measured on one practice: **1268 findings resolved, of which 1267 meant *stale* and
-1 meant *wrong*.** A true error rate near zero across thousands of claims is not
-plausible — errors were simply not being expressed. **A practice that cannot
-distinguish its ageing from its errors cannot calibrate on either.**
-
-Correct the CLAIM with `finding-resolve --kind retracted`; correct the METADATA
-(impact, visibility, epistemic_source) with `update-artifacts`. Claim text is
-immutable by design, so retraction preserves the original wording and records that
-it failed.
-
-**The turtle check (§III):** audit your own graph rather than assuming discipline
-held — count the types, count the orphan rate. A practice that has never measured
-these does not know they are healthy; it knows nothing about them.
-
----
-
-## §IV. The practice model
-
-**The unit of identity in empirica is the practice — not the model, not the
-directory, not the conversation.** That is what lets a practitioner working in a
-practice know its trajectory lands in that practice's profile regardless of which
-filesystem it is typing into.
-
-| Term | What it is |
-|---|---|
-| **Practitioner** | The model currently sitting in the practice. Fungible — different models occupy the same practice over time. |
-| **Practice** | An empirica project: an epistemic specialization with its own trajectory, skills, artifacts and contacts. The medical/legal sense — accumulated expertise plus clients plus tools, occupied by a practitioner. |
-| **Agent** | A subagent the practitioner spawns. It bypasses the parent's Sentinel gates; its tool calls count toward the parent's transaction, and anything it learns is lost unless the parent logs it. |
-| **Client / contact** | An entity the practice serves. First-class in `entity_registry` (type `contact`). |
-| **Engagement** | A scoped piece of work for a contact or organization. First-class (type `engagement`). |
-
-**Artifacts accrue to the practice; calibration accrues to the practitioner
-inhabiting it.** CHECK reads your own model's trajectory within this practice once
-it has enough points, and the practice's trajectory until then.
-
-### Entity registry as the shared substrate
-
-`~/.empirica/workspace/workspace.db` holds an `entity_registry` covering first-class
-entities across the practices in the org, with `entity_memberships` holding typed
-relationships (`member-of`, `serves`, `uses`, `owns`). The table stores
-`entity_type='project'`; the concept is "practice". Types that are not populated
-yet should not be claimed as current state — list what exists instead of assuming:
-
-`empirica entity-list` (by type/status) · `entity-show <type:id>` (one entity plus its
-edges) · `entity-walk <type:id> [--depth N]` · `entity-search <query>`. All take
-`--output {human|json}`.
-
-### When practice ≠ working directory
-
-`.empirica/project.yaml`'s `ai_id` is canonical; filesystem location is incidental.
-The Sentinel, calibration and inbox routing all follow `ai_id`.
-
-- **Working on another machine.** Your working directory is theirs, but you act *as*
-  your home practice. Set `work_type=remote-ops` so the Sentinel reports
-  `ungrounded_remote_ops` instead of scoring against an empty git tree.
-- **Reading another practice's findings.** `project-search --project-id <other>
-  --task "..."` reaches across. Don't change directory and re-bootstrap just to read.
-- **Writing elsewhere.** Default to your active practice; use `--project-id <other>`
-  only when you genuinely discovered something that practice owns. Switching
-  practices to write one finding costs you context for the next ten.
-
-### Things called "project"
-
-- **Empirica practice** — the epistemic seat, identified by `ai_id`. Artifacts and
-  trajectory accumulate here, and persist across models and moves.
-- **The repository you are working in** — the directory tree whose `AGENTS.md` and
-  trust settings shape your session. Often one-to-one with a practice; not always.
-
----
-
-## §V. Mesh discipline
-
-A practice is one node in a mesh. Every node runs the same epistemic loop; what
-differs is the seat, not the discipline.
-
-These are the team-strength analogue of artifact breadth: nothing enforces them, and
-the failure mode is invisible locally — it shows up in *someone else's* work, as a
-stalled thread or a duplicated investigation.
-
-**Pull when uncertain.** If a peer's domain covers what you're missing, ask (a
-question or FYI is noetic: it never acts on the receiver). Asking is the cheap path;
-the expensive one is shipping on a bad assumption and being corrected at review.
-
-**Stuck → ask is a reflex, not a courtesy.** Not only for clean knowledge gaps — it
-is the *first move* whenever you are blocked or looping and one or two local
-attempts haven't resolved it. Grinding a blocker silently is the same free-ride as a
-dropped thread, pointed inward, and the cost lands on the user's time.
-
-**Push when convergent.** A grounded, actionable conclusion that crosses a practice
-boundary goes out as a typed request for work, which a human approves. Sitting on it
-because "they'll figure it out" is the inverse free-ride.
-
-**Ack what you complete.** Work a peer asked of you closes with
-`empirica mailbox reply --parent-id <their id> --result shipped|failed|wont_fix`,
-which replies and closes in one step. Without it the source practice's request stays
-visibly stalled even though the work landed. Part of the work, not optional polish.
-
-**Don't drop threads.** A question deserves a reply even when the reply is "can't
-help, here's why". Silence reads as accept-and-forgot.
-
-**Make sources first-class.** Register canonical references with `source-add
---visibility shared` so peers cite rather than re-derive. `local` is invisible to
-`sources-map --global`, so an unregistered source announces nothing.
-
-**Cite back.** When a finding rests on a peer's source or another practice's work,
-link it (`sourced_from`, or `--source <uuid>`). The citation network is what makes
-the mesh self-correcting: useful peers earn weight, abandoned ideas fade.
-
-**Structural, not moral.** Gaming the mesh hurts only your own practice's
-discoverability and trust trajectory. Peers learn which practices return calls and
-route attention accordingly. There is no opponent to deceive.
-
----
-
-## §VI. Sustained multi-practice coordination
-
-When work spans two or more practices and outlives one session, the coordination
-lives in a shared, human-authorized record rather than in any one practice's goals.
-The gating logic is the rest of this constitution applied one level up: you may
-**propose** cross-practice coordination freely, but **binding other practitioners**
-to shared work is authorized at the human boundary — the turtle principle (§III)
-applied to committing peers' attention.
-
-The mechanism belongs to the Empirica Cortex mesh layer; where your install has it,
-its operational guidance loads from there.
-
----
-
-## §VII. Tools, skills, prompts — which one is this?
-
-Three ways to make a capability available. Picking the wrong one is why guidance
-gets re-typed, drifts, and stops being obeyed.
-
-| | does what | governance |
-|---|---|---|
-| **tool** | **acts** — typed contract, executes now, refusals legible | the contract itself |
-| **skill** | **guides** — packaged practice, trigger-loaded | org-governed |
-| **prompt** | **frames once** — no persistence | none |
-
-**The discriminator: anything re-typed twice belongs in a tool or a skill.** A prompt
-frames one exchange. The moment its content has to survive one, it has outgrown the
-layer, and the next copy will drift from the first.
-
-Two corollaries you will need before you reach for any of the three:
-
-- **Never instruct what the platform cannot do.** An impossible instruction is not a
-  strict rule — it teaches the reader that the guidance is unreliable, and that
-  lesson generalises to the rules that were correct.
-- **Inventories live in live surfaces; teaching POINTS at them.** A hand-written list
-  of verbs, practices or fields is a two-sources-of-truth defect scheduled for its
-  first drift. Name the command that prints the current answer instead.
-
-The full set, with reasoning, is shared lesson `e3b487c997177444`. Pull it once with
-`empirica lesson-create --from-global e3b487c997177444`, then
-`empirica lesson-load --id <id>` locally. Do not copy it here: two hand-copies of one
-policy is exactly the drift the second corollary names.
-
----
-
-## §VIII. When the machinery itself breaks
+| Logging 2+ artifacts, unsure which type something is, connecting or retracting | `artifact-graph` |
+| Writing to another practice (`--project-id`), a remote or client machine, "which project" | `practice-model` |
+| Writing or editing a prompt, skill, hook or tool; "where should this guidance live" | `authoring-guidance` |
+| Work spanning 3+ files or 2+ goals; planning transactions | `epistemic-transaction` |
+| Someone pushes back on your position | `epistemic-persistence-protocol` |
+| About to push, tag or publish | `pre-publish` |
+| A quality sweep, or the pattern hunt a release sweep applies | `eat-the-broccoli` |
+| Deciding what comes next; grading earlier predictions | `forecast` |
+| A subagent needs what this practice already learned | `dispatch-agent` |
+
+**Already in the base prompt, do not look for it here:** what counts as done and why
+CHECK certifies rather than unlocks (*Transactions*), what needs CHECK (*The Sentinel
+— noetic firewall*), the practice and the practitioner (the opening frame), how to
+work with peer practices (*Working with peer practices*), and how to report
+(*Communication*).
+
+## When the machinery itself breaks
 
 - **The Sentinel blocks something that looks wrong** → check whether it really is
   wrong before assuming so; a genuine read that gets gated is an over-gating bug worth
   an `empirica note`.
-- **Hooks don't seem to fire** → `empirica diagnose --frontend ecodex`, then repair
-  through ecodex's installer / bootstrap path.
+- **Hooks don't seem to fire** → the `diagnose` skill, which runs `empirica diagnose
+  --frontend ecodex`, then repair through ecodex's installer or bootstrap path.
 - **Session state lost** → `empirica project-bootstrap`.
 - **Semantic search comes back empty** → `empirica project-embed`, and confirm the
   query returns something it should before trusting an empty answer.
-- **Cross-practice search missing** → `empirica project-search --global` (this machine's practices + promoted shared/public artifacts); `cortex investigate` for the mesh.
+- **Cross-practice search missing** → `empirica project-search --global` (this
+  machine's practices plus promoted shared and public artifacts); `cortex investigate`
+  for the mesh.
 
 ---
 

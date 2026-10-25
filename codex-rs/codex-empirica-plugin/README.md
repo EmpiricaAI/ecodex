@@ -70,7 +70,7 @@ codex's plugin manifest has no field for either.
 | Surface | Contents |
 |---|---|
 | `hooks` | `hooks.json` — the wiring above |
-| `skills` | `skills/`: `code-audit`, `code-docs-align`, `diagnose`, `dispatch-agent`, `eat-the-broccoli`, `empirica-constitution`, `epistemic-persistence-protocol`, `epistemic-transaction`, `ewm-interview`, `forecast`, `onboard`, `pre-publish`, `render` (`docs/ecodex/api/skills.md`) |
+| `skills` | `skills/`: `artifact-graph`, `authoring-guidance`, `code-audit`, `code-docs-align`, `diagnose`, `dispatch-agent`, `eat-the-broccoli`, `empirica-constitution`, `epistemic-persistence-protocol`, `epistemic-transaction`, `ewm-interview`, `forecast`, `onboard`, `practice-model`, `pre-publish`, `render` (`docs/ecodex/api/skills.md`) |
 | `mcpServers` | `mcp_servers.json` registers `empirica-mcp`. The shipped config turns it **off** (`[plugins."empirica@empiricaAI".mcp_servers.empirica] enabled = false`): it only wraps the empirica CLI, which ecodex runs directly. Enable it for a front end without a shell (`docs/ecodex/api/mcp.md`) |
 | `statusline` | `hooks_scripts/scripts/statusline_empirica.py` (`docs/ecodex/api/plugin-statusline.md`) |
 | `writableRoots` | `["~/.empirica"]` — see below |

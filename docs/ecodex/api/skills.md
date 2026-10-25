@@ -6,16 +6,19 @@ into the plugin binary, so every ecodex release ships the set it was built with.
 
 ## Registered skills
 
-Thirteen skills. Eleven come from the Claude Code empirica plugin: ten were adapted
-in place for a model-agnostic host, and `eat-the-broccoli` is carried verbatim
-because its catalog is written for any host. `diagnose` and `onboard` are ecodex's
-own.
+Sixteen skills. Fourteen come from the Claude Code empirica plugin: thirteen were
+adapted in place for a model-agnostic host, and `eat-the-broccoli` is carried
+verbatim because its catalog is written for any host. `diagnose` and `onboard` are
+ecodex's own.
 
 | Skill | Pinned | Purpose |
 |---|---|---|
-| `empirica-constitution` | yes | Operational governance — routes situations to the right Empirica mechanism |
 | `epistemic-transaction` | yes | Plan multi-step work as measured PREFLIGHT→CHECK→POSTFLIGHT transactions |
 | `epistemic-persistence-protocol` | yes | Hold positions under pushback with calibrated backbone |
+| `empirica-constitution` | | Index: routes each moment to the Empirica skill that covers it, plus recovery steps when the machinery breaks |
+| `artifact-graph` | | Typing, connecting and retracting artifacts: type collapse, split before you log, provenance and visibility, orphans, the cognitive immune system |
+| `practice-model` | | Which practice work belongs to: `--project-id`, remote or client machines, the entity registry, practice versus repository |
+| `authoring-guidance` | | Where guidance belongs (tool, skill or prompt) and the rules for writing it |
 | `code-audit` | | Structured code-quality investigation producing Empirica artifacts |
 | `code-docs-align` | | Verify docs, docstrings, comments and ref-docs match the code |
 | `dispatch-agent` | | Spawn subagents with inherited Empirica context |
