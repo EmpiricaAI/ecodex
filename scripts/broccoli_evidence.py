@@ -38,6 +38,7 @@ _TEST_RESULT = re.compile(
 # a binary killed by a signal.
 _TARGET_FAILED = re.compile(r"^error: (?:test|doctest) failed, to rerun pass", re.MULTILINE)
 _TARGETS_FAILED = re.compile(r"^error: (\d+) targets? failed:", re.MULTILINE)
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _SIGNALLED = re.compile(r"process didn't exit successfully: .*\(signal: ")
 # rustc's closing lines, which arrive as diagnostics with no span; any other spanless warning (an
 # unknown lint) is a finding.
@@ -141,6 +142,7 @@ def cargo_test_counts(output: str, cargo_status: int) -> dict | None:
     when more targets failed than printed a FAILED result (a binary that crashed or was killed never
     prints one, so its tests would be missing from the counts).
     """
+    output = _ANSI.sub("", output)  # CARGO_TERM_COLOR=always colours `error:` and the result word
     matches = list(_TEST_RESULT.finditer(output))
     if not matches:
         return None

@@ -55,10 +55,10 @@ _NOT_A_SENTENCE_END = r"(?<!e\.g)(?<!i\.e)(?<!\bvs)(?<!\betc)(?<!\bDr)(?<!\bMr)(
 _SENTENCE = re.compile(r"(.+?" + _NOT_A_SENTENCE_END + r"[.!?])(?:\s|$)")
 _NEW_HEADING = re.compile(r"^## What[’']s New in ")
 _COMING_HEADING = re.compile(r"^## What[’']s Coming\s*$")
-# Any heading that names the sections, at any level, so a stale variant elsewhere is refused rather
-# than left beside the new block.
-_COMING_ANY = re.compile(r"^#{1,6} What[’']s Coming\b", re.IGNORECASE)
-_NEW_ANY = re.compile(r"^#{1,6} What[’']s New\b", re.IGNORECASE)
+# A top-level heading in the generated sections' shape, so a stale copy or variant elsewhere is
+# refused rather than left beside the new block; other headings that merely mention them are prose.
+_COMING_ANY = re.compile(r"^#{1,2} What[’']s Coming\b")
+_NEW_ANY = re.compile(r"^#{1,2} What[’']s New in ")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _ANY_TOP_HEADING = re.compile(r"^#{1,2} ")
 _FENCE = re.compile(r"^\s*(```|~~~)")
@@ -409,6 +409,14 @@ def items_past_horizon(roadmap: dict, version: str) -> list[dict]:
     ]
 
 
+def _as_record(revisions: list) -> list:
+    """Revisions as compared across releases: an unquoted date YAML reads equals it quoted."""
+    return [
+        {k: str(v) if k == "on" else v for k, v in r.items()} if isinstance(r, dict) else r
+        for r in revisions
+    ]
+
+
 def roadmap_silent_edits(released: dict, current: dict) -> list[str]:
     """What changed against the last RELEASED roadmap without leaving a trace, one message per
     problem.
@@ -432,22 +440,33 @@ def roadmap_silent_edits(released: dict, current: dict) -> list[str]:
             )
             continue
         old_revisions, revisions = old.get("revisions") or [], item.get("revisions") or []
-        if revisions[: len(old_revisions)] != old_revisions:
+        if _as_record(revisions[: len(old_revisions)]) != _as_record(old_revisions):
             problems.append(
                 f"{old['id']}: revisions released earlier were edited; they are the record, append "
                 f"a new one instead"
             )
             continue
+        # Each new revision starts where the record stood: the released confidence, then the one
+        # before it.
+        start_from = old.get("confidence")
+        for revision in revisions[len(old_revisions) :]:
+            if revision.get("from") != start_from:
+                problems.append(
+                    f"{old['id']}: a new revision starts from {revision.get('from')!r}, but the "
+                    f"confidence it revises was {start_from!r}"
+                )
+                break
+            start_from = revision.get("to")
+        # Only fields the released copy has are compared: one a later rule introduced was never
+        # released, so adding it is no edit.
         if old.get("status", "predicted") != "predicted":
-            rewritten = sorted(k for k in {*old, *item} if old.get(k) != item.get(k))
+            rewritten = sorted(k for k in old if old.get(k) != item.get(k))
             if rewritten:
                 problems.append(
                     f"{old['id']}: {', '.join(rewritten)} changed on an item that was already "
                     f"{old['status']}"
                 )
             continue
-        # Only fields the released copy has are compared: one a later rule introduced was never
-        # released, so adding it is no edit.
         if "steered" in old and old.get("steered") != item.get("steered"):
             problems.append(
                 f"{old['id']}: steered changed from {old.get('steered')!r} to "
@@ -461,12 +480,6 @@ def roadmap_silent_edits(released: dict, current: dict) -> list[str]:
                 problems.append(
                     f"{old['id']}: {', '.join(changed)} changed with no new revision; append one "
                     f"under `revisions` saying why"
-                )
-            elif revisions[len(old_revisions)].get("from") != old.get("confidence"):
-                problems.append(
-                    f"{old['id']}: the new revision starts from "
-                    f"{revisions[len(old_revisions)].get('from')!r}, "
-                    f"but the released confidence was {old.get('confidence')!r}"
                 )
         else:
             problems.append(
@@ -515,6 +528,11 @@ def replace_whats_new_block(readme: str, block: str) -> str:
                 end = i
         elif _ANY_TOP_HEADING.match(line) and not _COMING_HEADING.match(line):
             end = i
+            # The heading that ends the span can itself be a stale copy or variant.
+            if _COMING_ANY.match(line):
+                coming_elsewhere.append(i)
+            elif _NEW_ANY.match(line):
+                new_elsewhere.append(i)
     if start is None:
         raise ValueError("no `## What's New in …` heading found")
     if new_elsewhere:

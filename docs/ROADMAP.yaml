@@ -29,7 +29,7 @@ items:
     confidence: 0.8
     evidence: reviewed
     basis: Reviewed in the docs. Since core 1.14.14 the constitution skill became an index over three new skills, Shared Epistemic Records were removed in favour of proposals with several targets, and a forecasting skill was added; some ecodex docs pages still describe the earlier state.
-    falsifier: At the 0.165.0 tag, the README or a page under docs/ecodex describes a skill, a framework skill or a coordination mechanism that the bundled skills and vendored hooks in that tag do not have, Shared Epistemic Records included.
+    falsifier: At the 0.165.0 tag, the README or a page under docs/ecodex names a skill or framework skill that is not bundled in that tag, leaves a bundled skill out of a list that presents itself as complete, or describes Shared Epistemic Records as a mechanism ecodex still uses.
     horizon: "0.165.0"
     steered: true
     status: predicted
@@ -73,7 +73,7 @@ items:
     confidence: 0.75
     evidence: measured
     basis: Measured on a development build of core. After ecodex's quality sweep wrote its files, a POSTFLIGHT graded code quality and the owned-crate tests from them. Core's reader is not in a release yet; core cut eight releases in the two weeks to 26 October.
-    falsifier: With ecodex 0.165.1 and the newest released empirica core installed, running scripts/broccoli.sh and then a POSTFLIGHT reports no code-quality source.
+    falsifier: With ecodex 0.165.1 and the newest released empirica core installed, running scripts/broccoli.sh and then a POSTFLIGHT reports no code-quality source or no test source.
     horizon: "0.165.1"
     steered: true
     status: predicted

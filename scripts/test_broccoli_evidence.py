@@ -232,3 +232,18 @@ def test_a_crashed_binary_beside_a_failing_one_measured_nothing():
         "error: 1 target failed:\n    `-p codex-empirica-plugin --lib`\n"
     )
     assert be.cargo_test_counts(one_failure, 101)["failed"] == 1
+
+
+def test_colored_cargo_output_is_read_like_plain_output():
+    esc = "\x1b[0m\x1b[1m\x1b[91m"
+    colored = (
+        f"test result: {esc}FAILED\x1b[0m. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered "
+        f"out\n"
+        f"{esc}error\x1b[0m\x1b[1m: test failed, to rerun pass `-p codex-empirica-plugin --lib`\n"
+        f"{esc}error\x1b[0m\x1b[1m: test failed, to rerun pass `-p codex-empirica-plugin --test "
+        f"all`\n"
+    )
+    assert (
+        be.cargo_test_counts(colored, 101) is None
+    )  # two targets failed, one FAILED result: one binary died
+    assert be.cargo_test_counts(colored.rsplit(f"{esc}error", 1)[0], 101)["failed"] == 1

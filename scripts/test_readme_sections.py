@@ -290,3 +290,53 @@ def test_replace_block_refuses_a_second_whats_new_or_a_coming_variant():
     variant = README.replace("## Install", "## Install\n\n## What's Coming next\n\nstale forecast")
     with pytest.raises(ValueError, match="outside the What's New block"):
         rs.replace_whats_new_block(variant, "## What's New in 0.2.0")
+
+
+def test_a_stale_copy_right_after_the_block_is_refused():
+    stale_new = README.replace("## Install", "## What's New in 0.0.9\n\n- stale\n\n## Install")
+    with pytest.raises(ValueError, match="second What's New"):
+        rs.replace_whats_new_block(stale_new, "## What's New in 0.2.0")
+    stale_coming = README.replace("## Install", "## What's Coming next\n\nstale\n\n## Install")
+    with pytest.raises(ValueError, match="outside the What's New block"):
+        rs.replace_whats_new_block(stale_coming, "## What's New in 0.2.0")
+
+
+def test_an_ordinary_heading_mentioning_whats_new_is_left_alone():
+    other = README.replace(
+        "## Install", "## Install\n\n### What's new compared with upstream codex\n\nprose"
+    )
+    out = rs.replace_whats_new_block(other, "## What's New in 0.2.0")
+    assert "### What's new compared with upstream codex\n\nprose" in out
+
+
+def test_a_resolved_item_compares_only_the_fields_it_was_released_with():
+    old = {k: v for k, v in _item(status="shipped", resolved_in="0.2.0").items() if k != "steered"}
+    released = {"items": [old]}
+    assert (
+        rs.roadmap_silent_edits(released, _roadmap(_item(status="shipped", resolved_in="0.2.0")))
+        == []
+    )
+
+
+def test_new_revisions_chain_from_the_released_confidence_even_without_a_field_change():
+    released = _roadmap(_item(confidence=0.6))
+    current = copy.deepcopy(released)
+    current["items"][0]["revisions"] = [{"on": "2026-10-27", "from": 0.9, "to": 0.6, "reason": "x"}]
+    assert any("starts from 0.9" in p for p in rs.roadmap_silent_edits(released, current))
+    chained = copy.deepcopy(released)
+    chained["items"][0]["confidence"] = 0.5
+    chained["items"][0]["revisions"] = [
+        {"on": "2026-10-27", "from": 0.6, "to": 0.55, "reason": "x"},
+        {"on": "2026-10-28", "from": 0.4, "to": 0.5, "reason": "y"},
+    ]
+    assert any("starts from 0.4" in p for p in rs.roadmap_silent_edits(released, chained))
+
+
+def test_quoting_a_released_revision_date_is_not_an_edit():
+    import datetime
+
+    rev = {"on": datetime.date(2026, 10, 27), "from": 0.7, "to": 0.6, "reason": "x"}
+    released = _roadmap(_item(confidence=0.6, revisions=[rev]))
+    current = copy.deepcopy(released)
+    current["items"][0]["revisions"][0]["on"] = "2026-10-27"
+    assert rs.roadmap_silent_edits(released, current) == []

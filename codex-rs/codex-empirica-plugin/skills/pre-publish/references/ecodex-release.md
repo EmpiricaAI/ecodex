@@ -54,8 +54,9 @@ started yet". `scripts/release.sh` already passes `--repo` for the same reason.
    workspace version, refreshes `Cargo.lock`, rolls the changelog's `[Unreleased]`
    section, renders README's What's New and What's Coming for the new version,
    commits, tags, pushes, and publishes the owned crates. Before that, write a
-   `### Highlights` block under `[Unreleased]` and garden `docs/ROADMAP.yaml`
-   (the forecast skill's gardening pass): before it bumps anything the script stops
+   `### Highlights` block under `[Unreleased]` (without one, What's New falls back
+   to the entries' bold titles) and garden `docs/ROADMAP.yaml` (the forecast
+   skill's gardening pass): before it bumps anything the script stops
    if the README is stale, the roadmap is invalid or was edited without a
    revision, or `[Unreleased]` does not render, and it warns about items past their
    horizon. `--dry-run` runs the same checks, so run it first. cargo reads the
