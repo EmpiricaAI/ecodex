@@ -36,7 +36,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # rust-toolchain.toml pins channel 1.95.0 + clippy/rustfmt/rust-src;
+      # rust-toolchain.toml pins the channel + clippy/rustfmt/rust-src;
       # `rustup show` (run inside codex-rs) installs the pinned toolchain.
       - name: Install pinned Rust toolchain
         run: rustup show
