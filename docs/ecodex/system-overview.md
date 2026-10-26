@@ -12,7 +12,7 @@ concerns that we build, integrate and ship as a single product:
 |---|---|---|
 | **L1 — codex foundation** | The agent runtime, TUI, sandbox, app-server, RPC protocol, MCP machinery, plugin and hook hosts. Forked from `openai/codex`. | Upstream codex maintainers, and us (we PR fixes back). |
 | **L2 — empirica integration** | The discipline wiring: the plugin that routes codex's hook events to Empirica's Sentinel, transaction and calibration hooks, the base prompt, and the startup provisioning that installs it all. | Us. |
-| **L3 — ecodex-specific code** | The wire-protocol translator, curated providers and the model registry, the mesh listener and `Monitor` tool, provider hot-swap, installers, branding. Net-new code with no upstream counterpart. | Us. |
+| **L3 — ecodex-specific code** | The wire-protocol translator, curated providers and the model registry, the mesh listener and `monitor` tool, provider hot-swap, installers, branding. Net-new code with no upstream counterpart. | Us. |
 
 This doc walks each layer, then traces a session through all three.
 
@@ -37,10 +37,11 @@ This doc walks each layer, then traces a session through all three.
   `writableRoots`.
 - **Hook system** (`codex-rs/hooks`): the events plugins subscribe to
   (`PreToolUse`, `PostToolUse`, `SessionStart`, `UserPromptSubmit`, `Stop`,
-  compaction, subagent and session-end events).
+  model-request, compaction, subagent, permission, interrupt and session-end
+  events).
 - **CLI** (`codex-rs/cli`): the binary entrypoint, branded `ecodex`.
-- **SDKs** (`sdk/python`, `sdk/python-runtime`): Python SDKs for programmatic
-  use.
+- **SDKs** (`sdk/python`, `sdk/python-runtime`, `sdk/typescript`): SDKs for
+  programmatic use.
 
 ### Where it lives
 
@@ -48,7 +49,8 @@ This doc walks each layer, then traces a session through all three.
 codex-rs/            # the Rust workspace: about 160 crates, almost all upstream
 sdk/python/          # Python SDK (upstream)
 sdk/python-runtime/  # Python runtime (upstream)
-codex-cli/           # upstream npm wrapper (ecodex publishes its own under npm/)
+sdk/typescript/      # TypeScript SDK (upstream)
+codex-cli/           # upstream npm wrapper (ecodex's own, under npm/, is not published yet)
 docs/                # mostly upstream codex docs; ours are in docs/ecodex/
 ```
 
@@ -80,12 +82,15 @@ self-assessment against evidence.
 
 **As a library**, linked into `ecodex`, it carries the plugin's assets
 (`manifest.json`, `hooks.json`, `mcp_servers.json`, `skills/`, the vendored
-hooks and agents, the default config and translator routes). On every
-interactive, `exec`, resume or fork start, `provision()` writes them to
-`~/.codex/plugins/cache/empiricaAI/empirica/<version>/` when missing or out of
-date, enables `empirica@empiricaAI` in `config.toml` (unless the user set
-`enabled = false`), migrates the old `empirica@nubaeon` key, and writes
-`config.toml` and `translator-upstreams.toml` when none exist.
+hooks and agents, the text of the AGENTS.md block in
+`assets/empirica-system-prompt.md`, the default config and translator routes).
+On every interactive, `exec`, resume or fork start, `provision()` writes the
+plugin to `~/.codex/plugins/cache/empiricaAI/empirica/<version>/` when missing
+or out of date (the manifest lands as `.codex-plugin/plugin.json`), enables
+`empirica@empiricaAI` in `config.toml` (unless the user set `enabled = false`),
+migrates the old `empirica@nubaeon` key, and writes `config.toml`,
+`huggingface.config.toml` and `translator-upstreams.toml` into `~/.codex/` when
+they do not exist.
 
 **As a binary**, `codex-empirica-plugin`, it is the hook host codex runs for each
 event in `hooks.json`. It runs the matching vendored Python hook with the
@@ -108,14 +113,16 @@ boundary for the hooks; the only other child processes the plugin spawns are
 | `PreCompact` / `PostCompact` | `pre-compact`, `post-compact` | Carries epistemic state across a compaction |
 | `SessionEnd`, `TaskCompleted`, `SubagentStart` / `SubagentStop` | `session-end-postflight`, `task-completed`, `subagent-*` | Closes the measurement loop; ties tasks and subagents to Empirica goals |
 
-`PermissionRequest` and `Interrupt` have no `hooks.json` entry. The binary
-accepts a `permission-request` subcommand as a no-op, so an entry can be added
-without a new handler.
+codex declares sixteen hook events and `hooks.json` wires the twelve above.
+`PermissionRequest`, `Interrupt`, `PreModelRequest` and `PostModelRequest` have
+no entry. The binary accepts a `permission-request` subcommand as a no-op, so
+that entry can be added without a new handler.
 
 **Why a subprocess per hook.** Empirica's Python stays canonical, and a hook
-behaves exactly as it does under Claude Code. The cost is 30–270 hook fires per
-session at roughly 100–300 ms each, a 1–15% overhead. An in-process or sidecar
-path becomes worth it only if that latency proves unacceptable in real use.
+behaves exactly as it does under Claude Code. The cost is one Python process
+per hook fire, several of them at session start; it has not been measured
+against the current hook set. An in-process or sidecar path becomes worth it
+only if that latency proves unacceptable in real use.
 
 ### The base prompt
 
@@ -127,9 +134,11 @@ to diff against on each re-sync.
 
 ### Skills, agents and MCP
 
-- **`skills/`** — Empirica skills ported for codex (constitution, epistemic
-  transaction, persistence protocol, onboarding interview, code audit and
-  others), discoverable through codex's plugin skills.
+- **`skills/`** — Empirica's skills for codex, discoverable through codex's
+  plugin skills. Two are framework skills (`pinned: true`) the model reads early:
+  `epistemic-transaction` and `epistemic-persistence-protocol`. The rest load
+  when their moment comes, routed by the `empirica-constitution` index;
+  [`api/skills.md`](api/skills.md) lists them all.
 - **`assets/agents/`** — Empirica's subagents (architecture, security, ux,
   performance, and the outreach scout, search and fact-scorer), seeded at
   `SessionStart` for codex's agent tool.
@@ -161,9 +170,10 @@ requests and forwards them through a Canonical Intermediate Format (CIF) and
 per-protocol adapters.
 
 - Routes by model name from `~/.codex/translator-upstreams.toml` (written on
-  first start with routes for Mistral, DeepSeek, Qwen, GLM and Kimi); keys come
-  from the environment or `~/.empirica/credentials.yaml`, and a route without a
-  key is skipped.
+  first start with routes for Mistral, DeepSeek, Qwen, GLM, Kimi and Moonshot
+  over Chat Completions, and Claude over Anthropic Messages); keys come from the
+  environment or `~/.empirica/credentials.yaml`, and a route without a key is
+  skipped.
 - Retries a provider's rate limit (429) itself, honouring `Retry-After`.
 - Repairs tool-call arguments chat models produce but codex rejects
   (`tool_args.rs`).
@@ -188,10 +198,11 @@ per-protocol adapters.
 ### Mesh
 
 - **ntfy listener** (`codex-rs/core/src/ntfy_listener.rs`): holds an
-  authenticated ntfy stream and turns each ECO-decided proposal event into a
-  session wake. It is transport only; the woken model fetches the content with
-  the `empirica mailbox` CLI or the Cortex MCP tools.
-- **`Monitor` tool** (`codex-rs/core/src/tools/handlers/monitor.rs`): lets the
+  authenticated ntfy stream for this practice and, on each notification, runs
+  `empirica mailbox poll` and wakes the session with the waiting messages
+  inlined. The model reads a message's full body with `empirica mailbox show`
+  and replies with `empirica mailbox reply`.
+- **`monitor` tool** (`codex-rs/core/src/tools/handlers/monitor.rs`): lets the
   model watch a background stream and be woken by its events.
 - [`cross-ai-mesh.md`](cross-ai-mesh.md) covers the design.
 
@@ -214,8 +225,8 @@ mark into the OpenAI one.
   binaries, installs them behind `ecodex/scripts/ecodex-wrapper.sh`, per user
   or, with `--system`, under `/usr/local`. The wrapper exports `CORTEX_API_KEY`
   from the empirica credentials when present — only needed by the static-key
-  fallback for the Cortex MCP server; the default setup authenticates through
-  `empirica auth token --headers`. `uninstall.sh` reverses it.
+  fallback for the Cortex MCP server, which the documented setup authenticates
+  through `empirica auth token --headers` instead. `uninstall.sh` reverses it.
 
 ### Empirica chat
 
@@ -265,7 +276,8 @@ L3     codex → translator :18080 → CIF → provider's protocol → back as R
    │
    │   a peer proposal arrives
    ▼
-L3     ntfy listener wakes the session; the model reads the proposal over Cortex MCP
+L3     ntfy listener polls the mailbox and wakes the session with the messages;
+       the model reads one in full with `empirica mailbox show`
    │
    ▼
 L2     Stop → transaction-enforcer.py; SessionEnd → session-end-postflight.py
@@ -290,14 +302,15 @@ ecodex/                                   # repo root
 │   │   ├── skills/                       # Empirica skills for codex
 │   │   ├── assets/hooks_scripts/         # vendored Empirica hooks (setup-codex.py)
 │   │   ├── assets/agents/                # vendored Empirica subagents
-│   │   ├── assets/config/                # default config.toml + translator routes
-│   │   ├── tests/vendored_hooks/         # pytest against a real empirica
-│   │   └── src/                          # provision, empirica_cli, translate_output, hooks/
+│   │   ├── assets/config/                # default config.toml, Hugging Face profile, translator routes
+│   │   ├── assets/empirica-system-prompt.md  # the AGENTS.md block SessionStart writes
+│   │   ├── tests/                        # vendored_hooks/ (pytest against a real empirica), fresh_practice_bootstrap.sh
+│   │   └── src/                          # provision, empirica_cli, translate_output, agents_md, subagents, practice_bootstrap, hooks/
 │   └── codex-empirica-translator/        # L3: Responses ↔ Chat/Anthropic bridge
 ├── ecodex/                               # source-build installer and wrapper
-├── scripts/                              # install.sh, release.sh, sync-homebrew.sh, setup-codex.py, CI guards
+├── scripts/                              # install.sh, release.sh, sync-homebrew.sh, setup-codex.py, broccoli.sh, readme_sections.py, CI guards
 ├── packaging/homebrew/                   # the Homebrew formula
-├── npm/                                  # the ecodex npm package
+├── npm/                                  # the ecodex npm package (not published yet)
 └── docs/ecodex/                          # ecodex docs: this file, api/, integrations/, specs/
 ```
 
