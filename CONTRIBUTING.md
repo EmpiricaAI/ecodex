@@ -33,7 +33,7 @@ The source installer builds the release binaries (`ecodex`, `codex-empirica-plug
 
 ### Iterate on the empirica plugin (L2)
 
-The plugin lives at `codex-rs/codex-empirica-plugin/`. It is a library and a binary: the `ecodex` binary embeds the plugin's assets (hooks, skills, agents, `hooks.json`, the default config) and writes them to `~/.codex/plugins/cache/empiricaAI/empirica/` on startup; codex then runs the `codex-empirica-plugin` binary for each hook event, which runs the Python hook with the interpreter of the `empirica` CLI on PATH.
+The plugin lives at `codex-rs/codex-empirica-plugin/`. It is a library and a binary: the `ecodex` binary embeds the plugin's assets (hooks, skills, agents, `hooks.json`, the default config) and on startup writes the plugin to `~/.codex/plugins/cache/empiricaAI/empirica/` and any missing default config files to `~/.codex/`; codex then runs the `codex-empirica-plugin` binary for each hook event, which runs the Python hook with the interpreter of the `empirica` CLI on PATH.
 
 ```sh
 cd codex-rs
@@ -71,6 +71,8 @@ codex speaks only the Responses API. A provider that serves it is reached direct
 
 ### Checks to run
 
+`./scripts/broccoli.sh` is the one-command sweep of what ecodex owns: rustfmt, clippy with no warnings allowed, the owned-crate tests, the drift guards and the vendored-hook tests (`--quick` runs only the first three). When the checkout has an `.empirica/` directory it also writes the code-quality and test evidence Empirica's POSTFLIGHT grades from. The pieces, to run one at a time:
+
 ```sh
 cd codex-rs && just fmt                      # format
 just test -p <crate>                         # the crate you changed
@@ -78,11 +80,16 @@ just fix -p <crate>                          # clippy fixes, scoped
 cd .. && python3 scripts/check_vendored_firewall.py
 python3 scripts/check_upstream_sync_tag.py
 python3 scripts/check_empirica_core_pin.py
-python -m pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks/   # needs empirica importable
+python3 scripts/readme_sections.py --check   # README's What's New / What's Coming against CHANGELOG + docs/ROADMAP.yaml
+python -m pytest scripts/test_readme_sections.py scripts/test_broccoli_evidence.py \
+  scripts/test_check_upstream_sync_tag.py scripts/test_check_empirica_core_pin.py   # the scripts' tests CI runs
+python -m pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -p no:empirica   # needs empirica importable
 empirica compliance-report                   # lint, complexity, tests, docs, repo hygiene
 ```
 
-`ruff.toml` at the repo root scopes Python lint to the code ecodex owns, so `compliance-report` does not report upstream's lint debt. [`AGENTS.md`](AGENTS.md) holds the full Rust conventions.
+`ruff.toml` at the repo root scopes Python lint to the code ecodex owns, so `compliance-report` does not report upstream's lint debt. A change to `.github/workflows/ci.yml` or `release.yml` is linted with `actionlint` before it is pushed. [`AGENTS.md`](AGENTS.md) holds the full Rust conventions.
+
+README's What's New and What's Coming are generated: edit `CHANGELOG.md` (a `### Highlights` block under `[Unreleased]`) and `docs/ROADMAP.yaml`, then run `python3 scripts/readme_sections.py`. A released forecast item changes only through a dated entry under its `revisions`.
 
 ### Running the `codex-core` integration suite (`core::all`)
 
@@ -138,20 +145,27 @@ Blank issues are disabled. Discussion about the broader Empirica framework goes 
 
 `.github/workflows/ci.yml` runs on every PR and every push to `main`:
 
-- build and test of the owned crates (`codex-empirica-plugin`, `codex-empirica-translator`) and the Hugging Face integration contract
+- build and test of the owned crates (`codex-empirica-plugin`, `codex-empirica-translator`), a compile check of the shipped `ecodex` binary, and the Hugging Face integration contract
 - the drift guards: vendored firewall invariants, `UPSTREAM_SYNC_TAG` against the workspace version, and the empirica ref against the vendored commit
-- the vendored-hook tests, run against the exact empirica commit the hooks came from
+- `actionlint` over the workflows ecodex owns
+- the vendored-hook tests, run against the exact empirica commit the hooks came from, and the scripts' own tests
+- README's generated sections against `CHANGELOG.md` and `docs/ROADMAP.yaml`, with the forecast compared to the one in the last release tag
 
 Upstream codex's own test suites are out of scope for ecodex CI. Upstream's workflows are kept under `.github/workflows-upstream/` for reference when syncing.
 
 ## Releases
 
-ecodex versions keep upstream's major.minor and count releases in the patch number, so a release on the current base is a patch bump. The flow:
+ecodex versions keep upstream's major.minor and count releases in the patch number, so a release on the current base is a patch bump. Releases are cut by maintainers, and only on the owner's go for that version.
 
-1. `./scripts/release.sh --explicit <version> --push --publish-crates` — bumps the workspace version, refreshes `Cargo.lock`, rolls `CHANGELOG.md`'s `[Unreleased]` section, commits, tags, pushes, and publishes the owned crates (needs a crates.io token). `--dry-run` shows every step; `--gate-all` adds build, test and clippy gates before the commit.
-2. The tag push runs `.github/workflows/release.yml`, which builds the four release targets (Linux and macOS, x86_64 and aarch64) and attaches them to the GitHub release. The macOS builds take the longest.
-3. When the builds are attached, `scripts/sync-homebrew.sh <version> --tap <homebrew-tap checkout>` updates the Homebrew formula; commit and push it in the tap.
-4. `./scripts/release.sh --explicit <version> --force-version --skip-commit --skip-tag --skip-changelog --verify-install` installs the published release into a scratch prefix and checks that it is a working, integrated ecodex: the right version, the plugin and its config written on first start, and the companion binaries.
+The procedure is [`codex-rs/codex-empirica-plugin/skills/pre-publish/references/ecodex-release.md`](codex-rs/codex-empirica-plugin/skills/pre-publish/references/ecodex-release.md), the ecodex steps of the bundled `pre-publish` skill; follow it rather than this summary. In outline:
+
+1. **Gates.** `./scripts/broccoli.sh`, a drift check of the vendored hooks with `scripts/setup-codex.py`, and an independent read-only review of the changes since the last tag.
+2. **Stamp the README's latest-release link**, push, and wait for CI on that commit by its run id.
+3. **`./scripts/release.sh`** bumps the version, rolls the changelog, renders README's What's New and What's Coming, commits, tags, pushes and publishes the owned crates. Run it with `--dry-run` first: before it bumps anything it stops on a stale README, an invalid or silently edited forecast, or an `[Unreleased]` block that will not render.
+4. **Wait for the release run** (`release.yml`, four targets) and for CI on the release commit, each by run id.
+5. **Check the archives** by downloading each one and hashing it against its `.sha256`.
+6. **Verify the install** of the published release with `release.sh --verify-install`, before the tap is pushed.
+7. **Homebrew:** `scripts/sync-homebrew.sh` fills the formula; push the tap, then commit the filled formula on `main`.
 
 ## Security disclosures
 
