@@ -15,8 +15,10 @@ started yet". `scripts/release.sh` already passes `--repo` for the same reason.
 ## Gates (the skill's steps 2 to 7)
 
 - **`./scripts/broccoli.sh`** is the deterministic tier for what ecodex owns:
-  rustfmt, clippy with `-D warnings`, the owned-crate tests, the vendored-firewall,
-  UPSTREAM_SYNC_TAG and Hugging Face guards, and the vendored-hook suite. Its
+  rustfmt, clippy with no warnings allowed, the owned-crate tests, the vendored-firewall,
+  UPSTREAM_SYNC_TAG and Hugging Face guards, and the vendored-hook suite. It writes
+  `.empirica/code_quality.json` and `.empirica/test_report.json`, which the
+  transaction's POSTFLIGHT grades code quality and tests from. Its
   dependency advisories (cargo audit, deny, machete) are informational because they
   cover upstream's shared graph. Read them anyway: an advisory with a published fix
   in a crate the lockfile can move is a lockfile bump, not a note.

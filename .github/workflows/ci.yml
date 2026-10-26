@@ -139,7 +139,7 @@ jobs:
           # themselves are the bare CI gates above.
           "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
             scripts/test_check_upstream_sync_tag.py scripts/test_check_empirica_core_pin.py \
-            scripts/test_readme_sections.py -q
+            scripts/test_readme_sections.py scripts/test_broccoli_evidence.py -q
 
       # README's What's New / What's Coming are rendered from CHANGELOG.md and
       # docs/ROADMAP.yaml; a hand edit or a forecast changed without a dated

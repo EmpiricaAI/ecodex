@@ -28,6 +28,10 @@
 #   ./scripts/broccoli.sh --no-informational   gating checks only, skip advisories
 #
 # Exit code: 0 iff every GATING check passed. Informational findings never fail it.
+#
+# Evidence: when .empirica/ exists, writes .empirica/code_quality.json (rustfmt_ok,
+# clippy_warnings, clippy_errors) and .empirica/test_report.json (owned-crate
+# cargo test counts), which Empirica's POSTFLIGHT grades the transaction from.
 
 set -uo pipefail
 
@@ -51,6 +55,15 @@ OWNED_PKGS=(-p codex-empirica-plugin -p codex-empirica-translator -p codex-cli)
 # clippy (below) DOES include codex-cli: it's static, auth-independent, passes,
 # and ecodex's user-facing patches live there.
 PURE_PKGS=(-p codex-empirica-plugin -p codex-empirica-translator)
+
+# Evidence for Empirica's POSTFLIGHT (core's "Test evidence (any language)"
+# contract), scoped as below. broccoli_evidence.py writes each file atomically
+# when its step ends and removes it when the step measured nothing, so an older
+# pass cannot stand in for a broken run; without .empirica/ it writes nothing.
+EMPIRICA_DIR="${ECODEX_ROOT}/.empirica"
+EVIDENCE=(python3 "${SCRIPT_DIR}/broccoli_evidence.py")
+QUALITY_SCOPE="owned crates (rustfmt: codex-empirica-plugin, codex-empirica-translator; clippy: those and codex-cli)"
+TEST_SCOPE="owned crates: codex-empirica-plugin, codex-empirica-translator (cargo test, unfiltered)"
 
 QUICK=0
 RUN_INFORMATIONAL=1
@@ -80,6 +93,7 @@ run_gate() {
   else
     red   "  ✗ ${label}"
     GATING_FAILURES+=("${label}")
+    return 1
   fi
 }
 
@@ -94,6 +108,36 @@ run_info() {
   fi
 }
 
+# clippy_gate — lint the owned crates, print each diagnostic once, and count them
+# into code_quality.json. Passes with no warnings and no errors: what -D warnings
+# enforced, but counted across every crate instead of stopping at the first.
+clippy_gate() {
+  local stream status
+  stream="$(mktemp)"
+  env RUST_MIN_STACK=16777216 cargo clippy "${OWNED_PKGS[@]}" --all-targets --no-deps \
+    --message-format=json-diagnostic-rendered-ansi >"${stream}"
+  status=$?
+  "${EVIDENCE[@]}" clippy "${stream}" --cargo-status "${status}" --rustfmt-ok "${RUSTFMT_OK}" \
+    --scope "${QUALITY_SCOPE}" --out "${EMPIRICA_DIR}/code_quality.json"
+  status=$?
+  rm -f "${stream}"
+  return "${status}"
+}
+
+# tests_gate — the owned-crate tests, every binary even after a failure, with the
+# summed counts written to test_report.json.
+tests_gate() {
+  local log status
+  log="$(mktemp)"
+  env RUST_MIN_STACK=16777216 cargo test "${PURE_PKGS[@]}" --no-fail-fast 2>&1 | tee "${log}"
+  status=${PIPESTATUS[0]}
+  "${EVIDENCE[@]}" tests "${log}" --cargo-status "${status}" --scope "${TEST_SCOPE}" \
+    --out "${EMPIRICA_DIR}/test_report.json"
+  status=$?
+  rm -f "${log}"
+  return "${status}"
+}
+
 cd "${CODEX_RS}"
 
 bold "🥦 eat-the-broccoli — ecodex deterministic sweep (owned crates)"
@@ -101,13 +145,14 @@ echo "   scope: ${OWNED_PKGS[*]}"
 echo
 
 # ── GATING: format, lint, tests (things we own) ──────────────────────
-run_gate "rustfmt --check"        cargo fmt --check "${PURE_PKGS[@]}"
+RUSTFMT_OK=false
+run_gate "rustfmt --check"        cargo fmt --check "${PURE_PKGS[@]}" && RUSTFMT_OK=true
 # --no-deps: lint only the owned crates. Without it clippy also lints every
 # upstream workspace crate they depend on (app-server, core, ...), so upstream
 # lint debt under a new toolchain gates ecodex releases (0.164.0 + rustc 1.99.1:
 # one let_and_return in app-server/src/message_processor.rs).
-run_gate "clippy -D warnings"     env RUST_MIN_STACK=16777216 cargo clippy "${OWNED_PKGS[@]}" --all-targets --no-deps -- -D warnings
-run_gate "owned-crate tests"      env RUST_MIN_STACK=16777216 cargo test "${PURE_PKGS[@]}"
+run_gate "clippy (no warnings)"   clippy_gate
+run_gate "owned-crate tests"      tests_gate
 
 if [[ "${QUICK}" -eq 1 ]]; then
   echo
@@ -147,7 +192,10 @@ else
 
   # ── GATING: hermetic vendored-hook suite (needs pytest + empirica) ───
   if python3 -c 'import pytest, empirica' >/dev/null 2>&1; then
-    run_gate "vendored-hook suite" python3 -m pytest "${CODEX_RS}/codex-empirica-plugin/tests/vendored_hooks/" -q
+    # -p no:empirica: pytest's rootdir here is the ecodex root, so core's pytest
+    # plugin would write this suite's counts to .empirica/test_report.json and
+    # replace the owned-crate report written above.
+    run_gate "vendored-hook suite" python3 -m pytest "${CODEX_RS}/codex-empirica-plugin/tests/vendored_hooks/" -q -p no:empirica
   else
     yellow "▶ vendored-hook suite: SKIPPED — pytest or empirica not importable in this interpreter"
     yellow "  (CI runs it in a hermetic venv; not a pass, a skip — install both to gate it here)"
