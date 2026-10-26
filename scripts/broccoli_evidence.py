@@ -38,7 +38,8 @@ _TEST_RESULT = re.compile(
 # a binary killed by a signal.
 _TARGET_FAILED = re.compile(r"^error: (?:test|doctest) failed, to rerun pass", re.MULTILINE)
 _TARGETS_FAILED = re.compile(r"^error: (\d+) targets? failed:", re.MULTILINE)
-_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# Terminal control sequences: CSI (colours, erase line) and OSC (hyperlinks).
+_ANSI = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _SIGNALLED = re.compile(r"process didn't exit successfully: .*\(signal: ")
 # rustc's closing lines, which arrive as diagnostics with no span; any other spanless warning (an
 # unknown lint) is a finding.

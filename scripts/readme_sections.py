@@ -55,10 +55,10 @@ _NOT_A_SENTENCE_END = r"(?<!e\.g)(?<!i\.e)(?<!\bvs)(?<!\betc)(?<!\bDr)(?<!\bMr)(
 _SENTENCE = re.compile(r"(.+?" + _NOT_A_SENTENCE_END + r"[.!?])(?:\s|$)")
 _NEW_HEADING = re.compile(r"^## What[’']s New in ")
 _COMING_HEADING = re.compile(r"^## What[’']s Coming\s*$")
-# A top-level heading in the generated sections' shape, so a stale copy or variant elsewhere is
-# refused rather than left beside the new block; other headings that merely mention them are prose.
-_COMING_ANY = re.compile(r"^#{1,2} What[’']s Coming\b")
-_NEW_ANY = re.compile(r"^#{1,2} What[’']s New in ")
+# A level-1 or level-2 heading in the generated sections' shape, in any case: a stale copy or
+# variant elsewhere is refused rather than left beside the new block. Deeper headings are prose.
+_COMING_ANY = re.compile(r"^#{1,2} What[’']s Coming\b", re.IGNORECASE)
+_NEW_ANY = re.compile(r"^#{1,2} What[’']s New in ", re.IGNORECASE)
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _ANY_TOP_HEADING = re.compile(r"^#{1,2} ")
 _FENCE = re.compile(r"^\s*(```|~~~)")
@@ -417,6 +417,12 @@ def _as_record(revisions: list) -> list:
     ]
 
 
+def _same_field(key: str, old: dict, item: dict) -> bool:
+    if key == "revisions":
+        return _as_record(old.get(key) or []) == _as_record(item.get(key) or [])
+    return old.get(key) == item.get(key)
+
+
 def roadmap_silent_edits(released: dict, current: dict) -> list[str]:
     """What changed against the last RELEASED roadmap without leaving a trace, one message per
     problem.
@@ -460,7 +466,7 @@ def roadmap_silent_edits(released: dict, current: dict) -> list[str]:
         # Only fields the released copy has are compared: one a later rule introduced was never
         # released, so adding it is no edit.
         if old.get("status", "predicted") != "predicted":
-            rewritten = sorted(k for k in old if old.get(k) != item.get(k))
+            rewritten = sorted(k for k in old if not _same_field(k, old, item))
             if rewritten:
                 problems.append(
                     f"{old['id']}: {', '.join(rewritten)} changed on an item that was already "
@@ -496,8 +502,8 @@ def replace_whats_new_block(readme: str, block: str) -> str:
     The span starts at the `## What's New in` heading and ends at the next level-1 or level-2
     heading that is not What's Coming, or at a `---` divider that does not lead into What's Coming,
     or at the end of the file. Headings inside a code fence do not count. Everything outside the
-    span is returned byte for byte. A What's Coming anywhere else is refused, because replacing
-    around it would leave two forecasts.
+    span is returned byte for byte. A level-1 or level-2 What's Coming or What's New in heading
+    anywhere else, in any case, is refused, because replacing around it would leave two copies.
     """
     lines = readme.split("\n")
     in_fence = False
@@ -515,6 +521,8 @@ def replace_whats_new_block(readme: str, block: str) -> str:
                 start = i
             elif _COMING_ANY.match(line):
                 coming_elsewhere.append(i)
+            elif _NEW_ANY.match(line):
+                new_elsewhere.append(i)
             continue
         if end is not None:
             if _COMING_ANY.match(line):
@@ -537,7 +545,7 @@ def replace_whats_new_block(readme: str, block: str) -> str:
         raise ValueError("no `## What's New in …` heading found")
     if new_elsewhere:
         raise ValueError(
-            f"README has a second What's New heading (line {new_elsewhere[0] + 1}) after the one "
+            f"README has a second What's New heading (line {new_elsewhere[0] + 1}) beside the one "
             f"being replaced; remove the stale copy"
         )
     if coming_elsewhere:

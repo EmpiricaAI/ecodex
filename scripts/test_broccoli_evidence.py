@@ -247,3 +247,14 @@ def test_colored_cargo_output_is_read_like_plain_output():
         be.cargo_test_counts(colored, 101) is None
     )  # two targets failed, one FAILED result: one binary died
     assert be.cargo_test_counts(colored.rsplit(f"{esc}error", 1)[0], 101)["failed"] == 1
+
+
+def test_any_terminal_escape_is_stripped_before_reading():
+    noisy = (
+        "test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n"
+        "\x1b[K\x1b[1;31merror\x1b[0m: test failed, to rerun pass `-p codex-empirica-plugin "
+        "--lib`\n"
+        "\x1b]8;;file:///x\x1b\\\x1b[38:5:9merror\x1b[m: test failed, to rerun pass `-p x --test "
+        "all`\n"
+    )
+    assert be.cargo_test_counts(noisy, 101) is None

@@ -340,3 +340,47 @@ def test_quoting_a_released_revision_date_is_not_an_edit():
     current = copy.deepcopy(released)
     current["items"][0]["revisions"][0]["on"] = "2026-10-27"
     assert rs.roadmap_silent_edits(released, current) == []
+
+
+@pytest.mark.parametrize(
+    "stale",
+    [
+        "## What's coming next\n\nstale",  # case variant
+        "# What's Coming\n\nstale",  # level-1 variant
+    ],
+)
+@pytest.mark.parametrize("where", ["before", "after_block", "later"])
+def test_a_second_forecast_is_refused_wherever_it_sits(stale, where):
+    if where == "before":
+        text = README.replace("## What's New in 0.1.0", f"{stale}\n\n## What's New in 0.1.0")
+    elif where == "after_block":
+        text = README.replace("## Install", f"{stale}\n\n## Install")
+    else:
+        text = README.replace("Body.", f"Body.\n\n{stale}")
+    with pytest.raises(ValueError, match="outside the What's New block"):
+        rs.replace_whats_new_block(text, "## What's New in 0.2.0")
+
+
+@pytest.mark.parametrize("where", ["before", "after_block", "later"])
+def test_a_second_whats_new_is_refused_wherever_it_sits(where):
+    stale = "# What's new in 0.0.9\n\n- stale"
+    if where == "before":
+        text = README.replace("## What's New in 0.1.0", f"{stale}\n\n## What's New in 0.1.0")
+    elif where == "after_block":
+        text = README.replace("## Install", f"{stale}\n\n## Install")
+    else:
+        text = README.replace("Body.", f"Body.\n\n{stale}")
+    with pytest.raises(ValueError, match="second What's New"):
+        rs.replace_whats_new_block(text, "## What's New in 0.2.0")
+
+
+@pytest.mark.parametrize("status", ["predicted", "shipped"])
+def test_quoting_a_released_date_is_not_an_edit_in_any_status(status):
+    import datetime
+
+    rev = {"on": datetime.date(2026, 10, 27), "from": 0.7, "to": 0.6, "reason": "x"}
+    extra = {"resolved_in": "0.2.0"} if status != "predicted" else {}
+    released = _roadmap(_item(confidence=0.6, status=status, revisions=[rev], **extra))
+    current = copy.deepcopy(released)
+    current["items"][0]["revisions"][0]["on"] = "2026-10-27"
+    assert rs.roadmap_silent_edits(released, current) == []
