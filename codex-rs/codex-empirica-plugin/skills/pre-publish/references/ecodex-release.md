@@ -17,8 +17,9 @@ started yet". `scripts/release.sh` already passes `--repo` for the same reason.
 - **`./scripts/broccoli.sh`** is the deterministic tier for what ecodex owns:
   rustfmt, clippy with no warnings allowed, the owned-crate tests, the vendored-firewall,
   UPSTREAM_SYNC_TAG and Hugging Face guards, and the vendored-hook suite. It writes
-  `.empirica/code_quality.json` and `.empirica/test_report.json`, which the
-  transaction's POSTFLIGHT grades code quality and tests from. Its
+  `.empirica/code_quality.json` and `.empirica/test_report.json`, which
+  POSTFLIGHT grades code quality and tests from when the installed empirica
+  core reads them. Its
   dependency advisories (cargo audit, deny, machete) are informational because they
   cover upstream's shared graph. Read them anyway: an advisory with a published fix
   in a crate the lockfile can move is a lockfile bump, not a note.
@@ -51,10 +52,16 @@ started yet". `scripts/release.sh` already passes `--repo` for the same reason.
    <full sha>`, then `gh run watch -R EmpiricaAI/ecodex <run id>`.
 2. **`./scripts/release.sh --explicit <version> --push --publish-crates`** bumps the
    workspace version, refreshes `Cargo.lock`, rolls the changelog's `[Unreleased]`
-   section, commits, tags, pushes, and publishes the owned crates. Add `--dry-run`
-   first if anything about the tree is unusual. cargo reads the crates.io token from
-   its own credential store as well as `CARGO_REGISTRY_TOKEN`, so an unset variable
-   does not mean there is no token. Never print the token or write it into a file.
+   section, renders README's What's New and What's Coming for the new version,
+   commits, tags, pushes, and publishes the owned crates. Before that, write a
+   `### Highlights` block under `[Unreleased]` and garden `docs/ROADMAP.yaml`
+   (the forecast skill's gardening pass): before it bumps anything the script stops
+   if the README is stale, the roadmap is invalid or was edited without a
+   revision, or `[Unreleased]` does not render, and it warns about items past their
+   horizon. `--dry-run` runs the same checks, so run it first. cargo reads the
+   crates.io token from its own credential store as well as `CARGO_REGISTRY_TOKEN`,
+   so an unset variable does not mean there is no token. Never print the token or
+   write it into a file.
 3. **The tag push runs `release.yml`**: a plan job, then four builds (Linux and
    macOS, x86_64 and aarch64). Find the run with `gh run list -R EmpiricaAI/ecodex
    --workflow release.yml` and wait on its id; the macOS builds take longest. Rebuild one

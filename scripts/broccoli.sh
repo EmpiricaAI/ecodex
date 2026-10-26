@@ -31,7 +31,8 @@
 #
 # Evidence: when .empirica/ exists, writes .empirica/code_quality.json (rustfmt_ok,
 # clippy_warnings, clippy_errors) and .empirica/test_report.json (owned-crate
-# cargo test counts), which Empirica's POSTFLIGHT grades the transaction from.
+# cargo test counts), which Empirica core's POSTFLIGHT grades the transaction
+# from when the installed core reads them (core's development branch does).
 
 set -uo pipefail
 

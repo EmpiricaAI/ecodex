@@ -25,11 +25,11 @@ forecast:
 items:
   - id: docs-match-head
     title: README and docs match what ships
-    prediction: By the 0.165.0 release, the README and the docs that describe Empirica behaviour match the code, including the bundled skill set, which skills are framework skills, and the retirement of shared coordination records.
+    prediction: By the 0.165.0 release, the README and the docs that describe Empirica behaviour match the code, including the bundled skill set, which skills are framework skills, and the removal of Shared Epistemic Records.
     confidence: 0.8
     evidence: reviewed
-    basis: Reviewed in the docs. Core's last three releases split the constitution skill, added a forecasting skill and retired shared coordination records, and several ecodex docs pages still describe the earlier state.
-    falsifier: At the 0.165.0 tag, the README or the skills reference names a skill count or a set of framework skills that differs from the skills shipped in that tag.
+    basis: Reviewed in the docs. Since core 1.14.14 the constitution skill became an index over three new skills, Shared Epistemic Records were removed in favour of proposals with several targets, and a forecasting skill was added; some ecodex docs pages still describe the earlier state.
+    falsifier: At the 0.165.0 tag, the README or a page under docs/ecodex describes a skill, a framework skill or a coordination mechanism that the bundled skills and vendored hooks in that tag do not have, Shared Epistemic Records included.
     horizon: "0.165.0"
     steered: true
     status: predicted
@@ -39,7 +39,7 @@ items:
     prediction: ecodex releases 0.165.0 within three days of upstream codex tagging 0.165.0 as stable.
     confidence: 0.7
     evidence: measured
-    basis: Upstream's 0.165.0 alpha is already merged on a staging branch, builds, and passes the TUI suite apart from two catalog snapshot tests that also fail on the current release.
+    basis: ecodex 0.164.0 was tagged under four hours after upstream's rust-v0.164.0. Upstream's 0.165.0 alpha is already merged on a staging branch, builds, and passes the TUI suite apart from two snapshot tests that also fail on main.
     falsifier: More than three days pass between upstream's rust-v0.165.0 release and ecodex's v0.165.0 release on GitHub.
     horizon: "0.165.0"
     steered: true
@@ -49,9 +49,9 @@ items:
     title: The forecast is checked at every release
     prediction: From 0.165.0, the release step regenerates this section and refuses to release with a malformed or silently edited forecast.
     confidence: 0.8
-    evidence: measured
-    basis: A dry run of the release script checks the forecast before bumping the version and renders this section for the new version, and CI runs the same check on every push. Neither has run in a real release yet, and the first release that carries this file has no earlier forecast to compare against.
-    falsifier: The 0.165.0 release commit's README What's Coming differs from what the renderer produces from that commit's roadmap file.
+    evidence: reviewed
+    basis: A dry run of the release script checks the README and renders this section as releasing the next version would, before it bumps anything; CI runs the same check on pushes to main and on pull requests. Neither has run in a real release yet, and the first release that carries this file has no earlier forecast to compare against.
+    falsifier: At the 0.165.0 tag, the release commit's README What's Coming differs from what scripts/readme_sections.py renders from that commit, or scripts/release.sh --dry-run does not stop when that tag's docs/ROADMAP.yaml is made invalid.
     horizon: "0.165.0"
     steered: true
     status: predicted
@@ -69,11 +69,11 @@ items:
 
   - id: rust-code-quality
     title: Graded code quality for Rust work
-    prediction: Once core's code-quality reader ships, an ecodex transaction's POSTFLIGHT grades Rust code quality from ecodex's own quality sweep instead of reporting no source.
-    confidence: 0.85
+    prediction: By ecodex 0.165.1, a POSTFLIGHT run with a released empirica core grades Rust code quality and the owned-crate tests from ecodex's own quality sweep instead of reporting no source.
+    confidence: 0.75
     evidence: measured
-    basis: Measured on a development build of core. After ecodex's quality sweep wrote its files, a POSTFLIGHT graded code quality and the owned-crate tests from them. Core's reader is not in a core release yet.
-    falsifier: An ecodex POSTFLIGHT recorded after the sweep starts writing its quality file still reports no code-quality source.
+    basis: Measured on a development build of core. After ecodex's quality sweep wrote its files, a POSTFLIGHT graded code quality and the owned-crate tests from them. Core's reader is not in a release yet; core cut eight releases in the two weeks to 26 October.
+    falsifier: With ecodex 0.165.1 and the newest released empirica core installed, running scripts/broccoli.sh and then a POSTFLIGHT reports no code-quality source.
     horizon: "0.165.1"
     steered: true
     status: predicted
