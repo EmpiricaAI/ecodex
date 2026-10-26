@@ -61,12 +61,14 @@ The shipped `hooks.json` wires twelve events — upstream's `PreToolUse`,
 `TaskCompleted`, `PostToolUseFailure` — with eighteen commands in all;
 `PostToolUse`, `SessionStart` and `UserPromptSubmit` fan out to several
 scripts. `docs/ecodex/hook-events-roadmap.md` lists the script behind each
-event. `PermissionRequest` and `Interrupt` have no entry.
+event. Of the sixteen events codex declares, `PermissionRequest`, `Interrupt`,
+`PreModelRequest` and `PostModelRequest` have no entry.
 
 ## Stdin payload (codex format)
 
-Per `codex-rs/hooks/schema/generated/` for the twelve upstream events. The two
-ecodex events have no generated schema; their shape is the request struct in
+Per `codex-rs/hooks/schema/generated/` for upstream's fourteen events (one
+model-request schema serves both model-request events). The two ecodex events
+have no generated schema; their shape is the request struct in
 `codex-rs/hooks/src/events/task_completed.rs` and
 `post_tool_use_failure.rs`. PreToolUse example:
 

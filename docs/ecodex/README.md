@@ -31,8 +31,9 @@ untouched.
 - **Plugin:** twelve hook events are wired through the plugin's `hooks.json` — upstream's
   `PreToolUse`, `PostToolUse`, `SessionStart`, `UserPromptSubmit`, `Stop`, `PreCompact`,
   `PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop`, plus ecodex's
-  `TaskCompleted` and `PostToolUseFailure`. Upstream's `PermissionRequest` and `Interrupt`
-  have no entry; `permission-request` is accepted as a no-op subcommand. Several events
+  `TaskCompleted` and `PostToolUseFailure`. Upstream's `PermissionRequest`, `Interrupt`,
+  `PreModelRequest` and `PostModelRequest` have no entry; `permission-request` is accepted
+  as a no-op subcommand. Several events
   fan out to more than one script (`SessionStart` to four), mirroring Claude Code's
   `settings.json`. See [`api/hooks.md`](api/hooks.md) and the crate's
   [README](../../codex-rs/codex-empirica-plugin/README.md).
