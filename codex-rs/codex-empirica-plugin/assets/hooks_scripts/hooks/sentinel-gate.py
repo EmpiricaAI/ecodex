@@ -330,13 +330,14 @@ SAFE_BASH_PREFIXES = (
     "top -b -n 1",
     "pgrep ",
     "jobs",
-    # Terminal/tmux inspection (read-only)
+    # Terminal/tmux inspection (read-only). The list-* and show-* verbs only print; has-session only answers. What runs a command or
+    # changes a session (send-keys, run-shell, pipe-pane, new-session/window and split-window with a command, source-file, kill-*) is
+    # deliberately absent and gates in every work type. (tmux 3.6 does not run `#(shell)` jobs for display-message -p or list-* -F.)
     "tmux capture-pane",
-    "tmux list-panes",
-    "tmux list-windows",
-    "tmux list-sessions",
+    "tmux list-",
+    "tmux show-",
+    "tmux has-session",
     "tmux display-message",
-    "tmux show-option",
     # Disk inspection
     "df ",
     "du ",
@@ -600,8 +601,6 @@ INFRA_SAFE_PREFIXES = (
     "ollama show",
     "nginx -t",
     "nginx -T",
-    # Tmux full access
-    "tmux ",
     # Cloud/infra read operations
     "kubectl get",
     "kubectl describe",
@@ -2271,7 +2270,12 @@ _TOOL_DANGEROUS_FLAGS: dict[str, frozenset[str]] = {
     "ag": frozenset({"--pager"}),
     "ack": frozenset({"--pager"}),
     "bat": frozenset({"--pager"}),
-    "man": frozenset({"-P", "--pager", "-H", "--html"}),
+    "man": frozenset({"-P", "--pager", "-H", "--html", "-C", "--config-file"}),
+    # opt-in flags that make a read verb run a program: `--ext-diff` the diff.external command, `--textconv` a textconv driver's command.
+    # This does NOT make plain `git diff` safe from an external program: with diff.external set (or GIT_EXTERNAL_DIFF in the environment)
+    # a bare `git diff` already runs it, and no flag guard can see that. (-C / --config-file on man names a man-db config that can DEFINE
+    # the pager, nroff or compressor it executes.)
+    "git": frozenset({"--ext-diff", "--textconv"}),
     # linters and analyzers: fix in place, write reports, create stubs, install packages
     "ruff": frozenset({"--fix", "--fix-only", "--unsafe-fixes", "--add-noqa", "--output-file"}),
     "pip-audit": frozenset({"--fix", "-o", "--output"}),
@@ -2932,12 +2936,48 @@ def _has_dangerous_tool_flags(cmd: str) -> bool:
         return not _nvidia_smi_is_read_only(stripped)
     flags = _TOOL_DANGEROUS_FLAGS.get(head)
     if flags:
-        for tok in stripped.split()[1:]:
+        for tok in _tool_tokens(stripped)[1:]:  # shlex, so a quoted flag ("-P", '--pager=cat') is the flag it names
             if tok in flags:
                 return True
-            if tok.startswith("--") and "=" in tok and tok.split("=", 1)[0] in flags:
+            name = tok.split("=", 1)[0]
+            if tok.startswith("--") and "=" in tok and name in flags:
+                return True
+            if (
+                head in _GETOPT_ABBREVIATING
+                and name not in _REAL_LONG_FLAGS.get(head, ())
+                and _abbreviates_a_flag(name, flags)
+            ):
+                return True
+            if head == "man" and _man_short_cluster_runs_a_program(tok):
                 return True
     return False
+
+
+# Tools whose option parser is getopt_long: it accepts any UNAMBIGUOUS PREFIX of a long option (`man --conf cfg` is `--config-file cfg`,
+# `git blame --textco` is `--textconv`), so an exact-token denylist leaks. A prefix of a dangerous long flag gates, ambiguous or not: a
+# gate costs a CHECK, a leak runs a program. Two letters after the dashes are required so a one-letter stub does not gate everything.
+_GETOPT_ABBREVIATING = frozenset({"man", "git"})
+_MIN_ABBREVIATION = (
+    4  # "--" plus two letters: `man --co` (config-file) and `man --ht` (html) are unique prefixes getopt accepts
+)
+# Real long options of these tools that are ALSO a prefix of a dangerous one: an exact option beats a prefix match in getopt, so they are
+# what they say (git's `--text` is `-a`; it is also the start of `--textconv`).
+_REAL_LONG_FLAGS: dict[str, frozenset[str]] = {"git": frozenset({"--text"})}
+
+
+def _abbreviates_a_flag(name: str, flags: frozenset[str]) -> bool:
+    """True when `name` (a `--long` token without its `=value`) is a prefix of one of the dangerous long flags."""
+    return (
+        name.startswith("--")
+        and len(name) >= _MIN_ABBREVIATION
+        and any(f.startswith(name) for f in flags if f.startswith("--"))
+    )
+
+
+def _man_short_cluster_runs_a_program(tok: str) -> bool:
+    """man's -P (pager), -H (html browser) and -C (config file that can define the programs it runs) also arrive attached to their value
+    (`-Pcat`, `-C/tmp/m.conf`) or inside a cluster (`-aC file`). Any single-dash token carrying one of them gates."""
+    return len(tok) > 1 and tok[0] == "-" and tok[1] != "-" and any(c in tok[1:] for c in "PHC")
 
 
 # git accepts GLOBAL options between the binary and the subcommand, so the
@@ -6265,13 +6305,26 @@ def _check_expiry_and_compact(check_timestamp, empirica_root: Path | None) -> tu
     return None
 
 
+def _assessed(value, default):
+    """`default` only when the vector is missing (None). `value or default` also replaced a real 0.0, which is falsy."""
+    return default if value is None else value
+
+
 def _evaluate_check_threshold(know, uncertainty, db, env_annotation: str) -> tuple:
     """Evaluate CHECK vectors against dynamic thresholds.
 
     Returns (decision, reason) — always produces a final decision.
     """
-    raw_check_know = know or 0
-    raw_check_unc = uncertainty or 1
+    # A CHECK supplies 7 of the 13 vectors and the store keeps the rest NULL (1.14.16). `know or 0` / `uncertainty or 1` turned a
+    # NULL into a reported number ("U=100%") and, because 0.0 is falsy, a real 0.0 uncertainty into 1.0. Say what was not assessed.
+    if know is None or uncertainty is None:
+        missing = " and ".join(name for name, value in (("know", know), ("uncertainty", uncertainty)) if value is None)
+        return (
+            "allow",
+            f"ADVISORY: this CHECK did not assess {missing}, so the threshold was not evaluated. Supply it to certify the grounding.{env_annotation}",
+        )
+    raw_check_know = know
+    raw_check_unc = uncertainty
     _dyn_know, _dyn_unc = _get_dynamic_thresholds(db)
 
     if raw_check_know >= _dyn_know and raw_check_unc <= _dyn_unc:
@@ -6334,8 +6387,8 @@ def _run_authorization_pipeline(hook_input: dict, tool_name: str, tool_input: di
                 cursor, session_id, current_transaction_id, preflight_timestamp, tool_name, tool_input
             ),
             _check_auto_proceed(
-                preflight_know or 0,
-                preflight_uncertainty or 1,
+                _assessed(preflight_know, 0.0),
+                _assessed(preflight_uncertainty, 1.0),
                 db,
                 tx_file,
                 tx_state["_current_domain"],
