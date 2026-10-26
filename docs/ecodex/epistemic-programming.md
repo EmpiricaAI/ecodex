@@ -49,14 +49,16 @@ epistemic garbage collection, formal-verification integration (SMT/Z3).
 | Spec concept | Existing mechanism | Status |
 |---|---|---|
 | Grounded vs. inferred state | `--epistemic-source {intuition\|search\|mixed}` provenance on every artifact; PREFLIGHT `claims` with `ran/read/retrieved/assumed` grounding; POSTFLIGHT adjudication (`held/refuted/untested`) | **Live** |
+| `UNGROUNDED` → probe before acting | `assumption-log` banks a belief acted on without checking; open assumptions under the goals in play resurface at CHECK and POSTFLIGHT until they are resolved as verified or falsified | **Live** |
+| Refutation that arrives later | Falsifiers: the observation that would refute a finding, assumption or decision, registered at PREFLIGHT or CHECK before the evidence, re-surfaced by every later PREFLIGHT until adjudicated `tripped`, `survived` (only with evidence the population was looked at) or `expired` | **Live** |
 | Anti-agreement axiom | EPP (Epistemic Persistence Protocol): classify pushback EMOTIONAL/RHETORICAL/EVIDENTIAL/LOGICAL/CONTEXTUAL before updating; EWM Anti-Agreement Protocol ("never agree without grounding") | **Live** |
 | Quantified epistemic tuple | The 13 vectors (know/do/context/…/uncertainty) on every PREFLIGHT/CHECK/POSTFLIGHT, calibrated against deterministic service observations | **Live** — richer than the spec's 4-tuple |
 | Execution gated on confidence threshold | Sentinel noetic firewall: praxic actions require an open PREFLIGHT + passed CHECK; CHECK certifies the claims the action rests on | **Live** — gate is claim-grounding, not a scalar threshold |
 | Read-only probe vs. mutative commit toolchain | Sentinel's noetic/praxic discrimination by *effect* (read verbs flow free, mutating invocations gate), enforced via PreToolUse hooks | **Live** |
-| Structured mesh envelopes over narrative chat | Cortex mailbox: typed proposals (collab_brief vs ECO-gated praxic asks), canonical addressing, completion handshakes | **Live** — carries provenance prose, not yet machine-readable grounding traces |
+| Structured mesh envelopes over narrative chat | Cortex mailbox: typed proposals (collab_brief vs ECO-gated praxic asks), canonical addressing, completion handshakes; work several practices must each do is one proposal that closes when every target has acknowledged its part | **Live** — carries provenance prose, not yet machine-readable grounding traces |
 | `BOUNDED_VOID` + ntfy escalation | `unknown-log` (typed, resolvable unknowns ≠ findings); mesh reflex "stuck → collab immediately"; ntfy listener/wake infrastructure | **Live** |
 | Dynamic epistemic garbage collection | Epistemic gardening: resolve stale/superseded/retracted artifacts so retrieval surfaces what's live; distinct `stale` vs `retracted` vs `superseded` resolution kinds | **Live** — the spec names as "open research" what gardening already does |
-| Epistemic drift in multi-agent loops | Partially addressed: retrieved-from-own-artifacts grounding is explicitly demoted to *testimony, not observation* in CHECK claims; peer verdicts are "uncalibrated self-reports — trust artifacts, re-run gates" | **Partial** — see gaps |
+| Epistemic drift in multi-agent loops | Partially addressed: retrieved-from-own-artifacts grounding is explicitly demoted to *testimony, not observation* in CHECK claims; a peer's report is capped as `reported` evidence in a forecast; peer verdicts are "uncalibrated self-reports — trust artifacts, re-run gates" | **Partial** — see gaps |
 
 ## Gaps: spec ideas with no current counterpart
 
@@ -73,8 +75,9 @@ epistemic garbage collection, formal-verification integration (SMT/Z3).
 3. **Consensus lockdown on tuple divergence.** When two practices assess the
    same question and their confidence diverges beyond a threshold, nothing
    forces a designated verification run before either acts. Closest existing
-   shape: SERs — but state transitions there are social, not
-   divergence-triggered.
+   shape: one proposal addressed to several practices, which closes only when
+   each has acknowledged its part — but it waits on every acknowledgement, not on
+   divergent confidence.
 4. **Formal-verification integration.** No mapping from claims/vectors to SMT
    solvers or property checks. Speculative; lowest priority of the four.
 
