@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ecodex release pipeline
 #
-# Phase 1 (Tx-BC): version bump → CHANGELOG roll → commit → tag.
+# Phase 1 (Tx-BC): version bump → CHANGELOG roll → README render → commit → tag.
 # Phase 2 (Tx-BD): opt-in build/test/clippy gates + push + gh release.
 # Phase 3 (Tx-BE, this script): cargo publish own crates + binary asset uploads;
 #   homebrew + npm informative stubs (require Tap repo + npm package setup we
@@ -46,6 +46,8 @@
 #   - on a branch (not detached HEAD)
 #   - codex-rs/Cargo.toml has [workspace.package] with `version = "X.Y.Z"`
 #   - CHANGELOG.md has an `## [Unreleased]` section near the top
+#   - README.md's What's New / What's Coming are current and docs/ROADMAP.yaml
+#     is valid (`scripts/readme_sections.py --check`)
 #
 # All exit non-zero on validation failure; safe to re-run after fixing.
 
@@ -58,6 +60,7 @@ ECODEX_ROOT="$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
 CARGO_TOML="${ECODEX_ROOT}/codex-rs/Cargo.toml"
 CARGO_LOCK="${ECODEX_ROOT}/codex-rs/Cargo.lock"
 CHANGELOG="${ECODEX_ROOT}/CHANGELOG.md"
+README="${ECODEX_ROOT}/README.md"
 
 BUMP_KIND=""        # major | minor | patch | explicit
 EXPLICIT_VERSION=""
@@ -167,6 +170,14 @@ if [[ "$DRY_RUN" -eq 0 && "$SKIP_COMMIT" -eq 0 ]]; then
   if [[ -n "$(git status --porcelain)" ]]; then
     error "working tree not clean — commit or stash first, then re-run"
   fi
+fi
+
+# README's What's New / What's Coming render from CHANGELOG.md and
+# docs/ROADMAP.yaml. Check them before anything is bumped, so a malformed or
+# silently edited forecast stops the release with the tree untouched.
+if [[ "$SKIP_CHANGELOG" -eq 0 ]]; then
+  python3 "${SCRIPT_DIR}/readme_sections.py" --check \
+    || error "README sections are stale or docs/ROADMAP.yaml is invalid — run scripts/readme_sections.py, then re-run"
 fi
 
 # ─── Read current version ────────────────────────────────────────────
@@ -353,8 +364,12 @@ def update_links(s: str) -> str:
 new_body = update_links(new_body)
 Path(path).write_text(new_body)
 PY
+    # What's New now names the release just rolled; regenerate both sections.
+    python3 "${SCRIPT_DIR}/readme_sections.py" --version "$new_version" \
+      || error "could not render README's What's New / What's Coming for ${new_version}"
   else
     printf '  [dry-run] would roll [Unreleased] → [%s] - %s\n' "$new_version" "$(date -I)"
+    printf "  [dry-run] would render README's What's New for %s\n" "$new_version"
   fi
 fi
 
@@ -362,7 +377,7 @@ fi
 # Run AFTER bump + changelog roll (so the version under test is the
 # version that's about to be tagged) and BEFORE commit + tag (so a
 # failed gate leaves the working tree dirty for review — `git checkout
-# -- codex-rs/Cargo.toml codex-rs/Cargo.lock CHANGELOG.md` reverts cleanly).
+# -- codex-rs/Cargo.toml codex-rs/Cargo.lock CHANGELOG.md README.md` reverts cleanly).
 #
 # Each gate exits non-zero on failure. Cargo invocations stream output
 # directly to the user's terminal so the failure is legible.
@@ -413,7 +428,7 @@ if [[ "$GATE_CLIPPY" -eq 1 ]]; then gate_clippy; fi
 # ─── Commit ──────────────────────────────────────────────────────────
 if [[ "$SKIP_COMMIT" -eq 0 ]]; then
   log "Staging + committing"
-  run_or_dry git add "$CARGO_TOML" "$CARGO_LOCK" "$CHANGELOG"
+  run_or_dry git add "$CARGO_TOML" "$CARGO_LOCK" "$CHANGELOG" "$README"
   run_or_dry git commit -m "release: v${new_version}"
 fi
 
@@ -737,6 +752,9 @@ else
   echo "✓ Phase 1 complete."
   echo "  • Cargo.toml workspace.package.version → ${new_version}"
   echo "  • CHANGELOG.md rolled, [Unreleased] block promoted to [${new_version}]"
+  if [[ "$SKIP_CHANGELOG" -eq 0 ]]; then
+    echo "  • README.md What's New / What's Coming rendered for ${new_version}"
+  fi
   if [[ "$SKIP_COMMIT" -eq 0 ]]; then
     echo "  • Commit: $(git rev-parse --short HEAD) (release: v${new_version})"
   fi

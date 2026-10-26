@@ -1,0 +1,79 @@
+# ecodex's forecast of its own next directions. `scripts/readme_sections.py` renders the open items as README's "What's Coming".
+#
+# This is a PREDICTION, not a promise, and it is graded:
+#   * every item carries a confidence (0-1), the KIND of evidence its basis rests on, and the observation that would prove it wrong;
+#   * the evidence kind caps the confidence (the renderer refuses a higher one):
+#       measured  a command produced the figure and it was run for this forecast      up to 0.95
+#       reviewed  read in the code or the data, not run                               up to 0.85
+#       reported  someone else's report about code that may have changed since        up to 0.70
+#       inferred  reasoned from patterns, nothing checked                             up to 0.60
+#     Use the weakest kind any load-bearing part of the basis rests on;
+#   * when a release ships an item, set `status: shipped` and `resolved_in: <version>`; when it is abandoned, `status: dropped` and
+#     `resolved_in`. A prediction that was wrong when written is `retracted`; a replaced one is `superseded` with `superseded_by`;
+#     `steered: true` means a goal for it already existed when it was predicted (delivering planned work is not foresight);
+#   * after a release, a change to confidence, prediction, falsifier, horizon or evidence needs a dated entry under `revisions`
+#     (on, from, to, reason), and an item is never deleted, only resolved;
+#   * a falsifier must test the PREDICTION, not a neighbouring claim, and must be checkable by someone outside the project;
+#   * the text is public: no proposal, goal, task or commit ids (the renderer refuses them).
+#
+# Same schema and rules as empirica core's docs/ROADMAP.yaml. Quote `made_in` and every `horizon`: an unquoted 0.170 loads as 0.17.
+
+forecast:
+  made_in: "0.164.2"
+  made_on: "2026-10-26"
+
+items:
+  - id: docs-match-head
+    title: README and docs match what ships
+    prediction: By the 0.165.0 release, the README and the docs that describe Empirica behaviour match the code, including the bundled skill set, which skills are framework skills, and the retirement of shared coordination records.
+    confidence: 0.8
+    evidence: reviewed
+    basis: Reviewed in the docs. Core's last three releases split the constitution skill, added a forecasting skill and retired shared coordination records, and several ecodex docs pages still describe the earlier state.
+    falsifier: At the 0.165.0 tag, the README or the skills reference names a skill count or a set of framework skills that differs from the skills shipped in that tag.
+    horizon: "0.165.0"
+    steered: true
+    status: predicted
+
+  - id: upstream-0-165
+    title: Upstream codex 0.165 within three days
+    prediction: ecodex releases 0.165.0 within three days of upstream codex tagging 0.165.0 as stable.
+    confidence: 0.7
+    evidence: measured
+    basis: Upstream's 0.165.0 alpha is already merged on a staging branch, builds, and passes the TUI suite apart from two catalog snapshot tests that also fail on the current release.
+    falsifier: More than three days pass between upstream's rust-v0.165.0 release and ecodex's v0.165.0 release on GitHub.
+    horizon: "0.165.0"
+    steered: true
+    status: predicted
+
+  - id: public-forecast
+    title: The forecast is checked at every release
+    prediction: From 0.165.0, the release step regenerates this section and refuses to release with a malformed or silently edited forecast.
+    confidence: 0.8
+    evidence: measured
+    basis: A dry run of the release script checks the forecast before bumping the version and renders this section for the new version, and CI runs the same check on every push. Neither has run in a real release yet, and the first release that carries this file has no earlier forecast to compare against.
+    falsifier: The 0.165.0 release commit's README What's Coming differs from what the renderer produces from that commit's roadmap file.
+    horizon: "0.165.0"
+    steered: true
+    status: predicted
+
+  - id: permission-roots
+    title: Plugin writable roots survive a permission change
+    prediction: In 0.165.0, choosing a permission profile mid-session keeps the writable roots the empirica plugin declares, and a test covers it.
+    confidence: 0.7
+    evidence: reviewed
+    basis: Read in the code. A profile chosen mid-session is resolved again from config without the plugin's roots, which are only added when a session starts, so later writes to the plugin's state directory are refused by the sandbox.
+    falsifier: In 0.165.0, a session that changes its permission profile mid-session cannot write to ~/.empirica, or no test changes the profile with a root-declaring plugin loaded.
+    horizon: "0.165.0"
+    steered: true
+    status: predicted
+
+  - id: rust-code-quality
+    title: Graded code quality for Rust work
+    prediction: Once core's code-quality reader ships, an ecodex transaction's POSTFLIGHT grades Rust code quality from ecodex's own quality sweep instead of reporting no source.
+    confidence: 0.6
+    evidence: reported
+    basis: Reported by core, which plans a reader for a quality file the project writes, with ecodex's sweep script as the Rust writer. Neither side has shipped it yet.
+    falsifier: An ecodex POSTFLIGHT recorded after the sweep starts writing its quality file still reports no code-quality source.
+    horizon: "0.165.1"
+    steered: true
+    status: predicted

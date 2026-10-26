@@ -138,4 +138,18 @@ jobs:
           # The drift guards' self-tests run here (venv has pytest); the guards
           # themselves are the bare CI gates above.
           "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
-            scripts/test_check_upstream_sync_tag.py scripts/test_check_empirica_core_pin.py -q
+            scripts/test_check_upstream_sync_tag.py scripts/test_check_empirica_core_pin.py \
+            scripts/test_readme_sections.py -q
+
+      # README's What's New / What's Coming are rendered from CHANGELOG.md and
+      # docs/ROADMAP.yaml; a hand edit or a forecast changed without a dated
+      # revision fails here. The silent-edit check compares against the last
+      # release tag, which a shallow checkout does not have: fetch that one
+      # tag and name it, so the check cannot pass by finding no baseline.
+      - name: Check README sections and the roadmap
+        run: |
+          set -euo pipefail
+          latest="$(git ls-remote --tags --refs origin 'v[0-9]*' | sed 's#.*refs/tags/##' | sort -V | tail -1)"
+          test -n "$latest"
+          git fetch --depth=1 origin "refs/tags/${latest}:refs/tags/${latest}"
+          "$RUNNER_TEMP/vendored-hooks-venv/bin/python" scripts/readme_sections.py --check --baseline-ref "$latest"

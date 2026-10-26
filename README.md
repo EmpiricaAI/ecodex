@@ -30,6 +30,33 @@ Alpha. **`main` tracks upstream codex 0.164** (synced from the stable `rust-v0.1
 
 `main` is the canonical branch and carries all active work. Upstream `openai/codex` is tracked through the `upstream` remote; stable upstream tags are merged in periodically. The CLI is daily-driven by the ecodex team.
 
+## What's New in 0.164.2
+
+- **Changing directory and forking into a worktree work again in sessions that load the empirica plugin.** Both were refused since the 0.164 base.
+- **Release gates as a skill.** `pre-publish` runs the ordered release sequence, including an independent read-only review of the changes, with ecodex's own release steps beside it.
+- **Forecasting as a skill.** `forecast` turns "what comes next" into graded predictions, each with its evidence and the observation that would prove it wrong.
+- **A lighter constitution.** The framework skill the model read at every session start shrank from 3,300 words to a 540-word index; its depth moved to three skills read when needed.
+- **Hooks from core 1.14.15.** The memory swap is fixed and opt-in, and shared coordination records are gone in favour of proposals with several targets.
+
+All 7 entries for this release are in the [CHANGELOG](CHANGELOG.md).
+
+**Earlier releases**
+
+- **0.164.1** — Empirica hooks re-vendored from core 1.14.13
+- **0.164.0** — Upstream base is codex 0.164.0
+
+## What's Coming
+
+ecodex's own forecast, made in 0.164.2 from its open work and its known weak spots. Each prediction carries a confidence, the evidence behind it and the observation that would prove it wrong, and is graded when it ships or is dropped. The word beside the confidence says how the basis is known: **measured** by a command, **reviewed** in the code, **reported** by someone else, or **inferred**; weaker evidence cannot carry a higher confidence. **planned** means a goal for it already existed when we predicted it: those are scored separately, because delivering planned work is not foresight.
+
+| Direction | Confidence | Why we expect it | What would change our mind |
+|---|---|---|---|
+| **README and docs match what ships**: By the 0.165.0 release, the README and the docs that describe Empirica behaviour match the code, including the bundled skill set, which skills are framework skills, and the retirement of shared coordination records. | 80% (reviewed, planned) | Reviewed in the docs. Core's last three releases split the constitution skill, added a forecasting skill and retired shared coordination records, and several ecodex docs pages still describe the earlier state. | At the 0.165.0 tag, the README or the skills reference names a skill count or a set of framework skills that differs from the skills shipped in that tag. |
+| **The forecast is checked at every release**: From 0.165.0, the release step regenerates this section and refuses to release with a malformed or silently edited forecast. | 80% (measured, planned) | A dry run of the release script checks the forecast before bumping the version and renders this section for the new version, and CI runs the same check on every push. Neither has run in a real release yet, and the first release that carries this file has no earlier forecast to compare against. | The 0.165.0 release commit's README What's Coming differs from what the renderer produces from that commit's roadmap file. |
+| **Upstream codex 0.165 within three days**: ecodex releases 0.165.0 within three days of upstream codex tagging 0.165.0 as stable. | 70% (measured, planned) | Upstream's 0.165.0 alpha is already merged on a staging branch, builds, and passes the TUI suite apart from two catalog snapshot tests that also fail on the current release. | More than three days pass between upstream's rust-v0.165.0 release and ecodex's v0.165.0 release on GitHub. |
+| **Plugin writable roots survive a permission change**: In 0.165.0, choosing a permission profile mid-session keeps the writable roots the empirica plugin declares, and a test covers it. | 70% (reviewed, planned) | Read in the code. A profile chosen mid-session is resolved again from config without the plugin's roots, which are only added when a session starts, so later writes to the plugin's state directory are refused by the sandbox. | In 0.165.0, a session that changes its permission profile mid-session cannot write to ~/.empirica, or no test changes the profile with a root-declaring plugin loaded. |
+| **Graded code quality for Rust work**: Once core's code-quality reader ships, an ecodex transaction's POSTFLIGHT grades Rust code quality from ecodex's own quality sweep instead of reporting no source. | 60% (reported, planned) | Reported by core, which plans a reader for a quality file the project writes, with ecodex's sweep script as the Rust writer. Neither side has shipped it yet. | An ecodex POSTFLIGHT recorded after the sweep starts writing its quality file still reports no code-quality source. |
+
 ## What ecodex adds on top of codex
 
 Three layers (full architecture: [`docs/ecodex/system-overview.md`](docs/ecodex/system-overview.md)):
@@ -66,7 +93,7 @@ Three layers (full architecture: [`docs/ecodex/system-overview.md`](docs/ecodex/
 
 - **Cross-AI mesh participation**: an in-process listener holds the Cortex notification stream and wakes the session when a peer practice's proposal arrives — no polling, no token cost while idle. Agents read and answer through the `empirica mailbox` CLI and the Cortex MCP tools. Any model running in ecodex can receive a proposal from another practice, act on it and reply within seconds. See [`docs/ecodex/cross-ai-mesh.md`](docs/ecodex/cross-ai-mesh.md).
 - **The `monitor` tool** wakes the agent on background subprocess output (a build, a log, a CI run), one matching line at a time.
-- **Several instances at once.** Each ecodex session is keyed by its own thread id, so many agents can run in one directory or across practices without sharing state. The **ecodex cockpit** builds on that: one tmux window per practice, a running ecodex instance in the main pane and a practice controller beside it showing the practice's goals, tasks and unknowns, a Previous / Now / Next view, and explainable next-action choices — a control surface for measured practice work, distinct from empirica's own cockpit. It is an **ecodex-lab prototype** today — local, one practice configured, not shipped with ecodex — documented in the ecodex-lab practice (`docs/ECODEX_COCKPIT_PROTOTYPE.md`); it will be linked here once it is published.
+- **Several instances at once.** Each ecodex session is keyed by its own thread id, so many agents can run in one directory or across practices without sharing state. empirica's cockpit lays them out: one pane per practice, each running ecodex in its own directory, and `empirica cockpit refresh` brings a dead pane back to its last ecodex session. The `ewm-interview` skill drafts the cockpit profile for the practices it provisions. A richer ecodex cockpit, with a practice controller beside each instance, is an ecodex-lab prototype and is not shipped.
 - **Unattended runs.** `ecodex exec` in CI or cron has no practitioner to open a transaction; [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md#unattended-runs) shows how to run the job with the plugin off and keep the practice intact.
 
 ## Install

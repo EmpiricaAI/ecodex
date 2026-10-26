@@ -8,10 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+- **README's What's New and What's Coming are generated and checked.** `scripts/readme_sections.py` renders What's New from the newest release's `### Highlights` in this changelog, and What's Coming from `docs/ROADMAP.yaml`, ecodex's forecast of its next directions. It follows empirica core's rules: each direction carries a confidence capped by the kind of evidence behind it and the observation that would prove it wrong, internal ids are refused, and a released forecast changes only through a dated revision. `release.sh` checks both sections before it bumps anything and renders them for the new version; CI fails a README edited by hand or a forecast changed without a revision.
+
 ### Changed
 - **Empirica hooks re-vendored from core 1.14.16, and checked against core 1.14.17** (`e1903ccc605f`, which changes no vendored file; CI's empirica-core pin moves to it). Core now stores a vector nobody assessed as "not assessed" rather than 0.5 and audited every reader. Of the two vendored scripts that change, the statusline fills a vector the latest CHECK skipped from its last recorded value in the same transaction, so it no longer reads 0%, and session end takes each vector's newest recorded value instead of a default.
 
 ## [0.164.2] - 2026-10-25
+
+### Highlights
+- **Changing directory and forking into a worktree work again in sessions that load the empirica plugin.** Both were refused since the 0.164 base.
+- **Release gates as a skill.** `pre-publish` runs the ordered release sequence, including an independent read-only review of the changes, with ecodex's own release steps beside it.
+- **Forecasting as a skill.** `forecast` turns "what comes next" into graded predictions, each with its evidence and the observation that would prove it wrong.
+- **A lighter constitution.** The framework skill the model read at every session start shrank from 3,300 words to a 540-word index; its depth moved to three skills read when needed.
+- **Hooks from core 1.14.15.** The memory swap is fixed and opt-in, and shared coordination records are gone in favour of proposals with several targets.
 
 ### Added
 - **`pre-publish` and `eat-the-broccoli` skills** in the bundled plugin. `pre-publish` is the ordered release gate sequence from core (scope, deterministic tier, an independent read-only sweep with one `spawn_agent` subagent per area, every finding traced, hot-path timing, gaps, CI on the exact commit, cut and verify), with `references/ecodex-release.md` carrying ecodex's own cut: the README stamp, `release.sh`, the release run, the Homebrew sha256 check, `--verify-install` and the filled formula. `eat-the-broccoli` is the pattern catalog its sweep applies, carried verbatim from core's vendored copy of EmpiricaAI/broccoli (2.11.0, as of core 1.14.15). `scripts/broccoli.sh` now points at the bundled skill.
