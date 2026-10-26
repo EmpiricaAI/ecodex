@@ -70,9 +70,9 @@ items:
   - id: rust-code-quality
     title: Graded code quality for Rust work
     prediction: By ecodex 0.165.1, a POSTFLIGHT run with a released empirica core grades Rust code quality and the owned-crate tests from ecodex's own quality sweep instead of reporting no source.
-    confidence: 0.75
+    confidence: 0.9
     evidence: measured
-    basis: Measured on a development build of core. After ecodex's quality sweep wrote its files, a POSTFLIGHT graded code quality and the owned-crate tests from them. Core's reader is not in a release yet; core cut eight releases in the two weeks to 26 October.
+    basis: Measured with core's reader before its release. After ecodex's quality sweep wrote its files, a POSTFLIGHT graded code quality and the owned-crate tests from them, and core shipped that reader in a release on 26 October.
     falsifier: With ecodex 0.165.1 and the newest released empirica core installed, a POSTFLIGHT run after scripts/broccoli.sh passes reports no code-quality source or no test source.
     horizon: "0.165.1"
     steered: true
