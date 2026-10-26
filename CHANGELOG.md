@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [Unreleased]
 
 ### Changed
-- **Empirica hooks re-vendored from core 1.14.16** (`4f63866b9d34`; CI's empirica-core pin moves with it). Core now stores a vector nobody assessed as "not assessed" rather than 0.5 and audited every reader. Of the two vendored scripts that change, the statusline fills a vector the latest CHECK skipped from its last recorded value in the same transaction, so it no longer reads 0%, and session end takes each vector's newest recorded value instead of a default.
+- **Empirica hooks re-vendored from core 1.14.16, and checked against core 1.14.17** (`e1903ccc605f`, which changes no vendored file; CI's empirica-core pin moves to it). Core now stores a vector nobody assessed as "not assessed" rather than 0.5 and audited every reader. Of the two vendored scripts that change, the statusline fills a vector the latest CHECK skipped from its last recorded value in the same transaction, so it no longer reads 0%, and session end takes each vector's newest recorded value instead of a default.
 
 ## [0.164.2] - 2026-10-25
 
