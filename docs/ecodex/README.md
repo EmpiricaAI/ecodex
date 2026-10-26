@@ -18,9 +18,9 @@ untouched.
 | [`epistemic-llms.md`](epistemic-llms.md) | Which models hold up under the epistemic discipline, and why the framing matters for LLM agents. |
 | [`epistemic-programming.md`](epistemic-programming.md) | Epistemic programming as a paradigm, and how Empirica's transactions, claims and artifacts map onto it. |
 | [`verdict-integrity-audit.md`](verdict-integrity-audit.md) | Audit of claim/falsifier verdict integrity across the transaction loop. |
-| [`api/`](api/) | Plugin API contracts: [`hooks.md`](api/hooks.md), [`skills.md`](api/skills.md), [`mcp.md`](api/mcp.md), [`plugin-statusline.md`](api/plugin-statusline.md), [`plugin-writable-roots.md`](api/plugin-writable-roots.md), [`integration-tests.md`](api/integration-tests.md). |
+| [`api/`](api/) | Plugin API contracts: [`hooks.md`](api/hooks.md), [`skills.md`](api/skills.md) (the bundled skills and which are framework skills), [`mcp.md`](api/mcp.md), [`plugin-statusline.md`](api/plugin-statusline.md), [`plugin-writable-roots.md`](api/plugin-writable-roots.md), [`integration-tests.md`](api/integration-tests.md). |
 | [`integrations/`](integrations/) | Provider and model integration: [`providers.md`](integrations/providers.md), [`model-registry.md`](integrations/model-registry.md), [`model-notes.md`](integrations/model-notes.md), [`huggingface.md`](integrations/huggingface.md), [`discipline-strengthening.md`](integrations/discipline-strengthening.md), and the historical [`branding.md`](integrations/branding.md). |
-| [`experiments/`](experiments/) | Experiment designs: the ecodex-lab baseline, the shadow-corpus scoping and prevention-value experiments, and their subject manifests. |
+| [`experiments/`](experiments/) | Experiment designs: ecodex-lab (orchestrating ecodex practitioners, with a bare baseline), the shadow-corpus scoping and prevention-value experiments, and their subject manifests. Each records its design as of the date it gives. |
 | [`positioning/`](positioning/) | Positioning material: mesh-vs-worktrees and swarm-vs-society pages, the compliance crosswalk, deck sources and generated SVGs. |
 | [`specs/`](specs/) | Design specs for parked or in-progress work. |
 | [`inspection.md`](inspection.md) | Historical: the initial inspection of codex-rs (hook system, plugin marketplace, thread-scoped goals) that drove the architecture decision. Line references and counts are from that time. |
@@ -33,10 +33,13 @@ untouched.
   `PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop`, plus ecodex's
   `TaskCompleted` and `PostToolUseFailure`. Upstream's `PermissionRequest` and `Interrupt`
   have no entry; `permission-request` is accepted as a no-op subcommand. Several events
-  fan out to more than one script, mirroring Claude Code's `settings.json`. See [`api/hooks.md`](api/hooks.md) and the crate's
+  fan out to more than one script (`SessionStart` to four), mirroring Claude Code's
+  `settings.json`. See [`api/hooks.md`](api/hooks.md) and the crate's
   [README](../../codex-rs/codex-empirica-plugin/README.md).
 - **Hook events:** two ecodex additions on top of upstream's set. See
   [`hook-events-roadmap.md`](hook-events-roadmap.md).
+- **Skills:** the plugin bundles Empirica's skills for codex; two are framework skills the
+  model reads early. The catalog is [`api/skills.md`](api/skills.md).
 - **Cross-AI mesh:** the native listener wakes the session on each Cortex notification; the
   `empirica mailbox` CLI and the optional Cortex MCP server carry the content. See
   [`cross-ai-mesh.md`](cross-ai-mesh.md).
@@ -49,11 +52,14 @@ untouched.
 |---|---|
 | The plugin source | `codex-rs/codex-empirica-plugin/` |
 | The plugin's own README (cargo convention) | `codex-rs/codex-empirica-plugin/README.md` |
-| Plugin manifest and hook wiring | `codex-rs/codex-empirica-plugin/manifest.json`, `hooks.json` |
-| Vendored empirica hooks, skills, agents | `codex-rs/codex-empirica-plugin/assets/` |
+| Plugin manifest, hook wiring and MCP servers | `codex-rs/codex-empirica-plugin/manifest.json`, `hooks.json`, `mcp_servers.json` |
+| Bundled skills | `codex-rs/codex-empirica-plugin/skills/` |
+| Vendored empirica hook scripts, agents and base prompt | `codex-rs/codex-empirica-plugin/assets/` (`hooks_scripts/`, `agents/`, `empirica-system-prompt.md`) |
 | The translator | `codex-rs/codex-empirica-translator/` |
 | Curated model seed (the `/model` picker) | `codex-rs/models-manager/models.curated.json` |
 | Installers and wrapper | `scripts/install.sh`, `ecodex/scripts/` |
+| Release and quality scripts | `scripts/release.sh`, `scripts/broccoli.sh` (the quality sweep, which also writes code-quality and test evidence files for Empirica's POSTFLIGHT) |
+| The public forecast | `docs/ROADMAP.yaml`, rendered into the top-level README's What's Coming by `scripts/readme_sections.py` |
 | ecodex docs | `docs/ecodex/` (this directory) |
 | Upstream codex docs | `docs/` (parent directory, untouched) |
 
