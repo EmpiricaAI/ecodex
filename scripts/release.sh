@@ -172,14 +172,6 @@ if [[ "$DRY_RUN" -eq 0 && "$SKIP_COMMIT" -eq 0 ]]; then
   fi
 fi
 
-# README's What's New / What's Coming render from CHANGELOG.md and
-# docs/ROADMAP.yaml. Check them before anything is bumped, so a malformed or
-# silently edited forecast stops the release with the tree untouched.
-if [[ "$SKIP_CHANGELOG" -eq 0 ]]; then
-  python3 "${SCRIPT_DIR}/readme_sections.py" --check \
-    || error "README sections are stale or docs/ROADMAP.yaml is invalid — run scripts/readme_sections.py, then re-run"
-fi
-
 # ─── Read current version ────────────────────────────────────────────
 # Match the FIRST `version = "X.Y.Z"` after `[workspace.package]`.
 # awk window keeps us in the right TOML section so we don't pick up a
@@ -241,6 +233,18 @@ fi
 
 log "Current version: $current_version"
 log "New version:     $new_version  ($BUMP_KIND)"
+
+# README's What's New / What's Coming render from CHANGELOG.md and
+# docs/ROADMAP.yaml. Before anything is bumped (and in --dry-run): the README
+# must be current, and releasing [Unreleased] as the new version must render,
+# so a malformed or silently edited forecast, or an [Unreleased] block with an
+# empty Highlights, stops the release with the tree untouched.
+if [[ "$SKIP_CHANGELOG" -eq 0 ]]; then
+  python3 "${SCRIPT_DIR}/readme_sections.py" --check \
+    || error "README sections are stale or docs/ROADMAP.yaml is invalid — run scripts/readme_sections.py, then re-run"
+  python3 "${SCRIPT_DIR}/readme_sections.py" --preview "$new_version" \
+    || error "releasing [Unreleased] as ${new_version} would not render README's What's New / What's Coming"
+fi
 
 # ─── Update Cargo.toml ───────────────────────────────────────────────
 # In-place sed targeting the workspace.package version line. We anchor

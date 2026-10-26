@@ -7,4 +7,6 @@
 # when empirica core is unavailable.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-exec python3 -m pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -v "$@"
+# -p no:empirica: pytest's rootdir here is the repo root, which holds .empirica/,
+# so core's pytest plugin would replace broccoli.sh's owned-crate test report.
+exec python3 -m pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -v -p no:empirica "$@"

@@ -64,6 +64,11 @@ EMPIRICA_DIR="${ECODEX_ROOT}/.empirica"
 EVIDENCE=(python3 "${SCRIPT_DIR}/broccoli_evidence.py")
 QUALITY_SCOPE="owned crates (rustfmt: codex-empirica-plugin, codex-empirica-translator; clippy: those and codex-cli)"
 TEST_SCOPE="owned crates: codex-empirica-plugin, codex-empirica-translator (cargo test, unfiltered)"
+# OWNED_PKGS without the -p flags: only these packages' diagnostics count.
+OWNED_NAMES="$(printf '%s\n' "${OWNED_PKGS[@]}" | grep -vx -- '-p' | paste -sd, -)"
+# Captured step output lives here and goes with the script, however it exits.
+WORK="$(mktemp -d)" || exit 1
+trap 'rm -rf "${WORK}"' EXIT
 
 QUICK=0
 RUN_INFORMATIONAL=1
@@ -112,30 +117,24 @@ run_info() {
 # into code_quality.json. Passes with no warnings and no errors: what -D warnings
 # enforced, but counted across every crate instead of stopping at the first.
 clippy_gate() {
-  local stream status
-  stream="$(mktemp)"
+  local stream="${WORK}/clippy.json" status
   env RUST_MIN_STACK=16777216 cargo clippy "${OWNED_PKGS[@]}" --all-targets --no-deps \
     --message-format=json-diagnostic-rendered-ansi >"${stream}"
   status=$?
   "${EVIDENCE[@]}" clippy "${stream}" --cargo-status "${status}" --rustfmt-ok "${RUSTFMT_OK}" \
-    --scope "${QUALITY_SCOPE}" --out "${EMPIRICA_DIR}/code_quality.json"
-  status=$?
-  rm -f "${stream}"
-  return "${status}"
+    --packages "${OWNED_NAMES}" --scope "${QUALITY_SCOPE}" --out "${EMPIRICA_DIR}/code_quality.json"
 }
 
 # tests_gate — the owned-crate tests, every binary even after a failure, with the
-# summed counts written to test_report.json.
+# summed counts written to test_report.json. The previous report goes first, so
+# an interrupted run leaves none rather than an older one.
 tests_gate() {
-  local log status
-  log="$(mktemp)"
+  local log="${WORK}/test.log" status
+  rm -f "${EMPIRICA_DIR}/test_report.json"
   env RUST_MIN_STACK=16777216 cargo test "${PURE_PKGS[@]}" --no-fail-fast 2>&1 | tee "${log}"
   status=${PIPESTATUS[0]}
   "${EVIDENCE[@]}" tests "${log}" --cargo-status "${status}" --scope "${TEST_SCOPE}" \
     --out "${EMPIRICA_DIR}/test_report.json"
-  status=$?
-  rm -f "${log}"
-  return "${status}"
 }
 
 cd "${CODEX_RS}"
@@ -145,6 +144,8 @@ echo "   scope: ${OWNED_PKGS[*]}"
 echo
 
 # ── GATING: format, lint, tests (things we own) ──────────────────────
+# rustfmt's result rides in code_quality.json, so the previous file goes now.
+rm -f "${EMPIRICA_DIR}/code_quality.json"
 RUSTFMT_OK=false
 run_gate "rustfmt --check"        cargo fmt --check "${PURE_PKGS[@]}" && RUSTFMT_OK=true
 # --no-deps: lint only the owned crates. Without it clippy also lints every

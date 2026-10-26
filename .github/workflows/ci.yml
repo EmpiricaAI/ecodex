@@ -144,12 +144,15 @@ jobs:
       # README's What's New / What's Coming are rendered from CHANGELOG.md and
       # docs/ROADMAP.yaml; a hand edit or a forecast changed without a dated
       # revision fails here. The silent-edit check compares against the last
-      # release tag, which a shallow checkout does not have: fetch that one
-      # tag and name it, so the check cannot pass by finding no baseline.
+      # release tag, which a shallow checkout does not have: fetch that one tag
+      # and name it, so a missing tag fails the step instead of skipping the
+      # comparison. Only X.Y.Z tags are releases (sort -V would rank a
+      # prerelease above its release). A release whose tag has no roadmap file
+      # leaves nothing to compare, which is how a first forecast starts.
       - name: Check README sections and the roadmap
         run: |
           set -euo pipefail
-          latest="$(git ls-remote --tags --refs origin 'v[0-9]*' | sed 's#.*refs/tags/##' | sort -V | tail -1)"
+          latest="$(git ls-remote --tags --refs origin 'v[0-9]*' | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
           test -n "$latest"
           git fetch --depth=1 origin "refs/tags/${latest}:refs/tags/${latest}"
           "$RUNNER_TEMP/vendored-hooks-venv/bin/python" scripts/readme_sections.py --check --baseline-ref "$latest"
