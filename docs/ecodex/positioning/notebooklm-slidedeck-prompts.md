@@ -137,8 +137,9 @@ can live on different machines, under different users, on different substrates
 (Claude Code and ecodex/codex are peers on the same mesh), and across orgs. They
 coordinate not by sharing a filesystem but by message-passing: `collab` is open
 and ungated because knowledge cannot act on the receiver; `propose` is gated by
-ECO (an authorized human/actor decision) because action can. Coordination state
-that must outlive a thread lives in a Shared Epistemic Record (SER).
+ECO (an authorized human/actor decision) because action can. Work that several
+practices must each do is one proposal addressed to all of them, which closes only
+when every one has acknowledged its own part.
 
 The result is a generalized pull request — over arbitrary shared state, not just
 code — where calibration (the delta between an agent's stated belief and grounded
