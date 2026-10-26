@@ -70,9 +70,9 @@ items:
   - id: rust-code-quality
     title: Graded code quality for Rust work
     prediction: Once core's code-quality reader ships, an ecodex transaction's POSTFLIGHT grades Rust code quality from ecodex's own quality sweep instead of reporting no source.
-    confidence: 0.6
-    evidence: reported
-    basis: Reported by core, which plans a reader for a quality file the project writes, with ecodex's sweep script as the Rust writer. Neither side has shipped it yet.
+    confidence: 0.85
+    evidence: measured
+    basis: Measured on a development build of core. After ecodex's quality sweep wrote its files, a POSTFLIGHT graded code quality and the owned-crate tests from them. Core's reader is not in a core release yet.
     falsifier: An ecodex POSTFLIGHT recorded after the sweep starts writing its quality file still reports no code-quality source.
     horizon: "0.165.1"
     steered: true
