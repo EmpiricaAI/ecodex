@@ -97,7 +97,7 @@ README's What's New and What's Coming are generated: edit `CHANGELOG.md` (a `###
 
 ```sh
 cd codex-rs
-cargo build -p codex-exec -p codex-linux-sandbox -p codex-shell-escalation -p codex-rmcp-client -p codex-cli --bins
+cargo build -p codex-exec -p codex-linux-sandbox -p codex-rmcp-client -p codex-cli --bins
 ln -sf ecodex target/debug/codex        # ecodex renames the CLI; upstream tests look for `codex`
 ```
 
