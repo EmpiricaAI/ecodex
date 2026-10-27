@@ -119,7 +119,7 @@ jobs:
         run: |
           set -euo pipefail
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12 "$RUNNER_TEMP"
-          "$RUNNER_TEMP/actionlint" -color .github/workflows/ci.yml .github/workflows/release.yml
+          "$RUNNER_TEMP/actionlint" -color .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/nightly.yml
 
       - name: Run hermetic vendored-hook tests
         run: |
@@ -139,7 +139,8 @@ jobs:
           # themselves are the bare CI gates above.
           "$RUNNER_TEMP/vendored-hooks-venv/bin/python" -m pytest \
             scripts/test_check_upstream_sync_tag.py scripts/test_check_empirica_core_pin.py \
-            scripts/test_readme_sections.py scripts/test_broccoli_evidence.py -q
+            scripts/test_readme_sections.py scripts/test_broccoli_evidence.py \
+            scripts/test_scoped_cargo_audit.py -q
 
       # README's What's New / What's Coming are rendered from CHANGELOG.md and
       # docs/ROADMAP.yaml; a hand edit or a forecast changed without a dated

@@ -1,0 +1,40 @@
+{
+  "about": "Shipped advisories ecodex accepts until upstream codex moves the dependency (scripts/scoped_cargo_audit.py). Each needs a semver-major bump in an upstream crate; re-check at every upstream sync and remove an entry once the audit no longer reports it (a stale entry fails the gate).",
+  "accepted": [
+    {
+      "id": "RUSTSEC-2026-0387",
+      "crate": "crypto-bigint",
+      "reason": "Timing variability in constant-time operations. Fixed in crypto-bigint >=0.7.6; ecodex has 0.5.5 through elliptic-curve 0.13 and p256/p384 (aws-config, age, codex-user-verification, hpke, rtc-dtls), a RustCrypto stack upstream codex has not moved.",
+      "recorded": "2026-10-27",
+      "recheck": "each upstream sync (still 0.5.5 at rust-v0.165.0-alpha.1)"
+    },
+    {
+      "id": "RUSTSEC-2026-0391",
+      "crate": "zstd",
+      "reason": "Data from an abandoned stream leaks into the next on a reused context. Fixed in zstd >=0.14.3; ecodex has 0.13.3 through upstream's codex-app-server-protocol.",
+      "recorded": "2026-10-27",
+      "recheck": "each upstream sync (still 0.13.3 at rust-v0.165.0-alpha.1)"
+    },
+    {
+      "id": "RUSTSEC-2026-0403",
+      "crate": "zstd-safe",
+      "reason": "Uninitialized memory exposed when streaming decompression of a legacy frame fails. Fixed in zstd-safe >=8.2.0, which needs zstd 0.14; ecodex has 7.2.4 through zstd 0.13.3.",
+      "recorded": "2026-10-27",
+      "recheck": "each upstream sync (still 7.2.4 at rust-v0.165.0-alpha.1)"
+    },
+    {
+      "id": "RUSTSEC-2026-0398",
+      "crate": "zstd-safe",
+      "reason": "Seekable::decompress sets a Vec length beyond its capacity for offsets past the end. Fixed in zstd-safe >=8.2.0, which needs zstd 0.14; ecodex has 7.2.4 through zstd 0.13.3.",
+      "recorded": "2026-10-27",
+      "recheck": "each upstream sync (still 7.2.4 at rust-v0.165.0-alpha.1)"
+    },
+    {
+      "id": "RUSTSEC-2026-0410",
+      "crate": "zstd-sys",
+      "reason": "The WebAssembly allocator shim corrupts memory on allocation failure; ecodex builds no WebAssembly target. Fixed in zstd-sys >=2.1.2, pinned by zstd-safe 7.2.4; ecodex has 2.0.16.",
+      "recorded": "2026-10-27",
+      "recheck": "each upstream sync (still 2.0.16 at rust-v0.165.0-alpha.1)"
+    }
+  ]
+}

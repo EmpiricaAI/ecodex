@@ -1,0 +1,114 @@
+name: nightly
+
+# The suites too slow or too broad for every push (David, 2026-10-26: tier the
+# tests as empirica core does). Per-push CI (ci.yml) builds and tests only the
+# crates ecodex owns; these jobs cover the rest:
+#
+#   upstream-suites  codex-core's `all` integration suite and the codex-tui
+#                    suite. ecodex patches upstream crates (cli, tui, core), and
+#                    these are the suites that see a patch break upstream
+#                    behaviour. Built as CONTRIBUTING.md describes: the helper
+#                    binaries the tests look up, the `codex` name the tests
+#                    expect, and upstream's prebuilt codex-code-mode-host.
+#   advisories       cargo audit, scoped by scripts/scoped_cargo_audit.py to the
+#                    advisories in crates the release actually ships.
+#
+# A release is cut only from a commit this workflow passed on. Run it on demand
+# with workflow_dispatch (gh workflow run nightly.yml -R EmpiricaAI/ecodex).
+on:
+  schedule:
+    - cron: "41 2 * * *" # 02:41 UTC, off the top-of-hour rush
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  upstream-suites:
+    name: codex-core and codex-tui suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      # No debug info: the debug build of the whole test graph must fit the
+      # runner's disk. RUST_MIN_STACK matches the justfile's test recipe.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      RUST_MIN_STACK: "8388608"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Free runner disk
+        working-directory: .
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codex-rs
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest
+
+      - name: Build the binaries the tests look up
+        run: |
+          set -euo pipefail
+          cargo build -p codex-exec -p codex-linux-sandbox -p codex-shell-escalation -p codex-rmcp-client -p codex-cli --bins
+          ln -sf ecodex target/debug/codex
+          curl -fsSL "https://github.com/openai/codex/releases/download/$(cat UPSTREAM_SYNC_TAG)/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C target/debug
+          df -h /
+
+      - name: codex-core integration suite (core::all)
+        run: cargo nextest run -p codex-core --test all --no-fail-fast
+
+      - name: codex-tui suite
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p codex-tui --no-fail-fast
+
+      - name: Disk after the suites
+        if: ${{ always() }}
+        working-directory: .
+        run: df -h /
+
+  advisories:
+    name: dependency advisories (shipped crates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: cargo-audit
+
+      # Fails only for an advisory a release root (codex-cli, the plugin, the
+      # translator) reaches through normal or build dependencies; lockfile-only
+      # and dev-only advisories are listed but do not fail it.
+      - name: Scoped cargo audit
+        run: python3 ../scripts/scoped_cargo_audit.py

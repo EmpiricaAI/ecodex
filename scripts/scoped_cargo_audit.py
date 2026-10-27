@@ -14,21 +14,49 @@ For each cargo-audit advisory, this asks whether one of the three release roots
 depends on it through normal/build edges. A workspace-wide inverse tree is not
 authoritative: it includes dev dependencies and crates ecodex does not ship.
 
-Exit code: 1 if any advisory has a real reverse-dependent (SHIPPED), 0
-otherwise (including when only phantom/orphan-lockfile advisories exist).
+A shipped advisory whose fix ecodex cannot take on its own (it needs an upstream
+dependency to move a major version) can be accepted in cargo_audit_accepted.json,
+each entry with its id, crate, reason, the date it was recorded and when to check it
+again. An accepted advisory is listed and does not fail the gate. An entry that no
+shipped advisory matches any more is STALE and fails it, so the list is pruned when
+upstream moves instead of quietly accepting a future reappearance.
+
+Exit code: 1 if a shipped advisory is not accepted, or an accept entry is stale; 2
+if cargo audit or the accept list cannot be read; 0 otherwise (including when only
+phantom/orphan-lockfile advisories exist).
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 SHIPPED_ROOTS = (
     "codex-cli",
     "codex-empirica-plugin",
     "codex-empirica-translator",
 )
+DEFAULT_ACCEPTED = Path(__file__).with_name("cargo_audit_accepted.json")
+_ENTRY_FIELDS = ("id", "crate", "reason", "recorded", "recheck")
+
+
+def load_accepted(path: Path) -> dict[str, dict]:
+    """The accept list by advisory id. Raises ValueError for a malformed list or entry."""
+    data = json.loads(path.read_text())
+    entries = data.get("accepted") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError(f"{path}: expected an object with an `accepted` list")
+    accepted: dict[str, dict] = {}
+    for n, entry in enumerate(entries, start=1):
+        fields = entry if isinstance(entry, dict) else {}
+        missing = [f for f in _ENTRY_FIELDS if not str(fields.get(f, "")).strip()]
+        if missing:
+            raise ValueError(f"{path}: entry {n} needs {', '.join(missing)}")
+        accepted[entry["id"]] = entry
+    return accepted
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -77,13 +105,18 @@ def has_reverse_dependents(name: str, version: str) -> bool:
     return False
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
+    parser.add_argument("--accepted", type=Path, default=DEFAULT_ACCEPTED, help="the accept list")
+    args = parser.parse_args(argv)
+    try:
+        accepted = load_accepted(args.accepted) if args.accepted.exists() else {}
+    except (OSError, ValueError) as error:
+        sys.stderr.write(f"accept list unreadable: {error}\n")
+        return 2
+
     audit = cargo_audit_json()
     vulns = audit.get("vulnerabilities", {}).get("list", [])
-
-    if not vulns:
-        print("cargo-audit: 0 advisories. Clean.")
-        return 0
 
     shipped, phantom = [], []
     for v in vulns:
@@ -106,17 +139,47 @@ def main() -> int:
                 f"{v['package']['version']}  ({v['advisory']['title']})"
             )
 
-    if shipped:
-        print(f"\nSHIPPED ({len(shipped)}) -- has real reverse-dependents, FAILS this gate:")
-        for v in shipped:
+    def is_accepted(v: dict) -> bool:
+        entry = accepted.get(v["advisory"]["id"])
+        return entry is not None and entry["crate"] == v["package"]["name"]
+
+    taken = [v for v in shipped if is_accepted(v)]
+    failing = [v for v in shipped if not is_accepted(v)]
+    matched = {v["advisory"]["id"] for v in taken}
+    stale = [e for advisory_id, e in accepted.items() if advisory_id not in matched]
+
+    if taken:
+        print(
+            f"\nACCEPTED ({len(taken)}) -- shipped, accepted in {args.accepted.name}; "
+            "does not fail:"
+        )
+        for v in taken:
+            entry = accepted[v["advisory"]["id"]]
+            print(
+                f"  - {v['advisory']['id']}  {v['package']['name']} {v['package']['version']}  "
+                f"(recorded {entry['recorded']}; re-check {entry['recheck']})"
+            )
+
+    if failing:
+        print(f"\nSHIPPED ({len(failing)}) -- has real reverse-dependents, FAILS this gate:")
+        for v in failing:
             print(
                 f"  - {v['advisory']['id']}  {v['package']['name']} "
                 f"{v['package']['version']}  ({v['advisory']['title']})"
             )
             print(f"    {v['advisory']['url']}")
-        return 1
 
-    print("\nNo shipped-dependency vulnerabilities.")
+    if stale:
+        print(
+            f"\nSTALE ({len(stale)}) -- accepted in {args.accepted.name} but no shipped advisory "
+            "matches; remove these entries:"
+        )
+        for entry in stale:
+            print(f"  - {entry['id']}  {entry['crate']}")
+
+    if failing or stale:
+        return 1
+    print("\nNo unaccepted shipped-dependency vulnerabilities.")
     return 0
 
 
