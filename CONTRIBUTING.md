@@ -105,6 +105,7 @@ ln -sf ecodex target/debug/codex        # ecodex renames the CLI; upstream tests
 
 ```sh
 curl -fsSL "https://github.com/openai/codex/releases/download/$(cat UPSTREAM_SYNC_TAG)/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C target/debug
+mv target/debug/codex-code-mode-host-x86_64-unknown-linux-musl target/debug/codex-code-mode-host   # the name the tests look up
 ```
 
 Known failures that are **not** ecodex's: `suite::network_approval::network_rejection_preserves_execution_and_review_outcomes::{accepted_review,latest_rejection,pending_review}` fail identically on pristine upstream `rust-v0.160.0` on the Strix Halo box (the sandboxed child is still alive at the deadline), so treat them as environmental until they pass somewhere.

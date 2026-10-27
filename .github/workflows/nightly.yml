@@ -70,8 +70,12 @@ jobs:
           set -euo pipefail
           cargo build -p codex-exec -p codex-linux-sandbox -p codex-rmcp-client -p codex-cli --bins
           ln -sf ecodex target/debug/codex
+          # The archive holds codex-code-mode-host-x86_64-unknown-linux-musl; the
+          # tests look the binary up as codex-code-mode-host.
           curl -fsSL "https://github.com/openai/codex/releases/download/$(cat UPSTREAM_SYNC_TAG)/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz -C target/debug
+          mv target/debug/codex-code-mode-host-x86_64-unknown-linux-musl target/debug/codex-code-mode-host
+          test -x target/debug/codex-code-mode-host
           df -h /
 
       - name: codex-core integration suite (core::all)
