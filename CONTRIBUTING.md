@@ -152,7 +152,9 @@ Blank issues are disabled. Discussion about the broader Empirica framework goes 
 - the vendored-hook tests, run against the exact empirica commit the hooks came from, and the scripts' own tests
 - README's generated sections against `CHANGELOG.md` and `docs/ROADMAP.yaml`, with the forecast compared to the one in the last release tag
 
-Upstream codex's own test suites are out of scope for ecodex CI. Upstream's workflows are kept under `.github/workflows-upstream/` for reference when syncing.
+`.github/workflows/nightly.yml` runs nightly, and on demand, what is too slow or too broad for every push: the codex-tui suite, codex-core's `core::all` suite (informational until its failures are triaged), and the cargo audit scoped to shipped crates with its accept list `scripts/cargo_audit_accepted.json`. Releases are to require a passing nightly on the commit they are cut from; the release script does not check it yet.
+
+Upstream codex's own test suites are otherwise out of scope for ecodex CI. Upstream's workflows are kept under `.github/workflows-upstream/` for reference when syncing.
 
 ## Releases
 

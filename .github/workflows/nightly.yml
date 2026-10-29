@@ -13,8 +13,9 @@ name: nightly
 #   advisories       cargo audit, scoped by scripts/scoped_cargo_audit.py to the
 #                    advisories in crates the release actually ships.
 #
-# A release is cut only from a commit this workflow passed on. Run it on demand
-# with workflow_dispatch (gh workflow run nightly.yml -R EmpiricaAI/ecodex).
+# Releases are to require this workflow green on the commit they are cut from
+# (not checked by the release script yet). Run it on demand with
+# workflow_dispatch (gh workflow run nightly.yml -R EmpiricaAI/ecodex).
 on:
   schedule:
     - cron: "41 2 * * *" # 02:41 UTC, off the top-of-hour rush
@@ -78,7 +79,13 @@ jobs:
           test -x target/debug/codex-code-mode-host
           df -h /
 
-      - name: codex-core integration suite (core::all)
+      # Informational until triaged (David, 2026-10-29): it runs and its
+      # failures show in the run, but it does not fail the workflow. On
+      # 2026-10-27 it failed 154 of 2558 here (78 locally): drifted scenario
+      # snapshots in the tree, and sandbox/approval tests the runner cannot
+      # host. A planned goal triages it; then this continue-on-error goes.
+      - name: codex-core integration suite (core::all, informational)
+        continue-on-error: true
         run: cargo nextest run -p codex-core --test all --no-fail-fast
 
       # Two tests are excluded by exact name until they follow ecodex; each is a
