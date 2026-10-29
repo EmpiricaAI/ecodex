@@ -84,9 +84,20 @@ jobs:
       # 2026-10-27 it failed 154 of 2558 here (78 locally): drifted scenario
       # snapshots in the tree, and sandbox/approval tests the runner cannot
       # host. A planned goal triages it; then this continue-on-error goes.
+      # continue-on-error reports the step as success even when tests fail, so
+      # the count is written to the run summary and raised as a warning.
       - name: codex-core integration suite (core::all, informational)
         continue-on-error: true
-        run: cargo nextest run -p codex-core --test all --no-fail-fast
+        run: |
+          set +e
+          cargo nextest run -p codex-core --test all --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/core-all.log"
+          status=${PIPESTATUS[0]}
+          summary="$(grep -E '^ +Summary \[' "$RUNNER_TEMP/core-all.log" | tail -1 | sed 's/^ *//')"
+          echo "core::all (informational): ${summary:-no summary line}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            echo "::warning title=core::all (informational)::${summary:-nextest exited $status}"
+          fi
+          exit "$status"
 
       # Two tests are excluded by exact name until they follow ecodex; each is a
       # planned goal, and any other failure still fails the run:
