@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - **Empirica hooks re-vendored from core 1.14.18** (`f262b87f001d`; CI's empirica-core pin moves to it). The Sentinel treats fewer commands as reads: `tmux` only for its list, show and has-session verbs, and git's `--ext-diff`/`--textconv` and man's `-C`/`--config-file`, abbreviated, attached or quoted, as running a program. A CHECK that leaves `know` or `uncertainty` unassessed now passes with an advisory instead of reading the missing value as 0 or 1. The task-completed hook drops the codebase facts API core removed, and the protocol loader says when its poll fails.
 - **Empirica hooks re-vendored from core 1.14.16, and checked against core 1.14.17** (`e1903ccc605f`, which changes no vendored file; CI's empirica-core pin moves to it). Core now stores a vector nobody assessed as "not assessed" rather than 0.5 and audited every reader. Of the two vendored scripts that change, the statusline fills a vector the latest CHECK skipped from its last recorded value in the same transaction, so it no longer reads 0%, and session end takes each vector's newest recorded value instead of a default.
 
+### Security
+- `libz-sys` 1.1.29 → 1.1.31 in `Cargo.lock` (RUSTSEC-2026-0418, shipped via `curl-sys`): its build script printed the build's environment, secrets included, into `target/` when built with `cc` 1.6.0 or later. ecodex's lock has `cc` 1.2.55, so its builds were not exposed; the nightly's scoped audit caught the advisory and is clean again.
+
 ## [0.164.2] - 2026-10-25
 
 ### Highlights
