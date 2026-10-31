@@ -49,7 +49,11 @@ started yet". `scripts/release.sh` already passes `--repo` for the same reason.
 
 1. **Stamp the README** "latest release" link with the new version, commit, push,
    and wait for CI on that commit: `gh run list -R EmpiricaAI/ecodex --commit
-   <full sha>`, then `gh run watch -R EmpiricaAI/ecodex <run id>`.
+   <full sha>`, then `gh run watch -R EmpiricaAI/ecodex <run id>`. Start the
+   nightly on the same commit, `gh workflow run nightly.yml -R EmpiricaAI/ecodex
+   --ref main`, and wait for it by its run id too: it runs the upstream suites
+   and the shipped-crate audit in about 45 minutes, and `release.sh` bumps
+   nothing until the newest nightly run on HEAD has passed.
 2. **`./scripts/release.sh --explicit <version> --push --publish-crates`** bumps the
    workspace version, refreshes `Cargo.lock`, rolls the changelog's `[Unreleased]`
    section, renders README's What's New and What's Coming for the new version,
@@ -58,8 +62,9 @@ started yet". `scripts/release.sh` already passes `--repo` for the same reason.
    to the entries' bold titles) and garden `docs/ROADMAP.yaml` (the forecast
    skill's gardening pass): before it bumps anything the script stops
    if the README is stale, the roadmap is invalid or was edited without a
-   revision, or `[Unreleased]` does not render, and it warns about items past their
-   horizon. `--dry-run` runs the same checks, so run it first. cargo reads the
+   revision, `[Unreleased]` does not render, or the nightly has not passed on
+   HEAD, and it warns about items past their horizon. `--dry-run` runs the same
+   checks, so run it first. cargo reads the
    crates.io token from its own credential store as well as `CARGO_REGISTRY_TOKEN`,
    so an unset variable does not mean there is no token. Never print the token or
    write it into a file.
@@ -83,7 +88,8 @@ started yet". `scripts/release.sh` already passes `--repo` for the same reason.
    installs the published release into a scratch prefix and checks that it is an
    integrated ecodex: the version, the plugin and config written on first start,
    and the companion binaries. It installs from the GitHub release, so it runs
-   before the tap is pushed.
+   before the tap is pushed. `--force-version` skips the nightly check: HEAD is
+   now the release commit, which the nightly was never run on.
 6. **Homebrew.** `scripts/sync-homebrew.sh <version> --tap <homebrew-tap checkout>`
    fills the formula and copies it into the tap. Commit the tap as `ecodex
    <version>` and push it; this is what Homebrew users install.

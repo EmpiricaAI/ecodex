@@ -13,8 +13,8 @@ name: nightly
 #   advisories       cargo audit, scoped by scripts/scoped_cargo_audit.py to the
 #                    advisories in crates the release actually ships.
 #
-# Releases are to require this workflow green on the commit they are cut from
-# (not checked by the release script yet). Run it on demand with
+# A release requires this workflow green on the commit it is cut from:
+# scripts/release.sh checks before it bumps anything. Run it on demand with
 # workflow_dispatch (gh workflow run nightly.yml -R EmpiricaAI/ecodex).
 on:
   schedule:

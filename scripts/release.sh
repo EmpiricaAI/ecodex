@@ -48,6 +48,8 @@
 #   - CHANGELOG.md has an `## [Unreleased]` section near the top
 #   - README.md's What's New / What's Coming are current and docs/ROADMAP.yaml
 #     is valid (`scripts/readme_sections.py --check`)
+#   - nightly.yml's newest run on HEAD completed green, read with an
+#     authenticated gh CLI (--force-version, the post-cut path, skips this)
 #
 # All exit non-zero on validation failure; safe to re-run after fixing.
 
@@ -244,6 +246,43 @@ if [[ "$SKIP_CHANGELOG" -eq 0 ]]; then
     || error "README sections are stale or docs/ROADMAP.yaml is invalid — run scripts/readme_sections.py, then re-run"
   python3 "${SCRIPT_DIR}/readme_sections.py" --preview "$new_version" \
     || error "releasing [Unreleased] as ${new_version} would not render README's What's New / What's Coming"
+fi
+
+# ─── Nightly gate ────────────────────────────────────────────────────
+# A release is cut only from a commit nightly.yml passed on (David,
+# 2026-10-26): the nightly runs the upstream suites and the shipped-crate
+# audit that per-push CI does not. The commit checked is HEAD before the
+# bump, the one the release is cut from; the bump commit changes only the
+# version, the lock's member versions, the changelog and the README. It runs
+# before anything is bumped, and in --dry-run, like the README check above.
+# --force-version is the recovery and --verify-install path, run after the
+# cut on the release commit itself, so it skips the check. gh needs the full
+# SHA: a short one matches no run, which reads like "never ran". The
+# conclusion is the last field because it is empty while a run is in
+# progress, and read would collapse an empty middle field.
+NIGHTLY_REPO="EmpiricaAI/ecodex"
+if [[ "$FORCE_VERSION" -eq 1 ]]; then
+  warn "--force-version: not checking the nightly (recovery runs on the already-cut release commit)"
+else
+  command -v gh >/dev/null 2>&1 \
+    || error "gh CLI not found — it is needed to confirm nightly.yml passed on HEAD"
+  head_sha="$(git rev-parse HEAD)"
+  dispatch="gh workflow run nightly.yml -R ${NIGHTLY_REPO} --ref ${current_branch}"
+  nightly_row="$(gh run list -R "$NIGHTLY_REPO" --workflow nightly.yml --commit "$head_sha" \
+      --limit 1 --json databaseId,status,url,conclusion \
+      --jq '.[] | [.databaseId, .status, .url, .conclusion] | @tsv')" \
+    || error "couldn't read nightly.yml runs for ${head_sha} from ${NIGHTLY_REPO} (is gh authenticated?)"
+  if [[ -z "$nightly_row" ]]; then
+    error "nightly.yml has not run on ${head_sha}. Push it, start it with: ${dispatch}, and re-run once it passes"
+  fi
+  IFS=$'\t' read -r nightly_id nightly_status nightly_url nightly_conclusion <<<"$nightly_row"
+  if [[ "$nightly_status" != "completed" ]]; then
+    error "nightly.yml on ${head_sha} is ${nightly_status}: ${nightly_url}. Wait for it (gh run watch -R ${NIGHTLY_REPO} ${nightly_id}), then re-run"
+  fi
+  if [[ "$nightly_conclusion" != "success" ]]; then
+    error "nightly.yml's newest run on ${head_sha} ended ${nightly_conclusion:-without a conclusion}: ${nightly_url}. A release needs it green: fix, push, and start it with: ${dispatch}"
+  fi
+  log "Nightly passed on ${head_sha:0:10}: ${nightly_url}"
 fi
 
 # ─── Update Cargo.toml ───────────────────────────────────────────────

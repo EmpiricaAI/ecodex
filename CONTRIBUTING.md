@@ -82,7 +82,8 @@ python3 scripts/check_upstream_sync_tag.py
 python3 scripts/check_empirica_core_pin.py
 python3 scripts/readme_sections.py --check   # README's What's New / What's Coming against CHANGELOG + docs/ROADMAP.yaml
 python -m pytest scripts/test_readme_sections.py scripts/test_broccoli_evidence.py \
-  scripts/test_check_upstream_sync_tag.py scripts/test_check_empirica_core_pin.py   # the scripts' tests CI runs
+  scripts/test_check_upstream_sync_tag.py scripts/test_check_empirica_core_pin.py \
+  scripts/test_scoped_cargo_audit.py          # the scripts' tests CI runs
 python -m pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -p no:empirica   # needs empirica importable
 empirica compliance-report                   # lint, complexity, tests, docs, repo hygiene
 ```
@@ -152,7 +153,7 @@ Blank issues are disabled. Discussion about the broader Empirica framework goes 
 - the vendored-hook tests, run against the exact empirica commit the hooks came from, and the scripts' own tests
 - README's generated sections against `CHANGELOG.md` and `docs/ROADMAP.yaml`, with the forecast compared to the one in the last release tag
 
-`.github/workflows/nightly.yml` runs nightly, and on demand, what is too slow or too broad for every push: the codex-tui suite, codex-core's `core::all` suite (informational until its failures are triaged), and the cargo audit scoped to shipped crates with its accept list `scripts/cargo_audit_accepted.json`. Releases are to require a passing nightly on the commit they are cut from; the release script does not check it yet.
+`.github/workflows/nightly.yml` runs nightly, and on demand, what is too slow or too broad for every push: the codex-tui suite, codex-core's `core::all` suite (informational until its failures are triaged), and the cargo audit scoped to shipped crates with its accept list `scripts/cargo_audit_accepted.json`. A release requires it: `release.sh` will not bump the version unless the newest nightly run on HEAD passed. Start one on demand with `gh workflow run nightly.yml -R EmpiricaAI/ecodex --ref main`.
 
 Upstream codex's own test suites are otherwise out of scope for ecodex CI. Upstream's workflows are kept under `.github/workflows-upstream/` for reference when syncing.
 
@@ -163,8 +164,8 @@ ecodex versions keep upstream's major.minor and count releases in the patch numb
 The procedure is [`codex-rs/codex-empirica-plugin/skills/pre-publish/references/ecodex-release.md`](codex-rs/codex-empirica-plugin/skills/pre-publish/references/ecodex-release.md), the ecodex steps of the bundled `pre-publish` skill; follow it rather than this summary. In outline:
 
 1. **Gates.** `./scripts/broccoli.sh`, a drift check of the vendored hooks with `scripts/setup-codex.py`, and an independent read-only review of the changes since the last tag.
-2. **Stamp the README's latest-release link**, push, and wait for CI on that commit by its run id.
-3. **`./scripts/release.sh`** bumps the version, rolls the changelog, renders README's What's New and What's Coming, commits, tags, pushes and publishes the owned crates. Run it with `--dry-run` first: before it bumps anything it stops on a stale README, an invalid or silently edited forecast, or an `[Unreleased]` block that will not render.
+2. **Stamp the README's latest-release link**, push, start the nightly on that commit, and wait for it and for CI, each by its run id.
+3. **`./scripts/release.sh`** bumps the version, rolls the changelog, renders README's What's New and What's Coming, commits, tags, pushes and publishes the owned crates. Run it with `--dry-run` first: before it bumps anything it stops on a stale README, an invalid or silently edited forecast, an `[Unreleased]` block that will not render, or a HEAD the nightly has not passed.
 4. **Wait for the release run** (`release.yml`, four targets) and for CI on the release commit, each by run id.
 5. **Check the archives** by downloading each one and hashing it against its `.sha256`.
 6. **Verify the install** of the published release with `release.sh --verify-install`, before the tap is pushed.
