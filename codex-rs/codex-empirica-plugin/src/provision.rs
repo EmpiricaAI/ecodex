@@ -37,14 +37,11 @@ const PLUGIN_NAME: &str = "empirica";
 const PLUGIN_KEY: &str = "empirica@empiricaAI";
 /// The plugin's key before it moved to the empiricaAI marketplace.
 const LEGACY_PLUGIN_KEY: &str = "empirica@nubaeon";
-/// The MCP server `mcp_servers.json` declares.
-const MCP_SERVER_NAME: &str = "empirica";
 /// Fingerprint of the bundle last written into the plugin directory.
 const BUNDLE_MARKER: &str = ".ecodex-bundle";
 
 const MANIFEST: &str = include_str!("../manifest.json");
 const HOOKS: &str = include_str!("../hooks.json");
-const MCP_SERVERS: &str = include_str!("../mcp_servers.json");
 const DEFAULT_CONFIG: &str = include_str!("../assets/config/config.toml.default");
 const HUGGINGFACE_PROFILE: &str = include_str!("../assets/config/huggingface.config.toml");
 const TRANSLATOR_UPSTREAMS: &str = include_str!("../assets/config/translator-upstreams.toml");
@@ -116,7 +113,6 @@ fn bundle_files() -> Vec<(PathBuf, &'static [u8])> {
             MANIFEST.as_bytes(),
         ),
         (PathBuf::from("hooks.json"), HOOKS.as_bytes()),
-        (PathBuf::from("mcp_servers.json"), MCP_SERVERS.as_bytes()),
     ];
     for (prefix, dir) in [
         ("skills", &SKILLS),
@@ -251,15 +247,6 @@ fn ensure_config(codex_home: &Path, report: &mut ProvisionReport) -> io::Result<
     if !plugins.contains_key(PLUGIN_KEY) {
         let mut entry = Table::new();
         entry.insert("enabled", value(true));
-        // Empirica's MCP server only wraps the empirica CLI, which a session
-        // with a shell runs directly. Leave it declared but off; clients
-        // without a shell turn it on here.
-        let mut server = Table::new();
-        server.insert("enabled", value(false));
-        let mut servers = Table::new();
-        servers.set_implicit(true);
-        servers.insert(MCP_SERVER_NAME, Item::Table(server));
-        entry.insert("mcp_servers", Item::Table(servers));
         plugins.insert(PLUGIN_KEY, Item::Table(entry));
         report.plugin_enabled = true;
     }

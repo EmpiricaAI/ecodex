@@ -165,7 +165,7 @@ For the full vocabulary and how the pieces compose, see [`docs/ecodex/system-ove
 - [`docs/ecodex/MISTRAL_SOVEREIGN.md`](docs/ecodex/MISTRAL_SOVEREIGN.md) — wiring EU-sovereign Mistral models (Devstral/Codestral) for data residency and cost
 - [`docs/ecodex/system-overview.md`](docs/ecodex/system-overview.md) — three-layer architecture, runtime composition, file layout
 - [`docs/ecodex/cross-ai-mesh.md`](docs/ecodex/cross-ai-mesh.md) — the mesh: listener, mailbox, Cortex MCP, walkthrough
-- [`docs/ecodex/api/`](docs/ecodex/api/) — plugin API contracts (`hooks.md`, `skills.md`, `mcp.md`, `plugin-statusline.md`, `plugin-writable-roots.md`, `integration-tests.md`)
+- [`docs/ecodex/api/`](docs/ecodex/api/) — plugin API contracts (`hooks.md`, `skills.md`, `mcp.md` (no Empirica MCP server), `plugin-statusline.md`, `plugin-writable-roots.md`, `integration-tests.md`)
 - [`codex-rs/codex-empirica-plugin/README.md`](codex-rs/codex-empirica-plugin/README.md) — the plugin: handlers, provisioning, manifest surfaces
 - [`codex-rs/codex-empirica-translator/README.md`](codex-rs/codex-empirica-translator/README.md) — the translator: routes, adapters, repairs
 - [`docs/ecodex/README.md`](docs/ecodex/README.md) — index of everything under `docs/ecodex/`, including the historical records

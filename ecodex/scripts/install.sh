@@ -193,7 +193,9 @@ echo "→ Installing empirica plugin to $PLUGIN_DEST_DIR/"
 mkdir -p "${PLUGIN_DEST_DIR}/.codex-plugin"
 cp "${PLUGIN_SRC}/manifest.json"     "${PLUGIN_DEST_DIR}/.codex-plugin/plugin.json"
 cp "${PLUGIN_SRC}/hooks.json"        "${PLUGIN_DEST_DIR}/hooks.json"
-cp "${PLUGIN_SRC}/mcp_servers.json"  "${PLUGIN_DEST_DIR}/mcp_servers.json"
+# An earlier build also installed mcp_servers.json (the plugin no longer declares an
+# MCP server); remove that leftover on a re-install.
+rm -f "${PLUGIN_DEST_DIR}/mcp_servers.json"
 # Re-installs need an explicit clean before `cp -r`. Without the rm, GNU cp
 # detects an existing destination directory and copies the source *into* it
 # (creating skills/skills/, hooks_scripts/hooks_scripts/, agents/agents/).

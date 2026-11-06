@@ -1,68 +1,36 @@
-# Empirica's MCP server
+# Empirica and MCP
 
-The empirica plugin declares Empirica's MCP server, `empirica-mcp`. It exposes
-the `empirica` CLI's operations to the model as `mcp__empirica__*` tools.
+Empirica no longer ships an MCP server, and the ecodex plugin does not declare
+one. The `empirica` CLI is the one integration surface: the model runs it
+through its shell, which is how every Empirica operation reaches ecodex, from
+`finding-log` to `check-submit`. There are no `mcp__empirica__*` tools.
 
-**It is off by default.** The server only wraps the `empirica` CLI, and wherever
-ecodex has a shell the model runs `empirica` itself, so the server adds nothing
-there. Turn it on for a client that has no shell, such as a GUI or web front
-end.
+Earlier ecodex builds declared the server in the plugin, switched off by
+default, for a client without a shell. Such a client has no Empirica route
+through MCP now; the CLI needs a shell.
 
-This is separate from the Cortex MCP server, which carries cloud knowledge
-sharing and the AI mesh. Its default does not change.
+## If your config still has the old block
 
-## Turning it on or off
-
-The switch lives in `~/.codex/config.toml`:
+A block like this in `~/.codex/config.toml`, written by an earlier build, does
+nothing:
 
 ```toml
 [plugins."empirica@empiricaAI".mcp_servers.empirica]
-enabled = false   # true to turn the server on
+enabled = false
 ```
 
-ecodex writes this block, set to `false`, into a new `config.toml` and into an
-existing one that has no entry for the plugin yet. A plugin entry you already
-have is left as it is; add the block to it to turn the server off.
+codex applies a plugin's MCP settings only to servers the plugin declares, and
+the plugin declares none, so it never reads the block and prints no warning. You
+can delete it. ecodex does not touch an existing config beyond adding the plugin
+entry when it is missing, so it will not remove the block for you. A new
+`config.toml` no longer gets it.
 
-Check the result with:
+On upgrade ecodex also removes the plugin's old `mcp_servers.json` from
+`~/.codex/plugins/cache/empiricaAI/empirica/`, since the new bundle does not
+contain it.
 
-```sh
-ecodex mcp list
-```
+## The Cortex MCP server is separate
 
-It lists `empirica` with its enabled state.
-
-## How the server is declared
-
-The plugin's `manifest.json` points at `mcp_servers.json`:
-
-```json
-{
-  "mcp_servers": {
-    "empirica": {
-      "command": "empirica-mcp",
-      "args": [],
-      "enabled": true,
-      "startup_timeout_sec": 30,
-      "tool_timeout_sec": 60
-    }
-  }
-}
-```
-
-codex starts `empirica-mcp` over stdio and registers what it advertises under
-`mcp__empirica__*`. The manifest declares the server enabled on purpose: your
-config can turn a plugin's MCP server off but never back on, so the default has
-to live in config, where you can flip it either way. For the same reason the
-timeouts are the manifest's; config controls a plugin server's enablement and
-tool policy, not how it is launched.
-
-## Tools
-
-Each tool is one `empirica` CLI verb, named with underscores: `finding_log` runs
-`finding-log`, `goals_create` runs `goals-create`, and so on. The current list,
-with the verb each tool routes to:
-
-```sh
-empirica mcp-list-tools
-```
+The Cortex MCP server carries cloud knowledge sharing and the AI mesh. It is
+configured under `[mcp_servers.cortex]` and is unchanged; see
+[`cross-ai-mesh.md`](../cross-ai-mesh.md).

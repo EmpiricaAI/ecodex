@@ -13,13 +13,11 @@
       "epistemic-state",
       "calibration",
       "skills",
-      "mcp",
       "statusline"
     ]
   },
   "hooks": "./hooks.json",
   "skills": "./skills",
-  "mcpServers": "./mcp_servers.json",
   "statusline": "./hooks_scripts/scripts/statusline_empirica.py",
   "writableRoots": [
     "~/.empirica"

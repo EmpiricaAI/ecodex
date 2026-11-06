@@ -81,7 +81,7 @@ self-assessment against evidence.
 `codex-rs/codex-empirica-plugin/` is both a library and a binary.
 
 **As a library**, linked into `ecodex`, it carries the plugin's assets
-(`manifest.json`, `hooks.json`, `mcp_servers.json`, `skills/`, the vendored
+(`manifest.json`, `hooks.json`, `skills/`, the vendored
 hooks and agents, the text of the AGENTS.md block in
 `assets/empirica-system-prompt.md`, the default config and translator routes).
 On every interactive, `exec`, resume or fork start, `provision()` writes the
@@ -142,9 +142,9 @@ to diff against on each re-sync.
 - **`assets/agents/`** — Empirica's subagents (architecture, security, ux,
   performance, and the outreach scout, search and fact-scorer), seeded at
   `SessionStart` for codex's agent tool.
-- **`mcp_servers.json`** — declares the Empirica MCP server, which ecodex's
-  config leaves off: it wraps the `empirica` CLI the model can run itself.
-  [`api/mcp.md`](api/mcp.md) has the switch.
+- **No MCP server.** The plugin declares none: the model runs the `empirica`
+  CLI itself. [`api/mcp.md`](api/mcp.md) says what that means for an older
+  config.
 
 ### Discipline strengthening
 
@@ -298,7 +298,7 @@ ecodex/                                   # repo root
 │   ├── models-manager/                   # L1; L2 base prompt, L3 curated seed (registry + picker)
 │   ├── core-plugins/, plugin/, hooks/    # L1 plugin and hook hosts
 │   ├── codex-empirica-plugin/            # L2
-│   │   ├── manifest.json, hooks.json, mcp_servers.json
+│   │   ├── manifest.json, hooks.json
 │   │   ├── skills/                       # Empirica skills for codex
 │   │   ├── assets/hooks_scripts/         # vendored Empirica hooks (setup-codex.py)
 │   │   ├── assets/agents/                # vendored Empirica subagents
