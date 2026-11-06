@@ -1620,6 +1620,32 @@ def _init_context_budget(session_id: str, project_context: dict, db_path=None, u
         return {"error": str(e)}
 
 
+def _one_line(text: object, limit: int = 160) -> str:
+    """First line of `text`, capped, so a reason cannot break the banner into pieces."""
+    first = (str(text).strip().splitlines() or [""])[0]
+    return first if len(first) <= limit else first[: limit - 1] + "…"
+
+
+def _budget_banner_line(summary: dict | None) -> str:
+    """The banner's Budget line, saying so when the budget state was not saved or could not be built.
+
+    `_init_context_budget` records `persist` as `persisted`, `skipped: <reason>` or `failed: ...`, and returns `{"error": ...}` when it raised.
+    The banner used to print only a clean Budget line, so a skipped or failed save left no trace where a person looks (ecodex, since 1bb10b937).
+    A summary with no `persist` key is an older shape, not a failure, and says nothing extra."""
+    if not summary:
+        return ""
+    if "error" in summary:  # key presence, not truthiness: some exceptions have an empty message
+        return f"\nBudget: unavailable ({_one_line(summary['error'] or 'no detail', 120)})"
+    line = (
+        f"\nBudget: {summary.get('tokens_used', 0):,}t used / {summary.get('tokens_available', 0):,}t avail "
+        f"({summary.get('utilization_pct', 0)}%)"
+    )
+    persist = summary.get("persist")
+    if persist and persist != "persisted":
+        line += f" - not saved ({_one_line(persist)})"
+    return line
+
+
 def _init_dashboard(session_id: str, ai_id: str) -> str | None:
     """Initialize System Dashboard. Returns summary string or None."""
     try:
@@ -1690,6 +1716,23 @@ def _harness() -> str:
     return (os.environ.get("EMPIRICA_HARNESS") or "claude-code").strip().lower() or "claude-code"
 
 
+def _core_version_notice() -> str:
+    """A line when the installed core is older than these hooks (lib/hook_vintage.py), else "". Never raises."""
+    try:
+        # Imported here, not at the top: a harness that vendors this hook without the newer lib module must lose the notice, not SessionStart.
+        from hook_vintage import startup_notice
+
+        return startup_notice()
+    except Exception:
+        return ""
+
+
+def _startup_notices(project_root: Path) -> str:
+    """The notices SessionStart shows after the context: hooks newer than the installed core first (it is the more urgent and one line, so
+    it is what the banner's first line shows), then the cached deploy-gap verdict. Empty when there is nothing to say."""
+    return "\n\n".join(part for part in (_core_version_notice(), _deploy_gap_block(project_root)) if part)
+
+
 def _deploy_gap_block(project_root: Path) -> str:
     """The cached deploy-gap verdict for this box, or a line saying why there
     is none. Never runs the detector (2.1 s); reads a cache and spawns a
@@ -1700,7 +1743,7 @@ def _deploy_gap_block(project_root: Path) -> str:
     clean fresh verdict looks like, so a broken reader must not look clean.
 
     Skipped off Claude Code (``EMPIRICA_HARNESS != 'claude-code'``). The detector
-    compares this box's CLI, deployed Claude Code plugin and MCP wrapper against
+    compares this box's CLI, deployed Claude Code plugin against
     their checkouts, so under another harness it describes a deploy that session
     does not run, and a harness that never vendored the cache module would read
     ``verdict unreadable`` at every start (ecodex, prop_dke2es3rhff4plrgfliiqldf24).
@@ -1863,7 +1906,7 @@ def main():
     # Deploy-gap verdict (cached; the detector never runs on this path). Goes
     # into the injected context so the model sees it, and into the stderr
     # banner so the human does. Empty only when fresh and clean.
-    deploy_gap_text = _deploy_gap_block(project_root)
+    deploy_gap_text = _startup_notices(project_root)
     if deploy_gap_text:
         prompt = f"{prompt}\n\n{deploy_gap_text}\n"
 
@@ -1886,9 +1929,7 @@ def main():
 
     # User-visible message
     archive_msg = f"\nArchived {len(archived_plans)} stale plan(s)" if archived_plans else ""
-    budget_msg = ""
-    if budget_summary and not budget_summary.get("error"):
-        budget_msg = f"\nBudget: {budget_summary.get('tokens_used', 0):,}t used / {budget_summary.get('tokens_available', 0):,}t avail ({budget_summary.get('utilization_pct', 0)}%)"
+    budget_msg = _budget_banner_line(budget_summary)
     dash_msg = f"\n{dashboard_status}" if dashboard_status else ""
     # One staleness detector: the deploy-gap block. The VERSION-string compare
     # that used to sit beside it told practitioners to run `setup --force`,

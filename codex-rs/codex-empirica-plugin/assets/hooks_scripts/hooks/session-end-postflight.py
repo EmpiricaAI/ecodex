@@ -213,7 +213,9 @@ def _cleanup_session_files(claude_session_id: str | None):
             )
             restored = None
         else:
-            restored = restore_if_swapped(_LAUNCH_CWD)
+            from empirica.utils.memory_swap import current_harness
+
+            restored = restore_if_swapped(_LAUNCH_CWD, caller_harness=current_harness())
         if restored and restored.get("ok") and (restored.get("written_back") or restored.get("write_back_conflicts")):
             print(f"memory restore: {restored.get('message', '')}", file=sys.stderr)
         if restored and not restored.get("ok", False):
@@ -328,7 +330,7 @@ def _fetch_breadcrumbs(session_id: str) -> dict:
             uf_args = (project_id,)
             df = "WHERE project_id = ?"
             df_args = (project_id,)
-            gf = "WHERE is_completed = 0 AND project_id = ?"
+            gf = "WHERE is_completed = 0 AND COALESCE(status, '') != 'abandoned' AND project_id = ?"
             gf_args = (project_id,)
         else:
             pf = ""
@@ -337,7 +339,7 @@ def _fetch_breadcrumbs(session_id: str) -> dict:
             uf_args = ()
             df = ""
             df_args = ()
-            gf = "WHERE is_completed = 0"
+            gf = "WHERE is_completed = 0 AND COALESCE(status, '') != 'abandoned'"
             gf_args = ()
 
         # Recent findings (last 20)

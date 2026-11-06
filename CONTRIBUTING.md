@@ -84,7 +84,7 @@ python3 scripts/readme_sections.py --check   # README's What's New / What's Comi
 python -m pytest scripts/test_readme_sections.py scripts/test_broccoli_evidence.py \
   scripts/test_check_upstream_sync_tag.py scripts/test_check_empirica_core_pin.py \
   scripts/test_scoped_cargo_audit.py          # the scripts' tests CI runs
-python -m pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks/ -p no:empirica   # needs empirica importable
+python -m pytest codex-rs/codex-empirica-plugin/tests/vendored_hooks/   # needs empirica importable
 empirica compliance-report                   # lint, complexity, tests, docs, repo hygiene
 ```
 

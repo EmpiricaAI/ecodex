@@ -194,10 +194,10 @@ else
 
   # ── GATING: hermetic vendored-hook suite (needs pytest + empirica) ───
   if python3 -c 'import pytest, empirica' >/dev/null 2>&1; then
-    # -p no:empirica: pytest's rootdir here is the ecodex root, so core's pytest
-    # plugin would write this suite's counts to .empirica/test_report.json and
-    # replace the owned-crate report written above.
-    run_gate "vendored-hook suite" python3 -m pytest "${CODEX_RS}/codex-empirica-plugin/tests/vendored_hooks/" -q -p no:empirica
+    # Core's pytest plugin writes this suite's counts to its own
+    # .empirica/test_report.pytest.json; the collector sums every fresh
+    # test_report*.json, so the owned-crate report written above stays.
+    run_gate "vendored-hook suite" python3 -m pytest "${CODEX_RS}/codex-empirica-plugin/tests/vendored_hooks/" -q
   else
     yellow "▶ vendored-hook suite: SKIPPED — pytest or empirica not importable in this interpreter"
     yellow "  (CI runs it in a hermetic venv; not a pass, a skip — install both to gate it here)"

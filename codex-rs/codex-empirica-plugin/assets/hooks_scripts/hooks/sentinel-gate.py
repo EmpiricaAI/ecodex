@@ -191,10 +191,6 @@ def _normalize_aggregated_cortex_tool(tool_name: str, tool_input) -> str:
     return tool_name
 
 
-# Empirica MCP tools — ALL are epistemic workflow, always allowed.
-# The empirica-mcp server wraps CLI commands — same trust as Tier 2.
-EMPIRICA_MCP_PREFIX = "mcp__empirica__"
-
 # Safe Bash command prefixes - read-only operations (ACL)
 SAFE_BASH_PREFIXES = (
     # File inspection
@@ -1559,9 +1555,6 @@ def _is_recovery_or_measurement_action(tool_name: str, tool_input: dict | None) 
     and finally require that a recovery/measurement VERB is actually present so
     the universal exemption stays narrow.
     """
-    # Empirica MCP tools are epistemic workflow — always allowed.
-    if tool_name.startswith(EMPIRICA_MCP_PREFIX):
-        return True
     if tool_name != "Bash" or not tool_input:
         return False
     command = tool_input.get("command") or ""
@@ -1747,11 +1740,6 @@ def _locate_transaction_file(
     return _find_transaction_file(Path.home() / ".empirica", suffix, empirica_session_id, claude_session_id)
 
 
-def _is_empirica_mcp_tool(tool_name: str) -> bool:
-    """Check if tool is an empirica MCP tool (always allowed — epistemic workflow)."""
-    return tool_name.startswith(EMPIRICA_MCP_PREFIX)
-
-
 def _is_noetic_tool(tool_name: str) -> bool:
     """Is this tool noetic: it reads or investigates and cannot change state, so it flows in any phase?
 
@@ -1764,7 +1752,6 @@ def _is_noetic_tool(tool_name: str) -> bool:
         or tool_name in NOETIC_MCP_CHROME
         or tool_name in NOETIC_MCP_CORTEX
         or tool_name in NOETIC_MCP_CRM_READS
-        or _is_empirica_mcp_tool(tool_name)
     )
 
 
@@ -6310,6 +6297,11 @@ def _assessed(value, default):
     return default if value is None else value
 
 
+def _is_assessed(value) -> bool:
+    """A number the practitioner reported. None (NULL in the store), text and booleans are not an assessment."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value
+
+
 def _evaluate_check_threshold(know, uncertainty, db, env_annotation: str) -> tuple:
     """Evaluate CHECK vectors against dynamic thresholds.
 
@@ -6317,11 +6309,16 @@ def _evaluate_check_threshold(know, uncertainty, db, env_annotation: str) -> tup
     """
     # A CHECK supplies 7 of the 13 vectors and the store keeps the rest NULL (1.14.16). `know or 0` / `uncertainty or 1` turned a
     # NULL into a reported number ("U=100%") and, because 0.0 is falsy, a real 0.0 uncertainty into 1.0. Say what was not assessed.
-    if know is None or uncertainty is None:
-        missing = " and ".join(name for name, value in (("know", know), ("uncertainty", uncertainty)) if value is None)
+    # A below-threshold CHECK stays advisory below; one that assessed nothing to be advisory about is not certified: check-submit computes
+    # `investigate` for it, and a gate's floor for what was not assessed is deny, not allow (ecodex, prop_h2ofrznefjcjpj3b3b44rgrizm).
+    if not _is_assessed(know) or not _is_assessed(uncertainty):
+        missing = " and ".join(
+            name for name, value in (("know", know), ("uncertainty", uncertainty)) if not _is_assessed(value)
+        )
         return (
-            "allow",
-            f"ADVISORY: this CHECK did not assess {missing}, so the threshold was not evaluated. Supply it to certify the grounding.{env_annotation}",
+            "deny",
+            f"CHECK did not assess {missing}, so it certifies nothing and the threshold was not evaluated. "
+            f"Resubmit with `empirica check-submit` supplying know and uncertainty.{env_annotation}",
         )
     raw_check_know = know
     raw_check_unc = uncertainty

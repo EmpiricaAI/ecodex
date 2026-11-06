@@ -7,7 +7,7 @@ against the current epistemic state and recommends specific Empirica
 tools/agents/skills, influencing Claude's tool selection.
 
 This is the bridge between "what should I do" (VectorRouter modes) and
-"what should I use" (specific agents, skills, MCP tools).
+"what should I use" (specific agents, skills, tools).
 
 Input (stdin JSON):
   {"prompt": "user's prompt text"}
@@ -764,18 +764,6 @@ def _harness() -> str:
     return (os.environ.get("EMPIRICA_HARNESS") or "claude-code").strip().lower() or "claude-code"
 
 
-def _empirica_tool(mcp_tool: str, cli_verb: str) -> str:
-    """How to name an Empirica operation in advice: the MCP tool on Claude Code, the CLI verb elsewhere.
-
-    ecodex leaves the Empirica MCP server off by default (it wraps the CLI, and a shell-capable harness
-    has the CLI), so a hint naming `mcp__empirica__investigate` points at a tool that is not there
-    (prop_qr2m4fleanh65cjjj634zqsvom). Claude Code's text is unchanged.
-    """
-    if _harness() == "claude-code":
-        return f"`mcp__empirica__{mcp_tool}`"
-    return f"`empirica {cli_verb}`"
-
-
 def _agent_match_advice(agent_matches: list) -> list[str]:
     """Advice lines recommending the top-matched domain agent(s)."""
     if not agent_matches:
@@ -794,7 +782,7 @@ def _investigation_routing_advice(task_lower: str, has_agent_match: bool) -> lis
         return []
     return [
         "This looks like an investigation task. "
-        f"Use {_empirica_tool('investigate', 'investigate')} for systematic investigation "
+        "Use `empirica investigate` for systematic investigation "
         "with epistemic tracking, or spawn a domain-specific agent "
         "(empirica:architecture, security, performance, ux) "
         "for focused analysis."
@@ -806,7 +794,7 @@ def _blindspot_advice(task_lower: str, mode: str, vectors) -> list[str]:
     if not is_blindspot_relevant(task_lower, mode, vectors):
         return []
     return [
-        f"Consider running {_empirica_tool('blindspot_scan', 'blindspot-scan')} to detect "
+        "Consider running `empirica blindspot-scan` to detect "
         "knowledge gaps from negative space analysis before proceeding."
     ]
 
@@ -823,21 +811,17 @@ def _mode_based_advice(
     if mode == "load_context":
         return [
             "Project context not yet loaded (context vector low) — run "
-            f"{_empirica_tool('project_bootstrap', 'project-bootstrap')} to ground in project state "
+            "`empirica project-bootstrap` to ground in project state "
             "before proceeding."
         ]
     if mode == "investigate" and not has_agent_match:
         return [
-            f"Uncertainty is high — use {_empirica_tool('investigate', 'investigate')} "
-            "or spawn a domain agent for systematic investigation."
+            "Uncertainty is high — use `empirica investigate` or spawn a domain agent for systematic investigation."
         ]
     if mode == "cautious_implementation" and any(
         kw in task_lower for kw in ["try", "attempt", "approach", "workaround", "fix"]
     ):
-        return [
-            f"If this approach doesn't work, log it with {_empirica_tool('deadend_log', 'deadend-log')} "
-            "to prevent re-exploration."
-        ]
+        return ["If this approach doesn't work, log it with `empirica deadend-log` to prevent re-exploration."]
     return []
 
 
@@ -845,15 +829,10 @@ def _epistemic_workflow_advice(task_lower: str) -> list[str]:
     """Hint at the Empirica epistemic workflow for transaction-related tasks."""
     if not is_epistemic_task(task_lower):
         return []
-    uses = (
-        "Use the Empirica MCP tools (preflight/check/postflight) "
-        if _harness() == "claude-code"
-        else "Use the Empirica CLI (preflight-submit/check-submit/postflight-submit) "
-    )
     return [
         "This involves epistemic workflow. "
-        + uses
-        + "or invoke the `epistemic-transaction` skill (ships with the Cortex bundle) "
+        "Use the Empirica CLI (preflight-submit/check-submit/postflight-submit) "
+        "or invoke the `epistemic-transaction` skill (ships with the Cortex bundle) "
         "for planning guidance."
     ]
 
@@ -1028,15 +1007,32 @@ _WAKE_MARKER = (
     "[wake]"  # what wake_instance types; empirica.core.cockpit.instance_actions.WAKE_MARKER is the other copy
 )
 
-_WAKE_HEADER = """## ⏰ Wake turn — this prompt was a wake, not a request
+_WAKE_REARM_STEP = (
+    "If your mesh Monitor is not running (it expires after 30 minutes), re-arm it: run `empirica listener on --dry-run --output json`,\n"
+    "   start the Monitor with the `next_step` args it returns, then `empirica listener arm <monitor_task_id>`."
+)
 
-The listener service gave you this turn because your practice has mail. Do these, in order, then stop:
-1. Read and react to the pending messages below per the mailbox protocol (`empirica mailbox show <id>`, `empirica mailbox reply`).
-2. If your mesh Monitor is not running (it expires after 30 minutes), re-arm it: run `empirica listener on --dry-run --output json`,
-   start the Monitor with the `next_step` args it returns, then `empirica listener arm <monitor_task_id>`.
-3. Run `empirica mailbox poll` once more: events written while no Monitor was running are not delivered to a new one.
-Then stop. A wake is meant to be cheap: do not start unrelated work and do not write a status report.
-"""
+
+def _wake_header() -> str:
+    """The wake turn's instructions. The Monitor re-arm step names Claude Code tools (Monitor, TaskStop), so it exists only there."""
+    on_claude_code = _harness() == "claude-code"
+    steps = [
+        "Read and react to the pending messages below per the mailbox protocol (`empirica mailbox show <id>`, `empirica mailbox reply`).",
+    ]
+    if on_claude_code:
+        steps.append(_WAKE_REARM_STEP)
+    steps.append(
+        "Run `empirica mailbox poll` once more: events written while no Monitor was running are not delivered to a new one."
+        if on_claude_code
+        else "Run `empirica mailbox poll` once more to catch anything that arrived while you were working."
+    )
+    numbered = "\n".join(f"{n}. {text}" for n, text in enumerate(steps, 1))
+    return (
+        "## ⏰ Wake turn — this prompt was a wake, not a request\n\n"
+        "The listener service gave you this turn because your practice has mail. Do these, in order, then stop:\n"
+        f"{numbered}\n"
+        "Then stop. A wake is meant to be cheap: do not start unrelated work and do not write a status report.\n"
+    )
 
 
 def _wake_inbox_context() -> str:
@@ -1060,7 +1056,7 @@ def _wake_inbox_context() -> str:
         lead = mod._build_pending_inbox_lead()
     except Exception:
         return ""
-    return f"{_WAKE_HEADER}\n{lead}" if lead else ""
+    return f"{_wake_header()}\n{lead}" if lead else ""
 
 
 def main():
@@ -1074,7 +1070,9 @@ def main():
 
     # Every user prompt resets the proportionality budget, short ones and slash commands included; only a prompt that carries
     # a hypothesis re-arms it. This runs BEFORE the early return below, or "yes" / "go" would leave the old budget counting.
-    is_wake = prompt.strip() in ("", _WAKE_MARKER)
+    # The marker is a wake on every harness. A blank prompt is one only on Claude Code, where an idle pane's bare Enter (older cockpits)
+    # is the only way a blank arrives; elsewhere it is an image-only turn (codex) and must not pay a mailbox poll (ecodex).
+    is_wake = prompt.strip() == _WAKE_MARKER or (not prompt.strip() and _harness() == "claude-code")
     is_command_or_short = is_wake or len(prompt) < 10 or prompt.startswith("/")
     proportionality_check = None if is_command_or_short else build_investigation_proportionality_check(prompt)
     budget_armed = _sync_proportionality_budget(input_data.get("session_id", ""), proportionality_check)
