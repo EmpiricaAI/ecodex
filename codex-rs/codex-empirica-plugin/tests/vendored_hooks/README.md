@@ -53,6 +53,12 @@ Empirica revision before running this suite.
   command and referenced flag against Empirica's real argparse parser. This
   catches wrapper/CLI flag drift without maintaining a second command map.
 
+- `test_session_context_budget.py` — the startup project context stays under
+  codex's 2,500-token hook-output cap (counted as `ceil(bytes/4)`, as codex
+  does) and does not grow with the history. Feeds the vendored `session-init.py`
+  a `project-bootstrap` payload of every artifact category at 20 and at 20,000
+  items. A third test is the positive control: an uncapped context must trip the
+  same measure, so the two guards cannot pass for the wrong reason.
 - `test_session_start_single_session_and_budget_persist.py` — pins the two
   fixes empirica 1.14.8 made after the 2026-10 reports. codex fires every
   SessionStart hook, so `post-compact.py` must skip any `source` other than

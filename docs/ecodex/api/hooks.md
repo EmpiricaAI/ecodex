@@ -206,6 +206,29 @@ three tiers, highest priority first:
 | `TaskCompleted`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop` | `run-hook` | one script each (`docs/ecodex/hook-events-roadmap.md`) |
 | `PermissionRequest` | no-op | — |
 
+## What the model is shown at session start
+
+codex caps each hook's additional context at 2,500 tokens, counted as bytes
+divided by four, per context text. Past the cap the full text is written to
+`<temp dir>/hook_outputs/<thread id>/<id>.txt` and the model sees a head and tail
+preview with that path, so an over-budget block is cut without any error. A
+handler can raise its own limit with `additionalContextLimit` in `hooks.json`.
+
+The project context `session-init.py` builds from `empirica project-bootstrap`
+is the part that varies with a practice's history. `test_session_context_budget.py`
+(in `tests/vendored_hooks`) pushes a bootstrap of every artifact category, at a
+small and at an enormous size, through the vendored hook and fails if the
+rendered block crosses the cap or grows with the history. A re-vendor that
+renders more of the bootstrap has to pass it.
+
+**Compatibility floor.** The hooks are vendored from Empirica at the version
+stamped in `manifest.json` (`empiricaVendorVersion`) and run against whichever
+`empirica` is on `PATH`. A hook may call functions added in its own release, so
+the installed core should be at least the stamped version; `session-init.py` says
+so at startup when it is older. `project-bootstrap` fields added after the
+vendored release are tolerated, since the hook reads by key, but the model sees
+only what the vendored hook renders: new fields reach it by re-vendoring.
+
 ## Tests
 
 - `cargo nextest run -p codex-empirica-plugin` — the Rust handlers, output
