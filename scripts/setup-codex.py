@@ -179,6 +179,8 @@ class Sync:
     drifted: list[Path] = field(default_factory=list)
     deployable: list[Path] = field(default_factory=list)
     new_upstream: list[str] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)  # new lib files a vendored hook imports
+    sources: dict[str, str] = field(default_factory=dict)  # vendored .py path → post-sync text
     flags: dict[str, list[tuple[int, str]]] = field(default_factory=dict)
 
 
@@ -212,10 +214,15 @@ def sync_dir(
         if name in RETIRED:
             continue  # deliberately retired — never re-vendor
         if name not in emp_files:
+            if name.endswith(".py"):  # ecodex-only, untouched, but its imports still count
+                local = eco_dir / name
+                sync.sources[str(local)] = local.read_text("utf-8", errors="replace")
             continue  # ecodex-only (e.g. native agents) — leave untouched
         blob = git_show(emp, ref, f"{emp_reldir}/{name}")
         target = eco_dir / name
         sync.deployable.append(target)
+        if name.endswith(".py"):
+            sync.sources[str(target)] = blob.decode("utf-8", "replace")
         if target.read_bytes() != blob:
             sync.drifted.append(target)
             if apply:
@@ -233,6 +240,76 @@ def sync_dir(
         if name.startswith(".") or name.endswith((".pyc",)) or name in RETIRED:
             continue
         sync.new_upstream.append(f"{emp_reldir}/{name}")
+
+
+def _imported_modules(source: str) -> set[str]:
+    """Top-level module names a Python source imports, at any depth (inside functions too)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".")[0])
+    return names
+
+
+def missing_lib_imports(
+    sources: dict[str, str],
+    upstream_lib: set[str],
+    vendored_lib: set[str],
+    read_upstream,
+) -> list[str]:
+    """Upstream hooks/lib files that vendored code imports and ecodex does not carry yet.
+
+    Vendored hooks import lib modules by bare name (the lib directory is on sys.path), so
+    a hook that gains an import of a new lib module fails at import on codex seats unless
+    that file arrives with it. Follows imports between new lib files (breadth first, each
+    file once, so cycles end) and never offers a RETIRED file.
+    """
+    wanted: list[str] = []
+    seen: set[str] = set()
+    queue = list(sources.values())
+    while queue:
+        for module in sorted(_imported_modules(queue.pop(0))):
+            fname = f"{module}.py"
+            if fname in seen or fname in vendored_lib or fname in RETIRED:
+                continue
+            if fname not in upstream_lib:
+                continue
+            seen.add(fname)
+            wanted.append(fname)
+            queue.append(read_upstream(fname))
+    return wanted
+
+
+def add_imported_lib_files(
+    emp: Path, ref: str, apply: bool, sync: Sync, upstream_files: dict[Path, set[str]]
+) -> None:
+    """Copy the new lib files a vendored hook imports; leave every other new file as reported."""
+    lib_dir = ASSETS / "hooks_scripts" / "lib"
+    lib_reldir = DIR_MAP[lib_dir]
+    vendored = {p.name for p in lib_dir.iterdir() if p.is_file()}
+    wanted = missing_lib_imports(
+        sync.sources,
+        upstream_files[lib_dir],
+        vendored,
+        lambda n: git_show(emp, ref, f"{lib_reldir}/{n}").decode("utf-8", "replace"),
+    )
+    for name in wanted:
+        blob = git_show(emp, ref, f"{lib_reldir}/{name}")
+        target = lib_dir / name
+        if apply:
+            target.write_bytes(blob)
+        sync.drifted.append(target)
+        sync.deployable.append(target)
+        sync.sources[str(target)] = blob.decode("utf-8", "replace")
+        sync.added.append(f"{lib_reldir}/{name}")
+        if f"{lib_reldir}/{name}" in sync.new_upstream:
+            sync.new_upstream.remove(f"{lib_reldir}/{name}")
 
 
 def import_vendored(emp: Path, ref: str, apply: bool) -> Sync | None:
@@ -253,6 +330,11 @@ def import_vendored(emp: Path, ref: str, apply: bool) -> Sync | None:
         except RuntimeError as exc:
             print(f"✗ cannot read empirica source: {exc}", file=sys.stderr)
             return None
+    try:
+        add_imported_lib_files(emp, ref, apply, sync, upstream_files)
+    except RuntimeError as exc:
+        print(f"✗ cannot read empirica source: {exc}", file=sys.stderr)
+        return None
     return sync
 
 
@@ -285,6 +367,11 @@ def report(sync: Sync, apply: bool) -> None:
         print(f"  {'updated' if apply else 'would update'}  {p.relative_to(REPO)}")
     if not sync.drifted:
         print("  (in sync)")
+
+    if sync.added:
+        print(f"\nADDED because a vendored hook imports them ({len(sync.added)}):")
+        for n in sync.added:
+            print(f"  + {n}")
 
     if sync.new_upstream:
         print(f"\nNEW upstream files ecodex doesn't vendor ({len(sync.new_upstream)}):")
