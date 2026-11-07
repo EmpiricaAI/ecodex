@@ -21,7 +21,7 @@ what the plugin's `hooks.json` wires today:
 | Event | Lifecycle point | empirica handler(s) |
 |---|---|---|
 | `PreToolUse` | Before any tool invocation | `sentinel-gate.py` |
-| `PermissionRequest` | When a tool needs permission | none (subcommand accepted, no handler) |
+| `PermissionRequest` | When a tool needs permission | `permission-request.py` (ecodex-owned; records that a person was asked, prints nothing) |
 | `PostToolUse` | After a successful tool invocation | `tool-failure.py` (canonical) + `entity-extractor.py` + `truncation-legibility.py` |
 | `PreCompact` | Just before compaction runs | `pre-compact.py` |
 | `PostCompact` | Just after compaction (`trigger: manual \| auto`, same as PreCompact) | `post-compact.py` |

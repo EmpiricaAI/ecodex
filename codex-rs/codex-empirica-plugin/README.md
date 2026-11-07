@@ -20,13 +20,13 @@ codex-empirica-plugin session-start                     # practice bootstrap + s
 codex-empirica-plugin user-prompt-submit                # context router (tool-router.py)
 codex-empirica-plugin stop                              # transaction enforcer (transaction-enforcer.py)
 codex-empirica-plugin run-hook <Event> <script.py>      # any other vendored script on any event
-codex-empirica-plugin permission-request                # accepted, no-op
+codex-empirica-plugin permission-request                # accepted, no-op (the event runs permission-request.py through run-hook)
 ```
 
 `run-hook` is how one event fans out to several scripts without a Rust handler
-per script; `hooks.json` uses it for twelve of its seventeen entries, including
-every event beyond the five dedicated ones (`PreCompact`, `PostCompact`,
-`SessionEnd`, `SubagentStart`, `SubagentStop`, `TaskCompleted`,
+per script; `hooks.json` uses it for fourteen of its nineteen entries, including
+every event beyond the five dedicated ones (`PermissionRequest`, `PreCompact`,
+`PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `TaskCompleted`,
 `PostToolUseFailure`). `hooks.json` is the wiring; `docs/ecodex/api/hooks.md` is
 the contract.
 

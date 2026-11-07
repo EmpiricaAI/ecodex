@@ -119,6 +119,19 @@
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-empirica-plugin run-hook PermissionRequest permission-request.py",
+            "timeout": 5,
+            "statusMessage": "Empirica approval record"
+          }
+        ]
+      }
+    ],
     "PostToolUseFailure": [
       {
         "matcher": ".*",

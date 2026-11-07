@@ -15,7 +15,7 @@ codex-empirica-plugin session-start                    # practice bootstrap, the
 codex-empirica-plugin user-prompt-submit               # tool-router.py
 codex-empirica-plugin stop                             # transaction-enforcer.py
 codex-empirica-plugin run-hook <EventName> <script.py> # any other script on any event
-codex-empirica-plugin permission-request               # accepted, no-op
+codex-empirica-plugin permission-request               # accepted, no-op (the event runs permission-request.py through run-hook)
 ```
 
 Each invocation reads the codex hook payload as JSON on stdin, writes any
@@ -55,14 +55,14 @@ same shape as Claude Code's `settings.json` hook block:
 }
 ```
 
-The shipped `hooks.json` wires twelve events — upstream's `PreToolUse`,
-`PostToolUse`, `SessionStart`, `UserPromptSubmit`, `Stop`, `PreCompact`,
-`PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop` and ecodex's
-`TaskCompleted`, `PostToolUseFailure` — with eighteen commands in all;
+The shipped `hooks.json` wires thirteen events — upstream's `PreToolUse`,
+`PostToolUse`, `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`,
+`PreCompact`, `PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop` and
+ecodex's `TaskCompleted`, `PostToolUseFailure` — with nineteen commands in all;
 `PostToolUse`, `SessionStart` and `UserPromptSubmit` fan out to several
 scripts. `docs/ecodex/hook-events-roadmap.md` lists the script behind each
-event. Of the sixteen events codex declares, `PermissionRequest`, `Interrupt`,
-`PreModelRequest` and `PostModelRequest` have no entry.
+event. Of the sixteen events codex declares, `Interrupt`, `PreModelRequest` and
+`PostModelRequest` have no entry.
 
 ## Stdin payload (codex format)
 
@@ -117,7 +117,7 @@ typed events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 unknown fields, and turns an empty flat output into
 `{continue: true, hookSpecificOutput: {hookEventName}}`.
 
-For every other event name — the seven reached only through `run-hook` — it
+For every other event name — the eight reached only through `run-hook` — it
 whitelists the four fields every codex output schema accepts (`continue`,
 `stopReason`, `systemMessage`, `suppressOutput`), so `pre-compact.py`'s
 `systemMessage` reaches codex's hook warnings and a script can stop an event
@@ -203,8 +203,28 @@ three tiers, highest priority first:
 | `SessionStart` | `hooks::session_start::handle`, then `run-hook` | host-side practice bootstrap (`src/practice_bootstrap.rs`), `session-init.py`, `ewm-protocol-loader.py`, `post-compact.py`, `session-monitor-arm.py` |
 | `UserPromptSubmit` | `hooks::user_prompt_submit::handle`, then `run-hook` | `tool-router.py`, `context-shift-tracker.py` |
 | `Stop` | `hooks::stop::handle` | `transaction-enforcer.py` |
-| `TaskCompleted`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop` | `run-hook` | one script each (`docs/ecodex/hook-events-roadmap.md`) |
-| `PermissionRequest` | no-op | — |
+| `TaskCompleted`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PermissionRequest` | `run-hook` | one script each (`docs/ecodex/hook-events-roadmap.md`) |
+
+## The decision record
+
+Empirica core writes one line per gated tool call to the practice's
+`.empirica/decisions.jsonl` (the seat's `~/.empirica` outside a practice), from
+the same hooks ecodex runs: the gate writes the decision, the post hooks write
+the outcome, and a sampled call also carries a before and after snapshot of the
+practice's git state. The lines keep a hash of the input, never the command. Core
+loads `decision_record.py` from the installed `empirica` package by file, so it
+is not vendored and needs no entry in `hooks_scripts/lib`; with an older or
+missing core the hooks skip it silently. `EMPIRICA_DECISION_RECORD=0` turns it off.
+
+Codex never tells a hook what a person answered when it asked for approval. The
+`PermissionRequest` event runs `permission-request.py`, an ecodex-owned script
+that `scripts/setup-codex.py` leaves alone because core does not carry it. It
+writes one `permission_request` line and prints nothing, so it cannot approve or
+deny a call. Core's `infer_overrides` reads the answer from what followed in the
+same turn, and every answer it returns is marked inferred.
+
+The record is tamper-evident at best: the agent's own shell can edit the file,
+so it is audit data and a source of features, not proof of what happened.
 
 ## What the model is shown at session start
 

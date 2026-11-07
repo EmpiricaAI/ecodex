@@ -110,13 +110,17 @@ boundary for the hooks; the only other child processes the plugin spawns are
 | `PostToolUseFailure` | `tool-failure` | Records genuine dead-ends, not operational noise |
 | `UserPromptSubmit` | `tool-router`, `context-shift-tracker` | Assesses the prompt against the epistemic state; records whether it answers the model or starts something new |
 | `Stop` | `transaction-enforcer` | Blocks stopping when a transaction has run many turns without a POSTFLIGHT |
+| `PermissionRequest` | `permission-request` | Records that codex asked a person to approve a call; prints nothing, so it never decides |
 | `PreCompact` / `PostCompact` | `pre-compact`, `post-compact` | Carries epistemic state across a compaction |
 | `SessionEnd`, `TaskCompleted`, `SubagentStart` / `SubagentStop` | `session-end-postflight`, `task-completed`, `subagent-*` | Closes the measurement loop; ties tasks and subagents to Empirica goals |
 
-codex declares sixteen hook events and `hooks.json` wires the twelve above.
-`PermissionRequest`, `Interrupt`, `PreModelRequest` and `PostModelRequest` have
-no entry. The binary accepts a `permission-request` subcommand as a no-op, so
-that entry can be added without a new handler.
+codex declares sixteen hook events and `hooks.json` wires the thirteen above.
+`Interrupt`, `PreModelRequest` and `PostModelRequest` have no entry.
+
+Together these hooks write the per-call decision record when empirica core 1.14.22
+or newer is installed: one line per gated call in the practice's
+`.empirica/decisions.jsonl`, with the `PermissionRequest` hook adding the line that
+lets core infer whether a person approved. `docs/ecodex/api/hooks.md` has the detail.
 
 **Why a subprocess per hook.** Empirica's Python stays canonical, and a hook
 behaves exactly as it does under Claude Code. The cost is one Python process
