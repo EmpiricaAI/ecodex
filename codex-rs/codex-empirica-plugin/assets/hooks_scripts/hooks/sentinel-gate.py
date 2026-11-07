@@ -339,6 +339,18 @@ SAFE_BASH_PREFIXES = (
     "du ",
     "mount",
     "lsblk",
+    # Hardware and system reads (mesh-support, prop_mxrzdihewrghvo64gdbgiaiyki). None has a write mode, so they are
+    # reads in every work_type and inside pipes, chains and substitutions, which INFRA_SAFE_PREFIXES never covered.
+    # vmstat, iostat and free print forever when given an interval without a count: _streams_without_end refuses
+    # those forms here, and they stay allowed under the infra work types.
+    "lsusb",
+    "lspci",
+    "lscpu",
+    "lsmem",
+    "free",
+    "uptime",
+    "vmstat",
+    "iostat",
     # Network inspection (not modification)
     "curl ",
     "wget -O-",
@@ -563,12 +575,9 @@ INFRA_SAFE_PREFIXES = (
     "journalctl --since",
     "journalctl -u",
     "journalctl --no-pager",
+    # lsusb, lspci, lscpu, lsmem and uptime moved to SAFE_BASH_PREFIXES: no write mode, a read in every work_type.
+    # free, vmstat and iostat are there too for the forms that end; they stay here for the forms that stream.
     "free",
-    "uptime",
-    "lscpu",
-    "lsmem",
-    "lsusb",
-    "lspci",
     "htop",
     "vmstat",
     "iostat",
@@ -627,6 +636,12 @@ MAX_CHECK_AGE_MINUTES = 30
 # _get_dynamic_thresholds to find the practitioner's model without threading the
 # id through every gate that asks for thresholds.
 _hook_claude_session_id: str | None = None
+
+# The per-call decision record (empirica/core/decision_record.py). main() names the stage before each respond();
+# respond() writes the line. _tx_meta is filled by _peek_work_type from the transaction file it already reads.
+_decision_rule: str = "pipeline"
+_record_input: dict | None = None
+_tx_meta: dict = {}
 
 
 def _get_dynamic_thresholds(db) -> tuple:
@@ -1272,6 +1287,20 @@ def is_read_shaped_empirica_verb(cmd: str) -> bool:
     if verb in EMPIRICA_READ_SHAPED_BUT_MUTATING:
         return False
     return verb.endswith(EMPIRICA_READ_SUFFIXES)
+
+
+# empirica commands that only read although their verb is not read-shaped, for the decision record's inference of what a
+# command changes (not for gating: the firewall lets these through on its own lists). Checked 2026-11-07 against the handlers:
+# investigate is project-search, which stamps nothing; mailbox poll and show fetch and print. project-bootstrap is NOT here:
+# it stamps retrieval telemetry.
+EMPIRICA_READS_BY_NAME = ("empirica investigate", "empirica mailbox poll", "empirica mailbox show")
+
+
+def empirica_command_only_reads(cmd: str) -> bool:
+    """Does this empirica command only read? Its verb's name, or one of the reads whose name does not say so."""
+    return is_read_shaped_empirica_verb(cmd) or any(
+        cmd == prefix or cmd.startswith(prefix + " ") for prefix in EMPIRICA_READS_BY_NAME
+    )
 
 
 def _is_plain_single_command(cmd: str) -> bool:
@@ -2061,6 +2090,81 @@ def respond(decision: str, reason: str = "") -> None:
     if decision == "allow" and not show_nudge:
         output["suppressOutput"] = True
     print(json.dumps(output))
+    _record_decision(decision)
+
+
+def _decision_record():
+    """empirica/core/decision_record.py, loaded from its file. Importing it through the package runs empirica/core's own
+    imports (about 22 ms measured), and this runs after every call. None when empirica is not installed. The same function is
+    copied into each hook that records an outcome; tests/test_decision_record.py keeps the copies identical."""
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("empirica")
+        if spec is None or not spec.submodule_search_locations:
+            return None
+        path = Path(next(iter(spec.submodule_search_locations))) / "core" / "decision_record.py"
+        module_spec = importlib.util.spec_from_file_location("_empirica_decision_record", path)
+        if module_spec is None or module_spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+def _record_decision(decision: str) -> None:
+    """One line in the practice's decisions.jsonl for this decision. Never raises: the record must not change the decision."""
+    if _record_input is None:
+        return
+    try:
+        if (os.environ.get("EMPIRICA_DECISION_RECORD") or "").strip().lower() in ("0", "false", "no", "off"):
+            return
+        decision_record = _decision_record()
+        if decision_record is None or not decision_record.enabled():
+            return
+        hook_input = _record_input
+        tool_name = str(hook_input.get("tool_name") or "unknown")
+        tool_input = hook_input.get("tool_input") or {}
+        # Exactly the lookup the post hooks make (session's active work, else a practice-root cwd), and nothing else: a call's
+        # two lines must land in one file, and its before- and after-snapshots must be of one tree.
+        project = decision_record.project_path_for(hook_input.get("session_id"), hook_input.get("cwd"))
+        inferred = None
+        if tool_name == "Bash" and isinstance(tool_input, dict):
+            inferred = decision_record.infer_shell_effects(
+                str(tool_input.get("command") or ""),
+                cwd=hook_input.get("cwd"),
+                project_path=project,
+                empirica_is_read=empirica_command_only_reads,
+            )
+        record = decision_record.build(
+            tool_name=tool_name,
+            tool_input=tool_input,
+            decision=decision,
+            rule=_decision_rule,
+            tool_use_id=hook_input.get("tool_use_id"),
+            claude_session_id=hook_input.get("session_id"),
+            transaction_id=_tx_meta.get("transaction_id"),
+            tx_status=_tx_meta.get("tx_status"),
+            harness=(os.environ.get("EMPIRICA_HARNESS") or "claude-code").strip().lower() or "claude-code",
+            permission_mode=hook_input.get("permission_mode"),
+            inferred=inferred,
+            turn_id=hook_input.get("turn_id"),
+            sampled=bool(inferred)
+            and decision_record.sampled(
+                hook_input.get("tool_use_id"), reliable=inferred["reliable"] if inferred else None
+            ),
+        )
+        if record["sampled"]:
+            # Part A: the before half of an observed effect. `sampled` on the line means a before-snapshot exists: a denied
+            # call never runs, and a call outside a practice has no git to compare, so neither keeps the flag.
+            record["sampled"] = decision_record.store_before(
+                hook_input.get("tool_use_id"), project, decision=decision, sampled=True
+            )
+        decision_record.append(record, decision_record.record_path(project))
+    except Exception:
+        pass
 
 
 _UNAVAILABLE_MARKER = Path.home() / ".empirica" / "sentinel_unavailable.json"
@@ -3069,6 +3173,27 @@ def _env_name_changes_execution(name: str) -> bool:
 _EXACT_SAFE_COMMANDS = frozenset({"claude --version"})
 
 
+def _streams_without_end(cmd: str) -> bool:
+    """True for `vmstat 1`, `iostat -x 2`, `free -s 1`: an interval with no count, which prints until killed.
+
+    These tools change nothing, so this is not a write guard. A stream is kept out of the every-work-type list
+    because it never returns; the infra work types still allow it (INFRA_SAFE_PREFIXES).
+    """
+    words = cmd.split()
+    if not words:
+        return False
+    if words[0] in ("vmstat", "iostat"):
+        # `[interval [count]]`: one bare number is an interval alone.
+        return sum(1 for word in words[1:] if word.isdigit()) == 1
+    if words[0] == "free":
+        interval = any(
+            w == "-s" or w.startswith("--seconds") or (w.startswith("-s") and w[2:].isdigit()) for w in words[1:]
+        )
+        count = any(w == "-c" or w.startswith("--count") or (w.startswith("-c") and w[2:].isdigit()) for w in words[1:])
+        return interval and not count
+    return False
+
+
 def _matches_safe_prefix(cmd: str) -> bool:
     """Check if a command matches any SAFE_BASH_PREFIXES entry.
 
@@ -3078,6 +3203,8 @@ def _matches_safe_prefix(cmd: str) -> bool:
     _has_dangerous_tool_flags — the centralized chokepoint guard.
     """
     if _has_dangerous_tool_flags(cmd):
+        return False
+    if _streams_without_end(cmd):
         return False
     # Strip git's inert global options so `git -C <path> status` reaches the
     # same check as `git status`. The dangerous-flag guard above runs on the
@@ -6018,6 +6145,7 @@ def _peek_work_type(claude_session_id: str | None) -> None:
                 data = json.load(f)
             if data.get("status") == "open":
                 _current_work_type = data.get("work_type") or None
+            _tx_meta.update(transaction_id=data.get("transaction_id"), tx_status=data.get("status"))
     except Exception:
         pass
 
@@ -6506,6 +6634,8 @@ def main():
 
     tool_name = hook_input.get("tool_name", "unknown")
     tool_input = hook_input.get("tool_input", {})
+    global _record_input, _decision_rule
+    _record_input = hook_input
 
     # Option 2 — namespace-aggregation defense (codex/ecodex): normalize a bare
     # `mcp__cortex` namespace (op carried in tool_input) to the full
@@ -6531,6 +6661,7 @@ def main():
     # doctor/setup-claude-code to self-heal a stale box, sentinel pause/resume to
     # override). One chokepoint → parity-by-construction, not per-gate discipline.
     if _is_recovery_or_measurement_action(tool_name, tool_input):
+        _decision_rule = "release-path"
         respond("allow", "Release-path exemption: recovery/measurement action (always-open)")
         sys.exit(0)
 
@@ -6541,22 +6672,26 @@ def main():
     # runtime constraint that makes the discipline real.
     proportionality_deny = _check_proportionality_budget(hook_input, tool_name)
     if proportionality_deny:
+        _decision_rule = "proportionality"
         respond("deny", proportionality_deny)
         sys.exit(0)
 
     # Noetic firewall: whitelist-based access control
     noetic_result = _noetic_firewall_check(tool_name, tool_input, hook_input)
     if noetic_result:
+        _decision_rule = "noetic-firewall"
         respond("allow", noetic_result[1])
         sys.exit(0)
 
     # Exemptions: subagent, paused, sentinel disabled
     exemption = _check_exemptions(hook_input, tool_name)
     if exemption:
+        _decision_rule = "exemption"
         respond(exemption[0], exemption[1])
         sys.exit(0)
 
     # Everything else requires CHECK authorization via the pipeline
+    _decision_rule = "pipeline"
     decision, message = _run_authorization_pipeline(hook_input, tool_name, tool_input)
     respond(decision, message)
     sys.exit(0)
@@ -6582,6 +6717,7 @@ if __name__ == "__main__":
         import sys as _sys
 
         _sys.stderr.write(f"SENTINEL_CRASH: {type(e).__name__}: {e}\n")
+        _decision_rule = "crash"
         fail_closed = _os.environ.get("EMPIRICA_SENTINEL_FAIL_CLOSED", "").strip().lower() in {"1", "true", "yes"}
         if fail_closed:
             respond(
