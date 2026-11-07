@@ -12,8 +12,12 @@ name: security-audit
 # `cargo tree -i` and only fails for advisories with real reverse-dependents.
 #
 # Complements GitHub's native Dependabot security alerts (which don't make
-# this shipped-vs-phantom distinction) -- this is the release-blocking gate;
-# Dependabot PRs are still the mechanism that actually bumps the lockfile.
+# this shipped-vs-phantom distinction) -- this is the release-blocking gate.
+# Dependabot's automatic security-update PRs are switched off in the repo
+# settings (2026-11-07): they targeted upstream trees ecodex does not ship
+# (the npm root, sdk/python) and failed on every push; the alerts stay on.
+# There is no dependabot.yml either (dependabot-upstream.yaml is parked), so
+# a lockfile bump for a shipped crate is made by hand when this gate fails.
 
 on:
   schedule:

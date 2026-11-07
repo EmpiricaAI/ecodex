@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Dependabot's automatic security-update PRs are off for the repo.** They were the only Dependabot activity left (there is no `dependabot.yml`), they targeted upstream trees ecodex does not ship (the npm root, `sdk/python`), and the job failed on every push. GitHub's security alerts stay on, and the shipped-crate gate is unchanged: `security-audit.yml` with `scripts/scoped_cargo_audit.py`, weekly and on every `Cargo.lock` change.
+
 ### Added
 - **The plugin records when codex asks a person to approve a call.** `hooks.json` wires `PermissionRequest` to a new ecodex-owned `permission-request.py`, which writes one `permission_request` line to the decision record that empirica core 1.14.22 keeps in `.empirica/decisions.jsonl`. Codex never tells a hook what the person answered, so the script prints nothing and cannot decide for them; core infers approved or denied from what followed in the same turn and marks the answer inferred. With an older or missing core it does nothing. Four tests in `tests/vendored_hooks` cover it.
 - **`scripts/setup-codex.py` brings along the new `hooks/lib` files a vendored hook imports.** Until now a new lib file was only listed as "NEW upstream", so a hook that gained an import of it updated and then failed at import on codex seats until someone copied the file by hand (`hook_vintage.py` was the case). The script now reads the imports of every vendored hook with `ast`, follows imports between new lib files, copies exactly those, and reports them under "ADDED because a vendored hook imports them"; every other new upstream file is still only reported, and retired files are still never offered. `scripts/test_setup_codex.py` covers it.
