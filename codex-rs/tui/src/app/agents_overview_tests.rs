@@ -5,10 +5,12 @@ use crate::app::app_server_requests::BufferedServerRequest;
 #[path = "agent_center_tests.rs"]
 mod command_center;
 
+use super::super::agents_overview_view::AgentsOverviewGroup;
 use super::super::agents_overview_view::AgentsOverviewGrouping;
 use super::*;
 use crate::app::tests::make_test_app_with_channels;
 use crate::chatwidget::tests::helpers::normalize_agent_center_snapshot;
+use codex_config::types::AgentsOverviewGrouping as PersistedAgentsOverviewGrouping;
 
 #[tokio::test]
 async fn overview_worktree_creation_busy_state() {
@@ -40,6 +42,8 @@ async fn overview_worktree_creation_busy_state() {
 async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
     let mut app = make_test_app().await;
     let id = ThreadId::from_u128(/*value*/ 42);
+    let selected_id = ThreadId::from_u128(/*value*/ 43);
+    app.agents_overview.unread.extend([id, selected_id]);
     let mut snapshot = Vec::new();
     for enabled in [true, false] {
         app.local_settings.tui.status_line_use_colors = enabled;
@@ -51,12 +55,9 @@ async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
         );
         thread.name = Some("Named task".into());
         let mut selected = thread.clone();
-        selected.id = ThreadId::from_u128(/*value*/ 43).to_string();
+        selected.id = selected_id.to_string();
         selected.name = Some("Selected task".into());
-        let view = app.agents_overview_view(
-            vec![thread, selected],
-            Some(ThreadId::from_u128(/*value*/ 43)),
-        );
+        let view = app.agents_overview_view(vec![thread, selected], Some(selected_id));
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal
             .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
@@ -64,15 +65,20 @@ async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
         let buffer = terminal.backend().buffer();
         for row in buffer.content.chunks(100) {
             let text: String = row.iter().map(ratatui::buffer::Cell::symbol).collect();
+            if let Some(x) = text.find("● Selected task") {
+                let x = text[..x].chars().count();
+                snapshot.push(format!(
+                    "selected dot {:?} | title {:?}",
+                    row[x].style(),
+                    row[x + 2].style(),
+                ));
+            }
             if let Some(x) = text.find("Named task") {
                 let x = text[..x].chars().count();
-                let dot = row.iter().find(|cell| cell.symbol() == "○").unwrap();
-                let mut expected = ratatui::buffer::Cell::default();
-                expected.set_symbol("○").set_style(Style::default().cyan());
-                assert_eq!(dot, &expected);
                 snapshot.push(format!(
-                    "{} | title style: {:?}",
+                    "{} | unread: {:?} | title style: {:?}",
                     normalize_agent_center_snapshot(&text),
+                    row[x - 2].fg,
                     row[x].style()
                 ));
             }
@@ -156,7 +162,6 @@ use pretty_assertions::assert_eq;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 
 static OVERVIEW_TIMESTAMP: std::sync::LazyLock<i64> =
     std::sync::LazyLock::new(|| chrono::Utc::now().timestamp() - 120);
@@ -369,11 +374,12 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
         &app_server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
+            cleared_unread: Vec::new(),
             last_messages: HashMap::new(),
             threads: HashMap::from([
-                (retained, Some(retained_thread.clone())),
-                (archived, Some(archived_thread)),
-                (deleted, Some(deleted_thread)),
+                (retained, Some((retained_thread.clone(), false))),
+                (archived, Some((archived_thread, false))),
+                (deleted, Some((deleted_thread, false))),
             ]),
             recent_seed_complete: true,
             discovery: None,
@@ -394,6 +400,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
         &app_server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
+            cleared_unread: Vec::new(),
             last_messages: HashMap::new(),
             threads: HashMap::from([(retained, None)]),
             recent_seed_complete: true,
@@ -444,6 +451,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
                 &app_server,
                 request_id,
                 Ok(AgentsOverviewThreadRefresh {
+                    cleared_unread: Vec::new(),
                     threads: HashMap::new(),
                     last_messages,
                     recent_seed_complete: true,
@@ -781,7 +789,7 @@ async fn check_hidden_thread_does_not_refresh_shared_overview(source: &str) {
 async fn agents_overview_details_show_available_attention_without_expanding_rows() -> Result<()> {
     let mut app = make_test_app().await;
     let app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
-    let [root, child, unloaded] = std::array::from_fn(|_| ThreadId::new());
+    let [root, failed_agent, child, unloaded] = std::array::from_fn(|_| ThreadId::new());
     let waiting = ThreadStatus::Active {
         active_flags: vec![
             ThreadActiveFlag::WaitingOnApproval,
@@ -791,12 +799,18 @@ async fn agents_overview_details_show_available_attention_without_expanding_rows
     // The child question takes priority over the generic waiting parent.
     let mut threads = [
         (root, None, "Repair authentication", waiting.clone()),
-        (child, Some(root), "Check dependencies", waiting),
+        (child, Some(failed_agent), "Check dependencies", waiting),
         (
             unloaded,
             None,
             "Investigate parser",
             ThreadStatus::NotLoaded,
+        ),
+        (
+            failed_agent,
+            Some(root),
+            "Failed agent",
+            ThreadStatus::SystemError,
         ),
     ]
     .map(|(id, parent, title, status)| overview_thread(id, parent, title, status))
@@ -928,19 +942,22 @@ async fn agents_overview_details_render_markdown() {
     app.agents_overview.last_messages.clear();
     app.track_agents_overview_activity(
         thread_id,
-        &ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
-            thread_id: thread.id.clone(),
-            turn_id: "turn".into(),
-            completed_at_ms: 0,
-            item: ThreadItem::AgentMessage {
-                id: "answer".into(),
-                text: message.into(),
-                phase: None,
-                memory_citation: None,
-                delivery: None,
-                questions: None,
-            },
-        }),
+        &ServerNotification::ItemCompleted(
+            codex_app_server_protocol::ItemCompletedNotification::new(
+                thread.id.clone(),
+                "turn".into(),
+                ThreadItemPayload::AgentMessage {
+                    id: "answer".into(),
+                    text: message.into(),
+                    phase: None,
+                    memory_citation: None,
+                    delivery: None,
+                    questions: None,
+                },
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 0,
+            ),
+        ),
     );
     let view = app.agents_overview_view(vec![thread.clone()], Some(thread_id));
     terminal
@@ -1079,11 +1096,10 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
         .threads
         .insert(parent_id, Some(parent.clone()));
     app.track_agents_overview_notification(&ServerNotification::ItemCompleted(
-        codex_app_server_protocol::ItemCompletedNotification {
-            thread_id: parent.id.clone(),
-            turn_id: "previous-turn".into(),
-            completed_at_ms: 0,
-            item: ThreadItem::AgentMessage {
+        codex_app_server_protocol::ItemCompletedNotification::new(
+            parent.id.clone(),
+            "previous-turn".into(),
+            ThreadItemPayload::AgentMessage {
                 id: "answer".into(),
                 text: "Previous answer".into(),
                 phase: None,
@@ -1091,7 +1107,9 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
                 delivery: None,
                 questions: None,
             },
-        },
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        ),
     ));
     let channel = app.thread_event_channels.remove(&thread_id).unwrap();
     let details = app.agents_overview_details(
@@ -1132,16 +1150,18 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
 }
 
 #[tokio::test]
-async fn worktrees_overview_groups_linked_checkouts() {
+async fn worktrees_overview_groups_by_project_or_directory() {
     let mut app = make_test_app().await;
     let root = tempfile::tempdir().unwrap();
     let primary = root.path().join("primary");
     let linked = root.path().join("linked");
-    let linked_subdir = linked.join("subdir/child");
+    let primary_subdir = primary.join("shared/child");
+    let linked_subdir = linked.join("shared/child");
     let nested = primary.join("subdir");
     let nested_child = nested.join("child");
     let admin = primary.join(".git/worktrees/linked");
     std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(&primary_subdir).unwrap();
     std::fs::create_dir_all(&linked_subdir).unwrap();
     std::fs::create_dir_all(nested.join(".git")).unwrap();
     std::fs::create_dir_all(&nested_child).unwrap();
@@ -1155,46 +1175,129 @@ async fn worktrees_overview_groups_linked_checkouts() {
     .unwrap();
     std::fs::write(linked.join(".git"), format!("gitdir: {}", admin.display())).unwrap();
     let primary = dunce::canonicalize(primary).unwrap();
-    let threads = [primary.clone(), linked, linked_subdir, nested_child]
-        .into_iter()
-        .map(|cwd| {
-            let mut thread = overview_thread(
-                ThreadId::new(),
-                /*parent_thread_id*/ None,
-                "Task",
-                ThreadStatus::Idle,
-            );
-            thread.cwd = AbsolutePathBuf::from_absolute_path(cwd).unwrap();
-            thread
-        })
-        .collect::<Vec<_>>();
-    let headings = [primary.join(""), primary.join("subdir").join("child")].map(|path| {
-        crate::text_formatting::center_truncate_path(
-            &crate::status::format_directory_display(&path, /*max_width*/ None),
-            /*max_width*/ 64,
+    let primary_subdir = dunce::canonicalize(primary_subdir).unwrap();
+    let linked = dunce::canonicalize(linked).unwrap();
+    let linked_subdir = dunce::canonicalize(linked_subdir).unwrap();
+    let nested_child = dunce::canonicalize(nested_child).unwrap();
+    let threads = [
+        ("Primary README", primary.clone()),
+        ("Primary tree", primary.clone()),
+        ("Linked README", linked.clone()),
+        ("Linked tree", linked.clone()),
+        ("Primary child", primary_subdir.clone()),
+        ("Linked child", linked_subdir.clone()),
+        ("Nested repository", nested_child.clone()),
+    ]
+    .into_iter()
+    .map(|(title, cwd)| {
+        let mut thread = overview_thread(
+            ThreadId::new(),
+            /*parent_thread_id*/ None,
+            title,
+            ThreadStatus::Idle,
+        );
+        thread.cwd = AbsolutePathBuf::from_absolute_path(cwd).unwrap();
+        thread
+    })
+    .collect::<Vec<_>>();
+    let directory_headings = [
+        (&primary, "/tmp/worktree-root/primary"),
+        (&linked, "/tmp/worktree-root/linked"),
+        (&primary_subdir, "/tmp/worktree-root/primary/shared/child"),
+        (&linked_subdir, "/tmp/worktree-root/linked/shared/child"),
+        (&nested_child, "/tmp/worktree-root/primary/subdir/child"),
+    ]
+    .map(|(path, stable)| {
+        (
+            crate::text_formatting::center_truncate_path(
+                &crate::status::format_directory_display(path, /*max_width*/ None),
+                /*max_width*/ 64,
+            ),
+            stable,
         )
     });
-    let display_heading = &headings[0];
-    let grouped_heading = format!("{display_heading}  2");
     let width = 160;
     let view = app.agents_overview_view(threads, /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
-    let popup = render_bottom_popup(&app.chat_widget, width);
-    assert!(popup.contains(&grouped_heading), "{popup}");
-    let grouping = popup
+    let project_popup = render_bottom_popup(&app.chat_widget, width);
+    let project_root = primary.join("");
+    let project_headings = [
+        (&project_root, "/tmp/worktree-root/primary"),
+        (&primary_subdir, "/tmp/worktree-root/primary/shared/child"),
+        (&nested_child, "/tmp/worktree-root/primary/subdir/child"),
+    ]
+    .map(|(path, stable)| {
+        (
+            crate::text_formatting::center_truncate_path(
+                &crate::status::format_directory_display(path, /*max_width*/ None),
+                /*max_width*/ 64,
+            ),
+            stable,
+        )
+    });
+    assert!(
+        project_popup.contains(&format!("{}  4", project_headings[0].0)),
+        "{project_popup}"
+    );
+    assert!(
+        project_popup.contains(&format!("{}  2", project_headings[1].0)),
+        "{project_popup}"
+    );
+    let mut project_grouping = project_popup
         .lines()
         .map(|line| line.split('│').next().unwrap_or(line).trim_end())
         .collect::<Vec<_>>()
-        .join("\n")
-        .replace(&headings[1], "/tmp/worktree-root/primary/subdir/child")
-        .replace(display_heading, "/tmp/worktree-root/primary")
-        .replace('\\', "/");
+        .join("\n");
+    for (heading, stable) in project_headings.iter().rev() {
+        project_grouping = project_grouping.replace(heading, stable);
+    }
+    let project_grouping = project_grouping.replace('\\', "/");
+    app.agents_overview.view_state.lock().unwrap().grouping = AgentsOverviewGrouping::Directory;
+    let directory_popup = render_bottom_popup(&app.chat_widget, width);
+    for (heading, _) in &directory_headings[..2] {
+        assert!(
+            directory_popup.contains(&format!("{heading}  2")),
+            "{directory_popup}"
+        );
+    }
+    let mut directory_grouping = directory_popup
+        .lines()
+        .map(|line| line.split('│').next().unwrap_or(line).trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for (heading, stable) in directory_headings.iter().rev() {
+        directory_grouping = directory_grouping.replace(heading, stable);
+    }
+    let directory_grouping = directory_grouping.replace('\\', "/");
     insta::with_settings!({snapshot_path => "../snapshots"}, {
         insta::assert_snapshot!(
             "agents_overview_worktree_grouping",
-            normalize_agent_center_snapshot(grouping)
+            normalize_agent_center_snapshot(project_grouping)
+        );
+        insta::assert_snapshot!(
+            "agents_overview_directory_grouping",
+            normalize_agent_center_snapshot(directory_grouping)
         );
     });
+}
+
+#[cfg(unix)]
+#[test]
+fn overview_directory_group_keys_normalize_aliases() {
+    use super::super::agents_overview_view::directory_group_key;
+
+    let root = tempfile::tempdir().unwrap();
+    let checkout = root.path().join("checkout");
+    let alias = root.path().join("alias");
+    std::fs::create_dir(&checkout).unwrap();
+    std::os::unix::fs::symlink(&checkout, &alias).unwrap();
+
+    assert_eq!(
+        directory_group_key(&checkout, /*worktrees_enabled*/ true),
+        directory_group_key(&alias, /*worktrees_enabled*/ true),
+    );
+    let worktrees_enabled = false;
+    assert_eq!(directory_group_key(&alias, worktrees_enabled), alias);
 }
 
 #[tokio::test]
@@ -1221,7 +1324,7 @@ async fn overview_model_grouping_shows_details_and_preserves_selection() {
     .collect();
     let selected = ThreadId::from_u128(/*value*/ 1);
     let mut view = app.agents_overview_view(threads, Some(selected));
-    for _ in 0..2 {
+    for _ in 0..3 {
         view.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
     }
     assert_eq!(
@@ -1256,10 +1359,6 @@ async fn overview_model_grouping_shows_details_and_preserves_selection() {
 
 #[tokio::test]
 async fn shared_overview_shows_only_root_sessions() {
-    assert_eq!(
-        AgentsOverviewGroup::for_status(&ThreadStatus::SystemError),
-        AgentsOverviewGroup::NeedsYou
-    );
     let mut app = make_test_app().await;
     let first_root = ThreadId::from_string("00000000-0000-0000-0000-000000000101").unwrap();
     let unloaded_root = ThreadId::from_string("00000000-0000-0000-0000-000000000102").unwrap();
@@ -1416,66 +1515,6 @@ async fn shared_overview_shows_only_root_sessions() {
         .expect("restore conversation after closing dashboard");
     assert!(tui.terminal.viewport_area.height < screen_size.height);
     assert!(app.last_rendered_history_tail.is_some());
-}
-
-#[cfg(any(unix, windows))]
-#[tokio::test]
-async fn embedded_sessions_offer_to_start_a_background_server_without_migrating() {
-    let mut app = make_test_app().await;
-    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-
-    app.open_agents_overview(&app_server);
-
-    insta::with_settings!({snapshot_path => "../snapshots"}, {
-        insta::assert_snapshot!(
-            "agents_overview_embedded",
-            render_bottom_popup(&app.chat_widget, /*width*/ 96)
-        );
-    });
-    app_server.shutdown().await.expect("shutdown app server");
-}
-
-#[cfg(any(unix, windows))]
-#[tokio::test]
-async fn daemon_start_result_snapshots() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) =
-        crate::app::tests::make_test_app_with_channels().await;
-    let mut app_server =
-        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-    let mut tui = crate::tui::test_support::make_test_tui()?;
-
-    for (name, result) in [
-        ("agents_daemon_started", Ok(())),
-        (
-            "agents_daemon_start_failed",
-            Err("The host does not allow detached processes".to_string()),
-        ),
-    ] {
-        app.handle_event(
-            &mut tui,
-            &mut app_server,
-            AppEvent::AgentsDaemonStarted { result },
-        )
-        .await?;
-        let cell = match app_event_rx.try_recv()? {
-            AppEvent::InsertHistoryCell(cell) => cell,
-            other => panic!("expected daemon result history, got {other:?}"),
-        };
-        let rendered = cell
-            .display_lines(/*width*/ 80)
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        insta::with_settings!({snapshot_path => "../snapshots"}, {
-            insta::assert_snapshot!(name, rendered);
-        });
-    }
-
-    app_server.shutdown().await?;
-    Ok(())
 }
 
 #[tokio::test]
@@ -2704,6 +2743,7 @@ async fn command_center_refresh_failure_is_inline_and_clears_on_success() -> Res
     for result in [
         Err("unavailable".into()),
         Ok(AgentsOverviewThreadRefresh {
+            cleared_unread: Vec::new(),
             threads: HashMap::new(),
             last_messages: HashMap::new(),
             recent_seed_complete: false,
@@ -2736,6 +2776,7 @@ async fn command_center_refresh_failure_is_inline_and_clears_on_success() -> Res
         &server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
+            cleared_unread: Vec::new(),
             threads: HashMap::new(),
             last_messages: HashMap::new(),
             recent_seed_complete: true,
@@ -2971,18 +3012,40 @@ async fn overview_grouping_persists_across_config_reloads() -> Result<()> {
     app.local_settings.user_config_path = AbsolutePathBuf::try_from(config_path.clone())?;
     let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    for expected in [
-        AgentsOverviewGrouping::Status,
-        AgentsOverviewGrouping::Model,
-        AgentsOverviewGrouping::Project,
+    for (selected, persisted) in [
+        (
+            AgentsOverviewGrouping::Directory,
+            PersistedAgentsOverviewGrouping::Project,
+        ),
+        (
+            AgentsOverviewGrouping::Status,
+            PersistedAgentsOverviewGrouping::Status,
+        ),
+        (
+            AgentsOverviewGrouping::Model,
+            PersistedAgentsOverviewGrouping::Model,
+        ),
+        (
+            AgentsOverviewGrouping::Project,
+            PersistedAgentsOverviewGrouping::Project,
+        ),
     ] {
         let mut view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
         view.handle_key_event(KeyCode::Char('g').into());
-        let event = std::iter::from_fn(|| events.try_recv().ok())
-            .find(|event| matches!(event, AppEvent::PersistAgentsOverviewGrouping(_)))
-            .expect("grouping change emits persistence event");
-        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
         drop(view);
+        assert_eq!(
+            app.agents_overview.view_state.lock().unwrap().grouping,
+            selected
+        );
+        if selected == AgentsOverviewGrouping::Directory {
+            assert!(events.try_recv().is_err());
+            assert!(!std::fs::read_to_string(&config_path)?.contains("agents_overview_grouping"));
+        } else {
+            let event = std::iter::from_fn(|| events.try_recv().ok())
+                .find(|event| matches!(event, AppEvent::PersistAgentsOverviewGrouping(_)))
+                .expect("persisted grouping change emits persistence event");
+            Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+        }
 
         let mut loader = codex_config::LoaderOverrides::without_managed_config_for_tests();
         loader.user_config_path = Some(AbsolutePathBuf::try_from(config_path.clone())?);
@@ -2992,7 +3055,7 @@ async fn overview_grouping_persists_across_config_reloads() -> Result<()> {
             .build()
             .await?;
         app.local_settings = crate::local_settings::LocalSettings::from(&config);
-        assert_eq!(app.local_settings.tui.agents_overview_grouping, expected);
+        assert_eq!(app.local_settings.tui.agents_overview_grouping, persisted);
         assert!(!app.local_settings.tui.animations);
     }
     assert!(!home.path().join("config.toml").exists());
@@ -3003,7 +3066,7 @@ async fn overview_grouping_persists_across_config_reloads() -> Result<()> {
     Box::pin(app.handle_event(
         &mut tui,
         &mut server,
-        AppEvent::PersistAgentsOverviewGrouping(AgentsOverviewGrouping::Status),
+        AppEvent::PersistAgentsOverviewGrouping(PersistedAgentsOverviewGrouping::Status),
     ))
     .await?;
     assert_eq!(
@@ -3012,7 +3075,7 @@ async fn overview_grouping_persists_across_config_reloads() -> Result<()> {
     );
     assert_eq!(
         app.local_settings.tui.agents_overview_grouping,
-        AgentsOverviewGrouping::Status
+        PersistedAgentsOverviewGrouping::Status
     );
     assert!(
         render_bottom_popup(&app.chat_widget, /*width*/ 100)
@@ -3047,7 +3110,7 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
     ));
     view.handle_key_event(KeyCode::Char('p').into());
     assert!(rx.try_recv().is_err());
-    for _ in 0..3 {
+    for grouping_index in 0..3 {
         view.handle_key_event(KeyCode::Char('n').into());
         assert!(
             matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewSession { cwd: Some(cwd) }) if cwd == target.cwd)
@@ -3057,10 +3120,14 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
             matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewWorktree { cwd: Some(cwd) }) if cwd == target.cwd)
         );
         view.handle_key_event(KeyCode::Char('g').into());
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(AppEvent::PersistAgentsOverviewGrouping(_))
-        ));
+        if grouping_index == 0 {
+            assert!(rx.try_recv().is_err());
+        } else {
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(AppEvent::PersistAgentsOverviewGrouping(_))
+            ));
+        }
     }
     view.handle_key_event(KeyCode::Char('r').into());
     for character in "nwogrxfhap".chars() {

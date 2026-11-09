@@ -41,6 +41,11 @@ pub(crate) async fn notify_tool_start(
     for contributor in contributors {
         contributor
             .on_tool_start(ToolStartInput {
+                serving_assessment: invocation
+                    .step_context
+                    .serving_assessment
+                    .as_ref()
+                    .map(|value| value.requires_review),
                 session_store: &invocation.session.services.session_extension_data,
                 thread_store,
                 turn_store: invocation.turn.extension_data.as_ref(),
@@ -50,7 +55,7 @@ pub(crate) async fn notify_tool_start(
                 originating_item_id: originating_item_id.as_ref(),
                 tool_name: &invocation.tool_name,
                 mcp_tool,
-                permissions: Box::pin(async { tool_permission_context(invocation).await.ok() }),
+                permissions: Box::pin(async { tool_permission_context(invocation).ok() }),
                 payload: &invocation.payload,
                 conversation_history: Arc::clone(&conversation_history),
                 source: extension_tool_call_source(invocation.source.clone()),

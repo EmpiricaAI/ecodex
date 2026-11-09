@@ -5,6 +5,7 @@
 use crate::GuardianReviewError;
 use crate::GuardianReviewOutcome;
 use crate::GuardianReviewSessionLimits;
+use crate::ReviewDeadline;
 use crate::ReviewDenials;
 use crate::ReviewReport;
 use crate::ReviewRequest;
@@ -24,7 +25,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 /// Operations bound to one immutable action and its issuing context.
@@ -42,18 +42,19 @@ pub trait ReviewHost: Clone + Send + Sync + 'static {
     fn servicing_turn(&self) -> impl Future<Output = Option<(String, Arc<ModelInfo>)>> + Send;
     /// Returns the owning turn and optional target item after validating the action.
     fn validate_action(&self) -> Result<(&str, Option<&str>), ReviewDecision>;
+    /// Prepares evidence and accounting, with a client event only for supported actions.
     fn prepare(
         &self,
         approval_id: &str,
         reason: GuardianReviewReason,
-        deadline: Instant,
+        deadline: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> impl Future<Output = Result<(Self::Prepared, ReviewReport), ReviewDecision>> + Send;
     /// Captures fresh authorization evidence and rejects stale approvals for each attempt.
     fn attempt(
         &self,
         prepared: &Self::Prepared,
-        deadline: Instant,
+        deadline: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> impl Future<
         Output = (
@@ -106,7 +107,7 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                     &[("route", "required_sync"), ("reason", reason.into())],
                 );
             }
-            let deadline = Instant::now() + crate::REVIEW_TIMEOUT;
+            let deadline = ReviewDeadline::from_timeout(self.timeout);
             let (prepared, report) = match self
                 .host
                 .prepare(self.approval_id, reason, deadline, &self.cancellation)
@@ -115,9 +116,9 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                 Ok(prepared) => prepared,
                 Err(decision) => return Some(decision),
             };
-            self.host
-                .emit(EventMsg::GuardianAssessment(report.started_event()))
-                .await;
+            if let Some(event) = report.started_event() {
+                self.host.emit(EventMsg::GuardianAssessment(event)).await;
+            }
             let prepared = Arc::new(prepared);
             let cancellation = self.cancellation.child_token();
             let attempts = Arc::new(AtomicI64::new(/*v*/ 0));
@@ -166,7 +167,7 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                         let outcome = if !self.host.cached_approval_is_current(&prepared).await
                             || self.cancellation.is_cancelled() {
                             GuardianReviewOutcome::Error(GuardianReviewError::Cancelled)
-                        } else if Instant::now() >= deadline {
+                        } else if deadline.is_elapsed() {
                             GuardianReviewOutcome::Error(GuardianReviewError::Timeout)
                         } else {
                             GuardianReviewOutcome::CachedApproval
@@ -186,9 +187,12 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                 analytics,
                 completed_at_ms.try_into().unwrap_or_default(),
             );
-            if self.log_assessments && !cached_approval {
+            if self.log_assessments
+                && !cached_approval
+                && let Some(event) = &completed.event
+            {
                 self.telemetry
-                    .guardian_assessment(&completed.event, completed.assessment_outcome);
+                    .guardian_assessment(event, completed.assessment_outcome);
             }
             report.track(
                 self.telemetry,
@@ -204,14 +208,13 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
             }
             if completed.assessment_outcome.is_some()
                 && let Some(evidence) = evidence
+                && let Some(event) = &completed.event
             {
-                self.host
-                    .record_evidence(&prepared, evidence, &completed.event)
-                    .await;
+                self.host.record_evidence(&prepared, evidence, event).await;
             }
-            self.host
-                .emit(EventMsg::GuardianAssessment(completed.event))
-                .await;
+            if let Some(event) = completed.event {
+                self.host.emit(EventMsg::GuardianAssessment(event)).await;
+            }
             if cached_approval {
                 return Some(self.cached_approval().await);
             }

@@ -28,6 +28,7 @@ use pretty_assertions::assert_eq;
 
 struct Host {
     clock: AtomicI64,
+    fail_clock: AtomicBool,
     agent_path_calls: AtomicUsize,
     members: HashMap<ThreadId, AgentPath>,
     active: AtomicBool,
@@ -57,6 +58,9 @@ impl MessageBoardHost for Host {
 
     fn current_time(&self, _caller: ThreadId) -> BoxFuture<'_, Result<DateTime<Utc>>> {
         Box::pin(async move {
+            if self.fail_clock.load(Ordering::SeqCst) {
+                return Err(CodexErr::Io(std::io::Error::other("clock unavailable")));
+            }
             Ok(DateTime::parse_from_rfc3339("2026-09-18T12:00:00Z")
                 .map_err(|error| CodexErr::Io(std::io::Error::other(error)))?
                 .with_timezone(&Utc)
@@ -95,6 +99,7 @@ async fn opening_board_preserves_posts_when_corruption_has_no_startup_recovery()
     let root = ThreadId::new();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         members: [(root, AgentPath::root())].into(),
         fail_notifications: AtomicBool::new(false),
@@ -159,6 +164,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
     let child_path = AgentPath::root().join("worker").unwrap();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         members: [(root, AgentPath::root()), (child, child_path.clone())].into(),
         fail_notifications: AtomicBool::new(false),
@@ -458,6 +464,7 @@ async fn in_memory_handles_share_posts_deduplicate_calls_and_release_state() {
     let child_path = AgentPath::root().join("worker").unwrap();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         members: [(root, AgentPath::root()), (child, child_path.clone())].into(),
         active: AtomicBool::new(true),
@@ -544,6 +551,7 @@ async fn check_failed_requests_do_not_create_channels_or_notify_inactive_agents(
     let child_path = AgentPath::root().join("worker").unwrap();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         members: [(root, AgentPath::root()), (child, child_path.clone())].into(),
         fail_notifications: AtomicBool::new(false),
@@ -615,6 +623,7 @@ async fn check_queries_enforce_page_and_preview_caps(backend: Backend) {
     let host = Arc::new(Host {
         fail_notifications: AtomicBool::new(false),
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         members: [(root, AgentPath::root())].into(),
         active: AtomicBool::new(false),
@@ -711,6 +720,7 @@ async fn check_queries_page_discussions_and_search_unicode(backend: Backend) {
     let host = Arc::new(Host {
         fail_notifications: AtomicBool::new(false),
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         members: [(root, AgentPath::root())].into(),
         active: AtomicBool::new(true),
@@ -981,6 +991,7 @@ async fn check_tools_cover_channel_discussions_subscriptions_and_escaped_preview
         fail_notifications: AtomicBool::new(false),
         members: [(root, AgentPath::root()), (child, child_path.clone())].into(),
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         active: AtomicBool::new(true),
         notifications: Mutex::default(),
@@ -1213,15 +1224,18 @@ async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_resu
     let child_path = AgentPath::root().join("worker").unwrap();
     let host = Arc::new(Host {
         fail_notifications: AtomicBool::new(false),
-        members: [(root, AgentPath::root()), (child, child_path)].into(),
+        members: [(root, AgentPath::root()), (child, child_path.clone())].into(),
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         active: AtomicBool::new(true),
         notifications: Mutex::default(),
     });
     let board = backend.open(&sqlite, root.into(), host.clone()).await;
+    let mut selected = MessageBoardTool::DISCUSSION.to_vec();
+    selected.extend([MessageBoardTool::Append, MessageBoardTool::UpsertChannel]);
     let tools = message_board_tools(
-        &MessageBoardTool::DISCUSSION,
+        &selected,
         board.clone(),
         root,
         AgentPath::root(),
@@ -1241,7 +1255,15 @@ async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_resu
             "post",
             json!({"new_channel_name":"low-budget","text":"must not be stored"}),
         ),
+        (
+            "append",
+            json!({"new_channel_name":"low-budget-append","text":"must not be stored"}),
+        ),
         ("create_channel", json!({"channel_name":"low-budget"})),
+        (
+            "upsert_channel",
+            json!({"channel_name":"low-budget-upsert","description":"must not be stored"}),
+        ),
     ] {
         let mut limited = call(name, args);
         limited.truncation_policy = TruncationPolicy::Bytes(1);
@@ -1263,15 +1285,37 @@ async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_resu
     );
     small_budget.truncation_policy = TruncationPolicy::Bytes(4096);
     assert!(tool("create_channel").handle(small_budget).await.is_err());
-    assert!(
-        tool("post")
-            .handle(call(
-                "post",
-                json!({"text":"invalid","channel_name":"a","new_channel_name":"b"})
-            ))
-            .await
-            .is_err()
-    );
+    for name in ["post", "append"] {
+        assert!(
+            tool(name)
+                .handle(call(
+                    name,
+                    json!({"text":"invalid","channel_name":"a","new_channel_name":"b"})
+                ))
+                .await
+                .is_err()
+        );
+    }
+    for args in [
+        json!({"text":"no destination"}),
+        json!({"text":"invalid recipient","new_channel_name":"evidence","agents_to_notify":["worker"]}),
+    ] {
+        assert!(tool("append").handle(call("append", args)).await.is_err());
+    }
+    for args in [
+        json!({"channel_name":"policy"}),
+        json!({"description":"missing channel"}),
+        json!({"channel_name":"policy","description":"é".repeat(257)}),
+        json!({"channel_name":"policy","description":"invalid option","subscribe":true}),
+        json!({"channel_name":"policy","description":"invalid option","permissions":{}}),
+    ] {
+        assert!(
+            tool("upsert_channel")
+                .handle(call("upsert_channel", args))
+                .await
+                .is_err()
+        );
+    }
     assert!(
         tool("get_channels")
             .handle(call("get_channels", json!({"limit":0})))
@@ -1424,6 +1468,184 @@ async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_resu
             .len()
             <= 8000
     );
+
+    // Explicitly selected Append stores readable evidence, without delivery side effects.
+    host.notifications.lock().unwrap().clear();
+    let append_call = call(
+        "append",
+        json!({"text":"Permission revoked.","new_channel_name":"evidence"}),
+    );
+    let result = tool("append").handle(append_call.clone()).await.unwrap();
+    let appended: PostMetadata = serde_json::from_str(&result.log_output()).unwrap();
+    assert_eq!(
+        tool("append")
+            .handle(append_call)
+            .await
+            .unwrap()
+            .log_output(),
+        result.log_output()
+    );
+    let read = tool("read_post")
+        .handle(call("read_post", json!({"message_id":appended.message_id})))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<PostContent>(&read.log_output()).unwrap(),
+        PostContent {
+            metadata: appended.clone(),
+            text: "Permission revoked.".into(),
+            n_chars: 19,
+            next_offset_chars: 19,
+        }
+    );
+    let mut conflict = call(
+        "post",
+        json!({"text":"Permission revoked.","new_channel_name":"evidence"}),
+    );
+    conflict.call_id = "append".into();
+    assert!(tool("post").handle(conflict).await.is_err());
+    tool("subscribe")
+        .handle(call(
+            "subscribe",
+            json!({"channel_name":"evidence","target_agent":"worker"}),
+        ))
+        .await
+        .unwrap();
+    for (index, args) in [
+        json!({"text":"Later evidence.","channel_name":"evidence"}),
+        json!({"text":"Related evidence.","thread_id":appended.thread_id}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut append = call("append", args);
+        append.call_id = format!("later-append-{index}");
+        tool("append").handle(append).await.unwrap();
+    }
+    // Normal discussion still does not notify the append author: Append created
+    // neither a channel subscription nor a thread subscription for that author.
+    for (index, destination) in [
+        PostDestination::Channel("evidence".into()),
+        PostDestination::Thread(appended.thread_id),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        board
+            .post(
+                child,
+                PostRequest {
+                    request_id: format!("ordinary-reply-{index}"),
+                    destination,
+                    text: "Discuss this evidence.".into(),
+                    agents_to_notify: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(*host.notifications.lock().unwrap(), Vec::new());
+
+    // Upsert creates metadata without subscribing its author. Updating from another
+    // caller changes only the description, preserving the channel and its evidence.
+    host.clock.store(100, Ordering::SeqCst);
+    let upsert = call(
+        "upsert_channel",
+        json!({"channel_name":"policy","description":"Original policy"}),
+    );
+    assert_eq!(
+        tool("upsert_channel")
+            .handle(upsert)
+            .await
+            .unwrap()
+            .log_output(),
+        "null"
+    );
+    let created = tool("get_channels")
+        .handle(call("get_channels", json!({"query":"policy"})))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Page<ChannelSummary>>(&created.log_output()).unwrap(),
+        Page {
+            results: vec![ChannelSummary {
+                channel_name: "policy".into(),
+                description: Some("Original policy".into()),
+                permissions: None,
+                created_at: "2026-09-18T12:01:40Z".parse().unwrap(),
+                created_by: AgentPath::root(),
+                message_count: 0,
+                last_message_id: None,
+            }],
+            next_cursor: None,
+        }
+    );
+    board
+        .post(
+            child,
+            PostRequest {
+                request_id: "policy-evidence".into(),
+                destination: PostDestination::Channel("policy".into()),
+                text: "Deployment requires approval.".into(),
+                agents_to_notify: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let channels = call("get_channels", json!({"query":"policy"}));
+    let before = tool("get_channels").handle(channels.clone()).await.unwrap();
+    let mut expected: Page<ChannelSummary> = serde_json::from_str(&before.log_output()).unwrap();
+    let child_tools = message_board_tools(
+        &[MessageBoardTool::UpsertChannel],
+        board,
+        child,
+        child_path,
+        Some("collaboration"),
+        "Shared tools",
+        /*tool_messages*/ None,
+    );
+    host.fail_clock.store(true, Ordering::SeqCst);
+    child_tools[0]
+        .handle(call(
+            "upsert_channel",
+            json!({"channel_name":"policy","description":"Updated policy"}),
+        ))
+        .await
+        .unwrap();
+    expected.results[0].description = Some("Updated policy".into());
+    let after = tool("get_channels").handle(channels).await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Page<ChannelSummary>>(&after.log_output()).unwrap(),
+        expected
+    );
+    assert!(
+        child_tools[0]
+            .handle(call(
+                "upsert_channel",
+                json!({"channel_name":"clock-missing","description":"Must not be created"}),
+            ))
+            .await
+            .is_err()
+    );
+    let missing = tool("get_channels")
+        .handle(call("get_channels", json!({"query":"clock-missing"})))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Page<ChannelSummary>>(&missing.log_output()).unwrap(),
+        Page {
+            results: Vec::new(),
+            next_cursor: None
+        }
+    );
+    host.fail_clock.store(false, Ordering::SeqCst);
+    let mut posted = call(
+        "post",
+        json!({"channel_name":"policy","text":"More policy evidence."}),
+    );
+    posted.call_id = "after-upsert".into();
+    tool("post").handle(posted).await.unwrap();
+    assert_eq!(*host.notifications.lock().unwrap(), Vec::new());
 }
 
 #[test]
@@ -1463,6 +1685,7 @@ async fn channel_descriptions_migrate_legacy_storage_and_survive_reopen() {
     let root = ThreadId::new();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         members: [(root, AgentPath::root())].into(),
         active: AtomicBool::new(true),
@@ -1535,6 +1758,252 @@ async fn channel_descriptions_migrate_legacy_storage_and_survive_reopen() {
 }
 
 #[tokio::test]
+async fn silent_appends_preserve_evidence_and_explicit_subscriptions()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let root = ThreadId::new();
+    let child = ThreadId::new();
+    let host = Arc::new(Host {
+        clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
+        agent_path_calls: AtomicUsize::default(),
+        members: [
+            (root, AgentPath::root()),
+            (child, AgentPath::root().join("worker")?),
+        ]
+        .into(),
+        active: AtomicBool::new(true),
+        fail_notifications: AtomicBool::new(false),
+        notifications: Mutex::default(),
+    });
+    let options = LocalBoardOptions {
+        storage_namespace: "evidence_records".into(),
+    };
+    let descriptor = LocalBoard::new(sqlite.clone(), root.into()).with_options(options);
+    let writer = descriptor.read_write().open(host.clone()).await?;
+    let reader = descriptor.read_only().open(host.clone()).await?;
+    // Include characters requiring JSON escaping in the persisted subscription target.
+    let channel = "audit\"\\é";
+    let request = AppendRequest {
+        request_id: "original".into(),
+        destination: PostDestination::NewChannel(channel.into()),
+        text: "Deployment was revoked.".into(),
+    };
+    let original = writer.append(root, request.clone()).await?;
+    assert_eq!(writer.append(root, request.clone()).await?, original);
+    assert!(
+        reader
+            .append(
+                child,
+                AppendRequest {
+                    request_id: "reader".into(),
+                    destination: PostDestination::Channel(channel.into()),
+                    ..request.clone()
+                },
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        writer
+            .append(
+                root,
+                AppendRequest {
+                    text: "A different decision".into(),
+                    ..request.clone()
+                },
+            )
+            .await
+            .is_err()
+    );
+    let query = ChannelQuery {
+        query: None,
+        direction: SortDirection::OldestFirst,
+        page: PageRequest::default(),
+    };
+    let before = writer
+        .list_channels(root, query.clone())
+        .await?
+        .channels
+        .results
+        .remove(0);
+    writer
+        .upsert_channel(
+            child,
+            UpsertChannelRequest {
+                channel_name: channel.into(),
+                description: "Release decisions".to_owned().try_into()?,
+            },
+        )
+        .await?;
+    for (board, can_write) in [(&writer, true), (&reader, false)] {
+        assert_eq!(
+            board.list_channels(root, query.clone()).await?,
+            ChannelPage {
+                channels: Page {
+                    results: vec![ChannelSummary {
+                        description: Some("Release decisions".into()),
+                        permissions: Some(ChannelPermissions {
+                            read: true,
+                            post: can_write,
+                            reply: can_write,
+                            edit_metadata: false,
+                        }),
+                        ..before.clone()
+                    }],
+                    next_cursor: None,
+                },
+                board_permissions: Some(BoardPermissions {
+                    create_channel: can_write,
+                    edit_metadata: false,
+                    manage_permissions: false,
+                }),
+            }
+        );
+    }
+    assert_eq!(
+        reader
+            .read_post(
+                child,
+                ReadPostRequest {
+                    message_id: original.message_id,
+                    offset_chars: 0,
+                    limit_chars: NonZeroU32::MAX,
+                }
+            )
+            .await?,
+        PostContent {
+            metadata: original.clone(),
+            text: request.text.clone(),
+            n_chars: request.text.chars().count(),
+            next_offset_chars: request.text.chars().count(),
+        }
+    );
+    assert!(
+        reader
+            .upsert_channel(
+                child,
+                UpsertChannelRequest {
+                    channel_name: channel.into(),
+                    description: "Changed".to_owned().try_into()?,
+                },
+            )
+            .await
+            .is_err()
+    );
+    writer
+        .create_channel(
+            root,
+            CreateChannelRequest {
+                channel_name: "release".into(),
+                description: Some("Release evidence".to_owned().try_into()?),
+                subscription: SubscriptionChange::Unsubscribe,
+            },
+        )
+        .await?;
+    for name in [channel, "release"] {
+        reader
+            .set_subscription(
+                child,
+                SubscriptionRequest {
+                    target: SubscriptionTarget::Channel(name.into()),
+                    change: SubscriptionChange::Subscribe,
+                    target_agent: None,
+                },
+            )
+            .await?;
+    }
+    let later_request = AppendRequest {
+        request_id: "later".into(),
+        destination: PostDestination::Channel(channel.into()),
+        ..request.clone()
+    };
+    let later = writer.append(root, later_request.clone()).await?;
+    // Retry keys belong to the caller, so another author may use the same ID.
+    assert_ne!(writer.append(child, later_request).await?, later);
+    assert!(host.notifications.lock().unwrap().is_empty());
+    let pool = sqlite
+        .open_read_only_pool(
+            &dir.path().join("message_board_evidence_records_1.sqlite"),
+            /*busy_timeout*/ None,
+        )
+        .await?;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM subscriptions WHERE agent=?")
+            .bind(root.to_string())
+            .fetch_one(&pool)
+            .await?,
+        0
+    );
+    let first = reader
+        .subscribed_channels(
+            child,
+            PageRequest {
+                cursor: None,
+                limit: NonZeroU32::MIN,
+            },
+        )
+        .await?;
+    let last = reader
+        .subscribed_channels(
+            child,
+            PageRequest {
+                cursor: first.next_cursor,
+                limit: NonZeroU32::MIN,
+            },
+        )
+        .await?;
+    assert_eq!(
+        (first.results, last),
+        (
+            vec![channel.into()],
+            Page {
+                results: vec!["release".into()],
+                next_cursor: None,
+            }
+        )
+    );
+    // Normal posts on this same board still subscribe their author and notify once.
+    let discussion = PostRequest {
+        request_id: "discussion".into(),
+        destination: PostDestination::Channel(channel.into()),
+        text: "Discuss the latest evidence.".into(),
+        agents_to_notify: Vec::new(),
+    };
+    let posted = writer.post(root, discussion.clone()).await?;
+    assert_eq!(writer.post(root, discussion.clone()).await?, posted);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT target FROM subscriptions WHERE agent=?")
+            .bind(root.to_string())
+            .fetch_all(&pool)
+            .await?,
+        vec![serde_json::to_string(&SubscriptionTarget::Thread(
+            posted.thread_id
+        ))?]
+    );
+    assert!(
+        writer
+            .append(
+                root,
+                AppendRequest {
+                    request_id: discussion.request_id.clone(),
+                    destination: discussion.destination.clone(),
+                    text: discussion.text.clone(),
+                },
+            )
+            .await
+            .is_err()
+    );
+    drop((writer, reader));
+    let reopened = descriptor.read_write().open(host.clone()).await?;
+    assert_eq!(reopened.append(root, request).await?, original);
+    assert_eq!(reopened.post(root, discussion).await?, posted);
+    assert_eq!(*host.notifications.lock().unwrap(), vec![(child, posted)]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn local_board_setup_survives_reopen() -> Result<()> {
     use serde_json::json;
     let dir = tempfile::tempdir()?;
@@ -1545,6 +2014,7 @@ async fn local_board_setup_survives_reopen() -> Result<()> {
     let root = ThreadId::new();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         members: [(root, AgentPath::root())].into(),
         active: AtomicBool::new(true),
@@ -1643,6 +2113,7 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
     let child_path = AgentPath::root().join("worker").unwrap();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
+        fail_clock: AtomicBool::new(false),
         agent_path_calls: AtomicUsize::default(),
         members: [(root, AgentPath::root()), (child, child_path)].into(),
         active: AtomicBool::new(true),
@@ -1728,3 +2199,6 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
     }
     Ok(())
 }
+
+#[path = "local_board/mcp_tests.rs"]
+mod mcp;

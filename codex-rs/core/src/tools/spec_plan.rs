@@ -55,6 +55,7 @@ use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::multi_agent_tool::multi_agent_v2_handler;
+use crate::tools::registry::NativeReview;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
@@ -128,6 +129,7 @@ pub(crate) fn build_tool_router(
     apps_enabled: bool,
     step_store: &ExtensionData,
     tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
+    dynamic_tools: &[DynamicToolSpec],
 ) -> CodexResult<ToolRouter> {
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
@@ -171,7 +173,7 @@ pub(crate) fn build_tool_router(
         extension_tool_executors(session, step_store),
         &mut registry,
     );
-    append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
+    append_dynamic_tool_runtimes(dynamic_tools, &mut registry);
     let hosted_specs = hosted_model_tool_specs(
         turn_context,
         model_info,
@@ -653,7 +655,11 @@ fn build_model_visible_specs(
     }
     specs.extend(hosted_specs);
 
-    merge_into_namespaces(specs)
+    let mcp_namespaces = registry
+        .mcp_namespaces()
+        .map(|(_, namespace)| namespace)
+        .collect();
+    merge_into_namespaces(specs, &mcp_namespaces)
 }
 
 fn spec_for_model_request(
@@ -1102,7 +1108,7 @@ fn register_code_mode_executors(
 }
 
 #[instrument(level = "trace", skip_all, fields(tool_spec_count = specs.len()))]
-fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
+fn merge_into_namespaces(specs: Vec<ToolSpec>, mcp_namespaces: &HashSet<&str>) -> Vec<ToolSpec> {
     let mut merged_specs = Vec::with_capacity(specs.len());
     let mut namespace_indices = BTreeMap::<String, usize>::new();
     for spec in specs {
@@ -1145,7 +1151,10 @@ fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
             left_name.cmp(right_name)
         });
 
-        if namespace.description.trim().is_empty() {
+        // Native tools resolve their own defaults, including intentional empty descriptions.
+        if namespace.description.trim().is_empty()
+            && mcp_namespaces.contains(namespace.name.as_str())
+        {
             namespace.description = default_namespace_description(&namespace.name);
         }
     }
@@ -1366,8 +1375,17 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     }
 
     if features.enabled(Feature::TokenBudget) {
-        registry.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
-        registry.add(GetContextRemainingHandler);
+        let model_messages = ResolvedModelMessages::from_model(context.model_info);
+        let messages = model_messages.context_management();
+        registry.add_with_exposure(
+            NewContextWindowHandler::new(
+                messages.and_then(|messages| messages.new_context.as_ref()),
+            ),
+            ToolExposure::DirectModelOnly,
+        );
+        registry.add(GetContextRemainingHandler::new(
+            messages.and_then(|messages| messages.get_context_remaining.as_ref()),
+        ));
     }
 
     let current_time_reminder_enabled = features.enabled(Feature::CurrentTimeReminder);
@@ -1457,11 +1475,20 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 ToolExposure::Direct
             };
             let tool_namespace = turn_context.config.multi_agent_v2.tool_namespace.as_deref();
+            let native_review = if turn_context
+                .config
+                .features
+                .enabled(Feature::GuardianNativeMultiAgentHistory)
+            {
+                NativeReview::Required
+            } else {
+                NativeReview::Disabled
+            };
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
                 turn_context.config.multi_agent_v2.hide_spawn_agent_metadata;
-            registry.register_trusted_with_exposure(
+            registry.register_trusted_with_native_review(
                 multi_agent_v2_handler(
                     SpawnAgentHandlerV2::new(
                         SpawnAgentToolOptions {
@@ -1493,9 +1520,10 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     model_messages.multi_agent_tool_parameters_override("spawn_agent"),
                 ),
                 exposure,
+                native_review,
             );
             if !turn_context.config.multi_agent_v2.disable_direct_message {
-                registry.register_trusted_with_exposure(
+                registry.register_trusted_with_native_review(
                     multi_agent_v2_handler(
                         SendMessageHandlerV2,
                         tool_namespace,
@@ -1503,8 +1531,9 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         model_messages.multi_agent_tool_parameters_override("send_message"),
                     ),
                     exposure,
+                    native_review,
                 );
-                registry.register_trusted_with_exposure(
+                registry.register_trusted_with_native_review(
                     multi_agent_v2_handler(
                         FollowupTaskHandlerV2,
                         tool_namespace,
@@ -1512,6 +1541,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         model_messages.multi_agent_tool_parameters_override("followup_task"),
                     ),
                     exposure,
+                    native_review,
                 );
             }
             if turn_context.config.multi_agent_v2.wait_agent_enabled {
@@ -1525,7 +1555,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     exposure,
                 );
             }
-            registry.register_trusted_with_exposure(
+            registry.register_trusted_with_native_review(
                 multi_agent_v2_handler(
                     InterruptAgentHandler,
                     tool_namespace,
@@ -1533,6 +1563,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     model_messages.multi_agent_tool_parameters_override("interrupt_agent"),
                 ),
                 exposure,
+                native_review,
             );
             registry.register_trusted_with_exposure(
                 multi_agent_v2_handler(

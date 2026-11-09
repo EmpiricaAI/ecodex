@@ -48,7 +48,7 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
         assert_eq!(
             threads
                 .iter()
-                .any(|thread| thread.id == started.session.thread_id.to_string()),
+                .any(|(thread, _)| thread.id == started.session.thread_id.to_string()),
             pinned
         );
     }
@@ -238,10 +238,20 @@ async fn archiving_selects_the_next_displayed_task() -> Result<()> {
                 let expected = match (grouping, filtered) {
                     (AgentsOverviewGrouping::Status, false) => vec![3, 2, 1, 4],
                     (AgentsOverviewGrouping::Status, true) => vec![3, 1, 4],
-                    (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, false) => {
+                    (
+                        AgentsOverviewGrouping::Project
+                        | AgentsOverviewGrouping::Directory
+                        | AgentsOverviewGrouping::Model,
+                        false,
+                    ) => {
                         vec![3, 4, 2, 1]
                     }
-                    (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, true) => {
+                    (
+                        AgentsOverviewGrouping::Project
+                        | AgentsOverviewGrouping::Directory
+                        | AgentsOverviewGrouping::Model,
+                        true,
+                    ) => {
                         vec![3, 4, 1]
                     }
                 };
@@ -311,6 +321,7 @@ async fn archiving_selects_the_next_displayed_task() -> Result<()> {
 async fn external_removals_preserve_adjacent_selection() {
     for grouping in [
         AgentsOverviewGrouping::Project,
+        AgentsOverviewGrouping::Directory,
         AgentsOverviewGrouping::Status,
         AgentsOverviewGrouping::Model,
     ] {
@@ -362,7 +373,9 @@ async fn external_removals_preserve_adjacent_selection() {
             );
             let expected = match grouping {
                 AgentsOverviewGrouping::Status => [ids[0], ids[3]],
-                AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model => [ids[3], ids[0]],
+                AgentsOverviewGrouping::Project
+                | AgentsOverviewGrouping::Directory
+                | AgentsOverviewGrouping::Model => [ids[3], ids[0]],
             };
             let archive = ServerNotification::ThreadArchived(ThreadArchivedNotification {
                 thread_id: ids[2].to_string(),
@@ -438,6 +451,7 @@ async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> 
     let mut selections = Vec::new();
     for grouping in [
         AgentsOverviewGrouping::Project,
+        AgentsOverviewGrouping::Directory,
         AgentsOverviewGrouping::Status,
         AgentsOverviewGrouping::Model,
     ] {
@@ -467,13 +481,23 @@ async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> 
             app.agents_overview.visible_thread_ids = view.thread_ids();
             app.chat_widget.show_bottom_pane_view(Box::new(view));
             let expected = match (grouping, filtered) {
-                // The preceding filtered case retains Other 2; rediscovered tasks append.
-                (AgentsOverviewGrouping::Status, false) => vec![3, 1, 4, 2],
+                // Status displays tasks newest first: 4, 3, 2, 1.
+                (AgentsOverviewGrouping::Status, false) => vec![3, 2, 1, 4],
                 (AgentsOverviewGrouping::Status, true) => vec![3, 1, 4],
-                (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, false) => {
+                (
+                    AgentsOverviewGrouping::Project
+                    | AgentsOverviewGrouping::Directory
+                    | AgentsOverviewGrouping::Model,
+                    false,
+                ) => {
                     vec![3, 4, 2, 1]
                 }
-                (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, true) => {
+                (
+                    AgentsOverviewGrouping::Project
+                    | AgentsOverviewGrouping::Directory
+                    | AgentsOverviewGrouping::Model,
+                    true,
+                ) => {
                     vec![3, 4, 1]
                 }
             };
@@ -630,7 +654,8 @@ async fn hidden_task_stays_hidden_through_activity_and_seed_until_explicit_resum
         &app_server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
-            threads: HashMap::from([(id, Some(thread.clone()))]),
+            cleared_unread: Vec::new(),
+            threads: HashMap::from([(id, Some((thread.clone(), false)))]),
             last_messages: HashMap::new(),
             recent_seed_complete: true,
             discovery: None,
@@ -911,7 +936,11 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             &app_server,
             request_id,
             Ok(AgentsOverviewThreadRefresh {
-                threads: stale_threads,
+                cleared_unread: Vec::new(),
+                threads: stale_threads
+                    .into_iter()
+                    .map(|(id, thread)| (id, thread.map(|thread| (thread, false))))
+                    .collect(),
                 last_messages: HashMap::new(),
                 recent_seed_complete: true,
                 discovery: None,
@@ -1014,6 +1043,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             .send(AppEvent::AgentsOverviewThreadsLoaded {
                 request_id,
                 result: Ok(AgentsOverviewThreadRefresh {
+                    cleared_unread: Vec::new(),
                     threads: HashMap::new(),
                     last_messages: HashMap::new(),
                     recent_seed_complete: true,

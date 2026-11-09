@@ -322,19 +322,12 @@ impl ChatWidget {
                 });
             } else {
                 tx.send(
-                    AstraModelPickerAction::UpdateModel
-                        .into_picker_event(sparkle_thread, model_for_action.clone()),
+                    AstraModelPickerAction::ApplyModelSelection {
+                        effort: effort_for_action.clone(),
+                    }
+                    .into_picker_event(sparkle_thread, model_for_action.clone()),
                 );
-                tx.send(AppEvent::UpdateReasoningEffort(effort_for_action.clone()));
-                tx.send(AppEvent::PersistModelSelection {
-                    model: model_for_action.clone(),
-                    effort: effort_for_action.clone(),
-                    // ecodex: persist the routed provider so the picker's
-                    // cross-provider choice survives restart (None = keep current).
-                    model_provider: crate::ecodex_curated_models::provider_for_model(
-                        &model_for_action,
-                    ),
-                });
+
             }
             if let Some(warning) = warning.clone() {
                 tx.send(AppEvent::InsertHistoryCell(Box::new(

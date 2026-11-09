@@ -137,12 +137,15 @@ async fn protected_model_settings_use_the_proposed_permissions(
         on_request_auto_review: Some(REVIEW_INSTRUCTIONS.to_string()),
         never: None,
         unless_trusted: None,
+        granular: None,
+        ..Default::default()
     });
     messages.permissions = Some(PermissionMessages {
         danger_full_access: None,
         workspace_write: None,
         read_only: Some(PERMISSION_INSTRUCTIONS.to_string()),
         approved_prefixes: None,
+        ..PermissionMessages::default()
     });
     let test = test_codex()
         .with_model(INITIAL_MODEL)

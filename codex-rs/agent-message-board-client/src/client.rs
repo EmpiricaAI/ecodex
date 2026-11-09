@@ -18,6 +18,7 @@ use chrono::Utc;
 use codex_http_client::HttpClient;
 use codex_http_client::HttpResponse;
 use codex_message_board::AgentMessageBoard;
+use codex_message_board::AppendRequest;
 use codex_message_board::ChannelPage;
 use codex_message_board::ChannelQuery;
 use codex_message_board::ChannelSummary;
@@ -36,6 +37,7 @@ use codex_message_board::SubscriptionState;
 use codex_message_board::ThreadPage;
 use codex_message_board::ThreadQuery;
 use codex_message_board::ThreadSummary;
+use codex_message_board::UpsertChannelRequest;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -324,7 +326,31 @@ impl AgentMessageBoard for RemoteAgentMessageBoard {
         ChannelSummary
     );
     operation!(list_channels, ListChannels, ChannelQuery, ChannelPage);
+    fn upsert_channel(
+        &self,
+        _caller: ThreadId,
+        _request: UpsertChannelRequest,
+    ) -> BoxFuture<'_, Result<()>> {
+        // The service has no description-update operation; creation has different semantics.
+        Box::pin(async {
+            Err(CodexErr::InvalidRequest(
+                "remote message boards do not support channel upsert".into(),
+            ))
+        })
+    }
     operation!(post, Post, PostRequest, PostMetadata);
+    fn append(
+        &self,
+        _caller: ThreadId,
+        _request: AppendRequest,
+    ) -> BoxFuture<'_, Result<PostMetadata>> {
+        // The remote protocol has no silent write operation. Posting is not equivalent.
+        Box::pin(async {
+            Err(CodexErr::InvalidRequest(
+                "remote message boards do not support silent append".into(),
+            ))
+        })
+    }
     operation!(list_threads, ListThreads, ThreadQuery, Page<ThreadSummary>);
     operation!(search_posts, SearchPosts, PostQuery, Page<PostPreview>);
     operation!(read_thread, ReadThread, ReadThreadRequest, ThreadPage);

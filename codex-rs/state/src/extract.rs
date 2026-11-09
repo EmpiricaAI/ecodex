@@ -39,7 +39,9 @@ pub fn apply_rollout_item(
         | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
         RolloutItem::Compacted(_) => {}
         RolloutItem::WorldState(_) => {}
-        RolloutItem::RetainedContext(_) | RolloutItem::SecurityRiskScore(_) => {}
+        RolloutItem::DynamicToolsUpdated { .. }
+        | RolloutItem::RetainedContext(_)
+        | RolloutItem::SecurityRiskScore(_) => {}
         RolloutItem::RealtimeItem(_) => {}
         RolloutItem::TokenUsageRecord(_) => {}
     }
@@ -73,6 +75,7 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         | RolloutItem::Compacted(_)
         | RolloutItem::RealtimeItem(_)
         | RolloutItem::RetainedContext(_)
+        | RolloutItem::DynamicToolsUpdated { .. }
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::WorldState(_) => false,
@@ -94,6 +97,10 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
         .take()
         .or_else(|| meta_line.meta.creator_account_id.clone());
     metadata.id = meta_line.meta.id;
+    metadata.attached_thread_parent_id = meta_line
+        .meta
+        .forked_from_id
+        .filter(|_| meta_line.meta.attached_thread);
     metadata.source = enum_to_string(&meta_line.meta.source);
     if metadata.originator.is_none() && !meta_line.meta.originator.is_empty() {
         metadata.originator = Some(meta_line.meta.originator.clone());
@@ -528,6 +535,7 @@ mod tests {
             &RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: SessionMeta {
                     creator_user_id: None,
+                    attached_thread: false,
                     creator_account_id: None,
                     session_id: thread_id.into(),
                     id: thread_id,
@@ -778,6 +786,7 @@ mod tests {
             &RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: SessionMeta {
                     creator_user_id: None,
+                    attached_thread: false,
                     creator_account_id: None,
                     session_id: thread_id.into(),
                     id: thread_id,
@@ -820,6 +829,7 @@ mod tests {
         let created_at = DateTime::<Utc>::from_timestamp(1_735_689_600, 0).expect("timestamp");
         ThreadMetadata {
             creator_user_id: None,
+            attached_thread_parent_id: None,
             creator_account_id: None,
             originator: None,
             id,

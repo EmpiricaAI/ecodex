@@ -19,6 +19,7 @@ use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::ApplyPatchToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
@@ -28,6 +29,7 @@ use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
 use crate::tools::handlers::file_system_sandbox_policy_context_for_cwd;
 use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::selected_executor;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
@@ -38,6 +40,7 @@ use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 use crate::windows_sandbox::windows_sandbox_level_for_legacy_checks;
 use codex_apply_patch::ApplyPatchAction;
@@ -304,6 +307,7 @@ impl ApplyPatchHandler {
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
+            environments,
             session,
             step_context,
             cancellation_token,
@@ -319,70 +323,42 @@ impl ApplyPatchHandler {
                 "apply_patch handler received unsupported payload".to_string(),
             ));
         };
-        let args = match codex_apply_patch::parse_patch(&patch_input) {
-            Ok(args) => args,
-            Err(parse_error) => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "apply_patch verification failed: {parse_error}"
-                )));
-            }
+        let turn_environment = selected_executor(&environments, &step_context.environments)?;
+        let request = prepare_patch_request(&patch_input, turn_environment, &step_context).await?;
+        let tool_ctx = ToolCtx {
+            session,
+            step_context,
+            cancellation_token,
+            call_id,
+            tool_name,
         };
-        let selected_environment_id =
-            require_environment_id(args.environment_id.as_deref(), self.multi_environment)?;
-
-        // Verify the parsed patch against the selected environment filesystem.
-        let turn_environment = resolve_tool_environment(
-            &step_context.environments,
-            selected_environment_id.as_deref(),
-        )?;
-        let fs = turn_environment.environment.get_filesystem();
-        let sandbox = turn_environment.sandbox_context(/*additional_permissions*/ None);
-        match codex_apply_patch::verify_apply_patch_args(
-            args,
-            turn_environment.cwd(),
-            fs.as_ref(),
-            Some(&sandbox),
-        )
-        .await
-        {
-            codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-                let tool_ctx = ToolCtx {
-                    session,
-                    step_context: Arc::clone(&step_context),
-                    cancellation_token,
-                    call_id,
-                    tool_name,
-                };
-                let content = execute_verified_patch(
-                    changes,
-                    turn_environment.clone(),
-                    Some(&tracker),
-                    tool_ctx,
-                )
-                .await?;
-                Ok(boxed_tool_output(ApplyPatchToolOutput::from_text(content)))
-            }
-            codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-                Err(FunctionCallError::RespondToModel(format!(
-                    "apply_patch verification failed: {parse_error}"
-                )))
-            }
-            codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
-                tracing::trace!("Failed to parse apply_patch input, {error:?}");
-                Err(FunctionCallError::RespondToModel(
-                    "apply_patch handler received invalid patch input".to_string(),
-                ))
-            }
-            codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {
-                Err(FunctionCallError::RespondToModel(
-                    "apply_patch handler received non-apply_patch input".to_string(),
-                ))
-            }
-        }
+        let content = execute_prepared_patch(request, Some(&tracker), tool_ctx).await?;
+        Ok(boxed_tool_output(ApplyPatchToolOutput::from_text(content)))
     }
 }
 
 impl CoreToolRuntime for ApplyPatchHandler {
+    fn environments_for_input(
+        &self,
+        invocation: &ToolInvocation,
+    ) -> Result<ToolEnvironments, FunctionCallError> {
+        let ToolPayload::Custom { input } = &invocation.payload else {
+            return Err(FunctionCallError::Fatal(
+                "expected apply_patch input".to_string(),
+            ));
+        };
+        let args = codex_apply_patch::parse_patch(input).map_err(|err| {
+            FunctionCallError::RespondToModel(format!("apply_patch verification failed: {err}"))
+        })?;
+        let environment_id =
+            require_environment_id(args.environment_id.as_deref(), self.multi_environment)?;
+        let environment = resolve_tool_environment(
+            &invocation.step_context.environments,
+            environment_id.as_deref(),
+        )?;
+        Ok(ToolEnvironments::single_executor(environment))
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Custom { .. })
     }
@@ -404,6 +380,17 @@ impl CoreToolRuntime for ApplyPatchHandler {
         updated_input: serde_json::Value,
     ) -> Result<ToolInvocation, FunctionCallError> {
         let patch = updated_hook_command(&updated_input)?;
+        let args = codex_apply_patch::parse_patch(patch).map_err(|err| {
+            FunctionCallError::RespondToModel(format!("apply_patch verification failed: {err}"))
+        })?;
+        if let Some(id) =
+            require_environment_id(args.environment_id.as_deref(), self.multi_environment)?
+            && Some(id.as_str()) != invocation.environments.single_id()
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "PreToolUse hook cannot change the tool environment".to_string(),
+            ));
+        }
         invocation.payload = match invocation.payload {
             ToolPayload::Custom { .. } => ToolPayload::Custom {
                 input: patch.to_string(),
@@ -421,6 +408,7 @@ impl CoreToolRuntime for ApplyPatchHandler {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
+            tool_cwd: result.post_tool_use_cwd(),
             tool_name: HookToolName::apply_patch(),
             tool_use_id: invocation.call_id.clone(),
             tool_input: serde_json::json!({
@@ -449,6 +437,7 @@ pub(crate) async fn intercept_apply_patch(
         .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+            let request = prepare_verified_patch(changes, turn_environment, &step_context)?;
             let tool_ctx = ToolCtx {
                 session,
                 step_context,
@@ -456,8 +445,7 @@ pub(crate) async fn intercept_apply_patch(
                 call_id: call_id.to_string(),
                 tool_name: ToolName::plain(tool_name),
             };
-            let content =
-                execute_verified_patch(changes, turn_environment, tracker, tool_ctx).await?;
+            let content = execute_prepared_patch(request, tracker, tool_ctx).await?;
             Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
         }
         codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
@@ -473,12 +461,56 @@ pub(crate) async fn intercept_apply_patch(
     }
 }
 
-async fn execute_verified_patch(
+pub(crate) async fn prepare_patch_request(
+    patch_input: &str,
+    turn_environment: &TurnEnvironment,
+    step_context: &StepContext,
+) -> Result<ApplyPatchRequest, FunctionCallError> {
+    let args = match codex_apply_patch::parse_patch(patch_input) {
+        Ok(args) => args,
+        Err(parse_error) => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "apply_patch verification failed: {parse_error}"
+            )));
+        }
+    };
+    let fs = turn_environment.environment.get_filesystem();
+    let sandbox = turn_environment.sandbox_context(/*additional_permissions*/ None);
+    match codex_apply_patch::verify_apply_patch_args(
+        args,
+        turn_environment.cwd(),
+        fs.as_ref(),
+        Some(&sandbox),
+    )
+    .await
+    {
+        codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+            prepare_verified_patch(changes, turn_environment.clone(), step_context)
+        }
+        codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+            Err(FunctionCallError::RespondToModel(format!(
+                "apply_patch verification failed: {parse_error}"
+            )))
+        }
+        codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
+            tracing::trace!("Failed to parse apply_patch input, {error:?}");
+            Err(FunctionCallError::RespondToModel(
+                "apply_patch handler received invalid patch input".to_string(),
+            ))
+        }
+        codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {
+            Err(FunctionCallError::RespondToModel(
+                "apply_patch handler received non-apply_patch input".to_string(),
+            ))
+        }
+    }
+}
+
+fn prepare_verified_patch(
     action: ApplyPatchAction,
     turn_environment: TurnEnvironment,
-    tracker: Option<&SharedTurnDiffTracker>,
-    tool_ctx: ToolCtx,
-) -> Result<String, FunctionCallError> {
+    step_context: &StepContext,
+) -> Result<ApplyPatchRequest, FunctionCallError> {
     let cwd = action.cwd.clone();
     let sandbox_context = turn_environment.sandbox_context(/*additional_permissions*/ None);
     let policy_context = file_system_sandbox_policy_context_for_cwd(&sandbox_context, &cwd);
@@ -492,10 +524,7 @@ async fn execute_verified_patch(
     };
     let environment_id = turn_environment.selection.environment_id.as_str();
     let file_paths = file_paths_for_action(&action);
-    let granted_permissions = tool_ctx
-        .step_context
-        .turn
-        .granted_permissions(environment_id);
+    let granted_permissions = step_context.turn.granted_permissions(environment_id);
     let base_file_system_sandbox_policy = turn_environment
         .permission_profile()
         .file_system_sandbox_policy();
@@ -515,23 +544,41 @@ async fn execute_verified_patch(
             FunctionCallError::RespondToModel(format!("failed to check patch permissions: {error}"))
         })?;
     let effective_additional_permissions = apply_granted_turn_permissions(
-        &tool_ctx.step_context,
+        step_context,
         &turn_environment,
         &cwd,
         crate::sandboxing::SandboxPermissions::UseDefault,
         additional_permissions,
     );
-    let apply = apply_patch::prepare_apply_patch(
-        &tool_ctx.step_context,
+    let exec_approval_requirement = apply_patch::patch_approval_requirement(
+        step_context,
         &turn_environment,
         &matching,
-        action,
+        &action,
     )?;
-    let changes = convert_apply_patch_to_protocol(&apply.action);
+    let changes = convert_apply_patch_to_protocol(&action);
+    Ok(ApplyPatchRequest {
+        turn_environment,
+        action,
+        file_paths,
+        changes: Arc::new(changes),
+        exec_approval_requirement,
+        additional_permissions: effective_additional_permissions.additional_permissions,
+        permissions_preapproved: effective_additional_permissions.permissions_preapproved,
+    })
+}
+async fn execute_prepared_patch(
+    request: ApplyPatchRequest,
+    tracker: Option<&SharedTurnDiffTracker>,
+    tool_ctx: ToolCtx,
+) -> Result<String, FunctionCallError> {
     let emitter = ToolEmitter::apply_patch_for_environment(
-        changes.clone(),
-        apply.auto_approved,
-        turn_environment.selection.environment_id.clone(),
+        request.changes.as_ref().clone(),
+        matches!(
+            request.exec_approval_requirement,
+            ExecApprovalRequirement::Skip { .. }
+        ),
+        request.turn_environment.selection.environment_id.clone(),
     );
     let event_ctx = ToolEventCtx::new(
         tool_ctx.session.as_ref(),
@@ -542,15 +589,6 @@ async fn execute_verified_patch(
     );
     emitter.begin(event_ctx).await;
 
-    let request = ApplyPatchRequest {
-        turn_environment,
-        action: apply.action,
-        file_paths,
-        changes: Arc::new(changes),
-        exec_approval_requirement: apply.exec_approval_requirement,
-        additional_permissions: effective_additional_permissions.additional_permissions,
-        permissions_preapproved: effective_additional_permissions.permissions_preapproved,
-    };
     let mut orchestrator = ToolOrchestrator::new();
     let mut runtime = ApplyPatchRuntime::new();
     let result = orchestrator

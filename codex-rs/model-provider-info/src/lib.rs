@@ -8,6 +8,8 @@
 //! API provider construction applies the process-wide managed residency policy also
 //! used by default HTTP headers.
 
+use codex_client::OPENAI_ORGANIZATION_HEADER;
+use codex_client::OPENAI_PROJECT_HEADER;
 use codex_client::Provider as ApiProvider;
 use codex_client::RetryConfig as ApiRetryConfig;
 use codex_protocol::auth::AuthMode;
@@ -27,6 +29,7 @@ use std::fmt;
 use std::num::NonZeroU64;
 use std::path::Component;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::PoisonError;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -38,6 +41,7 @@ pub use capabilities::ModelProviderCapabilities;
 pub use capabilities::RemoteCompactionSupport;
 pub use gateway_oauth::GatewayOAuthConfig;
 pub use gateway_oauth::GatewayOAuthDelivery;
+pub use oauth_session::OAuthCredentialsStore;
 pub use oauth_session::OAuthSessionConfig;
 
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
@@ -84,9 +88,12 @@ const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 const AMAZON_BEDROCK_RUNTIME_PROVIDER_NAME: &str = "Amazon Bedrock Runtime";
 pub const AMAZON_BEDROCK_RUNTIME_PROVIDER_ID: &str = "amazon-bedrock-runtime";
+const GCP_PROVIDER_NAME: &str = "Google Cloud Vertex AI";
+pub const GCP_PROVIDER_ID: &str = "gcp";
 pub const AMAZON_BEDROCK_GPT_5_5_MODEL_ID: &str = "openai.gpt-5.5";
 pub const AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID: &str = "openai.gpt-5.6-sol";
 pub const AMAZON_BEDROCK_GPT_6_1_SOL_MODEL_ID: &str = "openai.gpt-6.1-sol";
+pub const AMAZON_BEDROCK_GPT_6_1_TERRA_MODEL_ID: &str = "openai.gpt-6.1-terra";
 pub const AMAZON_BEDROCK_GPT_6_SOL_MODEL_ID: &str = "openai.gpt-6-sol";
 pub const AMAZON_BEDROCK_GPT_6_LUNA_MODEL_ID: &str = "openai.gpt-6-luna";
 pub const AMAZON_BEDROCK_GPT_6_ASTRA_MODEL_ID: &str = "openai.gpt-6-astra";
@@ -146,6 +153,16 @@ pub struct ModelProviderInfo {
     pub base_url: Option<String>,
     /// Optional full URL for a Codex-native model catalog. When unset, OpenAI discovery
     /// uses the Codex backend unless `base_url` overrides the inference endpoint.
+    /// The endpoint must serve the Codex catalog format, not the public `/v1/models` API.
+    ///
+    /// For built-in OpenAI, set this under `[model_providers.openai]`; other non-default
+    /// provider overrides are rejected. The URL must use HTTPS and an allowed ChatGPT
+    /// host. Other hosts require a custom provider. Inference still uses `openai_base_url`.
+    ///
+    /// Catalog requests use the provider's credentials, including an API key or ChatGPT
+    /// access token. Only configure an endpoint you trust with those credentials.
+    /// Setting this URL does not grant catalog access or guarantee that the endpoint
+    /// accepts a regional API key. Existing discovery gates and entitlement checks apply.
     pub model_catalog_url: Option<RedactedString>,
     /// Environment variable that stores the user's API key for this provider.
     pub env_key: Option<String>,
@@ -163,6 +180,15 @@ pub struct ModelProviderInfo {
     pub gateway_oauth: Option<GatewayOAuthConfig>,
     /// AWS SigV4 auth configuration for this provider.
     pub aws: Option<ModelProviderAwsAuthInfo>,
+    /// Google Cloud project ID for the built-in GCP provider. Takes precedence
+    /// over `GOOGLE_CLOUD_PROJECT` when deriving the Vertex AI endpoint.
+    pub project_id: Option<String>,
+    /// Google Cloud location for the built-in GCP provider. Takes precedence
+    /// over `GOOGLE_CLOUD_LOCATION`; defaults to `global` when neither is set.
+    pub location: Option<String>,
+    /// Absolute path to a Google ADC credential file. For GCP, overrides
+    /// GOOGLE_APPLICATION_CREDENTIALS in the auth command's environment only.
+    pub credential_file: Option<PathBuf>,
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
@@ -323,7 +349,20 @@ other non-default provider fields are not supported"
         Ok(())
     }
 
+    /// Checks the credential-file path for a GCP provider or built-in GCP override.
+    pub fn validate_gcp_credential_file(&self) -> Result<(), String> {
+        if let Some(credential_file) = &self.credential_file
+            && !credential_file.is_absolute()
+        {
+            return Err("provider credential_file must be an absolute path".to_string());
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.is_gcp() {
+            self.validate_gcp_credential_file()?;
+        }
         if let Some(gateway) = &self.gateway_oauth {
             gateway.validate(self)?;
         }
@@ -421,7 +460,8 @@ other non-default provider fields are not supported"
         }
     }
 
-    fn build_header_map(&self) -> CodexResult<HeaderMap> {
+    /// Resolve configured request headers before choosing credentials or a runtime.
+    pub fn build_header_map(&self) -> CodexResult<HeaderMap> {
         let capacity = self.http_headers.as_ref().map_or(0, HashMap::len)
             + self.env_http_headers.as_ref().map_or(0, HashMap::len);
         let mut headers = HeaderMap::with_capacity(capacity);
@@ -571,10 +611,13 @@ other non-default provider fields are not supported"
             env_http_headers: Some(
                 [
                     (
-                        "OpenAI-Organization".to_string(),
+                        OPENAI_ORGANIZATION_HEADER.to_string(),
                         "OPENAI_ORGANIZATION".to_string(),
                     ),
-                    ("OpenAI-Project".to_string(), "OPENAI_PROJECT".to_string()),
+                    (
+                        OPENAI_PROJECT_HEADER.to_string(),
+                        "OPENAI_PROJECT".to_string(),
+                    ),
                 ]
                 .into_iter()
                 .collect(),
@@ -589,6 +632,9 @@ other non-default provider fields are not supported"
             supports_openai_builtin_tools: true,
             supports_standalone_web_search: true,
             capabilities: None,
+            project_id: None,
+            location: None,
+            credential_file: None,
             include_internal_metadata: true,
         }
     }
@@ -631,6 +677,9 @@ other non-default provider fields are not supported"
             supports_openai_builtin_tools: true,
             supports_standalone_web_search: false,
             capabilities: None,
+            project_id: None,
+            location: None,
+            credential_file: None,
             include_internal_metadata: false,
         }
     }
@@ -641,6 +690,47 @@ other non-default provider fields are not supported"
         let mut provider = Self::create_amazon_bedrock_provider(aws);
         provider.name = AMAZON_BEDROCK_RUNTIME_PROVIDER_NAME.into();
         provider
+    }
+
+    pub fn create_gcp_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: GCP_PROVIDER_NAME.into(),
+            base_url: None,
+            model_catalog_url: None,
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            // Config loading supplies default command auth after resolving its working directory.
+            auth: None,
+            gateway_oauth: None,
+            aws: None,
+            capabilities: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+            // GCP fronts OpenAI models through the Responses API; full tool set is supported.
+            supports_openai_builtin_tools: true,
+            supports_standalone_web_search: false,
+            project_id: None,
+            location: None,
+            credential_file: None,
+            include_internal_metadata: false,
+        }
+    }
+
+    /// Whether explicit Cyber programs may be selected and forwarded to this provider.
+    /// Use the configured provider ID, never its user-controlled display name, for defaults.
+    pub fn supports_cyber_access_programs(&self, provider_id: &str) -> bool {
+        self.capabilities
+            .and_then(|capabilities| capabilities.cyber_access_programs)
+            .unwrap_or(provider_id == OPENAI_PROVIDER_ID)
     }
 
     pub fn is_openai(&self) -> bool {
@@ -675,6 +765,10 @@ other non-default provider fields are not supported"
         self.name == AMAZON_BEDROCK_RUNTIME_PROVIDER_NAME
     }
 
+    pub fn is_gcp(&self) -> bool {
+        self.name == GCP_PROVIDER_NAME
+    }
+
     pub fn has_command_auth(&self) -> bool {
         self.auth.is_some()
     }
@@ -695,14 +789,14 @@ pub fn built_in_model_providers(
     let amazon_bedrock_provider = P::create_amazon_bedrock_provider(/*aws*/ None);
     let amazon_bedrock_runtime_provider =
         P::create_amazon_bedrock_runtime_provider(/*aws*/ None);
+    let gcp_provider = P::create_gcp_provider();
 
-    // We do not want to be in the business of adjucating which third-party
-    // providers are bundled with Codex CLI, so we only include the OpenAI and
-    // open source ("oss") providers by default. Users are encouraged to add to
-    // `model_providers` in config.toml to add their own providers.
+    // Bundle OpenAI, supported cloud-hosted OpenAI backends, and local OSS providers.
+    // Other compatible providers can be added through `model_providers` in config.toml.
     [
         (OPENAI_PROVIDER_ID, openai_provider),
         (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
+        (GCP_PROVIDER_ID, gcp_provider),
         (
             AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
             amazon_bedrock_runtime_provider,
@@ -747,14 +841,35 @@ pub fn openai_direct_provider(model: &str) -> Option<&'static str> {
 /// Merge configured providers into the built-in provider catalog.
 ///
 /// Configured providers extend the built-in set. Built-in providers are not
-/// generally overridable, but built-in Amazon Bedrock providers allow the user
-/// to customize their endpoint, authentication, headers, and AWS settings.
+/// generally overridable. OpenAI allows a catalog URL override, while the
+/// cloud-hosted OpenAI providers allow a limited
+/// set of endpoint, authentication, header, and cloud-specific overrides.
 pub fn merge_configured_model_providers(
     mut model_providers: HashMap<String, ModelProviderInfo>,
     configured_model_providers: HashMap<String, ModelProviderInfo>,
 ) -> Result<HashMap<String, ModelProviderInfo>, String> {
     for (key, mut provider) in configured_model_providers {
-        if matches!(
+        if key == "openai" {
+            // Keep the built-in identity, inference routing, and authentication.
+            // Only catalog routing is configurable through this provider entry.
+            if let Some(catalog_url) = provider.model_catalog_url.take()
+                && let Some(built_in_provider) = model_providers.get_mut(&key)
+            {
+                let allowed = catalog_url.parse::<http::Uri>().ok().is_some_and(|uri| {
+                    uri.scheme_str() == Some("https")
+                        && uri.host().is_some_and(|host| {
+                            codex_http_client::is_allowed_chatgpt_host(&host.to_ascii_lowercase())
+                        })
+                        && uri
+                            .authority()
+                            .is_some_and(|authority| !authority.as_str().contains('@'))
+                });
+                if !allowed {
+                    return Err("model_providers.openai.model_catalog_url must use an allowed ChatGPT host. If you need to use a 3rd party host, configure a custom model_provider".to_string());
+                }
+                built_in_provider.model_catalog_url = Some(catalog_url);
+            }
+        } else if matches!(
             key.as_str(),
             AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
         ) {
@@ -778,12 +893,56 @@ pub fn merge_configured_model_providers(
                         .extend(http_headers_override);
                 }
             }
+        } else if key == GCP_PROVIDER_ID {
+            merge_gcp_provider_overrides(model_providers.get_mut(&key), provider)?;
         } else {
             model_providers.entry(key).or_insert(provider);
         }
     }
 
     Ok(model_providers)
+}
+
+/// Validates GCP overrides and applies them when the built-in provider is present.
+pub fn merge_gcp_provider_overrides(
+    built_in: Option<&mut ModelProviderInfo>,
+    mut overrides: ModelProviderInfo,
+) -> Result<(), String> {
+    overrides
+        .validate_gcp_credential_file()
+        .and_then(|()| overrides.validate())
+        .map_err(|message| format!("model_providers.{GCP_PROVIDER_ID} {message}"))?;
+    let base_url = overrides.base_url.take();
+    let auth = overrides.auth.take();
+    let credential_file = overrides.credential_file.take();
+    let http_headers = overrides.http_headers.take();
+    let project_id = overrides.project_id.take();
+    let location = overrides.location.take();
+    if overrides != ModelProviderInfo::default() {
+        return Err(format!(
+            "model_providers.{GCP_PROVIDER_ID} only supports changing \
+`base_url`, `auth`, `http_headers`, `project_id`, `location`, and `credential_file`; other non-default provider fields are not supported"
+        ));
+    }
+
+    if let Some(provider) = built_in {
+        provider.project_id = project_id;
+        provider.location = location;
+        provider.credential_file = credential_file;
+        if let Some(base_url) = base_url {
+            provider.base_url = Some(base_url);
+        }
+        if let Some(auth) = auth {
+            provider.auth = Some(auth);
+        }
+        if let Some(http_headers) = http_headers {
+            provider
+                .http_headers
+                .get_or_insert_default()
+                .extend(http_headers);
+        }
+    }
+    Ok(())
 }
 
 pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> ModelProviderInfo {
@@ -832,6 +991,9 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         supports_openai_builtin_tools: false,
         supports_standalone_web_search: false,
         capabilities: None,
+        project_id: None,
+        location: None,
+        credential_file: None,
         include_internal_metadata: false,
     }
 }

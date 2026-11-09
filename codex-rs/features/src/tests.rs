@@ -212,6 +212,43 @@ fn guardian_v2_feature_config_preserves_boolean_toggle() {
 }
 
 #[test]
+fn guardian_v3_feature_config_resolves_base_and_profile_toggles() {
+    for (base, profile, enabled) in [
+        ("guardianv3 = true", "", true),
+        ("guardianv3 = false", "", false),
+        ("[guardianv3]", "", false),
+        ("[guardianv3]\nenabled = true", "", true),
+        ("[guardianv3]\nenabled = false", "", false),
+        (
+            "[guardianv3]\nenabled = true",
+            "[guardianv3]\nenabled = false",
+            false,
+        ),
+        (
+            "[guardianv3]\nenabled = false",
+            "[guardianv3]\nenabled = true",
+            true,
+        ),
+        ("[guardianv3]\nenabled = true", "[guardianv3]", true),
+    ] {
+        let base = toml::from_str::<FeaturesToml>(base).expect("base features");
+        let profile = toml::from_str::<FeaturesToml>(profile).expect("profile features");
+        let features = Features::from_sources(
+            FeatureConfigSource {
+                features: Some(&base),
+                ..Default::default()
+            },
+            FeatureConfigSource {
+                features: Some(&profile),
+                ..Default::default()
+            },
+            FeatureOverrides::default(),
+        );
+        assert_eq!(features.enabled(Feature::GuardianV3), enabled);
+    }
+}
+
+#[test]
 fn guardian_thread_context_is_ignored_with_a_migration_notice() {
     let enabled_context = "[guardianv2]\nthread_context = true";
     let disabled_context = "[guardianv2]\nthread_context = false";
@@ -940,5 +977,23 @@ fn retired_worktree_and_voice_config_overrides_are_ignored() {
             FeatureOverrides::default(),
         );
         assert_eq!(features, Features::with_defaults());
+    }
+}
+
+#[test]
+fn model_change_suppression_config_preserves_omission_and_explicit_values() {
+    for (input, expected) in [
+        ("", false),
+        ("suppress_model_change_announcements = false", false),
+        ("suppress_model_change_announcements = true", true),
+    ] {
+        let config: FeaturesToml = toml::from_str(input).unwrap();
+        let mut features = Features::with_defaults();
+        features.apply_toml(&config);
+        assert_eq!(
+            features.enabled(Feature::SuppressModelChangeAnnouncements),
+            expected,
+            "{input}"
+        );
     }
 }

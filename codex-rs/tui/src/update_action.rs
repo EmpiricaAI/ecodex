@@ -34,6 +34,9 @@ pub enum UpdateAction {
     /// The CLI points the script at the running binary's directory through
     /// [`INSTALL_DIR_ENV_VAR`], so a custom `--prefix` install updates in place.
     StandaloneUnix,
+    /// Update via `$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex`
+    /// (upstream's Windows installer; ecodex has no Windows install script of its own yet).
+    StandaloneWindows,
 }
 
 impl UpdateAction {
@@ -101,6 +104,15 @@ impl UpdateAction {
                 &[
                     "-c",
                     "curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh | bash",
+                ],
+            ),
+            UpdateAction::StandaloneWindows => (
+                "powershell",
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
                 ],
             ),
         }
@@ -253,6 +265,23 @@ mod tests {
             UpdateAction::BrewUpgrade.command_args(),
             ("brew", &["upgrade", "EmpiricaAI/tap/ecodex"][..])
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn standalone_unix_update_fails_when_installer_download_fails() {
+        let (command, args) = UpdateAction::StandaloneUnix.command_args();
+        let offline_command = args[1].replace("https://chatgpt.com", "file:///dev/null");
+        assert_ne!(offline_command, args[1], "installer URL must be replaced");
+        let output = std::process::Command::new(command)
+            .args([args[0], &offline_command])
+            .env_clear()
+            .env("HOME", "/dev/null")
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .expect("run standalone Unix update command");
+
+        assert!(!output.status.success(), "{output:?}");
     }
 }
 

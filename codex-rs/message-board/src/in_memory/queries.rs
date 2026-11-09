@@ -3,6 +3,7 @@
 use super::InMemoryAgentMessageBoard;
 use super::invalid;
 use crate::AgentMessageBoard;
+use crate::AppendRequest;
 use crate::ChannelPage;
 use crate::ChannelQuery;
 use crate::ChannelSummary;
@@ -23,6 +24,7 @@ use crate::ThreadPage;
 use crate::ThreadQuery;
 use crate::ThreadSort;
 use crate::ThreadSummary;
+use crate::UpsertChannelRequest;
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use caseless::default_case_fold_str;
@@ -45,8 +47,24 @@ impl AgentMessageBoard for InMemoryAgentMessageBoard {
         Box::pin(self.create_channel(caller, request))
     }
 
+    fn upsert_channel(
+        &self,
+        caller: ThreadId,
+        request: UpsertChannelRequest,
+    ) -> BoxFuture<'_, Result<()>> {
+        Box::pin(self.upsert_channel(caller, request))
+    }
+
     fn post(&self, caller: ThreadId, request: PostRequest) -> BoxFuture<'_, Result<PostMetadata>> {
         Box::pin(self.post(caller, request))
+    }
+
+    fn append(
+        &self,
+        caller: ThreadId,
+        request: AppendRequest,
+    ) -> BoxFuture<'_, Result<PostMetadata>> {
+        Box::pin(self.append(caller, request))
     }
 
     fn set_subscription(

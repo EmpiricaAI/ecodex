@@ -1,13 +1,12 @@
 ---
 source: tui/src/history_cell/tests.rs
-assertion_line: 1371
 expression: rendered
 ---
 ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ ✨ Update available! 0.1.0 -> 9.9.9                                                                        │
-│ Run sh -c 'curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh | bash'  │
-│ to update.                                                                                                 │
+│ ✨ Update available! 0.0.0 -> 9.9.9                                                                        │
+│ Run sh -c 's=$(curl -fsSL https://chatgpt.com/codex/install.sh) && CODEX_NON_INTERACTIVE=1 eval "$s"' to   │
+│ update.                                                                                                    │
 │                                                                                                            │
 │ See full release notes:                                                                                    │
-│ https://github.com/EmpiricaAI/ecodex/releases/latest                                                       │
+│ https://github.com/openai/codex/releases/latest                                                            │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

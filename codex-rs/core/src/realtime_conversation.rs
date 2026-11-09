@@ -33,9 +33,11 @@ use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_http_client::HttpClientFactory;
 use codex_login::CodexAuth;
+use codex_login::auth::is_fedramp_api_key;
 use codex_login::default_client::add_originator_header;
 use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;
+use codex_model_provider::resolve_api_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
@@ -152,7 +154,18 @@ impl RealtimeHandoffAdmission {
             return Ok(());
         };
         if !self.retired.load(Ordering::Acquire) {
-            session.route_realtime_text_input(text).await?;
+            // Bound the layout of the handoff future while retaining the admission permit.
+            Box::pin(session.route_realtime_text_input(text)).await?;
+        }
+        Ok(())
+    }
+
+    async fn record_transcript(&self, session: &Session, text: String) -> std::io::Result<()> {
+        let Ok(_permit) = self.gate.acquire().await else {
+            return Ok(());
+        };
+        if !self.retired.load(Ordering::Acquire) {
+            transcript_tail::record(session, text).await?;
         }
         Ok(())
     }
@@ -352,14 +365,14 @@ impl RealtimeStreamedItem {
             if self.buffered_text.is_empty() {
                 return None;
             }
-            let text = std::mem::take(&mut self.buffered_text);
+            let text = self.buffered_text.drain(..).collect::<String>();
             let text = format!("{prefix}{text}");
             self.sent_bytes += text.len();
             return Some(text);
         }
 
-        let head = std::mem::take(&mut self.buffered_text);
-        let tail = std::mem::take(&mut self.tail_text);
+        let head = self.buffered_text.drain(..).collect::<String>();
+        let tail = self.tail_text.drain(..).collect::<String>();
         let text = format!("{prefix}{head}{HANDOFF_STREAM_TRUNCATION_MARKER}{tail}");
         self.sent_bytes += text.len();
         Some(text)
@@ -474,13 +487,16 @@ impl RealtimeResponseCreateQueue {
     }
 }
 
+// Any completed transcript travels with its event so the fanout persists it before later handoffs.
+type RealtimeOutput = (RealtimeEvent, Option<String>);
+
 struct RealtimeInputTask {
     writer: RealtimeWebsocketWriter,
     events: RealtimeWebsocketEvents,
     text_rx: Receiver<ConversationTextParams>,
     handoff_output_rx: Receiver<RealtimeOutbound>,
     audio_rx: Receiver<RealtimeAudioFrame>,
-    events_tx: Sender<RealtimeEvent>,
+    events_tx: Sender<RealtimeOutput>,
     handoff_state: RealtimeHandoffState,
     session_kind: RealtimeSessionKind,
     event_parser: RealtimeEventParser,
@@ -489,6 +505,7 @@ struct RealtimeInputTask {
 
 struct RealtimeTranscriptTailFlush {
     enabled: bool,
+    event_parser: RealtimeEventParser,
     tx: Sender<String>,
 }
 
@@ -549,7 +566,7 @@ struct RealtimeStart {
 struct RealtimeStartOutput {
     realtime_active: Arc<AtomicBool>,
     route_handoffs: Arc<RealtimeHandoffAdmission>,
-    events_rx: Receiver<RealtimeEvent>,
+    events_rx: Receiver<RealtimeOutput>,
     transcript_tail_rx: Receiver<String>,
     sdp: Option<String>,
 }
@@ -675,7 +692,7 @@ impl RealtimeConversationManager {
         let (handoff_output_tx, handoff_output_rx) =
             async_channel::bounded::<RealtimeOutbound>(HANDOFF_OUT_QUEUE_CAPACITY);
         let (events_tx, events_rx) =
-            async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
+            async_channel::bounded::<RealtimeOutput>(OUTPUT_EVENTS_QUEUE_CAPACITY);
         let (transcript_tail_tx, transcript_tail_rx) = async_channel::bounded::<String>(1);
 
         let realtime_active = Arc::new(AtomicBool::new(true));
@@ -709,6 +726,7 @@ impl RealtimeConversationManager {
         };
         let transcript_tail_flush = RealtimeTranscriptTailFlush {
             enabled: flush_transcript_tail_on_session_end,
+            event_parser,
             tx: transcript_tail_tx,
         };
         let (task, sdp) = if let Some(sdp) = sdp {
@@ -815,6 +833,7 @@ impl RealtimeConversationManager {
         {
             let mut guard = self.state.lock().await;
             if let Some(state) = guard.conversation.as_mut()
+                // Only attach the task to the conversation currently stored in the manager.
                 && Arc::ptr_eq(&state.realtime_active, realtime_active)
             {
                 state.fanout_task = fanout_task.take();
@@ -1443,6 +1462,12 @@ async fn prepare_realtime_start(
     let mut extra_headers = match transport {
         ConversationStartTransport::Websocket => {
             let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
+            if realtime_sideband_base_url.is_none() {
+                api_provider = resolve_api_provider(
+                    &provider,
+                    Some(&CodexAuth::from_api_key(&realtime_api_key)),
+                )?;
+            }
             realtime_request_headers(
                 requested_realtime_session_id.as_deref(),
                 params.voice_session_id.as_deref(),
@@ -1730,6 +1755,7 @@ async fn handle_start_inner(
         start: realtime_start_instructions,
         end: realtime_end_instructions,
     };
+    let event_parser = session_config.event_parser;
     let start = RealtimeStart {
         api_provider,
         http_client_factory,
@@ -1796,7 +1822,20 @@ async fn handle_start_inner(
         let mut end = RealtimeConversationEnd::TransportClosed;
         let mut handoff_error = None;
         // Drain already-parsed events so a queued handoff is routed before the final tail.
-        while let Ok(event) = events_rx.recv().await {
+        while let Ok((event, completed)) = events_rx.recv().await {
+            if let Some(delta) = completed {
+                let text = wrap_realtime_delegation_input(
+                    "",
+                    Some(&delta),
+                    RealtimeDelegationSource::Handoff,
+                    /*preserve_transcript*/ true,
+                );
+                if let Err(err) = route_handoffs.record_transcript(&sess_clone, text).await {
+                    warn!("failed to save realtime transcript: {err}");
+                    handoff_error = Some("failed to save the realtime transcript");
+                    break;
+                }
+            }
             match &event {
                 RealtimeEvent::AudioOut(_) => {}
                 _ => {
@@ -1809,9 +1848,10 @@ async fn handle_start_inner(
                 end = RealtimeConversationEnd::Error;
             }
             let maybe_routed_text = match &event {
-                RealtimeEvent::HandoffRequested(handoff) => {
-                    realtime_delegation_from_handoff(handoff)
-                }
+                RealtimeEvent::HandoffRequested(handoff) => realtime_delegation_from_handoff(
+                    handoff,
+                    event_parser == RealtimeEventParser::FramelessBidi,
+                ),
                 _ => None,
             };
             if let Some(text) = maybe_routed_text {
@@ -1830,16 +1870,13 @@ async fn handle_start_inner(
                 break;
             }
         }
+        drop(events_rx);
         if handoff_error.is_none()
             && let Ok(text) = transcript_tail_rx.recv().await
+            && let Err(err) = route_handoffs.record_transcript(&sess_clone, text).await
         {
-            let _permit = route_handoffs.gate.acquire().await;
-            if !route_handoffs.retired.load(Ordering::Acquire)
-                && let Err(err) = transcript_tail::record(&sess_clone, text).await
-            {
-                warn!("failed to flush realtime transcript before closure: {err}");
-                handoff_error = Some("failed to save the realtime transcript before closure");
-            }
+            warn!("failed to flush realtime transcript before closure: {err}");
+            handoff_error = Some("failed to save the realtime transcript before closure");
         }
         // Make realtime_end eligible only after the tail has reached history.
         {
@@ -1915,12 +1952,16 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .or_else(|| realtime_transcript_delta_from_handoff(handoff))
 }
 
-fn realtime_delegation_from_handoff(handoff: &RealtimeHandoffRequested) -> Option<String> {
+fn realtime_delegation_from_handoff(
+    handoff: &RealtimeHandoffRequested,
+    preserve_transcript: bool,
+) -> Option<String> {
     let input = realtime_text_from_handoff_request(handoff)?;
     Some(wrap_realtime_delegation_input(
         &input,
         realtime_transcript_delta_from_handoff(handoff).as_deref(),
         RealtimeDelegationSource::Handoff,
+        preserve_transcript,
     ))
 }
 
@@ -1928,8 +1969,9 @@ fn wrap_realtime_delegation_input(
     input: &str,
     transcript_delta: Option<&str>,
     source: RealtimeDelegationSource,
+    preserve_transcript: bool,
 ) -> String {
-    RealtimeDelegation::new(input, transcript_delta, source)
+    RealtimeDelegation::new(input, transcript_delta, source, preserve_transcript)
         .render()
         .into_text()
         .unwrap_or_default()
@@ -1997,6 +2039,9 @@ fn realtime_request_headers(
             CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}"))
         })?;
         headers.insert(AUTHORIZATION, auth_value);
+        if is_fedramp_api_key(api_key) {
+            headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
+        }
     }
 
     add_originator_header(&mut headers, originator);
@@ -2113,7 +2158,7 @@ struct RealtimeWebrtcSidebandInputTask {
     sideband_headers: HeaderMap,
     session_initialization: RealtimeSidebandSessionInitialization,
     input_channels: RealtimeInputChannels,
-    events_tx: Sender<RealtimeEvent>,
+    events_tx: Sender<RealtimeOutput>,
     handoff_state: RealtimeHandoffState,
     session_kind: RealtimeSessionKind,
     event_parser: RealtimeEventParser,
@@ -2129,6 +2174,7 @@ enum RealtimeSidebandSessionInitialization {
     },
 }
 
+// The main loop for realtime inputs, including user audio/text and model commentary/results.
 async fn run_realtime_input_task(
     input: RealtimeInputTask,
     pending_outbound: Option<Box<RealtimePendingOutbound>>,
@@ -2149,6 +2195,7 @@ async fn run_realtime_input_task(
     let mut output_audio_state: Option<OutputAudioState> = None;
     let mut response_create_queue = RealtimeResponseCreateQueue::default();
 
+    // Send any previously unsent messages before entering the main event loop.
     if let Some(pending_outbound) = pending_outbound
         && let Err(err) = send_realtime_pending_outbound(
             &pending_outbound,
@@ -2168,8 +2215,9 @@ async fn run_realtime_input_task(
             realtime_event = events.next_event() => {
                 match realtime_event {
                     Ok(Some(event)) => {
+                        let completed = events.take_completed_transcript(&event, RealtimeDelegation::FIELD_BYTES).await;
                         handle_realtime_server_event(
-                            event,
+                            (event, realtime_transcript_delta(&completed)),
                             &writer,
                             &events_tx,
                             &handoff_state,
@@ -2282,11 +2330,11 @@ async fn send_realtime_pending_outbound(
     }
 }
 
-async fn report_realtime_transport_loss(events_tx: &Sender<RealtimeEvent>, err: ApiError) {
+async fn report_realtime_transport_loss(events_tx: &Sender<RealtimeOutput>, err: ApiError) {
     let mapped_error = map_api_error(err);
     error!("realtime stream closed: {mapped_error}");
     let _ = events_tx
-        .send(RealtimeEvent::Error(mapped_error.to_string()))
+        .send((RealtimeEvent::Error(mapped_error.to_string()), None))
         .await;
 }
 
@@ -2303,6 +2351,7 @@ async fn flush_realtime_transcript_tail(
                 REALTIME_SESSION_ENDED_HANDOFF_INSTRUCTION,
                 Some(&transcript_delta),
                 RealtimeDelegationSource::TranscriptTailFlush,
+                transcript_tail_flush.event_parser == RealtimeEventParser::FramelessBidi,
             ))
             .await;
     }
@@ -2598,9 +2647,9 @@ async fn handle_handoff_output(
 }
 
 async fn handle_realtime_server_event(
-    event: RealtimeEvent,
+    (event, completed): RealtimeOutput,
     writer: &RealtimeWebsocketWriter,
-    events_tx: &Sender<RealtimeEvent>,
+    events_tx: &Sender<RealtimeOutput>,
     handoff_state: &RealtimeHandoffState,
     session_kind: RealtimeSessionKind,
     output_audio_state: &mut Option<OutputAudioState>,
@@ -2746,7 +2795,7 @@ async fn handle_realtime_server_event(
         | RealtimeEvent::HistoryItemCompleted(_) => false,
     };
 
-    if events_tx.send(event).await.is_err() {
+    if events_tx.send((event, completed)).await.is_err() {
         anyhow::bail!("realtime output event channel closed");
     }
     if should_stop {

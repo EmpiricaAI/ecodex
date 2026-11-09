@@ -268,6 +268,19 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 
+    /// Checks whether a previously loaded model context still represents the stored history.
+    ///
+    /// Stores that cannot validate the opaque revision must return false. A false result or an
+    /// error requires a fresh read. This does not acquire writer ownership;
+    /// [`Self::resume_thread`] must still validate the snapshot after acquisition.
+    fn is_model_context_current(
+        &self,
+        _params: LoadThreadHistoryParams,
+        _revision: String,
+    ) -> ThreadStoreFuture<'_, bool> {
+        Box::pin(async { Ok(false) })
+    }
+
     /// Freezes source history and model context used to initialize a referenced fork.
     ///
     /// Stores without reference-backed fork support can retain this default implementation.
@@ -605,6 +618,44 @@ pub trait ThreadStore: Any + Send + Sync {
 
     /// Unarchives a thread and returns its updated metadata.
     fn unarchive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, StoredThread>;
+
+    /// Restores threads in order, returning the first thread's metadata and restored ids.
+    ///
+    /// The requested thread must restore successfully; active descendants are skipped and
+    /// descendant failures are best effort. Stores can share rollout discovery work.
+    fn unarchive_threads(
+        &self,
+        params: ArchiveThreadParams,
+        descendant_thread_ids: Vec<ThreadId>,
+    ) -> ThreadStoreFuture<'_, (StoredThread, Vec<ThreadId>)> {
+        Box::pin(async move {
+            let thread_id = params.thread_id;
+            let root = self.unarchive_thread(params).await?;
+            let mut restored = vec![thread_id];
+            for thread_id in descendant_thread_ids {
+                let result = async {
+                    let thread = self
+                        .read_thread(ReadThreadParams {
+                            thread_id,
+                            include_archived: true,
+                            include_history: false,
+                        })
+                        .await?;
+                    if thread.archived_at.is_some() {
+                        self.unarchive_thread(ArchiveThreadParams { thread_id })
+                            .await?;
+                        restored.push(thread_id);
+                    }
+                    Ok::<_, ThreadStoreError>(())
+                }
+                .await;
+                if let Err(err) = result {
+                    tracing::warn!("failed to unarchive thread {thread_id}: {err}");
+                }
+            }
+            Ok((root, restored))
+        })
+    }
 
     /// Deletes a thread's persisted rollout data and associated metadata.
     /// Success includes cleanup of associated persisted state; callers must not repeat it.

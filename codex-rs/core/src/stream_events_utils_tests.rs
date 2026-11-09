@@ -295,9 +295,10 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
     assert_eq!(text, "hello world");
 }
 
-fn output_context(session: Arc<Session>, turn_context: Arc<TurnContext>) -> HandleOutputCtx {
+async fn output_context(session: Arc<Session>, turn_context: Arc<TurnContext>) -> HandleOutputCtx {
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
-    let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
+    let (registry, hosted_specs) =
+        tool_registry_for_test_step(&session, step_context.as_ref()).await;
     let router = Arc::new(ToolRouter::from_registry(
         step_context.turn.as_ref(),
         step_context.turn.model_info(),
@@ -325,7 +326,7 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
     session.services.extensions = Arc::new(builder.build());
-    let mut ctx = output_context(Arc::new(session), Arc::new(turn_context));
+    let mut ctx = output_context(Arc::new(session), Arc::new(turn_context)).await;
     let item = assistant_output_text("original assistant text");
 
     let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
@@ -352,7 +353,7 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
         },
     )
     .await;
-    let mut ctx = output_context(Arc::clone(&session), turn_context);
+    let mut ctx = output_context(Arc::clone(&session), turn_context).await;
     let mut pending = Vec::new();
     for step in ["read", "write"] {
         let arguments = json!({"plan": [{"step": step, "status": "in_progress"}]});
@@ -549,13 +550,20 @@ fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() 
     );
 }
 
-#[test]
-fn completed_item_defers_mailbox_delivery_for_unknown_phase_messages() {
-    let item = assistant_output_text("final answer");
+#[test_case::test_case(Some(MessagePhase::FinalAnswer), "", true; "explicit_empty_final")]
+#[test_case::test_case(None, "final answer", true; "untagged_visible_answer")]
+#[test_case::test_case(None, "", false; "untagged_empty_message")]
+fn completed_item_defers_mailbox_delivery_for_final_answers(
+    phase: Option<MessagePhase>,
+    text: &str,
+    expected: bool,
+) {
+    let item = assistant_output_text_with_phase(text, phase);
 
-    assert!(completed_item_defers_mailbox_delivery_to_next_turn(
-        &item, /*plan_mode*/ false,
-    ));
+    assert_eq!(
+        completed_item_defers_mailbox_delivery_to_next_turn(&item, /*plan_mode*/ false),
+        expected
+    );
 }
 
 #[test_case::test_case(MessagePhase::Commentary; "commentary")]

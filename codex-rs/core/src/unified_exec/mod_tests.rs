@@ -4,11 +4,13 @@ use crate::codex_thread::BackgroundTerminalInfo;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecRequest;
+use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::output::CapturedStream;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecProcessFuture;
@@ -27,7 +29,6 @@ use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::test_env as remote_test_env;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -179,8 +180,7 @@ async fn exec_command_with_tty(
         collected_output.total_bytes(),
     ))
     .unwrap_or(usize::MAX);
-    let output_omitted_bytes = NonZeroUsize::new(collected_output.omitted_bytes());
-    let collected = collected_output.to_bytes_with_omission_marker();
+    let collected = CapturedStream::from(&collected_output);
     let has_exited = process.has_exited();
     let exit_code = process.exit_code();
     let response_process_id = if process_started_alive && !has_exited {
@@ -212,8 +212,8 @@ async fn exec_command_with_tty(
         process_id: response_process_id,
         exit_code,
         original_token_count: Some(original_token_count),
-        output_omitted_bytes,
         hook_command: Some(cmd.to_string()),
+        tool_cwd: None,
     })
 }
 
@@ -315,9 +315,9 @@ async fn write_stdin(
     input: &str,
     yield_time_ms: u64,
 ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
-    session
-        .services
-        .unified_exec_manager
+    let manager = &session.services.unified_exec_manager;
+    let terminal = manager.resolve_terminal(process_id).await?;
+    manager
         .write_stdin(
             &UnifiedExecContext::new(
                 Arc::clone(session),
@@ -326,7 +326,7 @@ async fn write_stdin(
                 "write".to_string(),
             ),
             WriteStdinRequest {
-                process_id,
+                terminal: &terminal,
                 input,
                 yield_time_ms,
                 max_output_tokens: None,
@@ -554,12 +554,17 @@ async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<(
     .await?;
     let process_id = open_shell.process_id.expect("expected process id");
 
-    write_stdin(
-        &session, &turn, process_id, "exit\n", /*yield_time_ms*/ 2_500,
-    )
-    .await?;
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+        let mut response = write_stdin(
+            &session, &turn, process_id, "exit\n", /*yield_time_ms*/ 2_500,
+        )
+        .await?;
+        while response.process_id.is_some() {
+            response = write_stdin(&session, &turn, process_id, "", /*yield_time_ms*/ 100).await?;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
 
     let err = write_stdin(&session, &turn, process_id, "", /*yield_time_ms*/ 100)
         .await
@@ -671,8 +676,12 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
     Ok(())
 }
 
+#[test_case::test_case(false; "terminal removed")]
+#[test_case::test_case(true; "session id reused")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Result<()> {
+async fn terminating_during_stdin_poll_returns_exited_response(
+    reuse_id: bool,
+) -> anyhow::Result<()> {
     let (session, turn) = test_session_and_turn().await;
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
@@ -743,7 +752,20 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
     .await
     .expect("poll should clone process handles");
 
-    manager.release_process_id(process_id).await;
+    if reuse_id {
+        let replacement = super::process_tests::remote_process(
+            WriteStatus::Accepted,
+            /*terminate_error*/ None,
+            SandboxType::None,
+        )
+        .await;
+        let mut store = manager.process_store.lock().await;
+        let entry = store.processes.get_mut(&process_id).unwrap();
+        entry.process = Arc::new(replacement);
+        entry.call_id = "replacement".into();
+    } else {
+        manager.release_process_id(process_id).await;
+    }
     allow_terminate.notify_one();
     process.terminate_confirmed().await?;
 
@@ -751,8 +773,19 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
         .await
         .expect("poll should finish")
         .expect("poll task should not panic")?;
-    assert_eq!(output.process_id, None);
-    assert!(manager.process_store.lock().await.processes.is_empty());
+    assert_eq!(
+        (output.process_id, output.event_call_id.as_str()),
+        (None, "call")
+    );
+    assert_eq!(
+        manager
+            .process_store
+            .lock()
+            .await
+            .processes
+            .contains_key(&process_id),
+        reuse_id
+    );
 
     Ok(())
 }
@@ -871,7 +904,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
     .await?;
     let process_id = opened.process_id.expect("running terminal");
     let cwd = PathUri::parse("file:///C:/workspace")?;
-    let original = {
+    {
         let mut store = manager.process_store.lock().await;
         let entry = store.processes.get_mut(&process_id).unwrap();
         entry.permissions = TerminalPermissions::for_launch(
@@ -886,8 +919,9 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
         );
         entry.environment_id = "unselected-executor".to_string();
         entry.cwd = cwd.clone();
-        Arc::clone(&entry.process)
-    };
+    }
+    let original = manager.resolve_terminal(process_id).await?;
+    assert_eq!(original.environment_id, "unselected-executor");
     // Empty polling must complete without an approval response.
     // The test deadline must allow the minimum empty-poll wait.
     tokio::time::timeout(
@@ -943,7 +977,13 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
                     ),
                     ("call", Some("write"), cwd.clone().into())
                 );
-                assert!(original.interaction_lock().try_lock_owned().is_err());
+                assert!(
+                    original
+                        .process
+                        .interaction_lock()
+                        .try_lock_owned()
+                        .is_err()
+                );
                 if input == "replace\n" {
                     let replacement = super::process_tests::remote_process(
                         WriteStatus::Accepted,
@@ -979,9 +1019,32 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
                 matches!(result, Err(UnifiedExecError::UnknownProcessId { process_id: id }) if id == process_id)
             ),
         }
-        assert!(original.interaction_lock().try_lock_owned().is_ok());
+        assert!(original.process.interaction_lock().try_lock_owned().is_ok());
     }
-    original.terminate();
+    // Reusing the numeric ID must also reject a subsequent write to the original terminal.
+    let context = UnifiedExecContext::new(
+        Arc::clone(&session),
+        crate::session::step_context::StepContext::for_test(turn),
+        tokio_util::sync::CancellationToken::new(),
+        "stale".to_string(),
+    );
+    let stale = manager
+        .write_stdin(
+            &context,
+            WriteStdinRequest {
+                terminal: &original,
+                input: "",
+                yield_time_ms: 250,
+                max_output_tokens: None,
+                truncation_policy: TruncationPolicy::Tokens(10_000),
+                interaction_event: None,
+            },
+        )
+        .await;
+    assert!(
+        matches!(stale, Err(UnifiedExecError::UnknownProcessId { process_id: id }) if id == process_id)
+    );
+    original.process.terminate();
     assert!(session.terminate_background_terminal(process_id).await);
     Ok(())
 }
@@ -1010,27 +1073,18 @@ async fn stdin_approval_observes_strict_review_enabled_while_queued() -> anyhow:
     )
     .await?;
     let process_id = opened.process_id.expect("running terminal");
-    let process = Arc::clone(
-        &manager
-            .process_store
-            .lock()
-            .await
-            .processes
-            .get(&process_id)
-            .unwrap()
-            .process,
-    );
+    let terminal = manager.resolve_terminal(process_id).await?;
     let context = UnifiedExecContext::new(
         Arc::clone(&session),
         StepContext::for_test(turn),
         tokio_util::sync::CancellationToken::new(),
         "write".to_string(),
     );
-    let interaction = process.interaction_lock().lock_owned().await;
+    let interaction = terminal.process.interaction_lock().lock_owned().await;
     let mut queued = Box::pin(manager.write_stdin(
         &context,
         WriteStdinRequest {
-            process_id,
+            terminal: &terminal,
             // NUL input must be rejected when strict review becomes required.
             input: "\0",
             yield_time_ms: 250,

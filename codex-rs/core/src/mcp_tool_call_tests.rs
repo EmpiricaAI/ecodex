@@ -8,6 +8,7 @@ use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::session::tests::mcp_config_for_test;
+use crate::session::tests::test_environment_id;
 use crate::session::tests::update_selected_settings_for_test;
 use crate::session::tests::update_turn_settings_for_test;
 use crate::session::turn_context::TurnEnvironment;
@@ -733,10 +734,24 @@ fn truncates_strings_on_char_boundaries() {
 
 #[test]
 fn approval_elicitation_request_uses_message_override_and_preserves_tool_params_keys() {
+    let mut metadata = approval_metadata(
+        Some("calendar"),
+        Some("Calendar"),
+        Some("Manage events and schedules."),
+        Some("Create Event"),
+        Some("Create a calendar event."),
+    );
+    metadata.annotations = Some(ToolAnnotations::from_raw(
+        /*title*/ Some("Calendar Event".to_string()),
+        /*read_only_hint*/ Some(false),
+        /*destructive_hint*/ Some(false),
+        /*idempotent_hint*/ Some(true),
+        /*open_world_hint*/ Some(true),
+    ));
     let question = build_mcp_tool_approval_question(
         "q".to_string(),
         CODEX_APPS_MCP_SERVER_NAME,
-        "create_event",
+        "calendar.create_event",
         Some("Calendar"),
         prompt_options(
             /*allow_session_remember*/ true, /*allow_persistent_approval*/ true,
@@ -746,13 +761,8 @@ fn approval_elicitation_request_uses_message_override_and_preserves_tool_params_
 
     let request = build_mcp_tool_approval_elicitation_request(McpToolApprovalElicitationRequest {
         server: CODEX_APPS_MCP_SERVER_NAME,
-        metadata: Some(&approval_metadata(
-            Some("calendar"),
-            Some("Calendar"),
-            Some("Manage events and schedules."),
-            Some("Create Event"),
-            Some("Create a calendar event."),
-        )),
+        tool_name: "calendar.create_event",
+        metadata: Some(&metadata),
         tool_params: Some(&serde_json::json!({
             "calendar_id": "primary",
             "title": "Roadmap review",
@@ -789,6 +799,13 @@ fn approval_elicitation_request_uses_message_override_and_preserves_tool_params_
                 MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: "calendar",
                 MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY: "Calendar",
                 MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY: "Manage events and schedules.",
+                "tool_name": "calendar.create_event",
+                "tool_annotations": {
+                    "readOnlyHint": false,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": true,
+                },
                 MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: "Create Event",
                 MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: "Create a calendar event.",
                 MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: {
@@ -1461,6 +1478,7 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
                 cwd: secondary_cwd.clone(),
                 workspace_roots: Vec::new(),
                 config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                    environment_hooks: Default::default(),
                     allow_login_shell: true,
                     workspace_roots: Vec::new(),
                     windows_sandbox_level: turn_context.windows_sandbox_level,
@@ -2021,6 +2039,7 @@ fn approval_elicitation_meta_marks_tool_approvals() {
     assert_eq!(
         build_mcp_tool_approval_elicitation_meta(
             "custom_server",
+            "run_action",
             /*metadata*/ None,
             /*tool_params*/ None,
             /*tool_params_display*/ None,
@@ -2030,7 +2049,37 @@ fn approval_elicitation_meta_marks_tool_approvals() {
         ),
         Some(serde_json::json!({
             MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
+            MCP_TOOL_APPROVAL_TOOL_NAME_KEY: "run_action",
         }))
+    );
+}
+
+#[test]
+fn approval_elicitation_meta_emits_only_supplied_hints_for_custom_servers() {
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(
+            Some(false),
+            /*destructive*/ None,
+            /*open_world*/ None,
+        )),
+        ..Default::default()
+    };
+    assert_eq!(
+        build_mcp_tool_approval_elicitation_meta(
+            "custom_server",
+            "run_action",
+            Some(&metadata),
+            /*tool_params*/ None,
+            /*tool_params_display*/ None,
+            prompt_options(
+                /*allow_session_remember*/ false, /*allow_persistent_approval*/ false
+            ),
+        ),
+        Some(serde_json::json!({
+            "codex_approval_kind": "mcp_tool_call",
+            "tool_name": "run_action",
+            "tool_annotations": { "readOnlyHint": false },
+        })),
     );
 }
 
@@ -2039,6 +2088,7 @@ fn approval_elicitation_meta_merges_session_and_always_persist_for_custom_server
     assert_eq!(
         build_mcp_tool_approval_elicitation_meta(
             "custom_server",
+            "run_action",
             Some(&approval_metadata(
                 /*connector_id*/ None,
                 /*connector_name*/ None,
@@ -2054,6 +2104,7 @@ fn approval_elicitation_meta_merges_session_and_always_persist_for_custom_server
         ),
         Some(serde_json::json!({
             MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
+            MCP_TOOL_APPROVAL_TOOL_NAME_KEY: "run_action",
             MCP_TOOL_APPROVAL_PERSIST_KEY: [
                 MCP_TOOL_APPROVAL_PERSIST_SESSION,
                 MCP_TOOL_APPROVAL_PERSIST_ALWAYS,
@@ -2193,6 +2244,7 @@ fn approval_elicitation_meta_includes_connector_source_for_codex_apps() {
     assert_eq!(
         build_mcp_tool_approval_elicitation_meta(
             CODEX_APPS_MCP_SERVER_NAME,
+            "calendar.run_action",
             Some(&approval_metadata(
                 Some("calendar"),
                 Some("Calendar"),
@@ -2211,6 +2263,7 @@ fn approval_elicitation_meta_includes_connector_source_for_codex_apps() {
         Some(serde_json::json!({
             MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
             MCP_TOOL_APPROVAL_SOURCE_KEY: MCP_TOOL_APPROVAL_SOURCE_CONNECTOR,
+            MCP_TOOL_APPROVAL_TOOL_NAME_KEY: "calendar.run_action",
             MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: "calendar",
             MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY: "Calendar",
             MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY: "Manage events and schedules.",
@@ -2228,6 +2281,7 @@ fn approval_elicitation_meta_merges_session_and_always_persist_with_connector_so
     assert_eq!(
         build_mcp_tool_approval_elicitation_meta(
             CODEX_APPS_MCP_SERVER_NAME,
+            "calendar.run_action",
             Some(&approval_metadata(
                 Some("calendar"),
                 Some("Calendar"),
@@ -2250,6 +2304,7 @@ fn approval_elicitation_meta_merges_session_and_always_persist_with_connector_so
                 MCP_TOOL_APPROVAL_PERSIST_ALWAYS,
             ],
             MCP_TOOL_APPROVAL_SOURCE_KEY: MCP_TOOL_APPROVAL_SOURCE_CONNECTOR,
+            MCP_TOOL_APPROVAL_TOOL_NAME_KEY: "calendar.run_action",
             MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: "calendar",
             MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY: "Calendar",
             MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY: "Manage events and schedules.",
@@ -2400,6 +2455,7 @@ async fn dispatched_mcp_approval_with_closed_response_is_classified_as_approval(
 
     let action = ApprovalAction::McpToolCall {
         id: call_id.to_string(),
+        environment_id: test_environment_id(&turn_context).to_owned(),
         server: "calendar".to_string(),
         tool_name: "send".to_string(),
         arguments: None,
@@ -2951,6 +3007,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         &metadata,
         &approval_config(&turn_context),
         turn_context.config.permissions.permission_profile(),
+        test_environment_id(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Approve),
         McpSessionApprovalScope::Tool,
     )
@@ -3034,6 +3091,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         &metadata,
         &approval_config(&turn_context),
         turn_context.config.permissions.permission_profile(),
+        test_environment_id(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
         McpSessionApprovalScope::Tool,
     )
@@ -3099,6 +3157,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         &metadata,
         &approval_config(&turn_context),
         turn_context.config.permissions.permission_profile(),
+        test_environment_id(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
         McpSessionApprovalScope::Tool,
     )
@@ -3178,6 +3237,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
         &metadata,
         &approval_config(&turn_context),
         turn_context.config.permissions.permission_profile(),
+        test_environment_id(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
         McpSessionApprovalScope::Tool,
     )
@@ -3277,6 +3337,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         &metadata,
         &approval_config(&turn_context),
         turn_context.config.permissions.permission_profile(),
+        test_environment_id(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
         McpSessionApprovalScope::Tool,
     )
@@ -3385,6 +3446,7 @@ async fn strict_auto_review_forces_guardian_for_mcp_policy_skip() {
         &metadata,
         &captured_mcp_config,
         &captured_mcp_config.permission_profile,
+        test_environment_id(&turn_context),
         McpToolApprovalPolicy::for_server(AppToolApproval::Approve),
         McpSessionApprovalScope::Tool,
     )
@@ -3470,6 +3532,7 @@ async fn assert_mcp_user_approval_persistence(
                 &metadata,
                 &approval_config(&turn_context),
                 turn_context.config.permissions.permission_profile(),
+                test_environment_id(&turn_context),
                 McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
                 McpSessionApprovalScope::Tool,
             )
@@ -3562,6 +3625,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
                 &metadata,
                 &approval_config(&turn_context),
                 turn_context.config.permissions.permission_profile(),
+                test_environment_id(&turn_context),
                 McpToolApprovalPolicy::for_server(AppToolApproval::Prompt),
                 McpSessionApprovalScope::Tool,
             )
@@ -3630,6 +3694,7 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
             &metadata,
             &approval_config(&turn_context),
             turn_context.config.permissions.permission_profile(),
+            test_environment_id(&turn_context),
             McpToolApprovalPolicy::for_server(approval_mode),
             McpSessionApprovalScope::Tool,
         )
@@ -3726,6 +3791,7 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
             &metadata,
             &approval_config(&turn_context),
             turn_context.config.permissions.permission_profile(),
+            test_environment_id(&turn_context),
             McpToolApprovalPolicy::for_server(AppToolApproval::Approve),
             McpSessionApprovalScope::Tool,
         )

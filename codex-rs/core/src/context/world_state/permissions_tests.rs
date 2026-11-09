@@ -263,12 +263,15 @@ fn permissions_state(
         on_request_auto_review: None,
         never: None,
         unless_trusted: None,
+        granular: None,
+        ..Default::default()
     };
     let permission_messages = PermissionMessages {
         danger_full_access: Some("Full access.".to_string()),
         workspace_write: Some("Workspace write.".to_string()),
         read_only: Some("Read only.".to_string()),
         approved_prefixes: None,
+        ..PermissionMessages::default()
     };
     let mut model = model_info_from_slug("test-model");
     model.model_messages = Some(ModelMessages {

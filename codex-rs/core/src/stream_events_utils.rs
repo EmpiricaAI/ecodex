@@ -16,7 +16,6 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::call_trace;
 use crate::tools::parallel::ToolCallRuntime;
-use crate::tools::router::ToolRouter;
 use codex_memories_read::citations::parse_memory_citation;
 use codex_memories_read::citations::thread_ids_from_memory_citation;
 use codex_protocol::error::CodexErr;
@@ -292,8 +291,9 @@ pub(crate) async fn finalize_non_tool_response_item(
                     Some(combined)
                 };
                 let defers_mailbox_delivery_to_next_turn =
-                    matches!(agent_message.phase, Some(MessagePhase::FinalAnswer) | None)
-                        && last_agent_message.is_some();
+                    assistant_message_defers_mailbox_delivery(agent_message.phase.as_ref(), || {
+                        last_agent_message.is_some()
+                    });
                 (
                     agent_message.memory_citation.clone(),
                     last_agent_message,
@@ -321,7 +321,7 @@ pub(crate) async fn handle_output_item_done(
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.step_context.turn.mode() == ModeKind::Plan;
 
-    match ToolRouter::build_tool_call(item.clone()) {
+    match ctx.step_context.tool_router.build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             call_trace::received(
@@ -523,15 +523,24 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
     plan_mode: bool,
 ) -> bool {
     match item {
-        ResponseItem::Message { role, phase, .. } => {
-            if role != "assistant" || !matches!(phase, Some(MessagePhase::FinalAnswer) | None) {
-                return false;
-            }
-            // Treat `None` like final-answer text so untagged providers default
-            // to the safer "defer mailbox mail" behavior.
-            last_assistant_message_from_item(item, plan_mode).is_some()
+        ResponseItem::Message { role, phase, .. } if role == "assistant" => {
+            assistant_message_defers_mailbox_delivery(phase.as_ref(), || {
+                last_assistant_message_from_item(item, plan_mode).is_some()
+            })
         }
         _ => false,
+    }
+}
+
+fn assistant_message_defers_mailbox_delivery(
+    phase: Option<&MessagePhase>,
+    has_visible_text: impl FnOnce() -> bool,
+) -> bool {
+    match phase {
+        Some(MessagePhase::FinalAnswer) => true,
+        Some(MessagePhase::Commentary | MessagePhase::PartialAnswer) => false,
+        // Without an explicit phase, keep treating visible assistant text as a final answer.
+        None => has_visible_text(),
     }
 }
 

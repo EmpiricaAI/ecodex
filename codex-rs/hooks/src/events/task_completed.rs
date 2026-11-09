@@ -61,7 +61,7 @@ pub(crate) async fn run(
         return TaskCompletedOutcome::default();
     }
 
-    let input_json = match serde_json::to_string(&TaskCompletedCommandInput {
+    let input = match serde_json::to_value(TaskCompletedCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
         transcript_path: NullableString::from_path(request.transcript_path.clone()),
@@ -71,7 +71,7 @@ pub(crate) async fn run(
         permission_mode: request.permission_mode.clone(),
         last_assistant_message: NullableString::from_string(request.last_assistant_message.clone()),
     }) {
-        Ok(input_json) => input_json,
+        Ok(input) => input,
         Err(error) => {
             return TaskCompletedOutcome {
                 hook_events: common::serialization_failure_hook_events(
@@ -86,7 +86,7 @@ pub(crate) async fn run(
     let results = dispatcher::execute_handlers(
         engine,
         matched,
-        input_json,
+        &input,
         request.cwd.as_path(),
         Some(request.turn_id),
         parse_completed,

@@ -1,9 +1,11 @@
 //! Binds an immutable action and root lifetime to fresh per-attempt authorization evidence.
 //! The extension chooses effects; this adapter supplies evidence, validation and publication.
 
+use super::super::runtime::validate;
 use super::*;
 use crate::codex_thread::GuardianAuthorizationVersion;
 use codex_config::config_toml::CircuitBreakAction;
+use codex_guardian_reviewer::ReviewDeadline;
 use codex_guardian_reviewer::ReviewHost;
 use codex_protocol::approvals::GuardianReviewReason;
 use codex_protocol::protocol::ErrorEvent;
@@ -111,14 +113,14 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
     ) -> Option<(String, Arc<codex_protocol::openai_models::ModelInfo>)> {
         let active = self.session.active_turn.lock().await;
         let turn = &active.as_ref()?.task.as_ref()?.turn_context;
-        Some((turn.sub_id.clone(), Arc::clone(turn.model_info())))
+        Some((turn.sub_id.clone(), Arc::clone(&turn.model_info().model)))
     }
 
     async fn prepare(
         &self,
         review_id: &str,
         review_reason: GuardianReviewReason,
-        deadline: Instant,
+        deadline: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> Result<(PreparedApproval, codex_guardian_reviewer::ReviewReport), ReviewDecision> {
         let super::super::runtime::ReviewRuntime {
@@ -129,7 +131,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             reasons: _,
             options,
         } = self.clone();
-        let request = match request.validate(&context) {
+        let request = match validate(&request, &context) {
             Ok(request) => request.clone(),
             Err(decision) => return Err(decision),
         };
@@ -148,10 +150,8 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         let plugin_attribution = match plugin_attribution_override {
             Some(attribution) => Some(attribution),
             None if matches!(&request, GuardianApprovalRequest::ExecCommand { .. }) => {
-                let attribution_deadline = std::cmp::min(
-                    deadline,
-                    Instant::now() + GUARDIAN_PLUGIN_ATTRIBUTION_TIMEOUT,
-                );
+                let attribution_deadline =
+                    deadline.cap(Instant::now() + GUARDIAN_PLUGIN_ATTRIBUTION_TIMEOUT);
                 let attribution = tokio::select! {
                     biased;
                     _ = cancellation.cancelled() => return Err(ReviewDecision::Abort),
@@ -190,6 +190,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 action: guardian_assessment_action(&request),
                 review_reason,
                 model_context,
+                timeout: turn.config.guardian_review_timeout,
             });
         let root_history = session
             .services
@@ -211,7 +212,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
     async fn attempt(
         &self,
         prepared: &PreparedApproval,
-        deadline: Instant,
+        deadline: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> (
         GuardianReviewOutcome,
@@ -307,7 +308,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
     }
 
     fn validate_action(&self) -> Result<(&str, Option<&str>), ReviewDecision> {
-        let request = self.request.validate(&self.context)?;
+        let request = validate(&self.request, &self.context)?;
         Ok((
             guardian_request_turn_id(request, &self.context.turn().sub_id),
             guardian_request_target_item_id(request),

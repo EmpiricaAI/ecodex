@@ -113,7 +113,7 @@ fn is_h1_heading(line: &str) -> bool {
 /// ecodex extension: before falling back, check whether the slug matches a
 /// known open-weights model family (qwen, llama, mistral, gemma, deepseek,
 /// gpt-oss, mirothinker, qwopus, kimi, glm, ollama-prefixed, etc.). When
-/// matched, return a tuned descriptor with `used_fallback_model_metadata`
+/// matched, return a tuned descriptor (upstream dropped the `used_fallback_model_metadata` marker;
 /// set to false — so the runtime doesn't emit the "Model metadata for X
 /// not found" warning for models we explicitly recognize as a family even
 /// if the exact tag isn't in models.json. Context windows are conservative
@@ -142,7 +142,6 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         info.max_context_window = Some(known.context_window);
         info.display_name = known.display_name;
         info.description = Some(known.family_description);
-        info.used_fallback_model_metadata = false;
         info
     } else {
         warn!("Unknown model {slug} is used. This will use fallback model metadata.");
@@ -186,7 +185,6 @@ fn build_fallback_model_info(slug: &str) -> ModelInfo {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
-        used_fallback_model_metadata: true, // this is the fallback model metadata
         supports_search_tool: false,
         supports_experimental_context: false,
         use_responses_lite: false,

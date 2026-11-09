@@ -119,7 +119,7 @@ fn build_session_telemetry(
         &config.model_provider,
         auth_manager.codex_api_key_env_enabled(),
     );
-    SessionTelemetry::new(
+    let mut session_telemetry = SessionTelemetry::new(
         thread_id,
         model,
         model,
@@ -131,7 +131,11 @@ fn build_session_telemetry(
         user_agent(),
         source,
     )
-    .with_auth_env(auth_env_telemetry.to_otel_metadata())
+    .with_auth_env(auth_env_telemetry.to_otel_metadata());
+    if !config.otel.log_sse_deltas {
+        session_telemetry = session_telemetry.without_sse_delta_logs();
+    }
+    session_telemetry
 }
 
 impl MemoryStartupContext {
@@ -296,7 +300,7 @@ impl MemoryStartupContext {
 
         StageOneRequestContext {
             version: self.version,
-            model_info,
+            model_info: Arc::unwrap_or_clone(model_info.model),
             session_telemetry: build_session_telemetry(
                 &self.auth_manager,
                 self.thread_id,
@@ -400,6 +404,7 @@ impl MemoryStartupContext {
         &self,
         config: Config,
         prompt: Vec<UserInput>,
+        workspace_lock: Arc<crate::MemoryWorkspaceLock>,
     ) -> anyhow::Result<SpawnedConsolidationAgent> {
         let NewThread {
             thread_id, thread, ..
@@ -413,6 +418,15 @@ impl MemoryStartupContext {
                 ..StartThreadOptions::new(config)
             })
             .await?;
+
+        // Cancellation or a shutdown timeout must not release workspace ownership
+        // while the agent can still write. The phase-2 handler keeps another owner
+        // through the final baseline reset after this thread has terminated.
+        let running_thread = Arc::clone(&thread);
+        tokio::spawn(async move {
+            running_thread.wait_until_terminated().await;
+            drop(workspace_lock);
+        });
 
         let agent = SpawnedConsolidationAgent { thread_id, thread };
         let submit_result = match agent

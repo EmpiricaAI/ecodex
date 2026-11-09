@@ -42,6 +42,8 @@ pub const FS_CLOSE_METHOD: &str = "fs/close";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
+pub const FS_WATCH_MISSING_METHOD: &str = "fs/watchMissing";
+pub const FS_MISSING_CHANGED_METHOD: &str = "fs/missingChanged";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
 pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
 pub const FS_WALK_METHOD: &str = "fs/walk";
@@ -153,6 +155,9 @@ pub struct EnvironmentCapabilities {
     /// Whether `exec` accepts instructions for launching an executor-local network proxy.
     #[serde(default)]
     network_proxy_launch: bool,
+    /// Whether executor proxies enforce managed review domains before ordinary allows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub network_proxy_review_domains: bool,
     /// Whether the selected shell can mask executor environment credentials.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     credential_masking: bool,
@@ -162,6 +167,9 @@ pub struct EnvironmentCapabilities {
     /// Whether capability discovery applies the filesystem sandbox sent with each root.
     #[serde(default)]
     pub capability_discovery_sandbox: bool,
+    /// Whether missing metadata paths can be watched on this physical connection.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fs_watch_missing: bool,
     /// Whether this executor supports V2 capability discovery.
     #[serde(default)]
     pub capability_discovery_v2: bool,
@@ -265,7 +273,7 @@ impl EnvironmentInfo {
             if let Some(path) = std::env::var_os(name)
                 .filter(|path| !path.is_empty())
                 .filter(|path| cfg!(unix) || std::path::Path::new(path).is_absolute())
-                .and_then(normalize_temp_path)
+                .and_then(&normalize_temp_path)
                 && !temporary_directories.contains(&path)
             {
                 temporary_directories.push(path);
@@ -314,9 +322,11 @@ impl EnvironmentInfo {
             temp_dir,
             capabilities: EnvironmentCapabilities {
                 network_proxy_launch: true,
+                network_proxy_review_domains: true,
                 credential_masking,
                 credential_masking_custom_providers: credential_masking,
                 capability_discovery_sandbox: true,
+                fs_watch_missing: cfg!(target_os = "linux"),
                 capability_discovery_v2: true,
                 environment_config_read: true,
                 http_header_env_vars: true,
@@ -750,6 +760,27 @@ pub struct FsGetMetadataParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_symlinks: Option<bool>,
     pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+/// One unsandboxed metadata observation per connection. A newer id supersedes the prior watch.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWatchMissingParams {
+    pub watch_id: u64,
+    pub missing: Vec<PathUri>,
+    pub present: Option<PathUri>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWatchMissingResponse {
+    pub watching: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsMissingChangedNotification {
+    pub watch_id: u64,
 }
 
 /// Filesystem RPC wire request with legacy optional sandbox policy cwd.
@@ -1270,6 +1301,7 @@ mod tests {
     fn discovery_v2_support_defaults_off_for_older_executors() -> serde_json::Result<()> {
         let legacy: super::EnvironmentCapabilities = serde_json::from_value(serde_json::json!({}))?;
         assert!(!legacy.capability_discovery_v2);
+        assert!(!legacy.fs_watch_missing);
         let capabilities = super::EnvironmentInfo::local().capabilities;
         assert_eq!(
             serde_json::from_value::<super::EnvironmentCapabilities>(serde_json::to_value(
@@ -1539,9 +1571,11 @@ mod tests {
             capabilities,
             EnvironmentCapabilities {
                 network_proxy_launch: true,
+                network_proxy_review_domains: false,
                 credential_masking: false,
                 credential_masking_custom_providers: false,
                 capability_discovery_sandbox: true,
+                fs_watch_missing: false,
                 capability_discovery_v2: false,
                 environment_config_read: false,
                 http_header_env_vars: false,

@@ -48,7 +48,6 @@ use codex_thread_store::InMemoryThreadStore;
 use core_test_support::TestTargetOs;
 use core_test_support::fs_wait;
 use core_test_support::hooks::trust_discovered_hooks;
-use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
@@ -84,12 +83,17 @@ use tempfile::TempDir;
 use tokio::sync::oneshot;
 use tokio::time::sleep;
 use tokio::time::timeout;
+use tracing_test::traced_test;
 
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
 const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
+
+#[cfg(test)]
+#[path = "hooks_cwd_tests.rs"]
+mod cwd_tests;
 
 #[tokio::test]
 async fn managed_hook_discovery_failure_rejects_session_startup_when_hooks_enabled() -> Result<()> {
@@ -448,7 +452,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     Ok(())
 }
 
-fn write_pre_tool_use_hook(
+pub(super) fn write_pre_tool_use_hook(
     home: &Path,
     matcher: Option<&str>,
     mode: &str,
@@ -527,7 +531,7 @@ elif mode == "exit_2":
     Ok(())
 }
 
-fn write_updating_pre_tool_use_hook(
+pub(super) fn write_updating_pre_tool_use_hook(
     home: &Path,
     matcher: &str,
     updated_input: &Value,
@@ -716,7 +720,7 @@ elif mode == "exit_2":
     Ok(())
 }
 
-fn install_allow_permission_request_hook(home: &Path) -> Result<()> {
+pub(super) fn install_allow_permission_request_hook(home: &Path) -> Result<()> {
     write_permission_request_hook(
         home,
         Some(PERMISSION_REQUEST_HOOK_MATCHER),
@@ -1179,7 +1183,7 @@ fn read_pre_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> 
     read_hook_inputs_from_log(home.join("pre_tool_use_hook_log.jsonl").as_path())
 }
 
-fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+pub(super) fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
     fs::read_to_string(home.join("permission_request_hook_log.jsonl"))
         .context("read permission request hook log")?
         .lines()
@@ -2718,7 +2722,9 @@ async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -
     Ok(())
 }
 
+/// A blocked prompt keeps hook context but never reaches prompt telemetry, the rollout, or the model.
 #[tokio::test]
+#[traced_test]
 async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2738,11 +2744,40 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
             write_user_prompt_submit_hook(home, "blocked first prompt", BLOCKED_PROMPT_CONTEXT)
                 .expect("failed to write user prompt submit hook test fixture");
         })
-        .with_config(trust_discovered_hooks);
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            config.otel.log_user_prompt = true;
+        });
     let test = builder.build(&server).await?;
 
-    test.submit_turn("blocked first prompt").await?;
+    test.codex
+        .start_turn_if_idle(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "blocked first prompt".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     test.submit_turn("second prompt").await?;
+
+    logs_assert(|lines| {
+        let prompts: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("codex.user_prompt") && line.contains(" prompt="))
+            .collect();
+        if prompts.len() == 1 && prompts[0].contains("prompt=second prompt") {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected only the accepted prompt in telemetry: {prompts:?}"
+            ))
+        }
+    });
+    let rollout = fs::read_to_string(test.codex.rollout_path().expect("rollout path"))?;
+    assert!(!rollout.contains("blocked first prompt"));
+    assert!(rollout.contains("second prompt"));
 
     let request = response.single_request();
     assert!(
@@ -2793,7 +2828,9 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
     Ok(())
 }
 
+/// Queued input is logged exactly once after acceptance; a later blocked prompt cannot leak or strand it.
 #[tokio::test]
+#[traced_test]
 async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2839,6 +2876,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
         })
         .with_config(move |config| {
             trust_discovered_hooks(config);
+            config.otel.log_user_prompt = true;
         });
     let test = builder.build_with_streaming_server(&server).await?;
 
@@ -2886,6 +2924,26 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     .await;
 
     assert_eq!(requests.len(), 2);
+
+    logs_assert(|lines| {
+        let prompts: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("codex.user_prompt") && line.contains(" prompt="))
+            .collect();
+        if prompts.len() == 2
+            && prompts[0].contains("prompt=initial prompt")
+            && prompts[1].contains("prompt=accepted queued prompt")
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected only accepted prompts in telemetry: {prompts:?}"
+            ))
+        }
+    });
+    let rollout = fs::read_to_string(test.codex.rollout_path().expect("rollout path"))?;
+    assert!(!rollout.contains("blocked queued prompt"));
+    assert!(rollout.contains("accepted queued prompt"));
 
     let second_user_texts = request_message_input_texts(&requests[1], "user");
     assert!(
@@ -3383,7 +3441,7 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let args = serde_json::json!({ "cmd": command });
+    let args = serde_json::json!({ "cmd": command, "workdir": "network-workdir" });
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -3414,8 +3472,26 @@ allow_local_binding = true
                 hook_reason,
             )
             .expect("failed to write permission request hook test fixture");
+            let script_path = home.join("permission_request_hook.py");
+            let script = fs::read_to_string(&script_path)
+                .expect("read permission request hook script")
+                .replace(
+                    "payload = json.load(sys.stdin)",
+                    "payload = json.load(sys.stdin)\npayload['process_cwd'] = str(Path.cwd())",
+                );
+            fs::write(script_path, script).expect("record network hook process cwd");
         })
-        .with_cloud_config_bundle(managed_network_requirements_loader())
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[experimental_network]
+enabled = true
+allow_local_binding = true
+allowed_domains = ["**.invalid"]
+review_domains = ["codex-network-test.invalid"]
+"#,
+            ),
+        )
         .with_config(move |config| {
             trust_discovered_hooks(config);
             config.approvals_reviewer = codex_config::types::ApprovalsReviewer::AutoReview;
@@ -3427,6 +3503,8 @@ allow_local_binding = true
         })
         .build(&server)
         .await?;
+    let execution_cwd = test.workspace_path_uri("network-workdir")?;
+    fs::create_dir(execution_cwd.to_abs_path()?).context("create network command workdir")?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "run the shell command after the network permission hook",
@@ -3463,11 +3541,21 @@ allow_local_binding = true
         );
     }
 
-    assert_single_permission_request_hook_input(
+    let hook_inputs = assert_single_permission_request_hook_input(
         test.codex_home_path(),
         command,
         Some("network-access http://codex-network-test.invalid:80"),
     )?;
+    assert_eq!(
+        json!({
+            "cwd": hook_inputs[0]["cwd"],
+            "process_cwd": hook_inputs[0]["process_cwd"],
+        }),
+        json!({
+            "cwd": execution_cwd.inferred_native_path_string(),
+            "process_cwd": dunce::canonicalize(&test.config.cwd)?.to_string_lossy(),
+        }),
+    );
     let requests = responses.requests();
     assert_eq!(
         requests
@@ -5987,7 +6075,7 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
     Ok(())
 }
 
-fn write_lifecycle_hooks(home: &Path, events: &[&str]) -> Result<()> {
+pub(super) fn write_lifecycle_hooks(home: &Path, events: &[&str]) -> Result<()> {
     let mut hooks = serde_json::Map::new();
     for event in events {
         let log = home.join(format!("{event}.jsonl"));

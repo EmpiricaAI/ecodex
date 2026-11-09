@@ -4,13 +4,12 @@ on:
   workflow_call:
 
 env:
-  WINDOWS_BINARIES: "codex codex-code-mode-host codex-responses-api-proxy codex-windows-sandbox-setup codex-windows-sandbox-service codex-command-runner codex-app-server"
+  WINDOWS_BINARIES: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy codex-windows-sandbox-setup codex-windows-sandbox-service codex-command-runner codex-app-server"
 
 jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    # Parallel Bazel artifacts are advisory while Cargo remains the release path.
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
+    # Release Cargo artifacts only while Bazel releases are disabled.
     runs-on: ${{ matrix.runs_on }}
     environment:
       name: bazel
@@ -30,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo, bazel]
+        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
         target:
           - x86_64-pc-windows-msvc
           - aarch64-pc-windows-msvc
@@ -39,14 +38,14 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: primary
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: primary
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-arm64
@@ -67,14 +66,14 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-arm64
@@ -100,7 +99,7 @@ jobs:
           Write-Host "Disk usage:"
           Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize Name, @{Name='Size(GB)';Expression={[math]::Round(($_.Used + $_.Free) / 1GB, 1)}}, @{Name='Free(GB)';Expression={[math]::Round($_.Free / 1GB, 1)}}
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           targets: ${{ matrix.build-system == 'cargo' && matrix.target || '' }}
 
@@ -253,7 +252,8 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}
           VOICE_ARCH: ${{ matrix.arch }}
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Use local Bazel while BuildBuddy credentials are unavailable.
+          BUILDBUDDY_API_KEY: ""
         run: |
           (cd codex-rs && cargo update --workspace)
           python .github/scripts/watch_voice_bazel.py "$(cygpath -w "$BASH")" ./.github/scripts/run-bazel-ci.sh \
@@ -309,7 +309,6 @@ jobs:
     needs:
       - build-windows-binaries
     name: Build Windows symbols - ${{ matrix.target }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -323,7 +322,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo, bazel]
+        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
         target:
           - aarch64-pc-windows-msvc
           - x86_64-pc-windows-msvc
@@ -370,7 +369,6 @@ jobs:
       - build-windows-binaries
       - build-windows-voice
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ${{ matrix.runs_on }}
     environment:
       name: azure-artifact-signing
@@ -388,7 +386,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo, bazel]
+        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
         target:
           - x86_64-pc-windows-msvc
           - aarch64-pc-windows-msvc
@@ -549,6 +547,26 @@ jobs:
             --entrypoint-dir "$CARGO_TARGET_DIR/$target/release" \
             --archive-dir "dist/$target"
 
+      - name: Verify packaged executor signatures and bytes
+        shell: pwsh
+        run: |
+          $target = "${{ matrix.target }}"
+          $source = Join-Path $env:CARGO_TARGET_DIR "$target/release/codex-exec-server.exe"
+          foreach ($stem in @("codex-package", "codex-app-server-package")) {
+            $package = Join-Path $env:RUNNER_TEMP "verify-executor-$stem-$target"
+            New-Item -ItemType Directory -Path $package | Out-Null
+            tar -xzf "dist/$target/$stem-$target.tar.gz" -C $package
+            if ($LASTEXITCODE -ne 0) { throw "Cannot extract executor package" }
+            $binary = Join-Path $package "bin/codex-exec-server.exe"
+            if ((Get-FileHash $binary).Hash -ne (Get-FileHash $source).Hash) {
+              throw "Packaged executor differs from the signed input"
+            }
+            $signature = Get-AuthenticodeSignature $binary
+            if ($signature.Status -ne "Valid" -or $null -eq $signature.TimeStamperCertificate) {
+              throw "Invalid or untimestamped executor signature"
+            }
+          }
+
       - name: Verify packaged Windows voice closure
         shell: pwsh
         run: |
@@ -566,6 +584,12 @@ jobs:
           if ($signature.Status -ne 'Valid') { throw "Packaged helper signature: $($signature.Status)" }
           python -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[3]); from package_runtime import runtime_files; runtime_files(Path(sys.argv[1]), sys.argv[2], public_release=True)' $voice $target (Join-Path $env:GITHUB_WORKSPACE 'third_party/voice')
           if ($LASTEXITCODE -ne 0) { throw 'Packaged runtime receipt verification failed' }
+
+      - name: Set up Python release tools
+        if: ${{ matrix.build-system == 'cargo' }}
+        uses: ./.github/actions/setup-python-release-tools
+        with:
+          group: runtime
 
       - name: Build Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' }}
@@ -586,9 +610,6 @@ jobs:
               ;;
           esac
 
-          python -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
-          "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m pip install build
-
           # The wheel's Windows support floor predates the native voice
           # runtime's verified device/VC++ prerequisites. Keep it voice-free.
           wheel_package="${RUNNER_TEMP}/codex-package-${{ matrix.target }}"
@@ -605,7 +626,8 @@ jobs:
             "$wheel_package" \
             --codex-version "${GITHUB_REF_NAME}" \
             --platform-tag "$platform_tag"
-          "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+          uv build --offline --no-build-isolation --no-create-gitignore \
+            --python "${RUNNER_TEMP}/python-runtime-build-venv" --wheel --out-dir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' }}

@@ -1,6 +1,6 @@
 //! Dashboard for inspecting and managing the TUI's retained daemon tasks.
 //! Search, rename, status filters and selection survive metadata refreshes.
-//! Rows retain their relative order while they remain in the same status group.
+//! The caller supplies rows in status, descending update time, and thread ID order.
 
 #[path = "agent_center/mod.rs"]
 pub(super) mod command_center;
@@ -8,7 +8,7 @@ pub(super) mod command_center;
 #[path = "agents_overview_grouping.rs"]
 mod grouping;
 
-pub(super) use codex_config::types::AgentsOverviewGrouping;
+pub(super) use grouping::AgentsOverviewGrouping;
 use grouping::model_name;
 
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
@@ -36,6 +36,7 @@ use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::terminal_hyperlinks::remap_wrapped_line;
 use crate::terminal_hyperlinks::visible_lines;
+use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadStatus;
@@ -57,6 +58,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -73,8 +75,8 @@ pub(super) enum AgentsOverviewGroup {
 }
 
 impl AgentsOverviewGroup {
-    pub(super) fn for_status(status: &ThreadStatus) -> Self {
-        match status {
+    pub(super) fn for_thread(thread: &Thread) -> Self {
+        match &thread.status {
             ThreadStatus::Active { active_flags }
                 if active_flags.contains(&ThreadActiveFlag::WaitingOnApproval)
                     || active_flags.contains(&ThreadActiveFlag::WaitingOnUserInput) =>
@@ -83,8 +85,9 @@ impl AgentsOverviewGroup {
             }
             ThreadStatus::Active { .. } => Self::Working,
             ThreadStatus::Idle => Self::Ready,
-            ThreadStatus::SystemError => Self::NeedsYou,
-            ThreadStatus::NotLoaded => Self::Finished,
+            // A subagent failure ends its work without asking the user to act.
+            ThreadStatus::SystemError if !is_subagent(thread) => Self::NeedsYou,
+            ThreadStatus::SystemError | ThreadStatus::NotLoaded => Self::Finished,
         }
     }
 
@@ -98,6 +101,10 @@ impl AgentsOverviewGroup {
     }
 }
 
+fn is_subagent(thread: &Thread) -> bool {
+    thread.parent_thread_id.is_some() || matches!(thread.source, SessionSource::SubAgent(_))
+}
+
 #[derive(Clone)]
 pub(super) struct AgentsOverviewRow {
     pub(super) details: AgentsOverviewDetails,
@@ -105,6 +112,7 @@ pub(super) struct AgentsOverviewRow {
     pub(super) thread_id: ThreadId,
     pub(super) group: AgentsOverviewGroup,
     pub(super) is_current: bool,
+    pub(super) unread: bool,
     pub(super) has_voice: bool,
 }
 
@@ -140,9 +148,15 @@ impl AgentsOverviewProjectGroup {
     }
 }
 
+pub(super) fn directory_group_key(cwd: &Path, worktrees_enabled: bool) -> PathBuf {
+    worktrees_enabled
+        .then(|| dunce::canonicalize(cwd).ok())
+        .flatten()
+        .unwrap_or_else(|| cwd.to_path_buf())
+}
+
 #[derive(Default)]
 pub(super) struct AgentsOverviewViewState {
-    row_order: HashMap<ThreadId, (AgentsOverviewGroup, usize)>,
     scroll: usize,
     page_height: usize,
     status_filter: usize,
@@ -187,6 +201,7 @@ pub(super) struct AgentsOverviewView {
     use_theme_colors: bool,
     pub(super) rows: Vec<AgentsOverviewRow>,
     project_groups: Vec<AgentsOverviewProjectGroup>,
+    directory_group_keys: Vec<PathBuf>,
     pub(super) pinned_thread_ranks: Option<HashMap<ThreadId, usize>>,
     pub(super) pin_action_pending: bool,
     selected: usize,
@@ -201,7 +216,7 @@ pub(super) struct AgentsOverviewView {
 
 impl AgentsOverviewView {
     pub(super) fn new(
-        mut rows: Vec<AgentsOverviewRow>,
+        rows: Vec<AgentsOverviewRow>,
         selected_thread_id: Option<ThreadId>,
         worktrees_enabled: bool,
         use_theme_colors: bool,
@@ -209,24 +224,6 @@ impl AgentsOverviewView {
         keymap: RuntimeKeymap,
         state: Arc<Mutex<AgentsOverviewViewState>>,
     ) -> Self {
-        {
-            let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
-            // The caller supplies recency order. Keep existing rows in place, and append
-            // new arrivals or status transitions in that order within their new group.
-            rows.sort_by_key(|row| {
-                let rank = state
-                    .row_order
-                    .get(&row.thread_id)
-                    .filter(|(group, _)| *group == row.group)
-                    .map_or(usize::MAX, |(_, rank)| *rank);
-                (row.group, rank)
-            });
-            state.row_order = rows
-                .iter()
-                .enumerate()
-                .map(|(rank, row)| (row.thread_id, (row.group, rank)))
-                .collect();
-        }
         let selected = state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -240,6 +237,10 @@ impl AgentsOverviewView {
         let project_groups = rows
             .iter()
             .map(|row| AgentsOverviewProjectGroup::for_thread(&row.thread, worktrees_enabled))
+            .collect();
+        let directory_group_keys = rows
+            .iter()
+            .map(|row| directory_group_key(row.thread.cwd.as_path(), worktrees_enabled))
             .collect();
         let center_shortcut_keys = crate::keymap::keymap_action_ids()
             .filter(|action| matches!(action.context, KeymapContext::List | KeymapContext::Agents))
@@ -277,6 +278,7 @@ impl AgentsOverviewView {
             use_theme_colors,
             rows,
             project_groups,
+            directory_group_keys,
             pinned_thread_ranks: None,
             pin_action_pending: false,
             selected,
@@ -413,7 +415,9 @@ impl AgentsOverviewView {
 
     fn status(row: &AgentsOverviewRow) -> (&'static str, Span<'static>) {
         match row.group {
-            AgentsOverviewGroup::NeedsYou if row.thread.status == ThreadStatus::SystemError => {
+            AgentsOverviewGroup::NeedsYou
+                if row.thread.status == ThreadStatus::SystemError && !is_subagent(&row.thread) =>
+            {
                 ("Error", "!".red())
             }
             AgentsOverviewGroup::NeedsYou => ("Needs input", "●".red()),
@@ -681,12 +685,15 @@ impl BottomPaneView for AgentsOverviewView {
         if self.agents_keymap.toggle_grouping.is_pressed(key) {
             let mut state = self.state();
             state.grouping = match state.grouping {
-                AgentsOverviewGrouping::Project => AgentsOverviewGrouping::Status,
+                AgentsOverviewGrouping::Project => AgentsOverviewGrouping::Directory,
+                AgentsOverviewGrouping::Directory => AgentsOverviewGrouping::Status,
                 AgentsOverviewGrouping::Status => AgentsOverviewGrouping::Model,
                 AgentsOverviewGrouping::Model => AgentsOverviewGrouping::Project,
             };
-            self.app_event_tx
-                .send(AppEvent::PersistAgentsOverviewGrouping(state.grouping));
+            if let Some(grouping) = state.grouping.persisted() {
+                self.app_event_tx
+                    .send(AppEvent::PersistAgentsOverviewGrouping(grouping));
+            }
             return;
         }
         if self.agents_keymap.toggle_pin.is_pressed(key) {

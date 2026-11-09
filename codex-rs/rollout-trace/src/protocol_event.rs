@@ -2,9 +2,9 @@
 //!
 //! The session layer already emits protocol events for turn lifecycle, terminal
 //! sessions, patch application, MCP calls, and collaboration tools. Rollout
-//! tracing reuses those observations instead of adding another set of hooks in
-//! `codex-core`: this module translates the protocol surface into the smaller
-//! trace vocabulary and keeps the mapping isolated inside `codex-rollout-trace`.
+//! tracing reuses those observations where they preserve the original payload.
+//! MCP results are recorded before protocol-event truncation instead. This module
+//! translates protocol events into the smaller trace vocabulary.
 //!
 //! The long explicit `EventMsg` matches are intentional. Most protocol events
 //! are not trace runtime boundaries, but spelling them out makes new protocol
@@ -17,7 +17,6 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::McpToolCallBeginEvent;
-use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus;
@@ -31,6 +30,7 @@ use crate::AgentThreadId;
 use crate::CodexTurnId;
 use crate::ExecutionStatus;
 use crate::RawTraceEventPayload;
+use crate::ToolCallKind;
 
 pub(crate) struct CodexTurnTraceEvent {
     pub context_turn_id: CodexTurnId,
@@ -59,7 +59,11 @@ pub(crate) fn codex_turn_trace_event(
                 context_turn_id: codex_turn_id.clone(),
                 payload: RawTraceEventPayload::CodexTurnEnded {
                     codex_turn_id,
-                    status: ExecutionStatus::Completed,
+                    status: if event.error.is_some() {
+                        ExecutionStatus::Failed
+                    } else {
+                        ExecutionStatus::Completed
+                    },
                 },
             })
         }
@@ -76,6 +80,12 @@ pub(crate) fn codex_turn_trace_event(
                 },
             })
         }
+        EventMsg::RawResponseItem(event) => Some(CodexTurnTraceEvent {
+            context_turn_id: default_turn_id.to_string(),
+            payload: RawTraceEventPayload::HistoryItemAccepted {
+                item_id: event.item.id()?.to_string(),
+            },
+        }),
         _ => None,
     }
 }
@@ -83,6 +93,7 @@ pub(crate) fn codex_turn_trace_event(
 pub(crate) enum ToolRuntimeTraceEvent<'a> {
     Started {
         tool_call_id: &'a str,
+        kind: ToolCallKind,
         payload: ToolRuntimePayload<'a>,
     },
     Ended {
@@ -104,7 +115,6 @@ pub(crate) enum ToolRuntimePayload<'a> {
     PatchApplyBegin(&'a PatchApplyBeginEvent),
     PatchApplyEnd(&'a PatchApplyEndEvent),
     McpToolCallBegin(&'a McpToolCallBeginEvent),
-    McpToolCallEnd(&'a McpToolCallEndEvent),
     CollabAgentSpawnBegin(&'a codex_protocol::protocol::CollabAgentSpawnBeginEvent),
     CollabAgentSpawnEnd(&'a codex_protocol::protocol::CollabAgentSpawnEndEvent),
     CollabAgentInteractionBegin(&'a codex_protocol::protocol::CollabAgentInteractionBeginEvent),
@@ -131,7 +141,6 @@ impl Serialize for ToolRuntimePayload<'_> {
             ToolRuntimePayload::PatchApplyBegin(event) => event.serialize(serializer),
             ToolRuntimePayload::PatchApplyEnd(event) => event.serialize(serializer),
             ToolRuntimePayload::McpToolCallBegin(event) => event.serialize(serializer),
-            ToolRuntimePayload::McpToolCallEnd(event) => event.serialize(serializer),
             ToolRuntimePayload::CollabAgentSpawnBegin(event) => event.serialize(serializer),
             ToolRuntimePayload::CollabAgentSpawnEnd(event) => event.serialize(serializer),
             ToolRuntimePayload::CollabAgentInteractionBegin(event) => event.serialize(serializer),
@@ -270,6 +279,12 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         EventMsg::ExecCommandBegin(event) if event.source != ExecCommandSource::UserShell => {
             Some(ToolRuntimeTraceEvent::Started {
                 tool_call_id: &event.call_id,
+                kind: match event.source {
+                    ExecCommandSource::UnifiedExecInteraction => ToolCallKind::WriteStdin,
+                    ExecCommandSource::Agent
+                    | ExecCommandSource::UserShell
+                    | ExecCommandSource::UnifiedExecStartup => ToolCallKind::ExecCommand,
+                },
                 payload: ToolRuntimePayload::ExecCommandBegin(event),
             })
         }
@@ -282,6 +297,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         }
         EventMsg::PatchApplyBegin(event) => Some(ToolRuntimeTraceEvent::Started {
             tool_call_id: &event.call_id,
+            kind: ToolCallKind::ApplyPatch,
             payload: ToolRuntimePayload::PatchApplyBegin(event),
         }),
         EventMsg::PatchApplyEnd(event) => Some(ToolRuntimeTraceEvent::Ended {
@@ -291,19 +307,17 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         }),
         EventMsg::McpToolCallBegin(event) => Some(ToolRuntimeTraceEvent::Started {
             tool_call_id: &event.call_id,
+            kind: ToolCallKind::Mcp {
+                server: event.invocation.server.clone(),
+                tool: event.invocation.tool.clone(),
+            },
             payload: ToolRuntimePayload::McpToolCallBegin(event),
         }),
-        EventMsg::McpToolCallEnd(event) => Some(ToolRuntimeTraceEvent::Ended {
-            tool_call_id: &event.call_id,
-            status: if event.result.is_ok() {
-                ExecutionStatus::Completed
-            } else {
-                ExecutionStatus::Failed
-            },
-            payload: ToolRuntimePayload::McpToolCallEnd(event),
-        }),
+        // The full backend result is recorded before this UI event can truncate it.
+        EventMsg::McpToolCallEnd(_) => None,
         EventMsg::CollabAgentSpawnBegin(event) => Some(ToolRuntimeTraceEvent::Started {
             tool_call_id: &event.call_id,
+            kind: ToolCallKind::SpawnAgent,
             payload: ToolRuntimePayload::CollabAgentSpawnBegin(event),
         }),
         EventMsg::CollabAgentSpawnEnd(event) => Some(ToolRuntimeTraceEvent::Ended {
@@ -319,6 +333,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         }),
         EventMsg::CollabAgentInteractionBegin(event) => Some(ToolRuntimeTraceEvent::Started {
             tool_call_id: &event.call_id,
+            kind: ToolCallKind::SendMessage,
             payload: ToolRuntimePayload::CollabAgentInteractionBegin(event),
         }),
         EventMsg::CollabAgentInteractionEnd(event) => Some(ToolRuntimeTraceEvent::Ended {
@@ -328,6 +343,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         }),
         EventMsg::CollabWaitingBegin(event) => Some(ToolRuntimeTraceEvent::Started {
             tool_call_id: &event.call_id,
+            kind: ToolCallKind::WaitAgent,
             payload: ToolRuntimePayload::CollabWaitingBegin(event),
         }),
         EventMsg::CollabWaitingEnd(event) => Some(ToolRuntimeTraceEvent::Ended {
@@ -337,6 +353,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         }),
         EventMsg::CollabCloseBegin(event) => Some(ToolRuntimeTraceEvent::Started {
             tool_call_id: &event.call_id,
+            kind: ToolCallKind::CloseAgent,
             payload: ToolRuntimePayload::CollabCloseBegin(event),
         }),
         EventMsg::CollabCloseEnd(event) => Some(ToolRuntimeTraceEvent::Ended {
@@ -399,6 +416,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         | EventMsg::DynamicToolCallResponse(_)
         | EventMsg::ElicitationRequest(_)
         | EventMsg::ElicitationAbandoned(_)
+        | EventMsg::NetworkApprovalResolved { .. }
         | EventMsg::ApplyPatchApprovalRequest(_)
         | EventMsg::GuardianAssessment(_)
         | EventMsg::DeprecationNotice(_)
@@ -411,6 +429,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         | EventMsg::ShutdownComplete
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
+        | EventMsg::PrivateSessionEvent(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::RawResponseCompleted(_)
         | EventMsg::ItemStarted(_)
@@ -479,6 +498,7 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         | EventMsg::DynamicToolCallResponse(_)
         | EventMsg::ElicitationRequest(_)
         | EventMsg::ElicitationAbandoned(_)
+        | EventMsg::NetworkApprovalResolved { .. }
         | EventMsg::ApplyPatchApprovalRequest(_)
         | EventMsg::GuardianAssessment(_)
         | EventMsg::DeprecationNotice(_)
@@ -491,6 +511,7 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         | EventMsg::PlanUpdate(_)
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
+        | EventMsg::PrivateSessionEvent(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::RawResponseCompleted(_)
         | EventMsg::ItemStarted(_)

@@ -19,10 +19,6 @@ fn curated_exact_slug_overrides_family_fallback() {
     // and would match the family-prefix table. Layer 1 must win.
     let info = model_info_from_slug("qwen3-coder:30b");
     assert_eq!(info.context_window, Some(262_144));
-    assert!(
-        !info.used_fallback_model_metadata,
-        "curated entry must suppress the fallback-metadata warning"
-    );
     assert_eq!(info.display_name, "Qwen3-Coder 30B-A3B (Alibaba)");
 }
 
@@ -32,7 +28,8 @@ fn picker_curated_slugs_are_seeded_not_fallback() {
     // bug. These slugs appear in the TUI picker (ecodex_curated_models.rs) but
     // were absent from the seed → fell through to fallback metadata (32K for the
     // glm family-prefix). Each MUST resolve via Layer 1 with the correct context
-    // window and used_fallback_model_metadata=false. If a row is deleted or its
+    // window (upstream removed the used_fallback_model_metadata marker in 0.167; the
+    // context-window check below is what distinguishes a seeded row from the fallback). If a row is deleted or its
     // context drifts, this fails — don't paper over by editing the assertion,
     // re-verify the model's real window first.
     let cases: &[(&str, i64)] = &[
@@ -48,10 +45,6 @@ fn picker_curated_slugs_are_seeded_not_fallback() {
     ];
     for (slug, expected_ctx) in cases {
         let info = model_info_from_slug(slug);
-        assert!(
-            !info.used_fallback_model_metadata,
-            "{slug} must be seeded (Layer 1), not fallback — picker shows it, so the seed must carry it. Otherwise /model emits 'metadata not found'."
-        );
         assert_eq!(
             info.context_window,
             Some(*expected_ctx),
@@ -213,10 +206,5 @@ fn picker_entries_are_ordered_seeded_and_carry_a_provider() {
     // Every picker slug resolves through the seed, never through the fallback.
     for entry in &entries {
         let info = model_info_from_slug(&entry.slug);
-        assert!(
-            !info.used_fallback_model_metadata,
-            "{} is offered in the picker but resolves to fallback metadata",
-            entry.slug
-        );
     }
 }

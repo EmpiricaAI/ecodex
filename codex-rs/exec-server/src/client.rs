@@ -845,7 +845,29 @@ impl ExecServerClient {
     }
 
     pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        self.ensure_network_review_capability(&params).await?;
         self.call(EXEC_METHOD, &params).await
+    }
+
+    async fn ensure_network_review_capability(
+        &self,
+        params: &ExecParams,
+    ) -> Result<(), ExecServerError> {
+        if params
+            .network_proxy
+            .as_ref()
+            .is_some_and(|launch| !launch.proxy.review_domains.is_empty())
+            && !self
+                .environment_info()
+                .await?
+                .capabilities
+                .network_proxy_review_domains
+        {
+            return Err(ExecServerError::Protocol(
+                "selected exec-server does not support managed network review domains".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Returns shared cached executor metadata, fetching it lazily if initialization omitted it.
@@ -1046,6 +1068,21 @@ impl ExecServerClient {
         .await
     }
 
+    pub(crate) async fn fs_watch_missing(
+        &self,
+        missing: Vec<codex_utils_path_uri::PathUri>,
+        present: Option<codex_utils_path_uri::PathUri>,
+    ) -> Result<Option<tokio::sync::oneshot::Receiver<()>>, ExecServerError> {
+        if !self.environment_info().await?.capabilities.fs_watch_missing {
+            return Ok(None);
+        }
+        Ok(self
+            .rpc_client()
+            .await?
+            .watch_missing(missing, present)
+            .await?)
+    }
+
     pub async fn fs_get_metadata(
         &self,
         params: FsGetMetadataParams,
@@ -1107,6 +1144,7 @@ impl ExecServerClient {
         params: ExecParams,
         network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     ) -> Result<Session, ExecServerError> {
+        self.ensure_network_review_capability(&params).await?;
         let policy_decision_timeout_ms = params
             .network_proxy
             .as_ref()
@@ -2013,7 +2051,6 @@ mod tests {
     use crate::FileSystemSandboxContext;
     use crate::ProcessId;
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
-    #[cfg(not(windows))]
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
     use crate::client_api::ExecServerTransportParams;
     use crate::client_api::RemoteExecServerConnectArgs;
@@ -2355,7 +2392,7 @@ mod tests {
                 cwd: None,
             },
             client_name: "stdio-test-client".to_string(),
-            initialize_timeout: Duration::from_secs(1),
+            initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
             resume_session_id: None,
         })
         .await
@@ -2721,6 +2758,10 @@ mod tests {
         provider_id: Some("sha256:fb4f62da3e84f6864dcec8ede7bc66f1c96ecaeaf55f8a786b85df994057c8ac".to_string()),
         ..EnvironmentInfo::local()
     }); "with_executor_metadata")]
+    #[test_case::test_case(Some(EnvironmentInfo {
+        capabilities: Default::default(),
+        ..EnvironmentInfo::local()
+    }); "without_optional_methods")]
     #[test_case::test_case(None; "legacy_server")]
     #[tokio::test]
     async fn environment_info_is_cached(
@@ -2775,6 +2816,18 @@ mod tests {
         let cached_info = client.clone().environment_info().await?;
         assert_eq!(cached_info.as_ref(), &expected_info);
         assert!(Arc::ptr_eq(&info, &cached_info));
+        if !info.capabilities.fs_watch_missing {
+            // The old executor has disconnected: probing an unsupported RPC would fail.
+            assert!(
+                client
+                    .fs_watch_missing(
+                        vec![PathUri::parse("file:///workspace/.agents/skills")?],
+                        /*present*/ None
+                    )
+                    .await?
+                    .is_none()
+            );
+        }
         Ok(())
     }
 

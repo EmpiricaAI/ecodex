@@ -2,6 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use tokio::time::Instant;
 
 #[tokio::test]
 async fn tracked_review_stays_reserved_until_cleanup_finishes() {
@@ -109,8 +110,8 @@ impl ReviewerRequest for Request {
     fn requires_fresh_session(&self) -> bool {
         self.fresh
     }
-    fn deadline(&self) -> Instant {
-        Instant::now() + std::time::Duration::from_secs(5)
+    fn deadline(&self) -> crate::ReviewDeadline {
+        crate::ReviewDeadline::At(Instant::now() + std::time::Duration::from_secs(5))
     }
     fn cancellation(&self) -> Option<&CancellationToken> {
         None
@@ -186,4 +187,39 @@ async fn fresh_attempt_bypasses_cached_session_and_snapshot(busy: bool) {
     })
     .await;
     assert_eq!(selections.recv().await, Some(if busy { 0 } else { 1 }));
+}
+
+#[tokio::test]
+async fn isolated_review_preserves_reusable_session() {
+    let spawns = Arc::new(AtomicUsize::default());
+    let pool = ReviewerPool::new(
+        Arc::new(ReviewerTasks::default()),
+        move |_, _, _, snapshot, _| {
+            assert_eq!(
+                snapshot, None,
+                "isolated review must not inherit a snapshot"
+            );
+            let id = spawns.fetch_add(/*val*/ 1, Ordering::SeqCst);
+            Box::pin(async move { Ok(Session(id)) })
+        },
+    );
+    pool.prewarm(Arc::new(()), ()).await.expect("prewarm trunk");
+    let (selected, mut selections) = tokio::sync::mpsc::unbounded_channel();
+
+    pool.review_isolated(&Request {
+        fresh: false,
+        selected: selected.clone(),
+        release: None,
+    })
+    .await;
+    assert_eq!(selections.recv().await, Some(1));
+
+    pool.review(Request {
+        fresh: false,
+        selected,
+        release: None,
+    })
+    .await;
+    assert_eq!(selections.recv().await, Some(0));
+    pool.shutdown().await;
 }

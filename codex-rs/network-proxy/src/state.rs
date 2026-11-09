@@ -13,6 +13,7 @@ use crate::policy::compile_denylist;
 use crate::policy::is_global_wildcard_domain_pattern;
 use crate::runtime::ConfigState;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -23,7 +24,7 @@ pub use crate::runtime::NetworkProxyState;
 #[cfg(test)]
 pub(crate) use crate::runtime::network_proxy_state_for_policy;
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct NetworkProxyConstraints {
     pub enabled: Option<bool>,
     pub mode: Option<NetworkMode>,
@@ -92,6 +93,7 @@ pub fn build_config_state(
         .map_err(NetworkProxyConstraintError::into_anyhow)?;
     let deny_set = compile_denylist(&denied_domains)?;
     let allow_set = compile_allowlist(&allowed_domains)?;
+    let review_set = compile_allowlist(&config.review_domains)?;
     let mitm_hooks = compile_mitm_hooks(&config)?;
     let mitm = if config.mitm {
         Some(Arc::new(MitmState::new(MitmUpstreamConfig {
@@ -107,6 +109,7 @@ pub fn build_config_state(
         brokerage_created_default_allowlist,
         allow_set,
         deny_set,
+        review_set,
         mitm,
         mitm_hooks,
         constraints,
@@ -381,14 +384,11 @@ pub fn validate_policy_against_constraints(
     }
 
     if let Some(allow_unix_sockets) = &constraints.allow_unix_sockets {
-        let allowed_set: HashSet<String> = allow_unix_sockets
-            .iter()
-            .map(|s| s.to_ascii_lowercase())
-            .collect();
+        let allowed_set: HashSet<&str> = allow_unix_sockets.iter().map(String::as_str).collect();
         validate(config_allow_unix_sockets, move |candidate| {
             let mut invalid = Vec::new();
             for entry in candidate {
-                if !allowed_set.contains(&entry.to_ascii_lowercase()) {
+                if !allowed_set.contains(entry.as_str()) {
                     invalid.push(entry.clone());
                 }
             }

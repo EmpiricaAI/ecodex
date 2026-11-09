@@ -155,7 +155,7 @@ single_version_override(
     module_name = "rules_cc",
     patch_strip = 1,
     patches = [
-        "//patches:rules_cc_rusty_v8_custom_libcxx.patch",
+        "//patches:rules_cc_windows_native_llvm.patch",
     ],
 )
 
@@ -325,7 +325,7 @@ toolchains.toolchain(
     edition = "2024",
     extra_exec_rustc_flags = MSVC_RUSTC_FLAGS,
     extra_rustc_flags = MSVC_RUSTC_FLAGS,
-    version = "1.99.1",
+    version = "1.95.0",
 )
 use_repo(toolchains, "default_rust_toolchains")
 
@@ -400,6 +400,14 @@ crate.annotation(
         "x86_64-pc-windows-gnullvm": ["pure"],
     },
     rustc_flags = ["-Copt-level=3"],
+)
+
+# Match the CodeModeHost response-compression benchmark's zstd level.
+crate.annotation(
+    crate = "tonic",
+    patch_args = ["-p1"],
+    patches = ["//patches:tonic-zstd-level1.patch"],
+    version = "0.14.3",
 )
 crate.annotation(
     crate = "zstd-sys",
@@ -671,6 +679,7 @@ crate.annotation(
 # The musl CLI's allocator needs declared native tools and consistent header flags.
 crate.annotation(
     build_script_env = {
+        "JEMALLOC_SYS_WITH_MALLOC_CONF": "narenas_ratio:0.25",
         "MAKE": "$${pwd}/$(MAKE)",
         "NM": "$${pwd}/$(execpath @llvm//tools:llvm-nm)",
         "RANLIB": "$${pwd}/$(execpath @llvm//tools:llvm-ranlib)",
@@ -815,28 +824,66 @@ inject_repo(crate, "alsa_lib")
     ]
 ]
 
-bazel_dep(name = "v8", version = "15.2.124.1")
-archive_override(
-    module_name = "v8",
+bazel_dep(name = "rules_license", version = "1.0.0")
+
+engine_repository = use_repo_rule("//third_party/v8:engine_repository.bzl", "engine_repository")
+
+engine_repository(
+    name = "v8",
     integrity = "sha256-aNN5G427qQbP/5o+NXONgXR8ZvS6mjf6mfAI6jtxyzI=",
     patch_strip = 3,
     patches = [
-        "//patches:v8_module_deps.patch",
-        "//patches:v8_bazel_rules.patch",
         "//patches:v8_source_portability.patch",
         "//patches:v8_array_sort_elements_kind.patch",
+        "//third_party/v8:v8_defs.patch",
     ],
     strip_prefix = "v8-15.2.124.1",
     urls = ["https://github.com/v8/v8/archive/refs/tags/15.2.124.1.tar.gz"],
 )
 
+# All V8 inputs are owned here, including the pinned Python generator inputs.
+pip.parse(
+    extra_pip_args = ["--require-hashes"],
+    hub_name = "v8_python_deps",
+    python_version = "3.11",
+    requirements_lock = "@v8//:bazel/requirements.txt",
+    simpleapi_skip = [
+        "jinja2",
+        "markupsafe",
+    ],
+)
+use_repo(pip, "v8_python_deps")
+
+native_windows_llvm = use_repo_rule("//third_party/v8:native_windows.bzl", "native_windows_llvm")
+
+native_windows_llvm(name = "v8_native_windows_llvm")
+
+native_windows_cc = use_repo_rule("//third_party/v8:native_windows.bzl", "native_windows_cc")
+
+native_windows_cc(
+    name = "v8_native_windows_cc",
+    native_llvm = "@v8_native_windows_llvm//:BUILD.bazel",
+)
+
+v8_dependencies = use_extension("//third_party/v8:dependencies.bzl", "dependencies")
+use_repo(
+    v8_dependencies,
+    "v8_abseil",
+    "v8_dragonbox",
+    "v8_fast_float",
+    "v8_fp16",
+    "v8_highway",
+    "v8_icu",
+    "v8_simdutf",
+)
+
 http_archive(
     name = "v8_crate_152_2_0",
     build_file = "//third_party/v8:v8_crate.BUILD.bazel",
-    sha256 = "a10fe1a92da5c32c7c7f838ce36c0ccfcfd5edf0865b58bdde820aa64cea9888",
-    strip_prefix = "v8-152.2.0",
+    sha256 = "e2e7f9961af59dbb749a60ac0a3c34c9680f6b86dd04277f2715356b5a52feab",
+    strip_prefix = "rusty_v8-350c5a859a9b3c84ab8701b3ad51e3b7699b30c0",
     type = "tar.gz",
-    urls = ["https://static.crates.io/crates/v8/v8-152.2.0.crate"],
+    urls = ["https://github.com/seanh-oai/rusty_v8/archive/350c5a859a9b3c84ab8701b3ad51e3b7699b30c0.tar.gz"],
 )
 
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")

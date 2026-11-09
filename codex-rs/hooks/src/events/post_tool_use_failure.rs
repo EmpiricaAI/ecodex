@@ -79,7 +79,7 @@ pub(crate) async fn run(
         return PostToolUseFailureOutcome::default();
     }
 
-    let input_json = match serde_json::to_string(&PostToolUseFailureCommandInput {
+    let input = match serde_json::to_value(PostToolUseFailureCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
         transcript_path: NullableString::from_path(request.transcript_path.clone()),
@@ -93,7 +93,7 @@ pub(crate) async fn run(
         error_message: request.error_message.clone(),
         duration_ms: request.duration_ms,
     }) {
-        Ok(input_json) => input_json,
+        Ok(input) => input,
         Err(error) => {
             return PostToolUseFailureOutcome {
                 hook_events: common::serialization_failure_hook_events(
@@ -108,7 +108,7 @@ pub(crate) async fn run(
     let results = dispatcher::execute_handlers(
         engine,
         matched,
-        input_json,
+        &input,
         request.cwd.as_path(),
         Some(request.turn_id),
         parse_completed,

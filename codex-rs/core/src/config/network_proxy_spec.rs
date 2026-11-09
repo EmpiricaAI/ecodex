@@ -174,6 +174,19 @@ impl NetworkProxySpec {
         } else {
             (config, NetworkProxyConstraints::default())
         };
+        if config.enabled
+            && config.mitm
+            && !config.credential_broker
+            && config
+                .mitm_hooks
+                .iter()
+                .any(|hook| hook.actions.aws_sigv4.is_some())
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "local AWS SigV4 hooks require features.credential_masking for protected shell snapshots",
+            ));
+        }
         validate_policy_against_constraints(&config, &constraints).map_err(|err| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -473,6 +486,10 @@ impl NetworkProxySpec {
             config.set_denied_domains(effective_denied_domains);
             constraints.denied_domains = Some(managed_denied_domains);
             constraints.denylist_expansion_enabled = Some(denylist_expansion_enabled);
+        }
+        if let Some(review_domains) = &requirements.review_domains {
+            config.review_domains =
+                Self::merge_domain_lists(review_domains.clone(), &config.review_domains);
         }
         if requirements.unix_sockets.is_some() {
             let allow_unix_sockets = requirements

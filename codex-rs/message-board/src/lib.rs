@@ -12,6 +12,7 @@ mod tools;
 mod types;
 
 pub use api::AgentMessageBoard;
+pub use api::AppendRequest;
 pub use api::ChannelDescription;
 pub use api::ChannelQuery;
 pub use api::CreateChannelRequest;
@@ -27,6 +28,7 @@ pub use api::SubscriptionRequest;
 pub use api::SubscriptionTarget;
 pub use api::ThreadQuery;
 pub use api::ThreadSort;
+pub use api::UpsertChannelRequest;
 pub use host::MessageBoardHost;
 pub use host::NotificationDelivery;
 pub use in_memory::InMemoryAgentMessageBoard;

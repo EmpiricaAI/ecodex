@@ -1,7 +1,7 @@
 //! Opportunistic attachment may fall back; automatic startup requires a shared server.
 
-use super::*;
 use crate::legacy_core::config::ConfigBuilder;
+use crate::*;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -367,8 +367,8 @@ fn daemon_eligibility_preserves_launch_options_and_explains_exclusions() {
             expected
         );
     }
-    let mut cli = Cli::parse_from(["codex"]);
-    let overrides = vec![("web_search".into(), toml::Value::String("live".into()))];
+    let cli = Cli::parse_from(["codex"]);
+    let overrides = [("web_search".into(), toml::Value::String("live".into()))];
     let loader = LoaderOverrides {
         ignore_user_config: true,
         ..Default::default()
@@ -402,18 +402,6 @@ fn daemon_eligibility_preserves_launch_options_and_explains_exclusions() {
             Some(expected)
         );
     }
-    cli.agents_overview = true;
-    cli.strict_config = true;
-    assert_eq!(
-        daemon_startup::exclusion(
-            &cli,
-            &overrides,
-            &LoaderOverrides::default(),
-            /*workload_identity_selected*/ false,
-            /*exec_server_url*/ None
-        ),
-        None
-    );
 }
 
 #[test]

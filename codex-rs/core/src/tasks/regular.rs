@@ -44,7 +44,19 @@ impl SessionTask for RegularTask {
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
-        let run_turn_span = trace_span!("run_turn");
+        if ctx
+            .config
+            .features
+            .enabled(codex_features::Feature::CriticalPathTiming)
+            && !ctx.session_source.is_non_root_agent()
+        {
+            ctx.turn_timing_state.enable_critical_path();
+        }
+        let run_turn_span = trace_span!(
+            "run_turn",
+            conversation.id = %sess.thread_id,
+            turn.id = %ctx.sub_id,
+        );
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.
         let prewarmed_client_session = async {
@@ -82,7 +94,7 @@ impl SessionTask for RegularTask {
         .await;
         let prewarmed_client_session = match prewarmed_client_session {
             SessionStartupPrewarmResolution::Cancelled => {
-                run_hooks_and_record_inputs(
+                let _ = run_hooks_and_record_inputs(
                     &sess,
                     &ctx,
                     &ctx.capture_current_model_info(),

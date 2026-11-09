@@ -84,6 +84,8 @@ async fn test_step(
         /*updates*/ None,
     ));
     let managed_client = Arc::new(ManagedClient {
+        connection_sharing: Default::default(),
+        shared_elicitation: None,
         _auth_change_notifications: None,
         client: Arc::clone(&client),
         server_info: McpServerInfo {
@@ -98,6 +100,7 @@ async fn test_step(
         tool_timeout: None,
         server_instructions: None,
         server_supports_sandbox_state_meta_capability: supports_sandbox_state_meta,
+        client_supports_network_policy_meta_capability: false,
         codex_apps_tools_cache_context: None,
     });
     let clients = Arc::new(McpBindingClients::new(HashMap::from([(

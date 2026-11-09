@@ -26,8 +26,9 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
-use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::permissions::RawFileSystemSandboxPolicy;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -368,7 +369,6 @@ pub struct TurnContext {
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) available_models: Vec<ModelPreset>,
     pub(crate) final_output_json_schema: Option<Value>,
-    pub(crate) dynamic_tools: Arc<[DynamicToolSpec]>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) extension_data: Arc<codex_extension_api::ExtensionData>,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
@@ -452,7 +452,6 @@ impl TurnContext {
             #[allow(deprecated)]
             cwd: self.cwd.clone(),
             final_output_json_schema: None,
-            dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state,
             extension_data,
             turn_timing_state: Arc::new(TurnTimingState::default()),
@@ -540,13 +539,13 @@ impl TurnContext {
     }
 
     /// Captures current model metadata without preparing a step.
-    pub(crate) fn capture_current_model_info(&self) -> Arc<ModelInfo> {
+    pub(crate) fn capture_current_model_info(&self) -> Arc<CatalogModel> {
         Arc::clone(&self.next_step_settings.load().model_info)
     }
 
     /// Legacy: returns the frozen initial-turn model metadata.
     /// Step-scoped consumers should use their captured `StepContext::settings`.
-    pub(crate) fn model_info(&self) -> &Arc<ModelInfo> {
+    pub(crate) fn model_info(&self) -> &Arc<CatalogModel> {
         &self.initial_settings.model_info
     }
 
@@ -864,7 +863,6 @@ impl TurnContext {
             windows_sandbox_level: self.windows_sandbox_level,
             available_models,
             final_output_json_schema: self.final_output_json_schema.clone(),
-            dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
             extension_data: Arc::clone(&self.extension_data),
             turn_timing_state: Arc::clone(&self.turn_timing_state),
@@ -1149,7 +1147,6 @@ impl Session {
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             available_models,
             final_output_json_schema: None,
-            dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
             extension_data,
             turn_timing_state: Arc::new(TurnTimingState::default()),
@@ -1299,7 +1296,7 @@ impl Session {
                 // Only execution and initial context creation publish model metadata.
                 self.services
                     .thread_extension_data
-                    .insert(model_info.clone());
+                    .insert_arc(Arc::clone(&model_info.model));
                 self.resolve_multi_agent_version_for_model(&model_info, &per_turn_config)
             }
             TurnContextBuildMode::StartupPrewarm | TurnContextBuildMode::InjectItems => {
@@ -1390,10 +1387,8 @@ impl Session {
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         turn_context.final_output_json_schema = options.final_output_json_schema;
-        turn_context.cyber_access_program = cyber_access_program::for_provider(
-            &turn_context.config.model_provider_id,
-            options.cyber_access_program,
-        );
+        turn_context.cyber_access_program =
+            cyber_access_program::for_provider(&turn_context.config, options.cyber_access_program);
         // Tool observers retain this turn's selection even after a later turn starts.
         if let Some(program) = turn_context.cyber_access_program {
             turn_context.extension_data.insert(program);
@@ -1413,7 +1408,7 @@ impl Session {
     }
 
     pub(crate) async fn maybe_emit_model_warnings_for_turn(&self, tc: &TurnContext) {
-        if tc.model_info().used_fallback_model_metadata {
+        if tc.model_info().origin == ModelOrigin::Synthetic {
             self.send_event(
                 tc,
                 EventMsg::Warning(WarningEvent {
@@ -1482,6 +1477,17 @@ impl Session {
         options: NewTurnContextOptions,
     ) -> Arc<TurnContext> {
         let session_configuration = self.default_turn_configuration().await;
+        self.new_turn_with_configuration(sub_id, session_configuration, options)
+            .await
+    }
+
+    /// Builds new work from the exact configuration selected by turn admission.
+    pub(crate) async fn new_turn_with_configuration(
+        &self,
+        sub_id: String,
+        session_configuration: SessionConfiguration,
+        options: NewTurnContextOptions,
+    ) -> Arc<TurnContext> {
         let turn_environments = self
             .activate_turn_environments(&session_configuration)
             .await;

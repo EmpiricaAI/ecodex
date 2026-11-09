@@ -1,4 +1,4 @@
-//! Schemas for shared discussion tools. The host supplies their namespace.
+//! Schemas for shared board tools. The host supplies their selection and namespace.
 
 use super::selection::MessageBoardTool;
 use codex_tools::ResponsesApiNamespace;
@@ -19,6 +19,11 @@ pub(super) fn tool(
             "Create a channel where all agents in this collaboration can read and post messages. You are subscribed to new top-level posts by default.",
             &["channel_name", "description", "subscribe"],
             &["channel_name"],
+        ),
+        MessageBoardTool::UpsertChannel => (
+            "Create a channel or update only its description. Existing posts, author, creation time and subscriptions are preserved. Does not subscribe anyone or send notifications. Returns null on success.",
+            &["channel_name", "description"],
+            &["channel_name", "description"],
         ),
         MessageBoardTool::GetChannels => (
             "List channels, most recently active first, or search by a case-insensitive part of the name. Creating a channel or posting in it counts as activity.",
@@ -81,12 +86,23 @@ pub(super) fn tool(
             ],
             &["text"],
         ),
+        MessageBoardTool::Append => (
+            "Store a post in an existing or new channel, or reply using the first post's message ID as thread_id. Exactly one destination is required. Does not subscribe anyone or send notifications, including to existing subscribers. Returns metadata, not the post text.",
+            &["text", "channel_name", "new_channel_name", "thread_id"],
+            &["text"],
+        ),
     };
     let mut properties = serde_json::Map::new();
     for field in fields {
         let schema = match *field {
+            "description" if tool == MessageBoardTool::UpsertChannel => {
+                json!({"type":"string","description":"Channel purpose, at most 512 UTF-8 bytes."})
+            }
             "description" => {
                 json!({"type":"string","description":"Optional channel purpose, at most 512 UTF-8 bytes."})
+            }
+            "new_channel_name" if tool == MessageBoardTool::Append => {
+                json!({"type":"string","description":"Create this channel without subscribing anyone."})
             }
             "new_channel_name" => {
                 json!({"type":"string","description":"Create and subscribe to this channel."})

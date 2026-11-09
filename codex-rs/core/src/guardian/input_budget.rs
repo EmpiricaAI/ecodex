@@ -6,8 +6,6 @@
 //! Loss telemetry describes accepted inputs, excluding feasibility checks and failed retries.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use codex_features::Feature;
@@ -33,15 +31,11 @@ use crate::session::turn::build_prompt;
 use crate::session::turn_context::TurnContext;
 
 #[derive(Clone)]
-pub(crate) struct PendingReviewContext(pub ComposedContext);
-
-/// Requests one bounded restart from the captured parent checkpoint when
-/// reviewer compaction invalidates the pending input. The flag belongs to this attempt.
-pub(super) struct CheckpointRecovery {
-    pub(super) requested: Arc<AtomicBool>,
-    pub(super) history_version: u64,
-    pub(super) fresh_parent_checkpoint: bool,
+pub(crate) struct PendingReviewContext {
+    pub context: ComposedContext,
 }
+
+pub(super) use codex_guardian_reviewer::CheckpointRecovery;
 
 /// Restart a reused reviewer before paying for a summary we would discard.
 /// A fresh checkpoint stays intact while final input selection makes the review fit.
@@ -84,14 +78,16 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
         codex_protocol::protocol::TruncationPolicy::Bytes(base.text.len()).token_budget();
     let maximum = effective_input_token_limit(turn.model_info(), turn.config.model_context_window)
         .saturating_sub(super::request_budget::INPUT_TOKEN_MARGIN);
-    let mut context = pending.0.clone();
+    let mut context = pending.context.clone();
     let history = session
         .clone_history()
         .await
-        .for_prompt_annotated(&turn.model_info().input_modalities);
-    context.retain_new_instructions(&history);
-    context
-        .retain_new_agent_messages(&history)
+        .for_prompt_annotated(
+            &turn.model_info().input_modalities,
+            session.services.image_store.as_ref(),
+        )
+        .await;
+    codex_guardian_context::prepare_sync_delivery(&mut context, &history)
         .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
     if context.estimated_tokens().saturating_add(minimum_prefix) > maximum {
         context
@@ -135,7 +131,7 @@ pub(crate) async fn finalize(
             "Guardian expects one review input".to_owned(),
         ));
     };
-    let mut context = pending.0.clone();
+    let mut context = pending.context.clone();
     let model = &step.settings.model_info;
     let history = session.clone_history().await;
     let recovery = session
@@ -151,12 +147,15 @@ pub(crate) async fn finalize(
         ));
     }
     let history_version = history.history_version();
-    let history = history.for_prompt_annotated(&model.input_modalities);
+    let history = history
+        .for_prompt_annotated(
+            &model.input_modalities,
+            session.services.image_store.as_ref(),
+        )
+        .await;
     // Use the history that will actually reach the model. Recompute after every
     // compaction retry; evidence removed by compaction must be delivered again.
-    context.retain_new_instructions(&history);
-    context
-        .retain_new_agent_messages(&history)
+    codex_guardian_context::prepare_sync_delivery(&mut context, &history)
         .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
     let prompt = build_prompt(
         history
@@ -289,14 +288,14 @@ pub(crate) async fn finalize(
             }
         }
         Err(codex_guardian_context::SectionError::UnsupportedDelivery {
-            section: "conversation_transcript",
+            section: "conversation_transcript" | "planned_action",
         }) => {
             *input = context
                 .into_annotated_messages()
                 .into_iter()
                 .map(|mut envelope| {
                     // Preserve the ordinary user-content annotations on each text segment;
-                    // native messages retain the original author, recipient and ciphertext.
+                    // native evidence retains its original identity and ciphertext.
                     if let ResponseItem::Message { role, content, .. } = &envelope.item
                         && role == "user"
                     {
@@ -368,7 +367,7 @@ pub(crate) async fn finalize(
         }
     }
     step.turn.extension_data.insert(RetainedReviewContext {
-        context: pending.0.retained_instructions(),
+        context: pending.context.retained_instructions(),
         history_version,
     });
     session

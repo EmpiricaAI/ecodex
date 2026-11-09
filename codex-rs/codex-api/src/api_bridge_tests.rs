@@ -11,6 +11,45 @@ fn map_api_error_maps_server_overloaded() {
     assert!(matches!(err.details(), CodexErrorDetails::ServerOverloaded));
 }
 
+#[tokio::test(start_paused = true)]
+async fn http_policy_capacity_preserves_retry_advice_and_terminal_behavior() {
+    use std::time::Duration;
+    for (code, expected) in [
+        (
+            "policy_capacity_unavailable",
+            CodexErrorInfo::PolicyCapacityUnavailable,
+        ),
+        ("server_is_overloaded", CodexErrorInfo::ServerOverloaded),
+    ] {
+        for advice in [RetryAfter::from_delay(Duration::from_secs(3)), None] {
+            let error = map_api_error(ApiError::Transport(TransportError::Http {
+                status: http::StatusCode::SERVICE_UNAVAILABLE,
+                url: None,
+                headers: None,
+                body: Some(
+                    serde_json::json!({"error": {
+                        "code": code, "type": "service_unavailable_error",
+                    }})
+                    .to_string(),
+                ),
+                retry_after: advice,
+            }));
+            assert_eq!(
+                (
+                    error.to_codex_protocol_error(),
+                    error.retry_after(),
+                    error.retry_delay(/*retry_count*/ 1)
+                ),
+                (
+                    expected.clone(),
+                    advice,
+                    advice.map(|_| Duration::from_secs(3))
+                )
+            );
+        }
+    }
+}
+
 #[test]
 fn map_api_error_preserves_content_filter_retry_and_public_error() {
     let err = map_api_error(ApiError::ContentFilter);
@@ -125,31 +164,49 @@ async fn http_retry_deadline_survives_mapping_and_respects_terminal_errors() {
 }
 
 #[test]
-fn map_api_error_distinguishes_capacity_from_slow_down() {
-    for (code, expected, retryable) in [
+fn map_http_error_classifies_provider_codes() {
+    use CodexErrorInfo::ModelNotFound;
+
+    for (status, code, expected, retryable) in [
         (
+            503,
             "server_is_overloaded",
             CodexErrorInfo::ServerOverloaded,
             false,
         ),
-        ("slow_down", CodexErrorInfo::RateLimitExceeded, true),
+        (503, "slow_down", CodexErrorInfo::RateLimitExceeded, true),
         (
+            503,
             "unknown_error",
             CodexErrorInfo::HttpConnectionFailed {
                 http_status_code: Some(503),
             },
             true,
         ),
+        (400, "model_not_found", ModelNotFound, false),
+        (403, "model_not_found", ModelNotFound, false),
+        (404, "model_not_found", ModelNotFound, false),
+        (
+            404,
+            "resource_not_found",
+            CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: Some(404),
+            },
+            true,
+        ),
     ] {
         let err = map_api_error(ApiError::Transport(TransportError::Http {
             retry_after: None,
-            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            status: http::StatusCode::from_u16(status).unwrap(),
             url: None,
             headers: None,
             body: Some(
                 serde_json::json!({"error": {"code": code, "message": "retry later"}}).to_string(),
             ),
         }));
+        if expected == ModelNotFound {
+            assert_eq!(err.http_status_code_value(), Some(status));
+        }
         assert_eq!(
             (
                 err.to_codex_protocol_error(),

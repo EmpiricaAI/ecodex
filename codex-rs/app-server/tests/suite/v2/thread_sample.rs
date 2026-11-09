@@ -16,6 +16,7 @@ use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadSampleCancelResponse;
 use codex_app_server_protocol::ThreadSampleParams;
 use codex_app_server_protocol::ThreadSampleResponse;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -304,6 +305,8 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             expected_turn_id: completed.turn.id.clone(),
             prompt: "Continue identically".to_string(),
             effort: Some(ReasoningEffort::Medium),
+            interrupt_on_cancel: Some(true),
+            thread_source: Some(ThreadSource::Feature("composer_predictions".to_string())),
             turn_trigger: Some("composer_predictions".to_string()),
             responsesapi_client_metadata: Some(HashMap::from([
                 (
@@ -390,6 +393,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             .header("x-codex-turn-metadata")
             .expect("turn metadata"),
     )?;
+    assert_eq!(metadata["thread_source"], "composer_predictions");
     assert_eq!(metadata["turn_trigger"], "composer_predictions");
     assert_eq!(metadata["generation_trigger"], "composer_prediction");
     let body_metadata: Value = serde_json::from_str(
@@ -513,6 +517,7 @@ async fn sample_preserves_effort_baseline(
             .header("x-codex-turn-metadata")
             .expect("turn metadata"),
     )?;
+    assert_eq!(metadata["thread_source"], "thread_sample");
     assert!(metadata.get("turn_trigger").is_none());
     Ok(())
 }
@@ -559,6 +564,7 @@ async fn sample_skips_inherited_stop_hooks() -> Result<()> {
     let list_id = client
         .send_hooks_list_request(HooksListParams {
             cwds: vec![home.path().to_path_buf()],
+            ..Default::default()
         })
         .await?;
     let hooks: HooksListResponse = client.read_response(list_id).await?;
@@ -773,14 +779,9 @@ async fn sample_blocks_mcp_execution_without_changing_parent_tools(
     let prefix = parent["input"].as_array().expect("parent input");
     let sample_input = sample["input"].as_array().expect("sample input");
     assert_eq!(&sample_input[..prefix.len()], prefix);
-    let removes_mcp = disable_mcp && incremental_tools;
-    assert_eq!(
-        sample_input[prefix.len()..].iter().any(|item| {
-            let text = item.to_string();
-            text.contains("namespaces are no longer available") && text.contains("mcp__sample_test")
-        }),
-        removes_mcp
-    );
+    assert!(!sample_input[prefix.len()..].iter().any(|item| {
+        item["type"] == "additional_tools" || item.to_string().contains("no longer available")
+    }));
     assert_eq!(sample, comparable_request(requests[3].body_json()));
     assert_eq!(
         requests[2].body_json()["tools"],

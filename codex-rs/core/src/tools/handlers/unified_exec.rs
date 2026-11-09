@@ -1,26 +1,67 @@
+use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
 use crate::shell::ShellInvocation;
 use crate::shell::get_shell_by_model_provided_path;
+use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_utils_path_uri::PathUri;
+use futures::future::BoxFuture;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[cfg(test)]
-use crate::tools::handlers::parse_arguments;
-
 mod exec_command;
+pub(crate) mod preparation;
 mod write_stdin;
 
 pub use exec_command::ExecCommandHandler;
 pub(crate) use exec_command::ExecCommandHandlerOptions;
 pub use write_stdin::WriteStdinHandler;
+
+/// Terminal tools expose the unified-exec process ID as `session_id`.
+pub(crate) fn terminal_session_for_input(
+    invocation: &ToolInvocation,
+) -> BoxFuture<'_, Result<ToolEnvironments, FunctionCallError>> {
+    #[derive(Deserialize)]
+    struct TerminalSessionArgs {
+        session_id: i32,
+    }
+
+    Box::pin(async move {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return Err(FunctionCallError::Fatal(
+                "expected function arguments for terminal session".to_string(),
+            ));
+        };
+        let args: TerminalSessionArgs = parse_arguments(arguments)?;
+        resolve_tool_environment(
+            &invocation.step_context.environments,
+            /*environment_id*/ None,
+        )?;
+        invocation
+            .session
+            .services
+            .unified_exec_manager
+            .resolve_terminal(args.session_id)
+            .await
+            .map(ToolEnvironments::Terminal)
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "{} failed: {err}",
+                    invocation.tool_name.name
+                ))
+            })
+    })
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
@@ -48,13 +89,25 @@ pub(crate) struct ExecCommandArgs {
 }
 
 #[derive(Debug, Deserialize)]
-struct ExecCommandEnvironmentArgs {
-    #[serde(default)]
-    environment_id: Option<String>,
+struct ExecCommandWorkdirArgs {
     // Keep this raw until after environment selection; relative paths must be
     // resolved against the selected environment cwd, not the process cwd.
     #[serde(default)]
     workdir: Option<String>,
+}
+
+impl ExecCommandWorkdirArgs {
+    /// Share cwd resolution between hooks and execution after environment selection.
+    fn resolve_cwd(&self, environment: &TurnEnvironment) -> Result<PathUri, FunctionCallError> {
+        self.workdir
+            .as_deref()
+            .filter(|workdir| !workdir.is_empty())
+            .map_or_else(
+                || Ok(environment.cwd().clone()),
+                |workdir| environment.cwd().join(workdir),
+            )
+            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
+    }
 }
 
 fn default_exec_yield_time_ms() -> u64 {
@@ -87,6 +140,7 @@ fn post_unified_exec_tool_use_payload(
     let tool_use_id = result.post_tool_use_id(&invocation.call_id);
     let tool_response = result.post_tool_use_response(&tool_use_id, &invocation.payload)?;
     Some(PostToolUsePayload {
+        tool_cwd: result.post_tool_use_cwd(),
         tool_name: HookToolName::bash(),
         tool_use_id,
         tool_input,

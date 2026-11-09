@@ -39,6 +39,13 @@ pub enum ApiError {
     RateLimit(String),
     #[error("invalid request: {message}")]
     InvalidRequest { message: String },
+    #[error("{message}")]
+    InvalidAudioInput { message: String },
+    #[error("{message}")]
+    ModelNotFound {
+        message: String,
+        status: Option<StatusCode>,
+    },
     #[error("invalid prompt: {message}")]
     InvalidPrompt { message: String },
     #[error("cyber policy: {message}")]
@@ -52,6 +59,9 @@ pub enum ApiError {
     },
     #[error("Flex capacity unavailable.")]
     FlexUnavailable,
+    /// Server-confirmed capacity failure on a policy-restricted route.
+    #[error("policy-restricted capacity unavailable")]
+    PolicyCapacityUnavailable { retry_after: Option<RetryAfter> },
     #[error("server overloaded")]
     ServerOverloaded { retry_after: Option<RetryAfter> },
 }
@@ -62,9 +72,46 @@ impl From<RateLimitError> for ApiError {
     }
 }
 
-pub(crate) fn parse_flex_unavailable(error: &Value) -> Option<ApiError> {
-    (error.get("code").and_then(Value::as_str) == Some("flex_unavailable"))
-        .then_some(ApiError::FlexUnavailable)
+pub(crate) fn parse_terminal_provider_error(
+    error: Option<&Value>,
+    status: Option<StatusCode>,
+) -> Option<ApiError> {
+    let error = error?;
+    let code = error.get("code")?.as_str()?;
+    match (code, status) {
+        (
+            "audio_too_large"
+            | "audio_too_short"
+            | "invalid_audio"
+            | "invalid_audio_data"
+            | "invalid_audio_format"
+            | "missing_audio_sample_rate",
+            None | Some(StatusCode::BAD_REQUEST),
+        ) => Some(ApiError::InvalidAudioInput {
+            message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .filter(|message| !message.trim().is_empty())
+                .unwrap_or("Invalid audio input.")
+                .to_owned(),
+        }),
+        ("flex_unavailable", None | Some(StatusCode::TOO_MANY_REQUESTS)) => {
+            Some(ApiError::FlexUnavailable)
+        }
+        (
+            "model_not_found",
+            None | Some(StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
+        ) => Some(ApiError::ModelNotFound {
+            message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .filter(|message| !message.trim().is_empty())
+                .unwrap_or(code)
+                .to_owned(),
+            status,
+        }),
+        _ => None,
+    }
 }
 
 impl From<crate::AuthError> for ApiError {

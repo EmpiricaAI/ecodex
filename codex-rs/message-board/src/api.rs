@@ -45,6 +45,15 @@ pub trait AgentMessageBoard: Send + Sync {
         request: CreateChannelRequest,
     ) -> BoxFuture<'_, Result<ChannelSummary>>;
 
+    /// Creates a channel or replaces only its description. Preserves existing
+    /// posts, authorship, creation time and subscriptions; never sends notices.
+    /// Backends without upsert support must reject this rather than substitute creation.
+    fn upsert_channel(
+        &self,
+        caller: ThreadId,
+        request: UpsertChannelRequest,
+    ) -> BoxFuture<'_, Result<()>>;
+
     fn list_channels(
         &self,
         caller: ThreadId,
@@ -56,6 +65,15 @@ pub trait AgentMessageBoard: Send + Sync {
     /// different input is an error; a successful retry returns the same metadata.
     /// Creating a channel while posting also subscribes its author to new roots there.
     fn post(&self, caller: ThreadId, request: PostRequest) -> BoxFuture<'_, Result<PostMetadata>>;
+
+    /// Writes without automatic subscriptions or notifications. Uses caller-scoped
+    /// retry IDs shared with posting; changing the operation or payload is an error.
+    /// Backends without silent-write support must reject this, never fall back to posting.
+    fn append(
+        &self,
+        caller: ThreadId,
+        request: AppendRequest,
+    ) -> BoxFuture<'_, Result<PostMetadata>>;
 
     fn list_threads(
         &self,
@@ -128,6 +146,14 @@ pub struct CreateChannelRequest {
     pub subscription: SubscriptionChange,
 }
 
+/// Creates or updates navigation metadata without changing stored evidence or delivery.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpsertChannelRequest {
+    pub channel_name: String,
+    pub description: ChannelDescription,
+}
+
 /// A channel purpose containing at most 512 UTF-8 bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String")]
@@ -181,6 +207,21 @@ pub struct PostRequest {
     pub text: String,
     /// Resolved paths in this board's tree; duplicates notify only once.
     pub agents_to_notify: Vec<AgentPath>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PostBehavior {
+    Discussion,
+    SilentAppend,
+}
+
+/// Request to append evidence without subscribing its author or notifying anyone.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppendRequest {
+    /// Caller-scoped invocation identity, shared with posting to reject conflicting retries.
+    pub request_id: String,
+    pub destination: PostDestination,
+    pub text: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

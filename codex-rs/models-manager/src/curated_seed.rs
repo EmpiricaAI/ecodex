@@ -458,7 +458,6 @@ pub fn enrich(mut template: ModelInfo, e: &CuratedEntry) -> ModelInfo {
     let _ = e.supports_tools;
     // A curated entry is, by definition, a recognized model — suppress the
     // "fallback model metadata" warning the way the family table does.
-    template.used_fallback_model_metadata = false;
     template
 }
 

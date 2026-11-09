@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
       - name: Validate tag matches Cargo.toml version
         shell: bash
         run: |
@@ -59,8 +59,7 @@ jobs:
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    # Parallel Bazel artifacts are advisory while Cargo remains the release path.
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
+    # Release Cargo artifacts only while Bazel releases are disabled.
     runs-on: ${{ matrix.runner }}
     environment:
       name: bazel
@@ -84,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo, bazel]
+        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
@@ -96,50 +95,50 @@ jobs:
             target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
 
     steps:
@@ -183,7 +182,7 @@ jobs:
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           targets: ${{ matrix.build-system == 'cargo' && matrix.target || '' }}
 
@@ -327,7 +326,8 @@ jobs:
         shell: bash
         env:
           APP_TARGET: ${{ matrix.target }}
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Use local Bazel while BuildBuddy credentials are unavailable.
+          BUILDBUDDY_API_KEY: ""
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -398,9 +398,9 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
-            # Both variants package the host, but only the primary bundle publishes
+            # Both variants package the host and executor; only the primary publishes
             # standalone binary archives to avoid duplicate release asset names.
-            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+            if [[ "${{ matrix.bundle }}" == "app-server" && ( "$binary" == "codex-code-mode-host" || "$binary" == "codex-exec-server" ) ]]; then
               continue
             fi
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
@@ -442,6 +442,12 @@ jobs:
           artifacts-dir: ${{ github.workspace }}/codex-rs/dist/${{ matrix.target }}
           binaries: codex-package-${{ matrix.target }}.tar.gz codex-package-${{ matrix.target }}.tar.zst
 
+      - name: Set up Python release tools
+        if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' && runner.os != 'macOS' }}
+        uses: ./.github/actions/setup-python-release-tools
+        with:
+          group: runtime
+
       - name: Build Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' && runner.os != 'macOS' }}
         shell: bash
@@ -466,11 +472,6 @@ jobs:
               exit 1
               ;;
           esac
-
-          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
-          # Do not install into the runner's system Python; macOS runners mark
-          # the Homebrew Python as externally managed under PEP 668.
-          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
 
           # Keep the existing manylinux_2_17 wheel compatible with older glibc.
           # GNU voice libraries belong in the signed release package archives,
@@ -500,7 +501,8 @@ jobs:
             --platform-tag "$platform_tag"
           )
           python3 "${stage_runtime_args[@]}"
-          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+          uv build --offline --no-build-isolation --no-create-gitignore \
+            --python "${RUNNER_TEMP}/python-runtime-build-venv" --wheel --out-dir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' && runner.os != 'macOS' }}
@@ -604,7 +606,8 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           PREFIX: ${{ matrix.prefix }}
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          # Use local Bazel while BuildBuddy credentials are unavailable.
+          BUILDBUDDY_API_KEY: ""
         run: |
           set -euo pipefail
           # Release tags bump Cargo.toml without rewriting the workspace lockfile.
@@ -635,7 +638,6 @@ jobs:
     needs: [build, build-macos-voice]
     if: ${{ always() && needs.build.result == 'success' && needs.build-macos-voice.result == 'success' }}
     name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment:
@@ -651,7 +653,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo, bazel]
+        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
@@ -660,19 +662,19 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -881,7 +883,6 @@ jobs:
   package-macos:
     needs: sign-macos-binaries
     name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: macos-15-xlarge
     timeout-minutes: 45
     permissions:
@@ -896,7 +897,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo, bazel]
+        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
@@ -905,22 +906,22 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
 
     steps:
@@ -999,9 +1000,9 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
-            # Both variants package the host, but only the primary bundle publishes
+            # Both variants package the host and executor; only the primary publishes
             # standalone binary archives to avoid duplicate release asset names.
-            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+            if [[ "${{ matrix.bundle }}" == "app-server" && ( "$binary" == "codex-code-mode-host" || "$binary" == "codex-exec-server" ) ]]; then
               continue
             fi
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
@@ -1081,6 +1082,12 @@ jobs:
           path: codex-rs/target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg
           if-no-files-found: error
 
+      - name: Set up Python release tools
+        if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' }}
+        uses: ./.github/actions/setup-python-release-tools
+        with:
+          group: runtime
+
       - name: Build Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' }}
         shell: bash
@@ -1099,9 +1106,6 @@ jobs:
               exit 1
               ;;
           esac
-
-          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
-          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
 
           # The wheel keeps its macOS 10.9/11 tags. The native voice build
           # currently targets macOS 14, so keep it in the release archives and
@@ -1130,7 +1134,8 @@ jobs:
             "$wheel_archive" \
             --codex-version "${GITHUB_REF_NAME}" \
             --platform-tag "$platform_tag"
-          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+          uv build --offline --no-build-isolation --no-create-gitignore \
+            --python "${RUNNER_TEMP}/python-runtime-build-venv" --wheel --out-dir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' }}
@@ -1165,7 +1170,6 @@ jobs:
   sign-macos-dmg:
     needs: package-macos
     name: Sign macOS DMG - ${{ matrix.target }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment:
@@ -1181,7 +1185,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo, bazel]
+        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
@@ -1270,7 +1274,6 @@ jobs:
       - package-macos
       - sign-macos-dmg
     name: Verify macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: macos-15-xlarge
     timeout-minutes: 30
     permissions:
@@ -1285,7 +1288,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo, bazel]
+        build-system: [cargo] # Bazel releases are disabled while the BuildBuddy key is revoked.
         target:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
@@ -1294,22 +1297,22 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             verify_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             verify_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             verify_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             verify_dmg: "false"
 
     steps:
@@ -1370,6 +1373,15 @@ jobs:
             normalized_actual="$(mktemp)"
             normalized_expected="$(mktemp)"
             codesign -d --entitlements :- "$path" >"$actual_entitlements"
+            # An omitted entitlement blob is valid only when the expected plist is empty.
+            python3 - "$expected_entitlements" "$actual_entitlements" <<'PY'
+          import plistlib
+          import sys
+          from pathlib import Path
+          expected, actual = map(Path, sys.argv[1:])
+          if not actual.stat().st_size and plistlib.loads(expected.read_bytes()) == {}:
+              actual.write_bytes(expected.read_bytes())
+          PY
             plutil -convert xml1 -o "$normalized_actual" "$actual_entitlements"
             plutil -convert xml1 -o "$normalized_expected" "$expected_entitlements"
             diff -u "$normalized_expected" "$normalized_actual"
@@ -1380,9 +1392,9 @@ jobs:
             binary_path="${RUNNER_TEMP}/signed-binaries/${binary}"
             verify_signed_binary "$binary_path" "$binary"
 
-            # The app-server package contains the host, but its standalone archives
+            # The app-server package contains both helpers, but their standalone archives
             # are omitted above to avoid duplicate release asset names.
-            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+            if [[ "${{ matrix.bundle }}" == "app-server" && ( "$binary" == "codex-code-mode-host" || "$binary" == "codex-exec-server" ) ]]; then
               continue
             fi
 
@@ -1418,6 +1430,7 @@ jobs:
           tar -xzf "${packaged_dir}/${package_stem}-${target}.tar.gz" -C "$package_dir"
           verify_signed_binary "${package_dir}/bin/${package_entrypoint}" "$package_entrypoint"
           verify_signed_binary "${package_dir}/bin/codex-code-mode-host" "codex-code-mode-host"
+          verify_signed_binary "${package_dir}/bin/codex-exec-server" "codex-exec-server"
 
           for resource in \
             "${package_dir}/codex-path/rg"
@@ -1573,7 +1586,7 @@ jobs:
       - name: Setup Node.js for npm packaging
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -1665,7 +1678,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
-          pattern: "{{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc}{,-bazel},*-symbols{,-bazel},argument-comment-lint-*,python-runtime-wheel-*,npm-packages}"
+          pattern: "{{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc},*-symbols,argument-comment-lint-*,python-runtime-wheel-*,npm-packages}"
 
       - name: Download verified provisioned macOS packages
         if: vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
@@ -1887,8 +1900,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
-          node-version: 24
+          # Trusted publishing requires the selected Node.js release to include npm >= 11.5.1.
+          node-version-file: .nvmrc
           registry-url: "https://registry.npmjs.org"
           scope: "@openai"
 

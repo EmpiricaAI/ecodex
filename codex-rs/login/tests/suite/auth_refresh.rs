@@ -281,6 +281,14 @@ async fn account_grant_tracks_refresh_replacement_and_logout() -> Result<()> {
             .unwrap_or_default()
             .is_empty()
     );
+    // Inspection must complete even with an IdP lease held and a refresh queued.
+    // Unlike inspection, the exchange above must still exclude refresh.
+    let inspected = ctx
+        .auth_manager
+        .account_oauth_grant()
+        .await?
+        .context("account inspection during refresh exclusion")?;
+    assert_eq!(inspected.tokens(), &initial_tokens);
     // No await between clearing the flag and release: this wake must come from the lease.
     refresh_wake.0.store(false, Ordering::SeqCst);
     let grant = lease.release();
@@ -385,6 +393,7 @@ async fn account_grant_tracks_refresh_replacement_and_logout() -> Result<()> {
         AuthKeyringBackendKind::default(),
     )?;
     assert!(grant.current_tokens().await?.is_none());
+    assert!(ctx.auth_manager.account_oauth_grant().await?.is_none());
     assert!(
         !ctx.auth_manager
             .account_login_is_current(&cached_auth)
@@ -1699,6 +1708,23 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
 
     let mut recovery = ctx.auth_manager.unauthorized_recovery();
     assert!(recovery.has_next());
+
+    std::fs::write(ctx.codex_home.path().join("auth.json"), "")?;
+    let error = recovery.next().await.expect_err("auth read should fail");
+    assert!(matches!(error, RefreshTokenError::Transient(_)));
+    assert_eq!(
+        ctx.auth_manager
+            .auth_cached()
+            .expect("read failure must preserve cached auth")
+            .get_token_data()?,
+        initial_tokens
+    );
+    save_auth(
+        ctx.codex_home.path(),
+        &disk_auth,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
 
     recovery.next().await?;
 

@@ -18,9 +18,21 @@ use uuid::Uuid;
 
 const PAGE_SIZE: u32 = 10;
 
+// Pair each row with its batched receipt before buffering or merging source pages.
+fn listed_threads(page: ThreadListResponse) -> impl Iterator<Item = (Thread, bool)> {
+    page.data.into_iter().map(move |thread| {
+        let unread = page
+            .read_states
+            .as_ref()
+            .and_then(|states| states.get(&thread.id))
+            .is_some_and(|state| state.first_unread.is_some());
+        (thread, unread)
+    })
+}
+
 pub(crate) async fn list_pinned_threads(
     handle: &AppServerRequestHandle,
-) -> Result<Option<Vec<Thread>>, String> {
+) -> Result<Option<Vec<(Thread, bool)>>, String> {
     let mut threads = Vec::new();
     for source_kinds in [
         Vec::new(),
@@ -36,6 +48,7 @@ pub(crate) async fn list_pinned_threads(
                         originators: None,
                         cursor: cursor.clone(),
                         limit: Some(100),
+                        attached_to_thread_id: None,
                         sort_key: Some(ThreadSortKey::SectionPosition),
                         sort_direction: None,
                         model_providers: Some(Vec::new()),
@@ -53,10 +66,11 @@ pub(crate) async fn list_pinned_threads(
                 .await;
             match result {
                 Ok(page) => {
-                    threads.extend(page.data.into_iter().filter(|thread| {
+                    let next_cursor = page.next_cursor.clone();
+                    threads.extend(listed_threads(page).filter(|(thread, _)| {
                         is_overview_thread(thread) && supports_shared_pinning(&thread.source)
                     }));
-                    let Some(next_cursor) = page.next_cursor else {
+                    let Some(next_cursor) = next_cursor else {
                         break;
                     };
                     cursor = Some(next_cursor);
@@ -92,7 +106,7 @@ pub(super) fn supports_shared_pinning(source: &SessionSource) -> bool {
 #[derive(Clone, Debug)]
 struct SourcePage {
     cursor: Option<String>,
-    rows: VecDeque<Thread>,
+    rows: VecDeque<(Thread, bool)>,
     exhausted: bool,
     sort_key: ThreadSortKey,
 }
@@ -124,7 +138,7 @@ impl AgentsOverviewDiscovery {
         &mut self,
         handle: &AppServerRequestHandle,
         limit: usize,
-    ) -> (Vec<Thread>, bool) {
+    ) -> (Vec<(Thread, bool)>, bool) {
         let [interactive, other] = &mut self.sources;
         let (left, right) = tokio::join!(
             interactive.fill(handle, Vec::new()),
@@ -139,7 +153,9 @@ impl AgentsOverviewDiscovery {
                 .sources
                 .iter()
                 .enumerate()
-                .filter_map(|(index, source)| source.rows.front().map(|row| (index, row)))
+                .filter_map(|(index, source)| {
+                    source.rows.front().map(|(thread, _)| (index, thread))
+                })
                 .max_by(|(_, left), (_, right)| {
                     left.recency_at
                         .unwrap_or(left.updated_at)
@@ -171,6 +187,7 @@ impl SourcePage {
                     request_id: RequestId::String(Uuid::new_v4().to_string()),
                     params: ThreadListParams {
                         excluded_thread_ids: None,
+                        attached_to_thread_id: None,
                         originators: None,
                         cursor: self.cursor.clone(),
                         limit: Some(PAGE_SIZE),
@@ -200,9 +217,10 @@ impl SourcePage {
                 }
                 Ok(page) => {
                     self.exhausted = page.next_cursor.is_none();
-                    self.cursor = page.next_cursor;
-                    self.rows
-                        .extend(page.data.into_iter().filter(is_overview_thread));
+                    self.cursor = page.next_cursor.clone();
+                    self.rows.extend(
+                        listed_threads(page).filter(|(thread, _)| is_overview_thread(thread)),
+                    );
                     return true;
                 }
                 Err(error) => {

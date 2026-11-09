@@ -6,6 +6,7 @@ mod spec;
 
 use self::selection::MessageBoardTool;
 use crate::AgentMessageBoard;
+use crate::AppendRequest;
 use crate::ChannelQuery;
 use crate::CreateChannelRequest;
 use crate::PageRequest;
@@ -168,6 +169,11 @@ impl BoardTool {
             }
         };
         match self.tool {
+            MessageBoardTool::UpsertChannel => {
+                let request = serde_json::from_str(raw).map_err(model_error)?;
+                self.check_mutation_budget(budget, /*target_path_bytes*/ 0)?;
+                encode(board.upsert_channel(caller, request).await)
+            }
             MessageBoardTool::CreateChannel => {
                 let arguments::CreateChannel {
                     channel_name,
@@ -351,14 +357,25 @@ impl BoardTool {
                         .await,
                 )
             }
-            MessageBoardTool::Post => {
+            MessageBoardTool::Post | MessageBoardTool::Append => {
                 let arguments::Post {
                     text,
                     channel_name,
                     new_channel_name,
                     thread_id,
                     agents_to_notify,
-                } = serde_json::from_str(raw).map_err(model_error)?;
+                } = if self.tool == MessageBoardTool::Append {
+                    let args: arguments::Append = serde_json::from_str(raw).map_err(model_error)?;
+                    arguments::Post {
+                        text: args.text,
+                        channel_name: args.channel_name,
+                        new_channel_name: args.new_channel_name,
+                        thread_id: args.thread_id,
+                        agents_to_notify: None,
+                    }
+                } else {
+                    serde_json::from_str(raw).map_err(model_error)?
+                };
                 self.check_mutation_budget(budget, /*target_path_bytes*/ 0)?;
                 let destination = match (channel_name, new_channel_name, thread_id) {
                     (Some(channel), None, None) => PostDestination::Channel(channel),
@@ -378,12 +395,24 @@ impl BoardTool {
                         runtime_tool_call_id,
                     } => format!("{cell_id}:{runtime_tool_call_id}"),
                 };
-                encode(
+                let request_id = format!("{}:{invocation}", call.turn_id);
+                encode(if self.tool == MessageBoardTool::Append {
+                    board
+                        .append(
+                            caller,
+                            AppendRequest {
+                                request_id,
+                                destination,
+                                text,
+                            },
+                        )
+                        .await
+                } else {
                     board
                         .post(
                             caller,
                             PostRequest {
-                                request_id: format!("{}:{invocation}", call.turn_id),
+                                request_id,
                                 destination,
                                 text,
                                 agents_to_notify: agents_to_notify
@@ -394,8 +423,8 @@ impl BoardTool {
                                     .map_err(model_error)?,
                             },
                         )
-                        .await,
-                )
+                        .await
+                })
             }
         }
     }
