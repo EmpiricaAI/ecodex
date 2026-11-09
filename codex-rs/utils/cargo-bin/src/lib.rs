@@ -42,6 +42,11 @@ pub enum CargoBinError {
 /// This helper allows callers to transparently support both.
 #[allow(deprecated)]
 pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
+    // ecodex: the CLI binary is named `ecodex` (cli/Cargo.toml), while upstream's
+    // tests spawn it as "codex" at about a hundred call sites. Resolve the upstream
+    // name to ours here, once, so those tests run the binary that was actually
+    // built instead of whatever stale `codex` happens to sit in the target dir.
+    let name = if name == "codex" { "ecodex" } else { name };
     let env_keys = cargo_bin_env_keys(name);
     for key in &env_keys {
         if let Some(value) = std::env::var_os(key) {

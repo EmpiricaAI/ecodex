@@ -3426,6 +3426,7 @@ mod tests {
                 )),
                 &workspace_roots,
                 "local-model".to_string(),
+                /*model_provider*/ None,
                 Some(ReasoningEffort::High),
                 Some(ReasoningSummary::Detailed),
                 Some(Some("local-service-tier".to_string())),
