@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.167.0] - 2026-11-10
+
 ### Added
 - **The plugin records when codex asks a person to approve a call.** `hooks.json` wires `PermissionRequest` to a new ecodex-owned `permission-request.py`, which writes one `permission_request` line to the decision record that empirica core 1.14.22 keeps in `.empirica/decisions.jsonl`. Codex never tells a hook what the person answered, so the script prints nothing and cannot decide for them; core infers approved or denied from what followed in the same turn and marks the answer inferred. With an older or missing core it does nothing. Four tests in `tests/vendored_hooks` cover it.
 - **`scripts/setup-codex.py` brings along the new `hooks/lib` files a vendored hook imports.** Until now a new lib file was only listed as "NEW upstream", so a hook that gained an import of it updated and then failed at import on codex seats until someone copied the file by hand (`hook_vintage.py` was the case). The script now reads the imports of every vendored hook with `ast`, follows imports between new lib files, copies exactly those, and reports them under "ADDED because a vendored hook imports them"; every other new upstream file is still only reported, and retired files are still never offered. `scripts/test_setup_codex.py` covers it.
@@ -1146,7 +1148,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.2...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...HEAD
+[0.167.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...v0.167.0
 [0.164.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.1...v0.164.2
 [0.164.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.0...v0.164.1
 [0.164.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.160.5...v0.164.0

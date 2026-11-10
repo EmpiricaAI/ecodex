@@ -30,20 +30,21 @@ Alpha. **`main` tracks upstream codex 0.164** (synced from the stable `rust-v0.1
 
 `main` is the canonical branch and carries all active work. Upstream `openai/codex` is tracked through the `upstream` remote; stable upstream tags are merged in periodically. The CLI is daily-driven by the ecodex team.
 
-## What's New in 0.164.2
+## What's New in 0.167.0
 
-- **Changing directory and forking into a worktree work again in sessions that load the empirica plugin.** Both were refused since the 0.164 base.
-- **Release gates as a skill.** `pre-publish` runs the ordered release sequence, including an independent read-only review of the changes, with ecodex's own release steps beside it.
-- **Forecasting as a skill.** `forecast` turns "what comes next" into graded predictions, each with its evidence and the observation that would prove it wrong.
-- **A lighter constitution.** The framework skill the model read at every session start shrank from about 3,300 words to an index of about 550; its depth moved to three skills read when needed.
-- **Hooks from core 1.14.15.** The memory swap, which lends a session the memory of the project it moves into and restores it on the way back, now works and is off unless `EMPIRICA_MEMORY_SWAP=1` is set. A proposal addressed to several practices now closes when each has acknowledged its part, which replaces Shared Epistemic Records.
+- The plugin records when codex asks a person to approve a call
+- `scripts/setup-codex.py` brings along the new `hooks/lib` files a vendored hook imports
+- README's What's New and What's Coming are generated and checked
+- The quality sweep reports to Empirica
+- A nightly workflow runs what is too slow or too broad for every push
+- Upstream codex rust-v0.167.0 folded in
 
-All 7 entries for this release are in the [CHANGELOG](CHANGELOG.md).
+Plus 12 more entries in the [CHANGELOG](CHANGELOG.md).
 
 **Earlier releases**
 
+- **0.164.2** — Changing directory and forking into a worktree work again in sessions that load the empirica plugin. Both were refused since the 0.164 base.
 - **0.164.1** — Empirica hooks re-vendored from core 1.14.13
-- **0.164.0** — Upstream base is codex 0.164.0
 
 ## What's Coming
 
