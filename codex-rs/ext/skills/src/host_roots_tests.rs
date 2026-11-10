@@ -343,6 +343,7 @@ async fn hugging_face_cli_skill_in_global_agents_root_is_discovered() {
         Some(&home_folder),
         Vec::new(),
         Vec::new(),
+        /*empty_remote_roots*/ None,
     )
     .await;
     let outcome = load_and_merge_host_skill_roots(
