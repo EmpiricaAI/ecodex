@@ -110,5 +110,10 @@ def test_an_entry_without_a_reason_is_refused(monkeypatch, tmp_path) -> None:
 
 
 def test_the_checked_in_list_is_well_formed() -> None:
+    # The list may be empty (nothing accepted today); what must hold is that
+    # the checked-in file parses and every entry it does carry is complete.
     entries = audit.load_accepted(audit.DEFAULT_ACCEPTED)
-    assert entries, "the accept list exists and is not empty"
+    assert isinstance(entries, dict)
+    for entry_id, entry in entries.items():
+        assert entry_id.startswith("RUSTSEC-"), entry_id
+        assert all(str(entry.get(f, "")).strip() for f in audit._ENTRY_FIELDS), entry_id
