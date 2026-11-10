@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.167.1] - 2026-11-10
+
 ### Fixed
 - **The release binary compiles again.** v0.167.0's `release.yml` build failed on every target: `codex-tui`'s update check (`tui/src/updates.rs`, release-profile-only code under `cfg(not(debug_assertions))`) matched on `UpdateAction` without upstream's new `StandaloneWindows` variant, so the tag's binaries were never produced and no v0.167.0 assets exist. The Windows standalone channel now reads the latest ecodex GitHub release like the other channels. CI's "Check the shipped binary compiles" step now also checks the binary with debug assertions off (`--config 'profile.dev.debug-assertions=false'`), which compiles that code and fails on the missing arm: `cargo check`, `cargo test`, CI and the nightly all compiled the dev profile only. (`cargo check --release` is not used for the gate: on Rust 1.95.0 it stops in `codex-core` with "queries overflow the depth limit" while computing the layout of an async fn body, which the real release build does not hit.)
 
@@ -1154,7 +1156,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.1...HEAD
+[0.167.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...v0.167.1
 [0.167.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...v0.167.0
 [0.164.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.1...v0.164.2
 [0.164.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.0...v0.164.1

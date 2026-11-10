@@ -30,21 +30,17 @@ Alpha. **`main` tracks upstream codex 0.164** (synced from the stable `rust-v0.1
 
 `main` is the canonical branch and carries all active work. Upstream `openai/codex` is tracked through the `upstream` remote; stable upstream tags are merged in periodically. The CLI is daily-driven by the ecodex team.
 
-## What's New in 0.167.0
+## What's New in 0.167.1
 
-- The plugin records when codex asks a person to approve a call
-- `scripts/setup-codex.py` brings along the new `hooks/lib` files a vendored hook imports
-- README's What's New and What's Coming are generated and checked
-- The quality sweep reports to Empirica
-- A nightly workflow runs what is too slow or too broad for every push
-- Upstream codex rust-v0.167.0 folded in
+- The release binary compiles again
+- Release binaries for macOS build on `macos-15` (arm64) and `macos-15-intel` (x86_64), fetching git dependencies with the system git
 
-Plus 12 more entries in the [CHANGELOG](CHANGELOG.md).
+The detail is in the [CHANGELOG](CHANGELOG.md).
 
 **Earlier releases**
 
+- **0.167.0** — The plugin records when codex asks a person to approve a call
 - **0.164.2** — Changing directory and forking into a worktree work again in sessions that load the empirica plugin. Both were refused since the 0.164 base.
-- **0.164.1** — Empirica hooks re-vendored from core 1.14.13
 
 ## What's Coming
 
