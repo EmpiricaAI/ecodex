@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [Unreleased]
 
 ### Changed
-- **Release binaries for macOS build on `macos-15`.** GitHub retired the `macos-14` hosted image on 2026-11-02; the v0.167.0 build had both macOS jobs cancelled at queue time ("The configuration 'macos-14-arm64-us-default' is not supported") while the Linux targets built, and the two macOS assets were produced by a second run of `release.yml` against the tag after this change. `x86_64-apple-darwin` still cross-compiles on the Apple Silicon runner; the label is pinned rather than `macos-latest`, which now means macOS 26.
+- **Release binaries for macOS build on `macos-15` (arm64) and `macos-15-intel` (x86_64), fetching git dependencies with the system git.** GitHub retired the `macos-14` hosted image on 2026-11-02; the v0.167.0 build had both macOS jobs cancelled at queue time ("The configuration 'macos-14-arm64-us-default' is not supported") while the Linux targets built. The first retry on `macos-15` failed again twice over: cargo's libgit2 could not fetch the `rusty_v8` git dependency's chromium submodule from googlesource on macOS (a dependency new since the 0.167.0 fold-in; Linux was unaffected), and the cross-compiled `x86_64-apple-darwin` job never got an arm64 runner under GitHub's capacity limits. The build step now sets `CARGO_NET_GIT_FETCH_WITH_CLI=true`, and `x86_64-apple-darwin` builds natively on the Intel runner, a separate capacity pool with 4 cores and 14 GB. The two macOS assets for v0.167.0 come from a run of `release.yml` against the tag after this change. Labels are pinned rather than `macos-latest`, which now means macOS 26.
 
 ## [0.167.0] - 2026-11-10
 
