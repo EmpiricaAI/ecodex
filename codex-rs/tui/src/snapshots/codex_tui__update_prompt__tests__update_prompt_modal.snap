@@ -7,8 +7,8 @@ expression: terminal.backend()
   Update available · 0.1.0 → 9.9.9
   Release notes: https://github.com/EmpiricaAI/ecodex/releases/latest
 
-› 1. Update now (runs `sh -c 'curl -fsSL https://raw.githubusercontent.com/     
-     EmpiricaAI/ecodex/main/scripts/install.sh | bash'`)                        
+› 1. Update now (runs `sh -c 's=$(curl -fsSL https://raw.githubusercontent.com/ 
+     EmpiricaAI/ecodex/main/scripts/install.sh) && eval "$s"'`)                 
   2. Skip
   3. Skip until next version
 
