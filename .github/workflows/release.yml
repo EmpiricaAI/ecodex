@@ -53,8 +53,11 @@ jobs:
           REQUESTED: ${{ inputs.targets }}
         run: |
           set -euo pipefail
-          # Runners: macos-14 = Apple Silicon standard hosted (x86_64-apple-darwin
-          # cross-compiles there; macos-13 Intel runners are scarce/deprecated);
+          # Runners: macos-15 = Apple Silicon standard hosted (x86_64-apple-darwin
+          # cross-compiles there). GitHub retired macos-14 on 2026-11-02; the
+          # v0.167.0 build had both macOS jobs cancelled at queue time with
+          # "The configuration 'macos-14-arm64-us-default' is not supported".
+          # macos-latest moved to macos-26, so the label is pinned, not latest.
           # ubuntu-22.04 = older glibc (2.35) host for broad forward-compat;
           # ubuntu-24.04-arm = native ARM hosted runner (GA).
           #
@@ -65,8 +68,8 @@ jobs:
           # into the tui phase before this cap. 2 jobs trades ~20 min for headroom.
           # macOS standard runners expose 3 cores; 3 is their default, stated explicitly.
           all='[
-            {"target": "aarch64-apple-darwin",      "runner": "macos-14",         "cargo_jobs": 3},
-            {"target": "x86_64-apple-darwin",       "runner": "macos-14",         "cargo_jobs": 3},
+            {"target": "aarch64-apple-darwin",      "runner": "macos-15",         "cargo_jobs": 3},
+            {"target": "x86_64-apple-darwin",       "runner": "macos-15",         "cargo_jobs": 3},
             {"target": "x86_64-unknown-linux-gnu",  "runner": "ubuntu-22.04",     "cargo_jobs": 2},
             {"target": "aarch64-unknown-linux-gnu", "runner": "ubuntu-24.04-arm", "cargo_jobs": 2}
           ]'
