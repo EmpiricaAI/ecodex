@@ -112,7 +112,8 @@ jobs:
         run: >-
           cargo nextest run -p codex-tui --no-fail-fast -E
           'not (test(=chatwidget::tests::bedrock_catalog_tests::bedrock_astra_model_and_reasoning_pickers)
-          | test(=chatwidget::tests::slash_commands::slash_daybreak_offers_an_application_when_unavailable))'
+          | test(=chatwidget::tests::slash_commands::slash_daybreak_offers_an_application_when_unavailable)
+          | test(=chatwidget::tests::slash_commands::slash_daybreak_custom_provider_requires_capability))'
 
       - name: Disk after the suites
         if: ${{ always() }}

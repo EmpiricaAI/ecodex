@@ -918,6 +918,11 @@ pub fn merge_gcp_provider_overrides(
     let http_headers = overrides.http_headers.take();
     let project_id = overrides.project_id.take();
     let location = overrides.location.take();
+    // ecodex: `supports_openai_builtin_tools` has a serde default of `true` but
+    // `Default` says otherwise, so a GCP override that omits it would never equal
+    // `ModelProviderInfo::default()`. It is not a GCP-tunable field; compare it at
+    // the derived default, as the Bedrock merge does above.
+    overrides.supports_openai_builtin_tools = ModelProviderInfo::default().supports_openai_builtin_tools;
     if overrides != ModelProviderInfo::default() {
         return Err(format!(
             "model_providers.{GCP_PROVIDER_ID} only supports changing \

@@ -30,7 +30,8 @@ pub enum UpdateAction {
     BrewUpgrade,
     /// Update via `cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli`.
     CargoInstall,
-    /// Update via `curl -fsSL .../scripts/install.sh | bash` (re-run, idempotent).
+    /// Update via `s=$(curl -fsSL .../scripts/install.sh) && eval "$s"` (re-run,
+    /// idempotent; a failed download runs nothing, which upstream's test checks).
     /// The CLI points the script at the running binary's directory through
     /// [`INSTALL_DIR_ENV_VAR`], so a custom `--prefix` install updates in place.
     StandaloneUnix,
@@ -103,7 +104,7 @@ impl UpdateAction {
                 "sh",
                 &[
                     "-c",
-                    "curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh | bash",
+                    r#"s=$(curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh) && eval "$s""#,
                 ],
             ),
             UpdateAction::StandaloneWindows => (
@@ -253,7 +254,7 @@ mod tests {
                 "sh",
                 &[
                     "-c",
-                    "curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh | bash"
+                    r#"s=$(curl -fsSL https://raw.githubusercontent.com/EmpiricaAI/ecodex/main/scripts/install.sh) && eval "$s""#
                 ][..],
             )
         );
@@ -271,7 +272,7 @@ mod tests {
     #[test]
     fn standalone_unix_update_fails_when_installer_download_fails() {
         let (command, args) = UpdateAction::StandaloneUnix.command_args();
-        let offline_command = args[1].replace("https://chatgpt.com", "file:///dev/null");
+        let offline_command = args[1].replace("https://raw.githubusercontent.com", "file:///dev/null");
         assert_ne!(offline_command, args[1], "installer URL must be replaced");
         let output = std::process::Command::new(command)
             .args([args[0], &offline_command])
