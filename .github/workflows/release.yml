@@ -96,7 +96,12 @@ jobs:
     name: ${{ matrix.target }}
     needs: plan
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180   # cold-cache release build incl. codex-code-mode-host's v8 dep is slow on 2-core runners; aarch64-apple-darwin needed >120 for v0.157.2
+    # GitHub's maximum for a hosted job. The macOS builds spend most of their
+    # time in the final thin-LTO/codegen tail: v0.164.2 took 133 min (x86_64)
+    # and 124 min (aarch64) on macos-14, and v0.167.1 ran past 180 min on both
+    # macos-15 runners with the compile phase done (1,035 crates in 64 min) and
+    # one rustc still linking. Linux finishes in about an hour.
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
