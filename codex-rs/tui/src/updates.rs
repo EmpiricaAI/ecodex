@@ -82,7 +82,10 @@ async fn check_for_update(
     let latest_version = match action {
         Some(UpdateAction::Daemon(_)) => return Ok(()),
         Some(
-            UpdateAction::BrewUpgrade | UpdateAction::CargoInstall | UpdateAction::StandaloneUnix,
+            UpdateAction::BrewUpgrade
+            | UpdateAction::CargoInstall
+            | UpdateAction::StandaloneUnix
+            | UpdateAction::StandaloneWindows,
         )
         | None => fetch_latest_github_release_version(&client_pool).await?,
     };

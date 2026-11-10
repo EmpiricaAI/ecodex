@@ -45,8 +45,13 @@ impl App {
         // ecodex: persist the provider the model routes to alongside it, so a
         // cross-provider pick in the picker survives a restart (None keeps it).
         let model_provider = crate::ecodex_curated_models::provider_for_model(&model);
-        self.persist_default_model_selection(app_server.request_handle(), model, effort, model_provider)
-            .await;
+        self.persist_default_model_selection(
+            app_server.request_handle(),
+            model,
+            effort,
+            model_provider,
+        )
+        .await;
     }
 
     pub(super) async fn persist_default_model_selection(

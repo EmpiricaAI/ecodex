@@ -327,7 +327,6 @@ impl ChatWidget {
                     }
                     .into_picker_event(sparkle_thread, model_for_action.clone()),
                 );
-
             }
             if let Some(warning) = warning.clone() {
                 tx.send(AppEvent::InsertHistoryCell(Box::new(

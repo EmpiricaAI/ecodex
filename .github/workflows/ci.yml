@@ -52,8 +52,19 @@ jobs:
       # The release ships the `ecodex` binary; the owned crates above do not
       # compile it. An ecodex change to a shared type (v0.157.8: a new field on
       # CuratedEntry) broke the binary after the tag because nothing here built it.
+      # The binary is checked a second time with debug assertions off, which
+      # is what compiles codex-tui's `cfg(not(debug_assertions))` update code.
+      # v0.167.0's binaries failed on every target with a non-exhaustive match
+      # there (upstream's new UpdateAction::StandaloneWindows) that cargo check,
+      # cargo test, this job and the nightly had all passed, because every one
+      # of them compiles the dev profile. The dev profile with the assertion
+      # cfg flipped is used rather than `cargo check --release`, which stops
+      # in codex-core with rustc's "queries overflow the depth limit" on 1.95.0
+      # (layout of an async fn body); the real release *build* does not.
       - name: Check the shipped binary compiles
-        run: cargo check -p codex-cli --bin ecodex
+        run: |
+          cargo check -p codex-cli --bin ecodex
+          cargo check -p codex-cli --bin ecodex --config 'profile.dev.debug-assertions=false'
 
       - name: Check Hugging Face integration contract
         working-directory: .
