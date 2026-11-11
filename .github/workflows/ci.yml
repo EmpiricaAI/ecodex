@@ -49,6 +49,14 @@ jobs:
       - name: Build + test owned crates
         run: cargo test -p codex-empirica-plugin -p codex-empirica-translator
 
+      # The same clippy gate scripts/broccoli.sh runs locally: the owned crates
+      # plus codex-cli, every target, no warnings. codex-cli's test target is
+      # not built by anything else here, and at 0.167.1 an upstream test in it
+      # named an UpdateAction variant ecodex does not have; only the local sweep
+      # saw it.
+      - name: Clippy gate (owned crates + codex-cli, all targets)
+        run: cargo clippy -p codex-empirica-plugin -p codex-empirica-translator -p codex-cli --all-targets --no-deps -- -D warnings
+
       # The release ships the `ecodex` binary; the owned crates above do not
       # compile it. An ecodex change to a shared type (v0.157.8: a new field on
       # CuratedEntry) broke the binary after the tag because nothing here built it.

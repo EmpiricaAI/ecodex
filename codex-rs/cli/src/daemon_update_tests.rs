@@ -5,17 +5,21 @@ use codex_tui::DaemonUpdateSource;
 use pretty_assertions::assert_eq;
 use std::os::unix::fs::PermissionsExt;
 
+// ecodex: upstream drives this through its npm/pnpm/bun registry channels, which
+// ecodex does not have. Homebrew is ecodex's package-manager channel, and the
+// non-Windows update path runs every non-daemon command from `/`, so the fake
+// `brew` must record a cwd outside the project.
 #[test]
 fn package_update_runs_outside_the_project() -> anyhow::Result<()> {
     const CHILD: &str = "CODEX_TEST_PACKAGE_UPDATE_CHILD";
     if std::env::var_os(CHILD).is_some() {
-        return run_update_action(UpdateAction::PnpmGlobalLatest, /*cli_executable*/ None);
+        return run_update_action(UpdateAction::BrewUpgrade, /*cli_executable*/ None);
     }
 
     let project = tempfile::tempdir()?;
     let bin = tempfile::tempdir()?;
     codex_utils_cargo_bin::write_executable(
-        &bin.path().join("pnpm"),
+        &bin.path().join("brew"),
         "#!/bin/sh\npwd -P > \"$0.cwd\"\n",
     )?;
     assert_cmd::Command::new(std::env::current_exe()?)
@@ -30,7 +34,7 @@ fn package_update_runs_outside_the_project() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    let cwd = std::fs::read_to_string(bin.path().join("pnpm.cwd"))?;
+    let cwd = std::fs::read_to_string(bin.path().join("brew.cwd"))?;
     assert!(!std::path::Path::new(cwd.trim_end()).starts_with(project.path().canonicalize()?));
     Ok(())
 }
