@@ -243,7 +243,39 @@ def _record_outcome(hook_input, outcome: str) -> None:
         record.record_outcome(hook_input, outcome)
 
 
+def _clear_pane_waiting() -> None:
+    """Clear this cockpit pane's waiting mark, if one is set (pane_waiting.py beside this hook). One stat when none is.
+
+    Claude Code has no hook for a permission dialog or a question being answered, so whatever the pane does next clears it. The
+    same function is copied into each hook that clears; tests/test_cockpit_pane_waiting.py keeps the copies identical."""
+    import os
+    from pathlib import Path
+
+    pane = os.environ.get("TMUX_PANE", "")
+    if not pane.startswith("%"):
+        return
+    try:
+        import zlib  # not hashlib: 1.8 ms to import on every hook call, against 0.05 ms
+
+        sock = os.environ.get("TMUX", "").split(",")[0]  # per tmux server: pane numbers repeat across servers
+        name = f"{zlib.crc32(sock.encode()):08x}_{pane[1:]}" if sock else pane[1:]
+        if not (Path.home() / ".empirica" / "pane_waiting" / name).exists():  # inside the try: a stat can raise
+            return
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_empirica_pane_waiting", Path(__file__).with_name("pane_waiting.py")
+        )
+        if spec is not None and spec.loader is not None:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.clear_if_waiting(pane)
+    except Exception:
+        pass
+
+
 def main():
+    _clear_pane_waiting()
     try:
         hook_input = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, EOFError):

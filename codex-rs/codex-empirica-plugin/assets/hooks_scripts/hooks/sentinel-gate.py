@@ -2380,6 +2380,8 @@ _TOOL_DANGEROUS_FLAGS: dict[str, frozenset[str]] = {
     "info": frozenset({"-o", "--output"}),
     "scc": frozenset({"-o", "--output"}),
     "sort": frozenset({"-o", "--output", "--compress-program"}),
+    # file -C compiles the magic file it is given and writes <name>.mgc
+    "file": frozenset({"-C", "--compile"}),
 }
 
 # awk family writes via print/printf > "file" INSIDE its program (the
@@ -2394,19 +2396,40 @@ _AWK_NAMES = frozenset({"awk", "gawk", "mawk", "nawk"})
 _SED_NAMES = frozenset({"sed", "gsed"})
 
 
+_SED_VALUE_LETTERS = frozenset("efl")  # -e SCRIPT, -f FILE, -l N: the value is attached or the next word
+_SED_LONG_VALUES = frozenset({"--expression", "--file", "--line-length"})
+
+
 def _sed_edits_in_place(stripped: str) -> bool:
-    """True if this sed invocation writes files rather than stdout."""
-    for tok in stripped.split()[1:]:
-        if not tok.startswith("-") or tok == "-":
-            break  # first non-flag token is the script; flags are done
+    """True if this sed invocation writes files rather than stdout.
+
+    Every word is scanned up to ``--``, not only those before the script: GNU getopt permutes, so ``sed 's/a/b/' -i f``
+    and ``sed -e 's/a/b/' -i f`` edit in place too. A value-taking flag's value is skipped, so ``-e 's/-i/x/'`` is not
+    read as ``-i``.
+    """
+    toks = _tool_tokens(stripped)[1:]
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        i += 1
         if tok == "--":
             break
         if tok.startswith("--"):
-            if tok.split("=", 1)[0] in ("--in-place", "--inplace"):
+            name, eq, _ = tok.partition("=")
+            if name in ("--in-place", "--inplace"):
                 return True
+            if name in _SED_LONG_VALUES and not eq:
+                i += 1
             continue
-        if "i" in tok[1:]:  # -i, -i.bak, -ni, -ni.bak
-            return True
+        if not tok.startswith("-") or tok == "-":
+            continue  # the script or a file operand
+        for j, letter in enumerate(tok[1:], start=1):
+            if letter == "i":  # -i, -i.bak, -ni, -ni.bak: the rest of the word is the suffix
+                return True
+            if letter in _SED_VALUE_LETTERS:
+                if j == len(tok) - 1:
+                    i += 1  # the value is the next word
+                break
     return False
 
 
@@ -5373,7 +5396,7 @@ def _check_postflight_loop_closed(
                         "only). Re-run `empirica preflight-submit -` ALONE, then run the rest.",
                     )
 
-            return ("deny", _closed_loop_message(tool_name, tool_input))
+            return _discipline_answer(tool_name, tool_input) or ("deny", _closed_loop_message(tool_name, tool_input))
     except (ValueError, TypeError):
         pass  # If timestamps can't be compared, continue with other checks
 
@@ -5662,6 +5685,16 @@ def _check_prior_investigate(
     prev_decision, prev_tx_id = prev_check
     if prev_decision != "investigate" or prev_tx_id == current_transaction_id:
         return None
+    # A transaction that ended in POSTFLIGHT closed its own investigation: what it found is recorded there. Without this the
+    # ask carried into every later transaction until a finding was logged, and asked on every praxic call (David,
+    # 2026-11-10: "Why am I being asked to confirm every run").
+    if (
+        prev_tx_id
+        and cursor.execute(
+            "SELECT 1 FROM reflexes WHERE transaction_id = ? AND phase = 'POSTFLIGHT' LIMIT 1", (prev_tx_id,)
+        ).fetchone()
+    ):
+        return None
 
     # If findings have been logged, INVESTIGATE is satisfied — allow everything
     cursor.execute(
@@ -5681,7 +5714,22 @@ def _check_prior_investigate(
     if tool_name == "Bash" and is_safe_bash_command(tool_input):
         return None  # Safe Bash is noetic
 
-    # Only genuinely praxic tools (Edit, Write, destructive Bash) get ask
+    # Only genuinely praxic tools (Edit, Write, destructive Bash) get ask, and once per transaction, as the docstring says:
+    # an "ask" is a permission prompt the person answers, so asking on every call made them confirm every run.
+    # With no transaction id there is nothing to key the answer to: "None" would let one answer cover every later
+    # transaction without an id (1.16.0 sweep), so those are asked each time, as before.
+    marker = Path.home() / ".empirica" / f"investigate_asked{_instance_suffix()}"
+    if current_transaction_id:
+        try:
+            if marker.read_text(encoding="utf-8").strip() == str(current_transaction_id):
+                return None
+        except OSError:
+            pass
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(str(current_transaction_id), encoding="utf-8")
+        except OSError:
+            pass
     return ("ask", "Previous CHECK returned INVESTIGATE. Consider running CHECK with proceed before praxic actions.")
 
 
@@ -5800,6 +5848,45 @@ def _check_project_context(cursor, db, session_id: str, preflight_project_id) ->
     )
 
 
+def _discipline_answer(tool_name: str, tool_input) -> tuple | None:
+    """Discipline mode's answer for a praxic call outside a transaction (empirica/core/sentinel_discipline.py), or None.
+
+    None keeps the refusal the caller was about to give: strict mode (chosen by setting; discipline is the default since 1.15.0), a
+    module that cannot be loaded, or any error. Settings are read only here, on the out-of-transaction branch, so a call inside
+    a transaction pays nothing for them.
+    """
+    global _decision_rule
+    try:
+        import importlib.util
+
+        decision_record = _decision_record()
+        if decision_record is None:
+            return None
+        path = Path(decision_record.__file__).with_name("sentinel_discipline.py")
+        spec = importlib.util.spec_from_file_location("_empirica_sentinel_discipline", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        hook_input = _record_input or {}
+        cwd = hook_input.get("cwd") or os.getcwd()
+        project = decision_record.project_path_for(hook_input.get("session_id"), cwd)
+        answer = module.decide(
+            tool_name,
+            tool_input,
+            cwd=cwd,
+            project_root=project,
+            suffix=_instance_suffix(),
+            empirica_is_read=empirica_command_only_reads,
+            transcript_path=hook_input.get("transcript_path"),
+        )
+        if answer is not None:
+            _decision_rule = "discipline-budget"
+        return answer
+    except Exception:
+        return None
+
+
 def _handle_no_preflight(tool_name: str, tool_input: dict, session_id: str, env_annotation: str) -> tuple:
     """Handle tool calls when no PREFLIGHT exists yet.
 
@@ -5837,6 +5924,9 @@ def _handle_no_preflight(tool_name: str, tool_input: dict, session_id: str, env_
                     pass
             return ("allow", f"Transition command (no PREFLIGHT yet - starting new cycle).{pre_tx_nudge}")
 
+    answer = _discipline_answer(tool_name, tool_input)
+    if answer is not None:
+        return answer
     return (
         "deny",
         f"No open transaction. Submit PREFLIGHT with your self-assessed vectors to begin measured work.{pre_tx_nudge}{env_annotation}",
@@ -6254,7 +6344,11 @@ def _handle_closed_transaction(tool_name: str, tool_input: dict) -> None:
     elif _is_noetic_tool(tool_name):
         respond("allow", "Noetic tool (transaction closed)")
         sys.exit(0)
-    # Praxic tool with closed transaction → correct error message
+    # Praxic tool with closed transaction → discipline mode's answer, else the correct error message
+    answer = _discipline_answer(tool_name, tool_input)
+    if answer is not None:
+        respond(*answer)
+        sys.exit(0)
     respond("deny", _closed_loop_message(tool_name, tool_input))
     sys.exit(0)
 

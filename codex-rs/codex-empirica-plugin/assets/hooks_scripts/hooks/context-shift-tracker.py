@@ -15,6 +15,7 @@ POSTFLIGHT reads counters for calibration; next-PREFLIGHT uses them for divergen
 
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -147,6 +148,37 @@ def _append_to_output(output, message):
         output["hookSpecificOutput"]["additionalContext"] = message
 
 
+# Whole words: as substrings, "plan" and "spec" fired on "explanation", "airplane", "inspect", "respect" and "special"
+# (goal 546e7c33). A nudge that fires on ordinary words trains the reader to skip it.
+_COMPLEX_WORK = re.compile(
+    r"\b(?:plan|plans|planning|implement|implementation|implementing|spec|specs|specification|transactions?"
+    r"|preflight|artifacts?|epistemic|decompose|complex|multi-step)\b|break this down|how should i approach",
+    re.IGNORECASE,
+)
+
+
+def _mark_plan_shaped(prompt: str) -> None:
+    """Keep the Sentinel's plan-shaped flag in step with the latest prompt (core/sentinel_discipline.py, goal 543fd1c6): in
+    discipline mode, planned or multi-step work gets no out-of-loop budget. Loaded by file path; never raises."""
+    try:
+        import importlib.util
+
+        from empirica.utils.session_resolver import InstanceResolver
+
+        spec = importlib.util.find_spec("empirica")
+        if spec is None or not spec.submodule_search_locations:
+            return
+        path = Path(next(iter(spec.submodule_search_locations))) / "core" / "sentinel_discipline.py"
+        module_spec = importlib.util.spec_from_file_location("_empirica_sentinel_discipline", path)
+        if module_spec is None or module_spec.loader is None:
+            return
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        module.mark_plan_shaped(InstanceResolver.instance_suffix(), bool(_COMPLEX_WORK.search(prompt)))
+    except Exception:
+        pass
+
+
 def _build_no_transaction_nudge(hook_input):
     """Build a skill nudge message when no active transaction exists."""
     skill_nudge = (
@@ -155,23 +187,8 @@ def _build_no_transaction_nudge(hook_input):
         "you are unsure which Empirica skill fits"
     )
 
-    user_prompt = hook_input.get("prompt", "").lower()
-    complex_work_signals = [
-        "plan",
-        "implement",
-        "spec",
-        "transaction",
-        "transactions",
-        "preflight",
-        "artifacts",
-        "epistemic",
-        "break this down",
-        "how should i approach",
-        "decompose",
-        "multi-step",
-        "complex",
-    ]
-    if any(signal in user_prompt for signal in complex_work_signals):
+    user_prompt = hook_input.get("prompt", "")
+    if _COMPLEX_WORK.search(user_prompt):
         skill_nudge += " | complex work detected — consider /epistemic-transaction for structured decomposition"
 
     return skill_nudge
@@ -341,9 +358,42 @@ def _refresh_presence(claude_session_id):
         pass
 
 
+def _clear_pane_waiting() -> None:
+    """Clear this cockpit pane's waiting mark, if one is set (pane_waiting.py beside this hook). One stat when none is.
+
+    Claude Code has no hook for a permission dialog or a question being answered, so whatever the pane does next clears it. The
+    same function is copied into each hook that clears; tests/test_cockpit_pane_waiting.py keeps the copies identical."""
+    import os
+    from pathlib import Path
+
+    pane = os.environ.get("TMUX_PANE", "")
+    if not pane.startswith("%"):
+        return
+    try:
+        import zlib  # not hashlib: 1.8 ms to import on every hook call, against 0.05 ms
+
+        sock = os.environ.get("TMUX", "").split(",")[0]  # per tmux server: pane numbers repeat across servers
+        name = f"{zlib.crc32(sock.encode()):08x}_{pane[1:]}" if sock else pane[1:]
+        if not (Path.home() / ".empirica" / "pane_waiting" / name).exists():  # inside the try: a stat can raise
+            return
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_empirica_pane_waiting", Path(__file__).with_name("pane_waiting.py")
+        )
+        if spec is not None and spec.loader is not None:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.clear_if_waiting(pane)
+    except Exception:
+        pass
+
+
 def main():
+    _clear_pane_waiting()
     hook_input = json.loads(sys.stdin.read() or "{}")
     claude_session_id = hook_input.get("session_id")
+    _mark_plan_shaped(str(hook_input.get("prompt") or ""))
 
     # Keep practitioner presence fresh each turn (the mesh active-state signal) —
     # best-effort, non-blocking. See _refresh_presence.

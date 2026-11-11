@@ -161,6 +161,7 @@ def _run_bootstrap(session_id: str, env: dict) -> tuple:
             "goals": (source.get("goals") or [])[:3],
             "findings": (source.get("findings") or [])[:5],
             "unknowns": (source.get("unknowns") or [])[:5],
+            "due": source.get("due") or [],
         }
         return bootstrap_data, project_context
     except json.JSONDecodeError:
@@ -807,6 +808,22 @@ def format_context(ctx: dict) -> str:
 
     parts = []
 
+    if ctx.get("due"):
+        try:  # the hook's interpreter can carry an older core than the `empirica` on PATH that produced ctx
+            from empirica.data.due import ANSWERS, due_lines
+
+            lines = [f"  - {line}" for line in due_lines(ctx["due"])]  # built first: a raise adds no half section
+            parts.append(f"**Due** ({ANSWERS}; raise these before asking what to work on):")
+            parts += lines
+        except Exception:
+            parts.append("**Due:**")
+            parts += [
+                f"  - {i.get('type')} {str(i.get('id'))[:8]} ({i.get('due_at')})"
+                for i in ctx["due"]
+                if isinstance(i, dict)
+            ]
+        parts.append("")
+
     if ctx.get("goals"):
         parts.append("**Active Goals:**")
         for g in ctx["goals"]:
@@ -868,6 +885,17 @@ def _foreign_owner_holds_pointer(
         return False
 
 
+def _headless_run() -> bool:
+    """Whether this session is a headless run (`claude -p`, an SDK call) rather than the pane's interactive conversation.
+
+    A headless run started inside a cockpit pane inherits the pane's instance id, and taking the instance pointer made
+    `refresh` resume the headless run instead of the pane's conversation (1.14.23 sweep). Claude Code names its entrypoint
+    in CLAUDE_CODE_ENTRYPOINT: `cli` for the interactive app, `sdk-*` for print mode and the SDKs. Any other value, or none,
+    reads as interactive, which is the behaviour before this check.
+    """
+    return os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk")
+
+
 def _write_instance_projects(project_path: str, claude_session_id: str, empirica_session_id: str) -> bool:
     """
     Write instance isolation files. Establishes linkage between Claude's
@@ -887,7 +915,9 @@ def _write_instance_projects(project_path: str, claude_session_id: str, empirica
         # directory, where the owner's transaction cannot be, so it never fired (nle took core's
         # pointer on 2026-09-29, 10-01 and 10-02). Our own session-keyed active_work is still
         # written below; only the shared instance pointer is left alone.
-        keep_owner_pointer = _foreign_owner_holds_pointer(instance_file, instance_id, claude_session_id, project_path)
+        keep_owner_pointer = (
+            _foreign_owner_holds_pointer(instance_file, instance_id, claude_session_id, project_path) or _headless_run()
+        )
 
         # Get TTY key if available
         tty_key = None
@@ -1732,7 +1762,12 @@ def _startup_notices(project_root: Path) -> str:
     it is what the banner's first line shows), then the cached deploy-gap verdict. Empty when there is nothing to say."""
     return "\n\n".join(
         part
-        for part in (_core_version_notice(), _classification_notice(project_root), _deploy_gap_block(project_root))
+        for part in (
+            _core_version_notice(),
+            _classification_notice(project_root),
+            _deploy_gap_block(project_root),
+            _practice_facts_notice(project_root),  # last: the banner shows only the first line of these notices
+        )
         if part
     )
 
@@ -1746,6 +1781,18 @@ def _classification_notice(project_root: Path) -> str:
         from empirica.core import project_types
 
         return project_types.classification_note(project_root)
+    except Exception:
+        return ""
+
+
+def _practice_facts_notice(project_root: Path) -> str:
+    """The practice's generated facts when its CLAUDE.md does not import them yet (core/practice_facts.py), else "".
+
+    Never raises: a core older than these hooks has no such module, and that must cost the notice, not SessionStart."""
+    try:
+        from empirica.core import practice_facts
+
+        return practice_facts.session_block(project_root)
     except Exception:
         return ""
 

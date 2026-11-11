@@ -62,16 +62,24 @@ IGNORE_PATTERNS = [
     "Temporary failure in name resolution",
 ]
 
-# Substrings that indicate the command actually DID its work before something else in
+# Output shapes that indicate the command actually DID its work before something else in
 # the same invocation failed. A partial success must never be recorded as an approach
 # that does not work.
+#
+# Each is the SHAPE the success takes, not a word from it: as bare substrings, "->" vetoed every Rust compile error
+# (`--> src/main.rs:2:5`) and any traceback quoting an annotated signature, "passed" vetoed "too many arguments passed",
+# and "Successfully" vetoed pip's "Successfully built x ... Failed to build y" (goal 546e7c33).
 SUCCESS_MARKERS = [
-    " -> ",  # git push refspec output
-    "->",
-    "files changed",
-    "Successfully",
-    "✅",
-    "passed",
+    re.compile(
+        r"^\s*\+?\s*[0-9a-f]{7,}\.\.\.?[0-9a-f]{7,}\s+\S+ -> \S+", re.M
+    ),  # git push: old..new or + old...new (forced)
+    re.compile(r"^\s*[*+] \[new (?:branch|tag)\]\s+\S+ -> \S+", re.M),  # git push of a new branch or tag
+    re.compile(r"\b\d+ files? changed\b"),  # git commit / diff --stat
+    re.compile(
+        r"\bSuccessfully (?:installed|uninstalled|tagged|created|pushed|deployed|published|updated|merged|rebased)\b"
+    ),
+    re.compile(r"\b\d+ passed\b"),  # pytest's summary line
+    re.compile("\u2705"),
 ]
 
 # The CLI reports its own success as JSON. A result that says `"ok": true` is work that landed whatever the process exit
@@ -95,7 +103,7 @@ def _is_interesting_failure(tool_name: str, error: str) -> bool:
         return False
     # If the output shows the work landed, the command did not fail in the sense that
     # matters — something later in the same invocation did.
-    if any(marker in error for marker in SUCCESS_MARKERS):
+    if any(marker.search(error) for marker in SUCCESS_MARKERS):
         return False
     if _OK_TRUE.search(error) and not _OK_FALSE.search(error):
         return False
@@ -239,7 +247,39 @@ def _record_outcome(hook_input, outcome: str) -> None:
         record.record_outcome(hook_input, outcome)
 
 
+def _clear_pane_waiting() -> None:
+    """Clear this cockpit pane's waiting mark, if one is set (pane_waiting.py beside this hook). One stat when none is.
+
+    Claude Code has no hook for a permission dialog or a question being answered, so whatever the pane does next clears it. The
+    same function is copied into each hook that clears; tests/test_cockpit_pane_waiting.py keeps the copies identical."""
+    import os
+    from pathlib import Path
+
+    pane = os.environ.get("TMUX_PANE", "")
+    if not pane.startswith("%"):
+        return
+    try:
+        import zlib  # not hashlib: 1.8 ms to import on every hook call, against 0.05 ms
+
+        sock = os.environ.get("TMUX", "").split(",")[0]  # per tmux server: pane numbers repeat across servers
+        name = f"{zlib.crc32(sock.encode()):08x}_{pane[1:]}" if sock else pane[1:]
+        if not (Path.home() / ".empirica" / "pane_waiting" / name).exists():  # inside the try: a stat can raise
+            return
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_empirica_pane_waiting", Path(__file__).with_name("pane_waiting.py")
+        )
+        if spec is not None and spec.loader is not None:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.clear_if_waiting(pane)
+    except Exception:
+        pass
+
+
 def main():
+    _clear_pane_waiting()
     try:
         hook_input = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, EOFError):
