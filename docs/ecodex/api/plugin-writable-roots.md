@@ -68,6 +68,11 @@ At session bootstrap, codex:
    network policy.
 5. Threads that profile through every `TurnContext` and `SandboxAttempt`
    spawned for the rest of the session.
+6. Remembers the merged roots on the session configuration, so a permission
+   profile chosen mid-session (the TUI's `/permissions`, a turn that names a
+   profile) is projected with the same carve-outs. Before this, such a change
+   rebuilt the profile from config alone and the plugin's state became
+   unwritable until the next session.
 
 The merge is **a structural no-op for unrestricted and external-sandbox
 profiles** — only `Restricted` (workspace-write equivalent) profiles consume

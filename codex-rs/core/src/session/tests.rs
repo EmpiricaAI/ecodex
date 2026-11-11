@@ -4668,6 +4668,7 @@ async fn set_rate_limits_retains_previous_credits() {
         originator: "test_originator".to_string(),
         dynamic_tools: Arc::default(),
         user_shell_override: None,
+        plugin_writable_roots: Vec::new(),
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -4791,6 +4792,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         originator: "test_originator".to_string(),
         dynamic_tools: Arc::default(),
         user_shell_override: None,
+        plugin_writable_roots: Vec::new(),
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -5357,6 +5359,45 @@ async fn session_settings_legacy_fast_service_tier_update_uses_priority_request_
     );
 }
 
+// ecodex: a permission profile chosen mid-session is projected from config,
+// which knows nothing of the writable roots the enabled plugins declared at
+// startup. The configuration remembers them and the projection re-applies them,
+// so the empirica plugin's `~/.empirica` stays writable after `/permissions`.
+#[tokio::test]
+async fn permission_profile_change_keeps_plugin_writable_roots() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    // Outside cwd and outside the temp dirs a workspace-write profile already
+    // covers; the policy check is lexical, so the path need not exist.
+    let plugin_root =
+        AbsolutePathBuf::from_absolute_path("/srv/ecodex-plugin-state").expect("absolute path");
+    let cwd = session_configuration.legacy_fallback_cwd.clone();
+    session_configuration.plugin_writable_roots = vec![plugin_root.clone()];
+
+    let chosen = PermissionProfile::workspace_write();
+    assert!(
+        !chosen
+            .file_system_sandbox_policy()
+            .can_write_local_path_with_cwd(plugin_root.as_path(), cwd.as_path()),
+        "the chosen profile must not already cover the plugin root"
+    );
+
+    let updated = session_configuration
+        .apply(
+            &SessionSettingsUpdate {
+                permission_profile: Some(chosen),
+                ..Default::default()
+            },
+            &[],
+        )
+        .expect("profile change applies");
+    assert!(
+        updated
+            .file_system_sandbox_policy(&[])
+            .can_write_local_path_with_cwd(plugin_root.as_path(), cwd.as_path()),
+        "the plugin root must stay writable after the profile change"
+    );
+}
+
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let config = build_test_config(codex_home.path()).await;
@@ -5416,6 +5457,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         originator: "test_originator".to_string(),
         dynamic_tools: Arc::default(),
         user_shell_override: None,
+        plugin_writable_roots: Vec::new(),
     }
 }
 
@@ -7069,6 +7111,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         originator: "test_originator".to_string(),
         dynamic_tools: Arc::default(),
         user_shell_override: None,
+        plugin_writable_roots: Vec::new(),
     };
     let session_telemetry = session_telemetry(
         thread_id,
@@ -7395,6 +7438,7 @@ async fn make_session_with_config_and_rx(
         originator: "test_originator".to_string(),
         dynamic_tools: Arc::default(),
         user_shell_override: None,
+        plugin_writable_roots: Vec::new(),
     };
 
     let (tx_event, rx_event) = async_channel::unbounded();
@@ -7532,6 +7576,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         originator: "test_originator".to_string(),
         dynamic_tools: Arc::default(),
         user_shell_override: None,
+        plugin_writable_roots: Vec::new(),
     };
 
     let (tx_event, rx_event) = async_channel::unbounded();
@@ -9404,6 +9449,7 @@ where
         originator: "test_originator".to_string(),
         dynamic_tools: Arc::from(dynamic_tools),
         user_shell_override: None,
+        plugin_writable_roots: Vec::new(),
     };
     let session_telemetry = session_telemetry(
         thread_id,

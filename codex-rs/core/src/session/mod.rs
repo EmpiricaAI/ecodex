@@ -1000,6 +1000,7 @@ impl Session {
             originator,
             dynamic_tools: Arc::from(dynamic_tools),
             user_shell_override,
+            plugin_writable_roots: Vec::new(),
         };
         session_configuration
             .validate(&environment_selections)
@@ -1015,6 +1016,14 @@ impl Session {
         let plugin_outcome = plugins_manager
             .plugins_for_config(&config.plugins_config_input())
             .await;
+        // Remembered on the configuration so a permission profile chosen
+        // mid-session is projected with the same roots (session.rs,
+        // set_permission_profile_projection).
+        session_configuration.plugin_writable_roots = plugin_outcome
+            .effective_plugin_writable_roots()
+            .into_iter()
+            .map(|src| src.root)
+            .collect();
         let current_permissions = session_configuration.permission_profile_state.snapshot();
         if let Some(enriched) = enrich_permission_profile_with_plugin_writable_roots(
             current_permissions.permission_profile(),

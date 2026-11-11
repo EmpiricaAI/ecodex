@@ -146,6 +146,12 @@ pub(crate) struct SessionConfiguration {
     pub(super) thread_name: Option<String>,
     /// Thread-owned plugin selection inherited by future turns.
     pub(super) disabled_plugin_ids: Vec<String>,
+    /// ecodex: the writable roots the enabled plugins declared, as merged into
+    /// the session's permission profile at startup. A permission profile chosen
+    /// mid-session is projected from config without them, so the projection
+    /// re-applies this list; otherwise a plugin's cross-cwd state (empirica's
+    /// `~/.empirica`) becomes unwritable for the rest of the session.
+    pub(super) plugin_writable_roots: Vec<AbsolutePathBuf>,
 
     // TODO(pakrym): Remove config from here
     pub(super) original_config_do_not_use: Arc<Config>,
@@ -619,6 +625,15 @@ impl SessionConfiguration {
         if let Some(existing_file_system_policy) = preserve_deny_reads_from {
             file_system_sandbox_policy
                 .preserve_deny_read_restrictions_from(existing_file_system_policy);
+        }
+        // ecodex: keep the plugin-declared writable roots across a profile
+        // change. The merge skips roots the new profile already lets through,
+        // so it is a no-op for unrestricted profiles.
+        if !self.plugin_writable_roots.is_empty() {
+            file_system_sandbox_policy = file_system_sandbox_policy.with_additional_writable_roots(
+                self.legacy_fallback_cwd.as_path(),
+                &self.plugin_writable_roots,
+            );
         }
         let effective_permission_profile =
             PermissionProfile::from_runtime_permissions_with_enforcement(
