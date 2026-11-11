@@ -111,7 +111,7 @@ Every channel ends up the same. You put the binaries on your `PATH`, and the fir
 
 Non-developers should use the install script or Homebrew: prebuilt binaries for macOS and Linux, no Rust toolchain. The cargo and source-build channels compile the workspace (10–25 min). With cargo, also run `cargo install codex-empirica-plugin codex-empirica-translator` so the hooks and the translator are there.
 
-The plugin's hooks run under the [empirica](https://github.com/EmpiricaAI/empirica) CLI. The install script, Homebrew and the source build install it for you when it is missing; with cargo or a bare tarball, run `pipx install empirica`.
+The plugin's hooks run under the [empirica](https://github.com/EmpiricaAI/empirica) CLI. The install script, Homebrew and the source build install it for you when it is missing; with cargo or a bare tarball, run `pipx install 'empirica[api]'` (the `[api]` extra is the local mesh server that several practices on one machine use without a Cortex).
 
 [`docs/ecodex/INSTALL.md`](docs/ecodex/INSTALL.md) covers what the first session writes, updating, uninstalling and troubleshooting.
 

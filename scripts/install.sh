@@ -105,17 +105,20 @@ case ":${PATH}:" in
   *) info "NOTE: ${INSTALL_DIR} is not on your PATH. Add:  export PATH=\"${INSTALL_DIR}:\$PATH\"" ;;
 esac
 # --- empirica CLI (the plugin's hooks shell out to it) ------------------------
+# The [api] extra carries the local mesh server (`empirica serve`), which several
+# practices on one machine use to hand work to each other when no Cortex is
+# configured; without it, provision-practice refuses the local-server step.
 if command -v empirica >/dev/null 2>&1; then
   :
 elif command -v pipx >/dev/null 2>&1; then
-  info "installing the empirica CLI (pipx install empirica)…"
-  pipx install empirica >/dev/null || info "WARNING: pipx install empirica failed — run it yourself"
+  info "installing the empirica CLI (pipx install 'empirica[api]')…"
+  pipx install 'empirica[api]' >/dev/null || info "WARNING: pipx install 'empirica[api]' failed — run it yourself"
 elif command -v uv >/dev/null 2>&1; then
-  info "installing the empirica CLI (uv tool install empirica)…"
-  uv tool install empirica >/dev/null || info "WARNING: uv tool install empirica failed — run it yourself"
+  info "installing the empirica CLI (uv tool install 'empirica[api]')…"
+  uv tool install 'empirica[api]' >/dev/null || info "WARNING: uv tool install 'empirica[api]' failed — run it yourself"
 else
   info "NOTE: the empirica CLI is missing and neither pipx nor uv is available."
-  info "      Install it with:  pipx install empirica   (the plugin's hooks need it)"
+  info "      Install it with:  pipx install 'empirica[api]'   (the plugin's hooks need it)"
 fi
 
 cat <<'EOF'

@@ -12,7 +12,14 @@ plugin.
 - **The `empirica` CLI.** The plugin's hooks run under it, so the Sentinel needs
   it. The install script, Homebrew and the source build set it up for you (with
   `pipx` or `uv` when it is missing). With cargo or a bare tarball, install it
-  yourself: `pipx install empirica`.
+  yourself: `pipx install 'empirica[api]'`.
+- **For several practices on one machine.** The `[api]` extra carries the local
+  mesh server (`empirica serve`): with no Cortex configured, the practices on a
+  machine hand work to each other through it, and `empirica provision-practice`
+  starts it as a user service. Retrieval across practices (`project-search`, the
+  session-start recall) needs one Qdrant server and one ollama embedding model
+  per machine, shared by every practice; empirica's own install guide covers
+  setting those up. A configured Cortex replaces the local server.
 - **A Rust toolchain** ([rustup.rs](https://rustup.rs/), stable) only for the
   cargo and source-build channels.
 
@@ -62,7 +69,7 @@ and the empirica CLI too:
 cargo install --git https://github.com/EmpiricaAI/ecodex codex-cli
 cargo install codex-empirica-plugin       # the hooks cannot run without it; ecodex warns if it is missing
 cargo install codex-empirica-translator   # for Mistral, DeepSeek, Qwen, GLM and Kimi
-pipx install empirica
+pipx install 'empirica[api]'
 ```
 
 ### Source build
