@@ -90,7 +90,9 @@ items:
     falsifier: With ecodex 0.167.2 and the newest released empirica core installed, a POSTFLIGHT run after scripts/broccoli.sh passes reports no code-quality source or no test source.
     horizon: "0.167.2"
     steered: true
-    status: predicted
+    status: shipped
+    resolved_in: "0.167.1"
+    reason: Graded at 0.167.1 with core 1.15.1 installed. After a fresh sweep, the POSTFLIGHT's grounded verification listed code quality among its sources and carried the owned-crate test report (104 passed, runner broccoli.sh) as its test evidence; core files every test report under the historical source name pytest with the runner in the item itself, which is why the test half looked missing at first.
     revisions:
       - "on": "2026-11-11"
         from: 0.9

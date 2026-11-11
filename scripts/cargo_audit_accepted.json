@@ -1,4 +1,33 @@
 {
   "about": "Shipped advisories ecodex accepts until upstream codex moves the dependency (scripts/scoped_cargo_audit.py). Each needs a semver-major bump in an upstream crate; re-check at every upstream sync and remove an entry once the audit no longer reports it (a stale entry fails the gate).",
-  "accepted": []
+  "accepted": [
+    {
+      "id": "RUSTSEC-2026-0487",
+      "crate": "hickory-proto",
+      "reason": "Panic on a malformed alpn value when parsing SVCB or HTTPS records from text. Fixed in hickory-proto >=0.26.2; ecodex has 0.25.2 through hickory-resolver 0.25 <- rama-dns 0.3.0-alpha.4, upstream codex's rama stack, which neither manifest pins; cargo update locks 0 packages. ecodex parses no DNS zone text or SVCB records of its own.",
+      "recorded": "2026-11-12",
+      "recheck": "each upstream sync (still 0.25.2 at rust-v0.167.0)"
+    },
+    {
+      "id": "RUSTSEC-2026-0489",
+      "crate": "hickory-proto",
+      "reason": "Panic when an SVCB or HTTPS parameter value is a single quote character. Fixed in hickory-proto >=0.26.2; same dependency path as RUSTSEC-2026-0487.",
+      "recorded": "2026-11-12",
+      "recheck": "each upstream sync (still 0.25.2 at rust-v0.167.0)"
+    },
+    {
+      "id": "RUSTSEC-2026-0490",
+      "crate": "hickory-proto",
+      "reason": "Zone file lexer panics on a token of 4096 or more characters. Fixed in hickory-proto >=0.26.2; same dependency path as RUSTSEC-2026-0487; ecodex reads no zone files.",
+      "recorded": "2026-11-12",
+      "recheck": "each upstream sync (still 0.25.2 at rust-v0.167.0)"
+    },
+    {
+      "id": "RUSTSEC-2026-0491",
+      "crate": "hickory-proto",
+      "reason": "Memory amplification from record counts in the DNS message header. Fixed in hickory-proto >=0.26.2; same dependency path as RUSTSEC-2026-0487. The resolver answers only the HTTP client's lookups against the configured resolvers.",
+      "recorded": "2026-11-12",
+      "recheck": "each upstream sync (still 0.25.2 at rust-v0.167.0)"
+    }
+  ]
 }
