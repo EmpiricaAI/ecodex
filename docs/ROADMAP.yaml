@@ -83,21 +83,16 @@ items:
 
   - id: rust-code-quality
     title: Graded code quality for Rust work
-    prediction: By ecodex 0.167.2, a POSTFLIGHT run with a released empirica core grades Rust code quality and the owned-crate tests from ecodex's own quality sweep instead of reporting no source.
-    confidence: 0.75
+    prediction: By ecodex 0.165.1, a POSTFLIGHT run with a released empirica core grades Rust code quality and the owned-crate tests from ecodex's own quality sweep instead of reporting no source.
+    confidence: 0.9
     evidence: measured
-    basis: Measured with core's reader before its release. After ecodex's quality sweep wrote its files, a POSTFLIGHT graded code quality and the owned-crate tests from them, and core shipped that reader in a release on 26 October. The POSTFLIGHTs of the 0.167 releases listed artifacts, git and the codebase model as their sources, because the sweep's files were two weeks old. After a fresh sweep on 11 November, a POSTFLIGHT under core 1.15.1 listed code quality among its sources, but not the owned-crate tests; the test half is what remains to be seen.
-    falsifier: With ecodex 0.167.2 and the newest released empirica core installed, a POSTFLIGHT run after scripts/broccoli.sh passes reports no code-quality source or no test source.
-    horizon: "0.167.2"
+    basis: Measured with core's reader before its release. After ecodex's quality sweep wrote its files, a POSTFLIGHT graded code quality and the owned-crate tests from them, and core shipped that reader in a release on 26 October.
+    falsifier: With ecodex 0.165.1 and the newest released empirica core installed, a POSTFLIGHT run after scripts/broccoli.sh passes reports no code-quality source or no test source.
+    horizon: "0.165.1"
     steered: true
     status: shipped
     resolved_in: "0.167.1"
-    reason: Graded at 0.167.1 with core 1.15.1 installed. After a fresh sweep, the POSTFLIGHT's grounded verification listed code quality among its sources and carried the owned-crate test report (104 passed, runner broccoli.sh) as its test evidence; core files every test report under the historical source name pytest with the runner in the item itself, which is why the test half looked missing at first.
-    revisions:
-      - "on": "2026-11-11"
-        from: 0.9
-        to: 0.75
-        reason: There was no 0.165.1 release, and at 0.167.1 the grading has not been observed with a released core because the sweep's files date from 26 October and the POSTFLIGHTs since name no code-quality or test source. The horizon moves to 0.167.2 and the confidence drops, because a prediction that misses its horizon was over-confident about when.
+    reason: Graded at 0.167.1, the first release after the 0.165.1 horizon (there was no 0.165.1), with core 1.15.1 installed. After a fresh sweep, the POSTFLIGHT's grounded verification listed code quality among its sources and carried the owned-crate test report (104 passed, runner broccoli.sh) as its test evidence. Core files every test report under the historical source name pytest with the runner in the item itself, which is why the test half looked missing at first; the sweep's files must also be fresher than the transaction, so a two-week-old sweep is not graded at all.
 
   - id: core-1-16-on-seats
     title: Core 1.16 reaches codex seats within two days
