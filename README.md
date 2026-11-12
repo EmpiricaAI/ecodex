@@ -30,17 +30,21 @@ Alpha. **`main` tracks upstream codex 0.164** (synced from the stable `rust-v0.1
 
 `main` is the canonical branch and carries all active work. Upstream `openai/codex` is tracked through the `upstream` remote; stable upstream tags are merged in periodically. The CLI is daily-driven by the ecodex team.
 
-## What's New in 0.167.1
+## What's New in 0.167.2
 
-- The release binary compiles again
-- Release binaries for macOS build on `macos-15` (arm64) and `macos-15-intel` (x86_64), fetching git dependencies with the system git
+- Plugin writable roots survive a permission-profile change
+- Four `hickory-proto` 0.25.2 advisories accepted
+- Empirica hooks re-vendored from core 1.16.0
+- The installer sets up `empirica[api]`
+- The forecast is re-made at 0.167.1
+- CI runs the owned-crate clippy gate
 
-The detail is in the [CHANGELOG](CHANGELOG.md).
+Plus 1 more entries in the [CHANGELOG](CHANGELOG.md).
 
 **Earlier releases**
 
+- **0.167.1** — The release binary compiles again
 - **0.167.0** — The plugin records when codex asks a person to approve a call
-- **0.164.2** — Changing directory and forking into a worktree work again in sessions that load the empirica plugin. Both were refused since the 0.164 base.
 
 ## What's Coming
 

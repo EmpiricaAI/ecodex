@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.167.2] - 2026-11-12
+
 ### Fixed
 - **Plugin writable roots survive a permission-profile change.** A profile chosen mid-session (the TUI's `/permissions`, a turn that names a profile) was projected from config without the roots the enabled plugins declare, so from that point the sandbox refused the empirica plugin's writes to `~/.empirica` and the discipline went dark until the next session, while the session still reported the same profile. The session configuration now remembers the roots it was enriched with at startup and the projection re-applies them (a no-op where the new profile already allows them). A test changes the profile with a root-declaring configuration and checks the root stays writable.
 
@@ -1169,7 +1171,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.1...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.2...HEAD
+[0.167.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.1...v0.167.2
 [0.167.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...v0.167.1
 [0.167.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...v0.167.0
 [0.164.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.164.1...v0.164.2
