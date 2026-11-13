@@ -1,5 +1,12 @@
 # EXP-SHADOW corpus design — ecodex's leg of the prevention-value experiment
 
+> **Status note, 2026-11-13.** Shared Epistemic Records (SERs) no longer exist:
+> empirica core removed them in 1.14.14 in favour of proposals with several
+> targets, where each practitioner acks its own part and the proposal closes when
+> all have. The SER references below are kept as the record of how this design
+> was coordinated when it was written; the convergence it waited on and the
+> routing step in §6 now run as a multi-target proposal to the same practices.
+
 **Status:** DRAFT for SER convergence, not yet run. Written 2026-08-11.
 **Owner:** ecodex practice. **Scopes:** goal `63be9970-c314-47f3-a265-82e862440988`.
 **Serves:** SER `ser_c2c87f7d63154258b59a14e4` (prevention-value base-rate

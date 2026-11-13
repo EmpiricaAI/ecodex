@@ -1,5 +1,10 @@
 # Handoff — drive ecodex-lab (next session, post-compact)
 
+> **Status note, 2026-11-13.** This is the handoff as written on 2026-06-03 and
+> is kept as a record. Shared Epistemic Records (SERs), named under Loose ends,
+> no longer exist: empirica core removed them in 1.14.14 in favour of proposals
+> with several targets.
+
 **Written 2026-06-03, end of a long ecodex session. Read this + `ecodex-lab-design.md` first; everything below is verified-current, not aspirational.**
 
 ## One-line state

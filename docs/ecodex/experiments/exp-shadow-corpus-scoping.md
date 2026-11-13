@@ -1,5 +1,11 @@
 # EXP-SHADOW pilot corpus — subject selection + spin-up automation
 
+> **Status note, 2026-11-13.** Shared Epistemic Records (SERs) no longer exist:
+> empirica core removed them in 1.14.14 in favour of proposals with several
+> targets. The SER convergence this page builds on is the record of how Q1 to Q3
+> were settled at the time; the pilot's results in §4 go back to core as a
+> multi-target proposal, not through an SER.
+
 **Status:** SCOPING for pilot execution. Follows
 [`prevention-value-exp-shadow-design.md`](prevention-value-exp-shadow-design.md)
 and its SER convergence (Q1 `window_s` per-corpus pre-registered, Q2 fresh
