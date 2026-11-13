@@ -32,7 +32,9 @@ items:
     falsifier: At the 0.167.2 tag, the README or a page under docs/ecodex names a skill that is not bundled in that tag, leaves a bundled skill out of a list that presents itself as complete, calls a skill a framework skill when its bundled SKILL.md is not pinned (or the reverse), or describes Shared Epistemic Records as a mechanism ecodex still uses.
     horizon: "0.167.2"
     steered: true
-    status: predicted
+    status: dropped
+    resolved_in: "0.167.2"
+    reason: Graded at 0.167.2. The skills half held, since the skills page names the sixteen bundled skills and the two framework skills exactly as the tag ships them. The Shared Epistemic Records half did not, since three dated experiment designs under docs/ecodex/experiments still route their next steps through such a record, and the release went out without touching them. The basis was true when written, so this is a bet that missed its second horizon, not a wrong premise. The pages get a dated status note on main rather than a third horizon.
     revisions:
       - "on": "2026-11-11"
         from: 0.8
@@ -74,7 +76,9 @@ items:
     falsifier: In 0.167.2, a session that changes its permission profile mid-session cannot write to ~/.empirica, or no test changes the profile with a root-declaring plugin loaded.
     horizon: "0.167.2"
     steered: true
-    status: predicted
+    status: shipped
+    resolved_in: "0.167.2"
+    reason: Graded at 0.167.2. The writable roots the plugin declares when a session starts are now applied again whenever a permission profile is chosen mid-session, and a test changes the profile with a root-declaring plugin loaded and checks that the root survives, using a directory the sandbox policy itself would not have covered. The end-to-end write to ~/.empirica after a live profile change was not exercised in a running session; the test stands in for it.
     revisions:
       - "on": "2026-11-11"
         from: 0.7
@@ -103,7 +107,9 @@ items:
     falsifier: More than two days pass between core's 1.16.0 release on GitHub and ecodex's v0.167.2 release, or in v0.167.2 an apply_patch that only adds or edits files inside the practice is refused by the Sentinel outside a transaction in discipline mode.
     horizon: "0.167.2"
     steered: true
-    status: predicted
+    status: shipped
+    resolved_in: "0.167.2"
+    reason: Graded at 0.167.2. Core released 1.16.0 on 11 November at 23:19 UTC and ecodex published 0.167.2 on 12 November at 14:56 UTC, fifteen and a half hours later, with its hooks re-vendored from that core tag. A seat test ran the vendored hooks against codex's own apply_patch payloads outside a transaction in discipline mode. A patch adding a file inside the practice passed as the first of three allowed acts and a second add as the second, while a delete and a write outside the practice were refused. Planned goals take a due date through the installed core's command line.
 
   - id: binaries-within-six-hours
     title: Every release ships all four binaries within six hours
