@@ -1038,9 +1038,13 @@ def _load_dynamic_context(session_id: str, ai_id: str, pre_snapshot: dict) -> di
             """
             SELECT approach, why_failed, created_timestamp, id
             FROM project_dead_ends
-            WHERE project_id = ?
+            WHERE project_id = ?{inval}
             ORDER BY created_timestamp DESC LIMIT 5
-        """,
+        """.format(
+                inval=" AND COALESCE(is_invalidated, 0) = 0"
+                if "is_invalidated" in {r[1] for r in cursor.execute("PRAGMA table_info(project_dead_ends)").fetchall()}
+                else ""
+            ),
             (project_id,),
         )
         for row in cursor.fetchall():
@@ -1252,6 +1256,7 @@ def _generate_new_session_prompt(
     # If hook already created session and ran bootstrap, use that
     if new_session_id:
         memory_text = _format_memory_context(session_bootstrap.get("memory_context"))
+        epistemic_focus += _contract_section(session_bootstrap.get("bootstrap_output"))
 
         return f"""
 ## POST-COMPACT — new session `{new_session_id}`, PREFLIGHT required
@@ -1280,6 +1285,21 @@ Compaction is routine + lossless — the durable layer carries what matters; the
 
 → `session-create --ai-id {ai_id}` → `project-bootstrap --session-id <new>` → PREFLIGHT, calibrated to your state *after* bootstrap.
 """
+
+
+def _contract_section(bootstrap_output) -> str:
+    """The parts of the bootstrap contract the epistemic focus does not rank: decisions, assumptions, mistakes with their
+    prevention, links, the coverage line and blindspot status (goal 2e686e79, ecodex: post-compact rendered none of it)."""
+    try:
+        from context_render import budget_from_env, render
+
+        breadcrumbs = (bootstrap_output or {}).get("breadcrumbs") if isinstance(bootstrap_output, dict) else None
+        if not isinstance(breadcrumbs, dict):
+            return ""
+        only = {"decisions", "assumptions", "mistakes_to_avoid", "artifact_edges"}
+        return "\n\n" + render(breadcrumbs, budget=budget_from_env() // 2, only=only)
+    except Exception:
+        return ""  # an older lib beside a newer hook: the focus above still stands
 
 
 def _format_memory_context(memory_context: dict) -> str:
