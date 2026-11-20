@@ -1859,7 +1859,6 @@ impl AppServerSession {
         permissions_override: TurnPermissionsOverride,
         workspace_roots: &[AbsolutePathBuf],
         model: String,
-        model_provider: Option<String>,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
         summary: Option<codex_protocol::config_types::ReasoningSummary>,
         service_tier: Option<Option<String>>,
@@ -1887,9 +1886,6 @@ impl AppServerSession {
             params.sandbox_policy = sandbox_policy;
             params.permissions = permissions;
             params.model = Some(model);
-            // ecodex extension: rides through to core, where the session detects the
-            // provider change and hot-swaps ModelClient (T78). None keeps the provider.
-            params.model_provider = model_provider;
             params.service_tier = service_tier;
             params.effort = effort;
             params.summary = summary;

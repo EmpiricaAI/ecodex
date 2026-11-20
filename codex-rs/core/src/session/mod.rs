@@ -2403,7 +2403,7 @@ impl Session {
         let thread_id = self.thread_id;
         let auth_manager = Arc::clone(&self.services.auth_manager);
         let new_client = crate::client::ModelClient::new(
-            Some(auth_manager),
+            codex_model_provider::create_model_provider(plan.new_provider, Some(auth_manager)),
             if plan
                 .config
                 .features
@@ -2414,7 +2414,7 @@ impl Session {
                 codex_login::auth::AgentIdentityAuthPolicy::JwtOnly
             },
             thread_id,
-            plan.new_provider,
+            self.item_id_generator.clone(),
             plan.session_source,
             plan.originator.clone(),
             plan.config.model_verbosity,
@@ -4263,7 +4263,7 @@ impl Session {
             .prepare_conversation_items_for_history(turn_context, model_info, items)
             .await;
         let items = items.into_iter().map(ResponseItemEnvelope::new).collect();
-        self.record_prepared_conversation_items(
+        self.record_prepared_conversation_items_impl(
             turn_context,
             model_info,
             items,

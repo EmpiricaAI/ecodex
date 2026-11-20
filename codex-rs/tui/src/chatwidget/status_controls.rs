@@ -159,7 +159,7 @@ impl ChatWidget {
             return;
         }
         let line = codex_ansi_escape::ansi_escape_line(&aggregate);
-        self.set_status_line(Some(FooterContent::Line(line)));
+        self.set_status_line(Some(line.into()));
     }
 
     /// Forwards the contextual active-agent label into the bottom-pane footer pipeline.
