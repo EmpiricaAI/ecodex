@@ -104,7 +104,6 @@ stream_max_retries = 0
                         TurnPermissionsOverride::Preserve,
                         config.permissions.user_visible_workspace_roots(),
                         "gpt-5.2".to_string(),
-                        /*model_provider*/ None,
                         /*effort*/ None,
                         /*summary*/ None,
                         /*service_tier*/ None,

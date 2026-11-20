@@ -356,11 +356,14 @@ async fn hugging_face_cli_skill_in_global_agents_root_is_discovered() {
     let cwd = absolute(temp_dir.path().join("workspace"));
     fs::create_dir_all(&cwd).expect("create workspace");
     let skill_path = write_skill(&home_folder.join(".agents/skills"), "hf-cli", "hf-cli");
+    let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
 
     let roots = resolve_skill_roots_with_home_dir(
         /*repository_file_system*/ None,
+        &access,
         &stack(vec![user_layer(&codex_home)]),
         &cwd,
+        /*project_markers*/ None,
         Some(&home_folder),
         Vec::new(),
         Vec::new(),

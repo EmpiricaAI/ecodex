@@ -147,7 +147,6 @@ stream_max_retries = 0
                     TurnPermissionsOverride::Preserve,
                     &config.workspace_roots,
                     started.session.model.clone(),
-                    /*model_provider*/ None,
                     /*effort*/ None,
                     /*summary*/ None,
                     /*service_tier*/ None,
