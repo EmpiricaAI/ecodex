@@ -2,32 +2,46 @@
   "about": "Shipped advisories ecodex accepts until upstream codex moves the dependency (scripts/scoped_cargo_audit.py). Each needs a semver-major bump in an upstream crate; re-check at every upstream sync and remove an entry once the audit no longer reports it (a stale entry fails the gate).",
   "accepted": [
     {
-      "id": "RUSTSEC-2026-0487",
+      "id": "RUSTSEC-2026-0530",
       "crate": "hickory-proto",
-      "reason": "Panic on a malformed alpn value when parsing SVCB or HTTPS records from text. Fixed in hickory-proto >=0.26.2; ecodex has 0.25.2 through hickory-resolver 0.25 <- rama-dns 0.3.0-alpha.4, upstream codex's rama stack, which neither manifest pins; cargo update locks 0 packages. ecodex parses no DNS zone text or SVCB records of its own.",
-      "recorded": "2026-11-12",
-      "recheck": "each upstream sync (still 0.25.2 at rust-v0.167.0)"
+      "reason": "DNSSEC: a parent-side NSEC record at a zone cut is accepted as proof of nonexistence. Fix lands only in hickory-proto >=0.26.0-beta.1 (no 0.25.x patch); ecodex has 0.25.2 through hickory-resolver 0.25 <- rama-dns <- upstream codex's rama stack, which neither manifest pins and which a semver-compatible cargo update cannot move (a 0.25->0.26 major bump is upstream's call). Not reachable: ecodex is not a validating resolver — hickory answers the HTTP client's forward (A/AAAA) lookups against the configured stub resolvers, and transport security rests on TLS certificate validation of the HTTPS endpoint, not on a DNSSEC nonexistence proof.",
+      "recorded": "2026-11-20",
+      "recheck": "each upstream sync (still 0.25.2 at rust-v0.170.0)"
     },
     {
-      "id": "RUSTSEC-2026-0489",
+      "id": "RUSTSEC-2026-0531",
       "crate": "hickory-proto",
-      "reason": "Panic when an SVCB or HTTPS parameter value is a single quote character. Fixed in hickory-proto >=0.26.2; same dependency path as RUSTSEC-2026-0487.",
-      "recorded": "2026-11-12",
-      "recheck": "each upstream sync (still 0.25.2 at rust-v0.167.0)"
+      "reason": "DNSSEC: a child-side NSEC/NSEC3 record is accepted as proof that a delegation has no DS record. Fixed only in >=0.26.0-beta.1; same dependency path and non-reachability as RUSTSEC-2026-0530 (ecodex performs no DNSSEC validation).",
+      "recorded": "2026-11-20",
+      "recheck": "each upstream sync (still 0.25.2 at rust-v0.170.0)"
     },
     {
-      "id": "RUSTSEC-2026-0490",
+      "id": "RUSTSEC-2026-0532",
       "crate": "hickory-proto",
-      "reason": "Zone file lexer panics on a token of 4096 or more characters. Fixed in hickory-proto >=0.26.2; same dependency path as RUSTSEC-2026-0487; ecodex reads no zone files.",
-      "recorded": "2026-11-12",
-      "recheck": "each upstream sync (still 0.25.2 at rust-v0.167.0)"
+      "reason": "DNSSEC: a parent-side NSEC3 record at a zone cut is accepted as proof of nonexistence. Fixed only in >=0.26.0-beta.1; same dependency path and non-reachability as RUSTSEC-2026-0530.",
+      "recorded": "2026-11-20",
+      "recheck": "each upstream sync (still 0.25.2 at rust-v0.170.0)"
     },
     {
-      "id": "RUSTSEC-2026-0491",
+      "id": "RUSTSEC-2026-0549",
       "crate": "hickory-proto",
-      "reason": "Memory amplification from record counts in the DNS message header. Fixed in hickory-proto >=0.26.2; same dependency path as RUSTSEC-2026-0487. The resolver answers only the HTTP client's lookups against the configured resolvers.",
-      "recorded": "2026-11-12",
-      "recheck": "each upstream sync (still 0.25.2 at rust-v0.167.0)"
+      "reason": "DNSSEC: an NSEC3 NODATA response at a zone apex is accepted without an NSEC3 record matching the query name. Fixed only in >=0.26.0-beta.1; same dependency path and non-reachability as RUSTSEC-2026-0530.",
+      "recorded": "2026-11-20",
+      "recheck": "each upstream sync (still 0.25.2 at rust-v0.170.0)"
+    },
+    {
+      "id": "RUSTSEC-2026-0550",
+      "crate": "hickory-proto",
+      "reason": "DNSSEC: an unsigned NSEC or NSEC3 record is used in a nonexistence proof. Fixed only in >=0.26.0-beta.1; same dependency path and non-reachability as RUSTSEC-2026-0530.",
+      "recorded": "2026-11-20",
+      "recheck": "each upstream sync (still 0.25.2 at rust-v0.170.0)"
+    },
+    {
+      "id": "RUSTSEC-2026-0551",
+      "crate": "hickory-proto",
+      "reason": "DNSSEC: records with a DNS class other than the query's are marked secure without being validated. Fixed only in >=0.26.0-beta.1; same dependency path and non-reachability as RUSTSEC-2026-0530.",
+      "recorded": "2026-11-20",
+      "recheck": "each upstream sync (still 0.25.2 at rust-v0.170.0)"
     }
   ]
 }
