@@ -444,6 +444,7 @@ SAFE_BASH_PREFIXES = (
     "git merge-base ",  # trailing space: a word boundary, so `git merge-basefoo` is not this
     "git rev-list",
     "git for-each-ref",
+    "git ls-remote ",  # a network read; trailing space: `git ls-remotes` is not this
     "git describe",
     "git shortlog",
     "git grep",
@@ -2538,6 +2539,9 @@ _GIT_TAG_READ_FLAGS = frozenset(
 _GIT_REF_VALUE_FLAGS = frozenset(
     {"--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"}
 )
+#: The value flags that put branch and tag into list mode wherever they stand, so a remaining word is a pattern (git creates
+#: nothing for `git branch --merged main newname`; checked 2026-11-18). --sort and --format do not.
+_GIT_LIST_MODE_FLAGS = frozenset({"--contains", "--no-contains", "--merged", "--no-merged", "--points-at"})
 
 
 def _git_ref_command_mutates(cmd: str) -> bool:
@@ -2551,14 +2555,22 @@ def _git_ref_command_mutates(cmd: str) -> bool:
             rest = rest[1:]
         return bool(rest) and rest[0] not in ("show", "get-url")
     read_flags = _GIT_BRANCH_READ_FLAGS if sub == "branch" else _GIT_TAG_READ_FLAGS
-    listing = False
+    # list mode is decided by the whole command, not left to right: git applies the flag wherever it stands. A word a
+    # value flag consumes (`git branch --format --contains newb`) is not a flag (second review pass, 2026-11-18).
+    own: list[str] = []
+    _skip = False
+    for t in rest:  # left to right: a consumed word consumes nothing
+        if _skip:
+            _skip = False
+            continue
+        own.append(t)
+        _skip = t in _GIT_REF_VALUE_FLAGS
+    listing = any(t in ("--list", "-l") or t.split("=", 1)[0] in _GIT_LIST_MODE_FLAGS for t in own)
     expect_value = False
     for tok in rest:
         if expect_value:
             expect_value = False
             continue
-        if tok in ("--list", "-l"):
-            listing = True
         if tok in _GIT_REF_VALUE_FLAGS:
             expect_value = True
         elif (
@@ -4224,6 +4236,19 @@ _SQLITE_SAFE_META = (
     ".HELP",
     ".DATABASES",
     ".FULLSCHEMA",
+    # Display and session settings that write nothing (goal 1131e094: '.timer on' before a SELECT gated a read). The unsafe
+    # list is checked first, so none of these can admit .shell, .output, .read or the rest.
+    ".TIMER",
+    ".HEADER",
+    ".NULLVALUE",
+    ".SEPARATOR",
+    ".ECHO",
+    ".SHOW",
+    ".EQP",
+    ".STATS",
+    ".CHANGES",
+    ".PRINT",
+    ".BAIL",
 )
 #: ANALYZE writes sqlite_stat tables and PRAGMA has setters, so neither is a read as a bare word.
 _SQLITE_SAFE_SQL = ("SELECT", "WITH", "EXPLAIN")

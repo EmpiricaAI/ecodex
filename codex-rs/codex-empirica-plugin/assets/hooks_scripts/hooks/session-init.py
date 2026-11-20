@@ -197,7 +197,7 @@ def _local_artifact_ids(finding_ids, unknown_ids) -> set:
                     continue
                 _ph = ",".join("?" * len(_ids))
                 _rows = db.conn.execute(
-                    f"SELECT id FROM {_tbl} WHERE id IN ({_ph}) AND visibility = 'local'",
+                    f"SELECT id FROM {_tbl} WHERE id IN ({_ph}) AND COALESCE(visibility, 'local') = 'local'",
                     tuple(_ids),
                 ).fetchall()
                 local.update(r[0] for r in _rows)
@@ -905,10 +905,80 @@ def _headless_run() -> bool:
 
     A headless run started inside a cockpit pane inherits the pane's instance id, and taking the instance pointer made
     `refresh` resume the headless run instead of the pane's conversation (1.14.23 sweep). Claude Code names its entrypoint
-    in CLAUDE_CODE_ENTRYPOINT: `cli` for the interactive app, `sdk-*` for print mode and the SDKs. Any other value, or none,
-    reads as interactive, which is the behaviour before this check.
+    in CLAUDE_CODE_ENTRYPOINT, but only when the variable is not already set, so `claude -p` started from VS Code keeps
+    `claude-vscode` and every pane of a tmux server started by an SDK process inherits `sdk-*` (1.15.0 sweep H4). The
+    claude process's own arguments decide instead: print mode carries -p/--print, and the SDKs start it with
+    --input-format/--output-format, which only print mode takes (goal 92d57ee3). The entrypoint decides only when that
+    process cannot be read.
     """
+    found = _claude_argv()
+    if found is not None:
+        argv, exact = found
+        at = _claude_index(argv, exact) or 0  # _claude_argv only returns argv with a claude word in it
+        flags = argv[at + 1 :]  # after `claude`, or after `node …/claude`
+        if not exact:  # ps joins the arguments with spaces: only the leading options are certainly options
+            flags = flags[: next((i for i, a in enumerate(flags) if not a.startswith("-")), len(flags))]
+        return any(
+            a in ("-p", "--print") or a.startswith(("--print=", "--input-format", "--output-format")) for a in flags
+        )
     return os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk")
+
+
+def _proc_args_and_parent(pid: int) -> tuple[list[str], int, bool] | None:
+    """(argv, parent pid, exact) of a process: /proc on Linux (exact arguments), ps elsewhere (arguments joined by
+    spaces, so not exact; -ww so a long command line is not cut); None when it cannot be read."""
+    try:
+        if Path("/proc").is_dir():
+            argv = Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace").split("\0")
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            return [a for a in argv if a], int(stat.rsplit(")", 1)[1].split()[1]), True
+        out = subprocess.run(
+            ["ps", "-ww", "-o", "ppid=", "-o", "args=", "-p", str(pid)], capture_output=True, text=True, timeout=2
+        ).stdout.strip()
+        if not out:
+            return None
+        parent, _, args = out.partition(" ")
+        return args.split(), int(parent), False
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+
+
+def _is_claude(arg: str) -> bool:
+    """A claude executable or script: by path (spaces allowed in it), or by the first word of a renamed process."""
+    return Path(arg).name == "claude" or Path(arg.split(" ")[0]).name == "claude" or "claude-code" in arg
+
+
+def _claude_index(argv: list[str], exact: bool) -> int | None:
+    """The index of the last word of the claude executable in argv: 0 for `claude …`, 1 for `node …/claude …`. ps joins
+    arguments with spaces, so there a path with a space spans several words (`node /Users/J Doe/…/claude`), rejoined
+    up to the first option (goal d6a5f502, third pass)."""
+    for i, a in enumerate(argv[:2]):
+        if _is_claude(a):
+            return i
+    if not exact and len(argv) > 2 and Path(argv[0]).name in ("node", "bun", "deno"):  # an interpreter running claude
+        end = min(next((i for i, a in enumerate(argv) if i > 0 and a.startswith("-")), len(argv)), 12)
+        for k in range(2, end):
+            if _is_claude(" ".join(argv[1 : k + 1])):
+                return k
+    return None
+
+
+def _claude_argv() -> tuple[list[str], bool] | None:
+    """(arguments, exact) of the claude process this hook runs under: the hook's parent, or a few levels up when a shell
+    stands between them. None when no ancestor within three levels looks like claude. A process that renamed itself
+    (`claude bg-spare`) counts by its first word."""
+    pid = os.getppid()
+    for _ in range(3):
+        found = _proc_args_and_parent(pid)
+        if found is None:
+            return None
+        argv, parent, exact = found
+        if _claude_index(argv, exact) is not None:
+            return argv, exact
+        if parent <= 1:
+            return None
+        pid = parent
+    return None
 
 
 def _write_instance_projects(project_path: str, claude_session_id: str, empirica_session_id: str) -> bool:
