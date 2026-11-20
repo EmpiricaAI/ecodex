@@ -50,7 +50,7 @@ pub(crate) fn decide_approval(
     reasons: ApprovalRequestReasons,
     mut options: GuardianReviewOptions,
 ) -> futures::future::BoxFuture<'static, Option<ReviewDecision>> {
-    let context: GuardianReviewContext = context.into();
+    let mut context: GuardianReviewContext = context.into();
     let request: ReviewAction = request.into();
     // Bind the invocation before scheduling. Async review cleanup can outlive
     // the decision, but must not extend the time blocking this tool.
@@ -90,6 +90,9 @@ pub(crate) fn decide_approval(
     } else {
         None
     };
+    context.review_execution = review_timing
+        .as_ref()
+        .and_then(codex_direct_tool_timing::ToolBlockingTimingGuard::review_execution);
     Box::pin(async move {
         let _review_timing = review_timing;
         let (_, history_reset) = session.history_reset().await;
@@ -99,6 +102,7 @@ pub(crate) fn decide_approval(
         };
         let _cancel_on_drop = cancellation.clone().drop_guard();
         let turn = context.turn();
+        turn.extension_data.insert_arc(Arc::clone(&turn.config));
         let live_config = session.get_config().await;
         let requirements = live_config.config_layer_stack.requirements();
         let model_requires_review =
@@ -126,6 +130,19 @@ pub(crate) fn decide_approval(
                         &assessment.authorization.permissions,
                     )
                     .await;
+            // MCP prepares the call after the response is scored. The score must
+            // also match the rules of the server that will handle the call.
+            if !require_synchronous_review
+                && let Ok(GuardianApprovalRequest::McpToolCall {
+                    prompt_permissions: Some((environment_id, sandbox)),
+                    ..
+                }) = &request.request
+            {
+                let owner_permissions =
+                    super::permissions::for_mcp_environment(environment_id, sandbox).ok();
+                require_synchronous_review =
+                    owner_permissions.as_ref() != Some(&assessment.authorization.permissions);
+            }
         }
         let retried = reasons.retry.is_some();
         let decision = codex_guardian_reviewer::ReviewRequest {
@@ -143,6 +160,7 @@ pub(crate) fn decide_approval(
             action: request.action.as_ref().ok(),
             thread_id: session.thread_id,
             thread_store: &session.services.thread_extension_data,
+            turn_store: &turn.extension_data,
             category: request.category,
             approval_policy: context.approval_policy,
             approvals_reviewer: context.approvals_reviewer,

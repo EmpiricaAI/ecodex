@@ -1,9 +1,12 @@
 use crate::config::OtelExporter;
 use crate::config::OtelHttpProtocol;
+use crate::headers_helper::HeadersHelper;
 use crate::metrics::MetricsError;
 use crate::metrics::Result;
 use crate::metrics::config::MetricsConfig;
 use crate::metrics::config::MetricsExporter;
+use crate::metrics::names::TURN_CRITICAL_PATH_COMPONENT_METRIC;
+use crate::metrics::names::TURN_CRITICAL_PATH_DURATION_METRIC;
 use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_metric_name;
 use crate::metrics::validation::validate_tag_key;
@@ -57,6 +60,20 @@ const MILLISECOND_DURATION_BOUNDARIES: &[f64] = &[
     7_000.0, 7_500.0, 8_000.0, 9_000.0, 10_000.0, 12_000.0, 15_000.0, 20_000.0, 30_000.0, 60_000.0,
     120_000.0,
 ];
+// Whole-turn profiles can accumulate minutes of inference, tool execution, or user wait.
+static TURN_CRITICAL_PATH_DURATION_BOUNDARIES: LazyLock<Vec<f64>> = LazyLock::new(|| {
+    let mut bounds = MILLISECOND_DURATION_BOUNDARIES.to_vec();
+    bounds.extend([
+        180_000.0,
+        300_000.0,
+        600_000.0,
+        900_000.0,
+        1_800_000.0,
+        3_600_000.0,
+        7_200_000.0,
+    ]);
+    bounds
+});
 const SECOND_DURATION_UNIT: &str = "s";
 const SECOND_DURATION_BOUNDARIES: &[f64] = &[
     0.0, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 12.0,
@@ -329,6 +346,7 @@ impl MetricsClient {
     /// Build a metrics client from configuration and validate defaults.
     pub fn new(config: MetricsConfig) -> Result<Self> {
         let MetricsConfig {
+            headers_helper,
             http_client_factory,
             environment,
             service_name,
@@ -381,6 +399,7 @@ impl MetricsClient {
                         exporter,
                         temporality,
                         &http_client_factory,
+                        headers_helper,
                     )?,
                     policy: http_client_factory.network_policy().clone(),
                 };
@@ -510,7 +529,12 @@ impl MetricsClient {
             duration.as_millis().min(i64::MAX as u128) as f64,
             MILLISECOND_DURATION_UNIT,
             MILLISECOND_DURATION_DESCRIPTION,
-            MILLISECOND_DURATION_BOUNDARIES,
+            match name {
+                TURN_CRITICAL_PATH_DURATION_METRIC | TURN_CRITICAL_PATH_COMPONENT_METRIC => {
+                    &TURN_CRITICAL_PATH_DURATION_BOUNDARIES
+                }
+                _ => MILLISECOND_DURATION_BOUNDARIES,
+            },
             tags,
         )
     }
@@ -636,6 +660,7 @@ fn build_otlp_metric_exporter(
     exporter: OtelExporter,
     temporality: Temporality,
     factory: &codex_http_client::HttpClientFactory,
+    headers_helper: Option<Arc<HeadersHelper>>,
 ) -> Result<opentelemetry_otlp::MetricExporter> {
     match exporter {
         OtelExporter::None => Err(MetricsError::ExporterDisabled),
@@ -643,6 +668,7 @@ fn build_otlp_metric_exporter(
             crate::config::resolve_exporter(&OtelExporter::Statsig),
             temporality,
             factory,
+            /*headers_helper*/ None,
         ),
         OtelExporter::OtlpGrpc {
             endpoint,
@@ -694,11 +720,12 @@ fn build_otlp_metric_exporter(
                 .with_protocol(protocol)
                 .with_headers(headers);
 
-            if factory.network_policy().is_managed() {
+            if headers_helper.is_some() || factory.network_policy().is_managed() {
                 let client = crate::otlp::build_async_http_client(
                     factory,
                     tls.as_ref(),
                     OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
+                    headers_helper,
                 )
                 .map_err(|err| MetricsError::InvalidConfig {
                     message: err.to_string(),

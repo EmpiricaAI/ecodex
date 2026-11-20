@@ -22,6 +22,7 @@ use super::app_server_requests::BufferedServerRequest;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_event::AgentsOverviewThreadRefresh;
+use crate::backend_id::BackendId;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -38,6 +39,9 @@ pub(crate) const AGENTS_OVERVIEW_VIEW_ID: &str = "agents-overview";
 pub(super) struct AgentsOverviewState {
     /// Missing metadata records a local resume until the next metadata refresh.
     pub(super) threads: HashMap<ThreadId, Option<Thread>>,
+    /// Identifies the query that populated the cached search results.
+    pub(super) search_id: Uuid,
+    pub(super) search_matches: HashMap<ThreadId, Thread>,
     /// Lifecycle removals take precedence over delayed tool registration responses.
     pub(super) removed_threads: HashSet<ThreadId>,
     /// Local visibility only; activity and metadata refreshes never reveal hidden roots.
@@ -48,19 +52,21 @@ pub(super) struct AgentsOverviewState {
     pub(super) pending_usage: Option<(ThreadId, Uuid)>,
     pub(super) usage_disabled: bool,
     pub(super) activity: HashMap<ThreadId, super::agents_overview_details::AgentsOverviewActivity>,
-    pub(super) initialized: bool,
-    pub(super) discovery: super::agents_overview_discovery::AgentsOverviewDiscovery,
+    pub(super) initialized: HashSet<BackendId>,
+    pub(super) discovery:
+        HashMap<BackendId, super::agents_overview_discovery::AgentsOverviewDiscovery>,
     pub(super) show_more_requested: bool,
     pub(super) refresh_show_more: bool,
     /// Vacancies left by lifecycle removals, filled without expanding the visible window.
     pub(super) refill_count: usize,
-    pub(super) request_id: Option<Uuid>,
+    pub(super) active_refresh: Option<(Uuid, BackendId)>,
     pub(super) refresh_pending: bool,
+    pub(super) refresh_invalidated: bool,
     pub(super) pin_refresh_requested: bool,
     pub(super) refresh_thread_ids: HashSet<ThreadId>,
     pub(super) active_refresh_thread_ids: HashSet<ThreadId>,
-    pub(super) pinned_thread_ids: Option<Vec<ThreadId>>,
-    pub(super) pending_pin_change: Option<Uuid>,
+    pub(super) pins_by_backend: std::collections::BTreeMap<BackendId, Option<Vec<ThreadId>>>,
+    pub(super) pending_pin_change: Option<(Uuid, BackendId)>,
     pub(super) refresh_task: Option<tokio::task::AbortHandle>,
     pub(super) refresh_notifications: HashMap<ThreadId, Vec<ServerNotification>>,
     pub(super) rendered_full_screen: bool,
@@ -78,6 +84,34 @@ pub(super) struct AgentsOverviewState {
     pub(super) input_states: HashMap<ThreadId, ThreadInputState>,
     pub(super) new_session_draft: Option<Box<StartupDraftPump>>,
     pub(super) dispatched_requests: HashMap<ThreadId, Vec<BufferedServerRequest>>,
+}
+
+impl AgentsOverviewState {
+    pub(super) fn invalidate_discovery(&mut self, backend: BackendId, displayed: bool) {
+        self.initialized.remove(&backend);
+        self.discovery.remove(&backend);
+        if displayed {
+            self.reset_visible_pagination();
+            self.view_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .has_more = false;
+        }
+        self.refresh_invalidated |= self
+            .active_refresh
+            .is_some_and(|(_, owner)| owner == backend);
+    }
+
+    pub(super) fn reset_visible_pagination(&mut self) {
+        self.show_more_requested = false;
+        self.refill_count = 0;
+    }
+
+    pub(super) fn has_more(&self, backend_id: BackendId) -> bool {
+        self.discovery
+            .get(&backend_id)
+            .is_none_or(super::agents_overview_discovery::AgentsOverviewDiscovery::has_more)
+    }
 }
 
 impl Drop for AgentsOverviewState {
@@ -125,13 +159,17 @@ impl App {
         request_id: Uuid,
         result: Result<AgentsOverviewThreadRefresh, String>,
     ) {
-        if self.agents_overview.request_id != Some(request_id) {
+        let Some((_, refresh_backend_id)) = self
+            .agents_overview
+            .active_refresh
+            .take_if(|(id, _)| *id == request_id)
+        else {
             return;
-        }
-        self.agents_overview.request_id = None;
+        };
         self.agents_overview.refresh_show_more = false;
         self.agents_overview.active_refresh_thread_ids.clear();
         self.agents_overview.refresh_task = None;
+        let invalidated = std::mem::take(&mut self.agents_overview.refresh_invalidated);
         let refill_succeeded = result
             .as_ref()
             .is_ok_and(|refresh| refresh.recent_seed_complete);
@@ -142,38 +180,68 @@ impl App {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.loading = false;
-            state.refresh_failed = !refill_succeeded;
+            state.refresh_failed = !invalidated && !refill_succeeded;
         }
         match result {
-            Ok(refresh) => {
+            _ if invalidated => self.agents_overview.refresh_notifications.clear(),
+            Ok(mut refresh) => {
                 for id in refresh.cleared_unread {
                     self.agents_overview.unread.remove(&id);
                 }
                 if let Some(pinned_thread_ids) = refresh.pinned_thread_ids {
-                    self.agents_overview.pinned_thread_ids = pinned_thread_ids;
-                }
-                self.agents_overview.initialized = refresh.recent_seed_complete;
-                if let Some(discovery) = refresh.discovery {
-                    if !discovery.has_more() {
-                        self.agents_overview.refill_count = 0;
-                        self.agents_overview.show_more_requested = false;
-                    }
-                    self.agents_overview.initialized = true;
+                    let pins = pinned_thread_ids.map(|ids| {
+                        let mut seen = HashSet::new();
+                        ids.into_iter()
+                            .filter(|id| {
+                                self.backend_registry.observe(refresh_backend_id, *id)
+                                    && seen.insert(*id)
+                            })
+                            .collect()
+                    });
                     self.agents_overview
-                        .view_state
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .has_more = discovery.has_more();
-                    self.agents_overview.discovery = discovery;
+                        .pins_by_backend
+                        .insert(refresh_backend_id, pins);
                 }
-                self.agents_overview
-                    .last_messages
-                    .extend(refresh.last_messages);
+                let displayed_refresh = refresh_backend_id == app_server.backend_id();
+                if refresh.discovery.is_some()
+                    || (displayed_refresh && refresh.recent_seed_complete)
+                {
+                    self.agents_overview.initialized.insert(refresh_backend_id);
+                } else if displayed_refresh {
+                    self.agents_overview.initialized.remove(&refresh_backend_id);
+                }
+                if let Some(discovery) = refresh.discovery {
+                    if displayed_refresh {
+                        let has_more = discovery.has_more();
+                        if !has_more {
+                            self.agents_overview.reset_visible_pagination();
+                        }
+                        self.agents_overview
+                            .view_state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .has_more = has_more;
+                    }
+                    self.agents_overview
+                        .discovery
+                        .insert(refresh_backend_id, discovery);
+                }
                 for (thread_id, thread) in refresh.threads {
                     if self.agents_overview.removed_threads.contains(&thread_id) {
                         continue;
                     }
-                    if let Some((mut thread, unread)) = thread {
+                    if thread.is_some()
+                        && !self.backend_registry.observe(refresh_backend_id, thread_id)
+                    {
+                        continue;
+                    }
+                    if let Some(message) = refresh.last_messages.remove(&thread_id) {
+                        self.agents_overview
+                            .last_messages
+                            .insert(thread_id, message);
+                    }
+                    if let Some((mut thread, unread, latest_prompt)) = thread {
+                        self.agents_overview.search_matches.remove(&thread_id);
                         if unread {
                             self.agents_overview.unread.insert(thread_id);
                         } else {
@@ -186,7 +254,8 @@ impl App {
                             self.agents_overview.usage.remove(&thread_id);
                             continue;
                         }
-                        if !self.agents_overview.threads.contains_key(&thread_id)
+                        if displayed_refresh
+                            && !self.agents_overview.threads.contains_key(&thread_id)
                             && !self.agents_overview.hidden_threads.contains(&thread_id)
                             && thread.parent_thread_id.is_none()
                             && !matches!(
@@ -197,6 +266,11 @@ impl App {
                             self.agents_overview.refill_count =
                                 self.agents_overview.refill_count.saturating_sub(1);
                         }
+                        self.agents_overview
+                            .activity
+                            .entry(thread_id)
+                            .or_default()
+                            .latest_prompt = latest_prompt;
                         thread.turns.clear();
                         self.agents_overview.threads.insert(thread_id, Some(thread));
                     } else {
@@ -216,6 +290,9 @@ impl App {
                     && let Ok(thread_id) = ThreadId::from_string(&reverted.thread_id)
                 {
                     // Discard stale read results without clearing activity received after the revert.
+                    if let Some(activity) = self.agents_overview.activity.get_mut(&thread_id) {
+                        activity.latest_prompt = None;
+                    }
                     self.agents_overview.last_messages.remove(&thread_id);
                     if let Some(usage) = self.agents_overview.usage.get_mut(&thread_id) {
                         usage.tokens = None;
@@ -226,10 +303,11 @@ impl App {
             }
         }
         if std::mem::take(&mut self.agents_overview.refresh_pending)
+            || invalidated
             || (refill_succeeded
                 && (self.agents_overview.refill_count > 0
                     || self.agents_overview.show_more_requested)
-                && self.agents_overview.discovery.has_more())
+                && self.agents_overview.has_more(app_server.backend_id()))
         {
             self.refresh_changed_agents_overview_threads(app_server);
         }
@@ -268,6 +346,18 @@ impl App {
             .cloned()
             .collect();
         let view = self.agents_overview_view(threads, selected_thread_id);
+        let matches = &mut self.agents_overview.search_matches;
+        if !matches.is_empty() {
+            let visible: HashSet<_> = view
+                .visible_indices()
+                .into_iter()
+                .map(|i| view.rows[i].thread_id)
+                .collect();
+            matches.retain(|id, _| {
+                visible.contains(id) || self.agents_overview.hidden_threads.contains(id)
+            });
+        }
+        view.load_search_matches(/*additional*/ 0);
         self.agents_overview.visible_thread_ids = view.thread_ids();
         let next_thread_id = view
             .selected_index()
@@ -304,6 +394,35 @@ impl App {
         mut threads: Vec<Thread>,
         selected_thread_id: Option<ThreadId>,
     ) -> AgentsOverviewView {
+        {
+            let overview = &self.agents_overview;
+            let mut state = overview
+                .view_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.vim_enabled = self.chat_widget.composer_is_vim_enabled();
+            if state
+                .history
+                .as_ref()
+                .is_some_and(|search| search.id == overview.search_id)
+            {
+                let query = state.search.to_lowercase();
+                threads.extend(
+                    overview
+                        .search_matches
+                        .values()
+                        .filter(|thread| {
+                            super::agents_overview_discovery::matches_query(thread, &query)
+                        })
+                        .cloned(),
+                );
+            } else if let Some(target) = state
+                .rename_target
+                .and_then(|id| overview.search_matches.get(&id))
+            {
+                threads.push(target.clone());
+            }
+        }
         threads.retain(|thread| !thread.ephemeral);
         for thread in &mut threads {
             if thread.parent_thread_id.is_none()
@@ -349,6 +468,15 @@ impl App {
                 continue;
             }
             rows.push(AgentsOverviewRow {
+                backend_id: self
+                    .backend_registry
+                    .owner(thread_id)
+                    .or(self.app_server_backend_id),
+                search_id: self
+                    .agents_overview
+                    .search_matches
+                    .contains_key(&thread_id)
+                    .then_some(self.agents_overview.search_id),
                 unread: self.agents_overview.unread.contains(&thread_id),
                 details: self.agents_overview_details(root, &children),
                 thread: root.clone(),
@@ -359,11 +487,6 @@ impl App {
             });
         }
 
-        self.agents_overview
-            .view_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .vim_enabled = self.chat_widget.composer_is_vim_enabled();
         let mut view = AgentsOverviewView::new(
             rows,
             selected_thread_id,
@@ -376,13 +499,23 @@ impl App {
             self.keymap.clone(),
             Arc::clone(&self.agents_overview.view_state),
         );
-        view.pinned_thread_ranks = self.agents_overview.pinned_thread_ids.as_ref().map(|ids| {
-            ids.iter()
+        let pins = &self.agents_overview.pins_by_backend;
+        view.pinned_thread_ranks = pins.values().any(Option::is_some).then(|| {
+            pins.values()
+                .flatten()
+                .flatten()
                 .copied()
                 .enumerate()
                 .map(|(rank, id)| (id, rank))
                 .collect()
         });
+        view.can_return_to_chat =
+            self.pending_startup_thread_start || self.current_displayed_thread_id().is_some();
+        view.pin_action_supported = self
+            .displayed_conversation_backend_id()
+            .and_then(|owner| pins.get(&owner))
+            .map(Option::is_some)
+            .unwrap_or(true);
         view.pin_action_pending = self.agents_overview.pending_pin_change.is_some();
         view
     }
@@ -393,6 +526,25 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<AppRunControl> {
+        if let Some(owner) = self.backend_registry.owner(thread_id)
+            && owner != app_server.backend_id()
+        {
+            let Some(Some(thread)) = self.agents_overview.threads.get(&thread_id) else {
+                self.add_agents_overview_error(format!(
+                    "Agent session {thread_id} is unavailable. Refresh Command Center and try again."
+                ));
+                return Ok(AppRunControl::Continue);
+            };
+            self.app_event_tx
+                .send(AppEvent::ResumeBackendSession(SessionTarget {
+                    backend_id: owner,
+                    path: thread.path.clone(),
+                    thread_id,
+                    cwd: Some(thread.cwd.to_path_buf()),
+                    history_mode: Some(thread.history_mode),
+                }));
+            return Ok(AppRunControl::Continue);
+        }
         Box::pin(self.attach_agents_overview_thread(
             tui, app_server, thread_id, /*started*/ None, /*startup_draft*/ None,
         ))
@@ -429,6 +581,7 @@ impl App {
             loading::draw(tui)?;
         }
         let mut restored_blank_session = false;
+        let mut resumed_mode = None;
         let mut provider_resume_checked = false;
         if self.primary_thread_id != Some(root_thread_id) {
             let previous_displayed_thread_id = self.current_displayed_thread_id();
@@ -629,14 +782,11 @@ impl App {
             };
             let (resumed, read_only) = if let Some((_, started)) = started {
                 (started, false)
-            } else if !unloaded
-                && let Some(blank) = self.agents_overview.blank_sessions.get(&root_thread_id)
+            } else if let Some(blank) = self
+                .live_blank_session(app_server, root_thread_id, &target_thread)
+                .await
             {
-                // An untouched task has no rollout for thread/resume yet. Its live
-                // subscription and saved settings are sufficient to restore the editor.
                 restored_blank_session = true;
-                let mut blank = blank.clone();
-                blank.session.thread_name.clone_from(&target_thread.name);
                 (blank, false)
             } else {
                 match app_server
@@ -651,6 +801,7 @@ impl App {
                 {
                     Ok(resumed) => {
                         provider_resume_checked = true;
+                        resumed_mode = Some(resumed.session.collaboration_mode.is_some());
                         (resumed, false)
                     }
                     Err(error)
@@ -768,6 +919,9 @@ impl App {
                 self.add_agents_overview_error(format!("Failed to attach to task: {error}"));
                 return Ok(AppRunControl::Continue);
             }
+            if !is_new_session && !restored_blank_session {
+                self.agents_overview.blank_sessions.remove(&root_thread_id);
+            }
             // Replacing the widget clears the terminal before the remaining server requests.
             if startup_draft.is_none() {
                 loading::draw(tui)?;
@@ -856,6 +1010,9 @@ impl App {
             self.select_agent_thread(tui, app_server, root_thread_id)
                 .await?;
         }
+        if self.current_displayed_thread_id() == Some(root_thread_id) {
+            self.remember_attached_host_project(app_server);
+        }
         let read_only = self.chat_widget.is_external_writer_view();
         if !read_only {
             self.replay_agents_overview_requests(app_server, root_thread_id)
@@ -867,6 +1024,10 @@ impl App {
             // A fresh server result supersedes the saved rejection, but not the draft.
             if provider_resume_checked {
                 input_state.provider_error = None;
+            }
+            if let Some(has_resumed_mode) = resumed_mode {
+                self.chat_widget
+                    .update_input_collaboration_mode(&mut input_state, has_resumed_mode);
             }
             // A saved draft includes model settings, so apply newer server settings after it.
             let pending_settings = restored_blank_session
@@ -886,11 +1047,13 @@ impl App {
     pub(super) async fn restore_session_draft(
         &mut self,
         thread_id: ThreadId,
-        input: ThreadInputState,
+        mut input: ThreadInputState,
         pending_settings: Option<codex_app_server_protocol::ThreadSettingsUpdatedNotification>,
     ) {
         let preserve_in_flight_turn = !self.chat_widget.is_external_writer_view()
             && self.active_turn_id_for_thread(thread_id).await.is_some();
+        self.reconcile_saved_session_input(thread_id, &mut input)
+            .await;
         self.chat_widget.restore_thread_input_state(
             Some(input),
             ThreadInputStateRestoreMode {

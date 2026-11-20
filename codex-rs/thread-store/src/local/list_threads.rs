@@ -241,7 +241,13 @@ pub(super) async fn list_rollout_threads(
     sort_key: codex_rollout::ThreadSortKey,
     sort_direction: codex_rollout::SortDirection,
 ) -> ThreadStoreResult<codex_rollout::ThreadsPage> {
-    if params.relation_filter.is_some() || params.section.is_some() || params.project_id.is_some() {
+    if params.use_state_db_only
+        || params
+            .relation_filter
+            .is_some_and(ThreadRelationFilter::is_parent_scoped)
+        || params.section.is_some()
+        || params.project_id.is_some()
+    {
         let page = codex_rollout::state_db::list_threads_db(
             state_db.as_deref(),
             &config.sqlite,
@@ -265,37 +271,9 @@ pub(super) async fn list_rollout_threads(
         return Ok(page.into());
     }
 
-    let page = if params.use_state_db_only && params.archived {
-        RolloutRecorder::list_archived_threads_from_state_db(
-            state_db,
-            config,
-            params.page_size,
-            cursor,
-            sort_key,
-            sort_direction,
-            params.allowed_sources.as_slice(),
-            params.model_providers.as_deref(),
-            params.cwd_filters.as_deref(),
-            default_model_provider_id,
-            params.search_term.as_deref(),
-        )
-        .await
-    } else if params.use_state_db_only {
-        RolloutRecorder::list_threads_from_state_db(
-            state_db,
-            config,
-            params.page_size,
-            cursor,
-            sort_key,
-            sort_direction,
-            params.allowed_sources.as_slice(),
-            params.model_providers.as_deref(),
-            params.cwd_filters.as_deref(),
-            default_model_provider_id,
-            params.search_term.as_deref(),
-        )
-        .await
-    } else if params.archived {
+    let include_attached_threads =
+        params.relation_filter == Some(ThreadRelationFilter::IncludeAttached);
+    let page = if params.archived {
         RolloutRecorder::list_archived_threads(
             state_db,
             config,
@@ -308,6 +286,7 @@ pub(super) async fn list_rollout_threads(
             params.cwd_filters.as_deref(),
             default_model_provider_id,
             params.search_term.as_deref(),
+            include_attached_threads,
         )
         .await
     } else {
@@ -323,6 +302,7 @@ pub(super) async fn list_rollout_threads(
             params.cwd_filters.as_deref(),
             default_model_provider_id,
             params.search_term.as_deref(),
+            include_attached_threads,
         )
         .await
     };
@@ -333,6 +313,7 @@ pub(super) async fn list_rollout_threads(
 
 fn state_relation_filter(filter: ThreadRelationFilter) -> codex_state::ThreadRelationFilter {
     match filter {
+        ThreadRelationFilter::IncludeAttached => codex_state::ThreadRelationFilter::IncludeAttached,
         ThreadRelationFilter::DirectChildrenOf(id) => {
             codex_state::ThreadRelationFilter::DirectChildrenOf(id)
         }
@@ -426,15 +407,15 @@ mod tests {
             .await
             .expect("backfill should be complete");
         let created_at = Utc::now();
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             rollout_path,
             created_at,
             SessionSource::Cli,
-        );
-        builder.model_provider = Some(config.default_model_provider_id.clone());
-        builder.cwd = home.path().to_path_buf();
-        builder.cli_version = Some("test_version".to_string());
+        )
+        .with_model_provider(Some(config.default_model_provider_id.clone()))
+        .with_cwd(home.path().to_path_buf())
+        .with_cli_version("test_version".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "needle title".to_string();
         metadata.first_user_message = Some("plain preview".to_string());
@@ -495,16 +476,16 @@ mod tests {
             .mark_backfill_complete(/*last_watermark*/ None)
             .await
             .expect("backfill should be complete");
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             rollout_path,
             Utc::now(),
             SessionSource::Cli,
-        );
-        builder.history_mode = ThreadHistoryMode::Paginated;
-        builder.model_provider = Some(config.default_model_provider_id.clone());
-        builder.cwd = home.path().to_path_buf();
-        builder.cli_version = Some("test_version".to_string());
+        )
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_model_provider(Some(config.default_model_provider_id.clone()))
+        .with_cwd(home.path().to_path_buf())
+        .with_cli_version("test_version".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.name = Some("canonical paginated name".to_string());
         metadata.title = "stale title name".to_string();

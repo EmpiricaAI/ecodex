@@ -317,6 +317,22 @@ impl ResponsesRequest {
             .collect()
     }
 
+    /// Returns all `input_audio` `file_id` spans from `message` inputs for the provided role.
+    pub fn message_input_audio_file_ids(&self, role: &str) -> Vec<String> {
+        self.inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+            .filter_map(|item| item.get("content").and_then(Value::as_array).cloned())
+            .flatten()
+            .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_audio"))
+            .filter_map(|span| {
+                span.get("file_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+
     pub fn input(&self) -> Vec<Value> {
         self.body_json()["input"]
             .as_array()
@@ -1141,6 +1157,20 @@ where
         .mount(server)
         .await;
     response_mock
+}
+
+/// Choose a response from the decoded request, including compressed requests.
+pub async fn mount_response_handler(
+    server: &MockServer,
+    respond: impl Fn(ResponsesRequest) -> ResponseTemplate + Send + Sync + 'static,
+) -> ResponseMock {
+    let (mock, requests) = base_mock();
+    mock.respond_with(move |request: &wiremock::Request| {
+        respond(ResponsesRequest(request.clone()))
+    })
+    .mount(server)
+    .await;
+    requests
 }
 
 fn base_mock() -> (MockBuilder, ResponseMock) {

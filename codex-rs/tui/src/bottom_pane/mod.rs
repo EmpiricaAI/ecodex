@@ -23,12 +23,16 @@
 pub(crate) use chat_composer::CommandPopupPlacement;
 pub(crate) use chat_composer::ComposerRenderOptions;
 pub(crate) use chat_composer::TranscriptFooter;
+pub(crate) use chat_composer::composer_layout::FooterLayout;
 pub(crate) use composer_gap::ComposerGap;
 pub(crate) use footer::footer_hint_items_line;
 pub(crate) use footer::inset_footer_hint_area;
+pub(crate) use status_line::StatusLine;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use crate::activation_key_guard::ActivationKeyGuard;
+use crate::activation_key_guard::ActivationKeySuppression;
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -90,7 +94,7 @@ pub(crate) use multi_select_picker::MultiSelectPicker;
 mod question_tests;
 mod questions;
 mod request_user_input;
-pub(crate) mod status_line_content;
+mod status_line;
 mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
@@ -121,7 +125,7 @@ pub(crate) use footer::footer_content;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
-pub(crate) use status_line_style::STATUS_LINE_SEPARATOR;
+pub(crate) use status_line_style::StatusLineAccent;
 pub(crate) use status_line_style::status_line_from_segments;
 pub(crate) use voice_strip::VoiceStripPhase;
 pub(crate) use voice_strip::VoiceStripState;
@@ -197,10 +201,9 @@ mod feedback_view;
 mod hooks_browser_view;
 pub(crate) use feedback_view::FeedbackAudience;
 pub(crate) use feedback_view::feedback_classification;
-pub(crate) use feedback_view::feedback_disabled_params;
+pub(crate) use feedback_view::feedback_consent_params;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_success_cell;
-pub(crate) use feedback_view::feedback_upload_consent_params;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
 pub(crate) use status_line_setup::StatusLineItem;
@@ -219,6 +222,7 @@ pub(crate) use picker_option::picker_option_list;
 pub(crate) use picker_option::picker_option_row;
 pub(crate) mod popup_consts;
 mod scroll_state;
+pub(crate) use scroll_state::ScrollState;
 mod selection_popup_common;
 pub(crate) use selection_popup_common::menu_surface_padding_height;
 pub(crate) use selection_popup_common::render_menu_surface;
@@ -272,6 +276,7 @@ pub(crate) use chat_composer::InputResult;
 pub(crate) use chat_composer::KillBufferSnapshot;
 pub(crate) use chat_composer::QueuedInputAction;
 pub(crate) use chat_composer::RestrictedInputMode;
+pub(crate) use chat_composer::ShellPrefixHandling;
 pub(crate) use chat_composer_history::HistoryEntry;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
@@ -306,7 +311,7 @@ pub(crate) struct BottomPane {
     warnings_view: Option<warnings_view::WarningsView>,
     /// A keep press can close the viewer; its remaining repeats must not edit the draft.
     pub(crate) suppress_warning_keep_repeat: bool,
-    view_transition_key_guard: Option<crate::activation_key_guard::ActivationKeyGuard>,
+    pub(crate) view_transition_key_guard: Option<crate::activation_key_guard::ActivationKeyGuard>,
     pub(crate) questions: Option<Box<AsyncQuestions>>,
     delayed_approval_requests: VecDeque<DelayedApprovalRequest>,
     last_composer_activity_at: Option<Instant>,
@@ -566,6 +571,10 @@ impl BottomPane {
     /// Slash recall records the submitted command text regardless of whether the command succeeds.
     pub(crate) fn record_pending_slash_command_history(&mut self) {
         self.composer.record_pending_slash_command_history();
+    }
+
+    pub(super) fn keymap(&self) -> &RuntimeKeymap {
+        &self.keymap
     }
 
     /// Replace all bottom-pane keymap caches from one resolved runtime keymap.
@@ -843,12 +852,33 @@ impl BottomPane {
         self.push_view(Box::new(modal));
     }
 
+    fn is_composer_activity_key(key: KeyEvent) -> bool {
+        matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && !key_hint::has_ctrl_or_alt(key.modifiers)
+            && matches!(
+                key.code,
+                KeyCode::Char(_)
+                    | KeyCode::Backspace
+                    | KeyCode::Delete
+                    | KeyCode::Enter
+                    | KeyCode::Tab
+            )
+    }
+
     /// Preserve restricted drafts, allowing recovery commands only for connected unavailable threads.
     pub(crate) fn handle_restricted_key(
         &mut self,
         key: KeyEvent,
         mode: RestrictedInputMode,
     ) -> InputResult {
+        if mode == RestrictedInputMode::DraftHandoff {
+            let result = self.composer.handle_restricted_key(key, mode);
+            if Self::is_composer_activity_key(key) {
+                self.record_composer_activity_at(Instant::now());
+            }
+            self.request_redraw();
+            return result;
+        }
         self.view_stack.clear();
         self.warnings_view = None;
         self.delayed_approval_requests.clear();
@@ -887,17 +917,7 @@ impl BottomPane {
                 view.observe_key_event_while_covered(key_event, routed_key);
             }
         }
-        let records_composer_activity =
-            matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-                && !key_hint::has_ctrl_or_alt(key_event.modifiers)
-                && matches!(
-                    key_event.code,
-                    KeyCode::Char(_)
-                        | KeyCode::Backspace
-                        | KeyCode::Delete
-                        | KeyCode::Enter
-                        | KeyCode::Tab
-                );
+        let records_composer_activity = Self::is_composer_activity_key(key_event);
         if self.warnings_active() {
             if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
                 self.record_composer_activity_at(Instant::now());
@@ -944,21 +964,19 @@ impl BottomPane {
                 let view = &mut self.view_stack[last_index];
                 let prefer_esc =
                     key_event.code == KeyCode::Esc && view.prefer_esc_to_handle_key_event();
-                let ctrl_c_completed = key_event.code == KeyCode::Esc
+                let cancel_handled = key_event.code == KeyCode::Esc
                     && !prefer_esc
-                    && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
-                    && view.is_complete();
-                if ctrl_c_completed {
-                    (true, true, view.completion(), false)
-                } else {
+                    && matches!(view.on_ctrl_c(), CancellationEvent::Handled);
+                if !cancel_handled {
                     view.handle_key_event_with_activation_key(key_event, activation_key);
-                    (
-                        false,
-                        view.is_complete(),
-                        view.completion(),
-                        view.is_in_paste_burst(),
-                    )
                 }
+                let complete = view.is_complete();
+                (
+                    cancel_handled && complete,
+                    complete,
+                    view.completion(),
+                    view.is_in_paste_burst(),
+                )
             };
 
             if ctrl_c_completed {
@@ -1185,13 +1203,15 @@ impl BottomPane {
         text_elements: Vec<TextElement>,
         local_image_paths: Vec<PathBuf>,
         mention_bindings: Vec<MentionBinding>,
+        shell_prefix: ShellPrefixHandling,
     ) {
         self.composer.edit_stored_draft(|composer| {
-            composer.set_text_content_with_mention_bindings(
+            composer.set_text_content_with_shell_prefix(
                 text,
                 text_elements,
                 local_image_paths,
                 mention_bindings,
+                shell_prefix,
             );
             composer.move_cursor_to_end();
         });
@@ -1378,7 +1398,6 @@ impl BottomPane {
         self.status_widget().is_some()
     }
 
-    #[cfg(test)]
     pub(crate) fn status_line_content(&self) -> Option<&footer_content::FooterContent> {
         self.composer.status_line_content()
     }
@@ -1444,23 +1463,24 @@ impl BottomPane {
 
     pub(crate) fn ensure_status_indicator(&mut self) {
         if self.status.is_none() {
-            self.status.get_or_insert_with(|| {
-                StatusIndicatorWidget::new(
-                    self.app_event_tx.clone(),
-                    self.frame_requester.clone(),
-                    self.animations_enabled,
-                    self.effects,
-                )
-            });
-            if let Some(status) = self.status.as_mut() {
-                status.set_interrupt_binding(
-                    self.keymap
-                        .primary_hint(KeymapContext::Chat, "interrupt_turn"),
-                );
-            }
+            self.status = Some(self.new_status_indicator());
             self.sync_status_inline_message();
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn new_status_indicator(&self) -> StatusIndicatorWidget {
+        let mut status = StatusIndicatorWidget::new(
+            self.app_event_tx.clone(),
+            self.frame_requester.clone(),
+            self.animations_enabled,
+            self.effects,
+        );
+        status.set_interrupt_binding(
+            self.keymap
+                .primary_hint(KeymapContext::Chat, "interrupt_turn"),
+        );
+        status
     }
 
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
@@ -1923,8 +1943,13 @@ impl BottomPane {
 
     /// Return true when no popups or modal views are active, regardless of task state.
     pub(crate) fn can_launch_external_editor(&self) -> bool {
+        self.completion_can_yield_focus() && !self.composer.popup_active()
+    }
+
+    /// A hidden completion popup can yield to another pane. Prompts and queries keep input.
+    pub(crate) fn completion_can_yield_focus(&self) -> bool {
         !self.has_active_view()
-            && !self.composer.popup_active()
+            && !self.composer.query_active()
             && !self.questions.as_ref().is_some_and(|q| q.expanded)
     }
 
@@ -2021,13 +2046,15 @@ impl BottomPane {
         &mut self,
         key: KeyBinding,
         activated_at: Instant,
+        suppression: ActivationKeySuppression,
     ) {
-        self.view_transition_key_guard =
-            Some(crate::activation_key_guard::ActivationKeyGuard::new_at(
-                key,
-                activated_at,
-                self.enhanced_keys_supported,
-            ));
+        let reported_repeats_only = self.enhanced_keys_supported
+            || matches!(suppression, ActivationKeySuppression::ReportedRepeats);
+        self.view_transition_key_guard = Some(ActivationKeyGuard::new_at(
+            key,
+            activated_at,
+            reported_repeats_only,
+        ));
     }
 
     pub(crate) fn consume_view_transition_key_event(&mut self, key_event: KeyEvent) -> bool {
@@ -2367,6 +2394,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Settle typing before an accepted handoff image without starting shell mode.
+    pub(crate) fn settle_before_handoff_image(&mut self) {
+        self.composer
+            .flush_pending_input_with_shell_prefix(ShellPrefixHandling::Literal);
+    }
+
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
         if !self.has_active_view() {
             self.composer.attach_image(path);
@@ -2414,9 +2447,10 @@ impl BottomPane {
 
     pub(crate) fn backdrop_with_options<'a>(
         &'a self,
-        options: ComposerRenderOptions<'a>,
+        mut options: ComposerRenderOptions<'a>,
     ) -> RenderableItem<'a> {
         let views = if self.centered_dialog().is_some() {
+            options.is_dialog_backdrop = true;
             &self.view_stack[..self.view_stack.len() - 1]
         } else {
             &self.view_stack
@@ -2567,6 +2601,7 @@ impl BottomPane {
                 && options.warning_count == 0
                 && options.footer.is_none()
                 && !options.separate_status_line
+                && !options.is_dialog_backdrop
                 && options.command_popup_placement == CommandPopupPlacement::AboveComposer
             {
                 RenderableItem::Borrowed(&self.composer)
@@ -2965,7 +3000,11 @@ mod tests {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let mut pane = test_pane(AppEventSender::new(tx_raw));
         let activation_key = crate::key_hint::plain(KeyCode::Enter);
-        pane.suppress_current_view_key_until_release(activation_key, Instant::now());
+        pane.suppress_current_view_key_until_release(
+            activation_key,
+            Instant::now(),
+            ActivationKeySuppression::ViewTransition,
+        );
         pane.push_view(Box::new(DismissibleView::default()));
 
         assert!(pane.consume_view_transition_key(activation_key, KeyEventKind::Repeat));

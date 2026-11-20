@@ -87,6 +87,7 @@ fn registry_collects_target_specific_sections_in_registration_order() {
         target: ContextTarget::Sync,
         history: &history,
         transcript: &transcript,
+        is_selected_exec_output: None,
         root_conversation: &[],
         root_conversation_candidates: None,
         trusted_user_answers: &[],
@@ -102,6 +103,7 @@ fn registry_collects_target_specific_sections_in_registration_order() {
         target: ContextTarget::Async,
         history: &history,
         transcript: &transcript,
+        is_selected_exec_output: None,
         root_conversation: &[],
         root_conversation_candidates: None,
         trusted_user_answers: &[],
@@ -168,6 +170,7 @@ fn registry_skips_optional_sections_and_stops_on_missing_required_evidence() {
                 target,
                 history: &[ResponseItem::Other],
                 transcript: &transcript,
+                is_selected_exec_output: None,
                 root_conversation: &[],
                 root_conversation_candidates: None,
                 trusted_user_answers: &[],
@@ -204,7 +207,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
     ];
     let answers = ["assistant: Publish?\nuser: No.\n".to_string()];
     let reviews = super::PreviousReviews::try_from_fragments(vec![super::PreviousReview {
-        id: codex_protocol::ResponseItemId::new("review"),
+        id: codex_protocol_test_support::uuid_v7_item_id_generator_for_test()("review"),
         fragment: "<guardian_sync_review>debug-secret review</guardian_sync_review>".to_string(),
     }])
     .unwrap();
@@ -256,6 +259,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
             target,
             history: &history,
             transcript: &transcript,
+            is_selected_exec_output: None,
             root_conversation: &root,
             root_conversation_candidates: None,
             trusted_user_answers: &answers.iter().cloned().map(Into::into).collect::<Vec<_>>(),
@@ -280,7 +284,12 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
                 "Host notice: some verified user answers are unavailable within the evidence budget. Do not treat the remaining answers as complete authorization for an action.\n".into(),
                 "Host notice: some root user instructions are unavailable. Do not treat the remaining root evidence as complete authorization for an action.\n".into(),
                 ">>> ROOT CONVERSATION END\n".into(),
-            ])}, ContextSection::TrustedUserAnswers { items: vec![
+            ].into_iter().enumerate().map(|(index, text): (usize, String)| {
+                const EVIDENCE_INDICES: [usize; 3] = [3, 4, 5];
+                let content = codex_protocol::models::ContentItem::InputText { text };
+                if EVIDENCE_INDICES.contains(&index) { crate::Budgeted::required(content) }
+                else { crate::Budgeted::protected(content) }
+            }).collect())}, ContextSection::TrustedUserAnswers { items: vec![
                 ">>> TRUSTED USER ANSWERS START\n".into(),
                 answers[0].clone().into(),
                 ">>> TRUSTED USER ANSWERS END\n".into(),
@@ -316,15 +325,15 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
             let prepared = {
                 let context = super::default_registry().prepare(&input).unwrap();
                 let profile = &super::ContextProfile::synchronous();
-                let transcript = profile.prepare_transcript(
-                    context.transcript_entries(),
+                super::prepare_context(
+                    std::borrow::Cow::Owned(context),
+                    profile,
                     /*entry_number_offset*/ 0,
-                );
-                context.compose(
                     super::ContextPresentation::SyncFull {
                         session_id: "worker",
                     },
-                    transcript,
+                    super::ContextBudgeting::Fixed,
+                    &[],
                 )
             }
             .unwrap()
@@ -333,7 +342,13 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
             let actual_repl = prepared.into_iter().filter(|item| matches!(item,
                 codex_protocol::user_input::UserInput::Text { text, .. } if text.starts_with("<node_repl_review_evidence>")))
                 .collect::<Vec<_>>();
-            assert_eq!(actual_repl, repl.render_inputs());
+            assert_eq!(
+                actual_repl,
+                repl.render_inputs()
+                    .into_iter()
+                    .map(|item| item.content)
+                    .collect::<Vec<_>>()
+            );
         }
         expected.push(ContextSection::PermissionContext { items: vec![
                 "\n>>> PARENT TURN PERMISSION CONTEXT START\n".into(),
@@ -363,14 +378,44 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
                 )),
                 ..action.clone()
             };
-            assert_eq!(
-                super::default_registry().collect(&SectionInput {
+            let collected = super::default_registry()
+                .prepare(&SectionInput {
                     planned_action: Some(&oversized),
                     ..input
-                }),
-                Err(SectionError::EvidenceLimitExceeded {
+                })
+                .unwrap();
+            assert_eq!(
+                super::prepare_context(
+                    std::borrow::Cow::Owned(collected.clone()),
+                    &super::ContextProfile::synchronous(),
+                    /*entry_number_offset*/ 0,
+                    super::ContextPresentation::SyncFull {
+                        session_id: "worker"
+                    },
+                    super::ContextBudgeting::Fixed,
+                    &[],
+                )
+                .err(),
+                Some(SectionError::EvidenceLimitExceeded {
                     section: "native_tool_call"
                 })
+            );
+            let elastic = super::prepare_context(
+                std::borrow::Cow::Owned(collected),
+                &super::ContextProfile::synchronous(),
+                /*entry_number_offset*/ 0,
+                super::ContextPresentation::SyncFull {
+                    session_id: "worker",
+                },
+                super::ContextBudgeting::Elastic,
+                &[],
+            )
+            .unwrap();
+            let config = super::ElasticBudgetConfig::default();
+            let prepared = elastic.prepare_elastic_entries(&config).unwrap();
+            assert!(
+                matches!(&oversized.kind, super::PlannedActionKind::ToolCall(call)
+                if prepared.context.into_messages().contains(call))
             );
         }
         if target == ContextTarget::Async {
@@ -394,6 +439,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
                     target,
                     history: &[],
                     transcript: &transcript,
+                    is_selected_exec_output: None,
                     root_conversation: &[],
                     root_conversation_candidates: None,
                     trusted_user_answers: &[],

@@ -31,7 +31,7 @@ const UNSUPPORTED_AUDIO_FORMAT_PLACEHOLDER: &str =
 
 const MAX_PROMPT_AUDIO_BASE64_BYTES: usize = MAX_PROMPT_AUDIO_INPUT_BYTES.div_ceil(3) * 4;
 const AUDIO_TOKEN_ESTIMATE_CACHE_SIZE: usize = 32;
-const AUDIO_TOKENS_PER_SECOND: f64 = 10.0;
+const AUDIO_TOKENS_PER_SECOND: u32 = 10;
 
 static AUDIO_TOKEN_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Arc<OnceLock<usize>>>> =
     LazyLock::new(|| {
@@ -107,7 +107,9 @@ fn prepare_message_content(items: &mut [ContentItem]) {
 
 fn prepare_tool_output_content(items: &mut [FunctionCallOutputContentItem]) {
     for item in items {
-        if let FunctionCallOutputContentItem::InputAudio { audio_url } = item
+        if let FunctionCallOutputContentItem::InputAudio {
+            audio: AudioReference::Inline { audio_url },
+        } = item
             && let Err(error) = prepare_audio(audio_url)
         {
             warn!(%error, "failed to prepare tool output audio");
@@ -147,8 +149,41 @@ fn canonical_audio_mime(mime: &str) -> Option<&'static str> {
     }
 }
 
+/// Budget one file reference at the inline audio rate. Missing or unusable metadata
+/// reserves the full 20 minutes accepted by Responses. Admission belongs to Responses.
+pub fn estimate_file_audio_tokens(duration: Option<std::time::Duration>) -> usize {
+    const MAX_DURATION: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+    let duration = duration
+        .filter(|value| !value.is_zero())
+        .unwrap_or(MAX_DURATION)
+        .min(MAX_DURATION);
+    let tokens =
+        (duration.as_nanos() * u128::from(AUDIO_TOKENS_PER_SECOND)).div_ceil(1_000_000_000);
+    usize::try_from(tokens).unwrap_or(usize::MAX)
+}
+
+/// Estimate tool audio on Core's multi-threaded runtime.
+pub fn estimate_tool_audio_tokens(audio: &AudioReference) -> usize {
+    estimate_tool_audio_tokens_with(audio, estimate_audio_token_count)
+}
+
+/// Code Mode can render on a single thread, where blocking cache access is unavailable.
+pub fn estimate_tool_audio_tokens_without_cache(audio: &AudioReference) -> usize {
+    estimate_tool_audio_tokens_with(audio, estimate_audio_token_count_without_cache)
+}
+
+fn estimate_tool_audio_tokens_with(
+    audio: &AudioReference,
+    inline_cost: impl FnOnce(&str) -> usize,
+) -> usize {
+    match audio {
+        AudioReference::Inline { audio_url } => inline_cost(audio_url),
+        AudioReference::File { .. } => estimate_file_audio_tokens(/*duration*/ None),
+    }
+}
+
 /// Estimates audio tokens from decoded duration, falling back to the data URL size.
-pub fn estimate_audio_token_count(audio_url: &str) -> usize {
+fn estimate_audio_token_count(audio_url: &str) -> usize {
     let key = sha1_digest(audio_url.as_bytes());
     AUDIO_TOKEN_ESTIMATE_CACHE
         .get_or_init(key, || estimate_audio_token_count_without_cache(audio_url))
@@ -156,11 +191,11 @@ pub fn estimate_audio_token_count(audio_url: &str) -> usize {
 
 /// The same duration-based estimate without accessing the Tokio-dependent cache.
 /// Suitable for bounded output rendered on a current-thread runtime.
-pub fn estimate_audio_token_count_without_cache(audio_url: &str) -> usize {
+fn estimate_audio_token_count_without_cache(audio_url: &str) -> usize {
     let Some(duration_seconds) = audio_duration_seconds(audio_url) else {
         return approx_token_count(audio_url);
     };
-    let token_count = (duration_seconds * AUDIO_TOKENS_PER_SECOND).ceil();
+    let token_count = (duration_seconds * f64::from(AUDIO_TOKENS_PER_SECOND)).ceil();
     if token_count >= usize::MAX as f64 {
         usize::MAX
     } else {

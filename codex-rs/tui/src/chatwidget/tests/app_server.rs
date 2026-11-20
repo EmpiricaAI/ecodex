@@ -16,6 +16,7 @@ fn thread_settings_for_test(
         thread_id: thread_id.to_string(),
         thread_settings: codex_app_server_protocol::ThreadSettings {
             disabled_plugin_ids: Vec::new(),
+            environments: None,
             cwd: test_path_buf("/tmp/thread-settings").abs(),
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
@@ -964,6 +965,7 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
     assert_eq!(status.header(), "Working");
 
     let item = AppServerThreadItemPayload::AgentMessage {
+        moderation: None,
         id: "msg-1".to_string(),
         text: "Yes. What do you need?".to_string(),
         phase: Some(MessagePhase::FinalAnswer),
@@ -1047,6 +1049,7 @@ async fn live_app_server_turn_started_sets_feedback_turn_id() {
         crate::app_event::FeedbackCategory::Bug,
         /*include_logs*/ false,
         crate::bottom_pane::FeedbackAudience::External,
+        /*can_save*/ true,
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1057,6 +1060,7 @@ async fn live_app_server_turn_started_sets_feedback_turn_id() {
             reason: None,
             turn_id: Some(turn_id),
             include_logs: false,
+            destination: crate::app_event::FeedbackDestination::OpenAi,
         }) if turn_id == "turn-1"
     );
 }
@@ -1726,6 +1730,8 @@ async fn live_app_server_failed_turn_consolidates_streamed_answer() {
     handle_turn_started(&mut chat, "turn-1");
     while rx.try_recv().is_ok() {}
 
+    handle_agent_message_delta(&mut chat, "I’ll check the patch.");
+    chat.flush_answer_stream_with_separator();
     handle_agent_message_delta(&mut chat, "```diff\n+ streamed patch\n```\n");
     chat.run_commit_tick();
     while rx.try_recv().is_ok() {}
@@ -1771,6 +1777,7 @@ async fn live_app_server_turn_completion_repairs_dropped_message_deltas() {
     );
     completed_turn.items_view = codex_app_server_protocol::TurnItemsView::Summary;
     completed_turn.items = vec![ThreadItem::untimed(AppServerThreadItemPayload::AgentMessage {
+        moderation: None,
         id: "msg-1".to_string(),
         text: concat!(
             "The transport kept this.\nAnd dropped this.\n\n",
@@ -1797,6 +1804,7 @@ async fn live_app_server_turn_completion_repairs_dropped_message_deltas() {
         .filter_map(|event| match event {
             AppEvent::ConsolidateAgentMessage {
                 source,
+                phase: Some(MessagePhase::FinalAnswer),
                 scrollback_reflow,
                 ..
             } => {
@@ -1823,18 +1831,28 @@ async fn live_app_server_turn_completion_repairs_dropped_message_deltas() {
 
 #[tokio::test]
 async fn live_app_server_interleaved_flush_repairs_mismatched_completion() {
-    for (completed_item_id, completed) in [
-        ("msg-1", "The transport kept this.\nAnd dropped this."),
-        ("msg-2", "The transport kept this."),
+    let prefix = "The transport kept this.";
+    let full = "The transport kept this.\nAnd dropped this.";
+    for (completed_item_id, later_delta, completed, expected) in [
+        ("msg-1", "", full, full),
+        ("msg-1", "\nAnd", full, full),
+        ("msg-1", "\n", full, full),
+        ("msg-2", "", prefix, prefix),
     ] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
         handle_turn_started(&mut chat, "turn-1");
         while rx.try_recv().is_ok() {}
-        handle_agent_message_delta(&mut chat, "The transport kept this.");
+        handle_agent_message_delta(&mut chat, prefix);
         chat.flush_answer_stream_with_separator();
         while rx.try_recv().is_ok() {}
 
+        if !later_delta.is_empty() {
+            handle_agent_message_delta(&mut chat, later_delta);
+            if later_delta == "\n" {
+                chat.flush_answer_stream_with_separator();
+            }
+        }
         complete_assistant_message(
             &mut chat,
             completed_item_id,
@@ -1844,21 +1862,18 @@ async fn live_app_server_interleaved_flush_repairs_mismatched_completion() {
 
         let consolidations = std::iter::from_fn(|| rx.try_recv().ok())
             .filter_map(|event| match event {
+                AppEvent::CorrectFlushedAgentMessage { cell, .. } => {
+                    Some(cell.copy_source().unwrap().to_owned())
+                }
                 AppEvent::ConsolidateAgentMessage {
+                    interrupted_item: None,
                     source,
-                    scrollback_reflow,
                     ..
-                } => Some((source, scrollback_reflow)),
+                } => Some(source),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            consolidations,
-            vec![(
-                completed.to_string(),
-                crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan,
-            )]
-        );
+        assert_eq!(consolidations, vec![expected]);
     }
 }
 
@@ -1889,8 +1904,10 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
                 misalignment: None,
-                message: "Reconnecting... 1/5".to_string(),
-                codex_error_info: Some(CodexErrorInfo::Other),
+                message: "Reconnecting... 2/5".to_string(),
+                codex_error_info: Some(CodexErrorInfo::ResponseStreamDisconnected {
+                    http_status_code: Some(429),
+                }),
                 additional_details: None,
             },
             will_retry: true,
@@ -1900,6 +1917,11 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         /*replay_kind*/ None,
     );
     drain_insert_history(&mut rx);
+
+    insta::assert_snapshot!(
+        chat.bottom_pane.status_widget().unwrap().header(),
+        @"Server is busy, reconnecting 2/5"
+    );
 
     chat.handle_server_notification(
         ServerNotification::AgentMessageDelta(
@@ -1921,23 +1943,36 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
 }
 
 #[tokio::test]
-async fn live_app_server_rate_limit_error_renders_upstream_message() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let error = CodexErr::from(CodexErrorDetails::RateLimitExceeded(
-        "Please try again in 10s.".to_string(),
-    ));
+async fn live_app_server_errors_render_upstream_message() {
+    for (error, snapshot) in [
+        (
+            CodexErr::from(CodexErrorDetails::RateLimitExceeded(
+                "Please try again in 10s.".to_string(),
+            )),
+            "rate_limit_exceeded_error",
+        ),
+        (
+            CodexErr::SessionBudgetExceeded,
+            "session_budget_exceeded_error",
+        ),
+    ] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        handle_turn_started(&mut chat, "turn-1");
+        drain_insert_history(&mut rx);
+        assert!(chat.bottom_pane.is_task_running());
+        handle_error(
+            &mut chat,
+            error.to_string(),
+            Some(error.to_codex_protocol_error().into()),
+        );
 
-    handle_error(
-        &mut chat,
-        error.to_string(),
-        Some(error.to_codex_protocol_error().into()),
-    );
-
-    let lines = drain_insert_history(&mut rx)
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    assert_chatwidget_snapshot!("rate_limit_exceeded_error", lines_to_single_string(&lines));
+        let lines = drain_insert_history(&mut rx)
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_chatwidget_snapshot!(snapshot, lines_to_single_string(&lines));
+        assert!(!chat.bottom_pane.is_task_running());
+    }
 }
 
 #[tokio::test]
@@ -2141,7 +2176,7 @@ async fn live_app_server_manual_thread_name_updates_status_surfaces() {
         ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").expect("thread id");
     chat.thread_id = Some(thread_id);
 
-    chat.expect_manual_thread_name(thread_id, "review-fix".to_string());
+    chat.display_thread_name(thread_id, "review-fix".to_string());
 
     chat.handle_server_notification(
         ServerNotification::ThreadNameUpdated(
@@ -2210,7 +2245,7 @@ async fn live_app_server_manual_thread_name_is_visible_before_notification() {
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
 
-    chat.expect_manual_thread_name(thread_id, "Manual title".to_string());
+    chat.display_thread_name(thread_id, "Manual title".to_string());
 
     assert_eq!(chat.thread_name(), Some("Manual title".to_string()));
     assert!(drain_insert_history(&mut rx).is_empty());

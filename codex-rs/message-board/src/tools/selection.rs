@@ -21,6 +21,14 @@ pub enum MessageBoardTool {
 }
 
 impl MessageBoardTool {
+    pub(super) const READ_ONLY: [Self; 5] = [
+        Self::GetChannels,
+        Self::ListThreads,
+        Self::SearchPosts,
+        Self::ReadThread,
+        Self::ReadPost,
+    ];
+
     /// Existing agent discussion tools, in their original registration order.
     pub const DISCUSSION: [Self; 9] = [
         Self::CreateChannel,
@@ -33,6 +41,14 @@ impl MessageBoardTool {
         Self::Unsubscribe,
         Self::Post,
     ];
+
+    /// Bundled schema for discovery before a caller has been bound to a board.
+    pub fn spec(self) -> codex_tools::ToolSpec {
+        super::spec::tool(
+            self, /*namespace*/ None, /*namespace_description*/ "",
+            /*description_override*/ None,
+        )
+    }
 
     pub(super) fn name(self) -> &'static str {
         match self {

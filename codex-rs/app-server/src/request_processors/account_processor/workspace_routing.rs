@@ -49,6 +49,7 @@ pub(super) struct CachedWorkspaceRouting {
 
 pub(super) struct AccountRead {
     account_state: ProviderAccountState,
+    user_id: Option<String>,
     pub(super) workspace_routing: Option<WorkspaceRouting>,
     workspace_name: Option<String>,
 }
@@ -274,6 +275,7 @@ impl AccountRequestProcessor {
         Ok(Some(
             GetAccountResponse {
                 account,
+                user_id: read.user_id,
                 requires_openai_auth: read.account_state.requires_openai_auth,
                 workspace_routing: read.workspace_routing.map(|routing| {
                     codex_app_server_protocol::WorkspaceRouting {
@@ -340,6 +342,15 @@ impl AccountRequestProcessor {
             let account_state = provider
                 .account_state()
                 .map_err(AccountReadError::InvalidAccount)?;
+            let user_id = auth
+                .as_ref()
+                .filter(|_| {
+                    matches!(
+                        &account_state.account,
+                        Some(ProviderAccount::Chatgpt { .. })
+                    )
+                })
+                .and_then(CodexAuth::get_chatgpt_user_id);
             let mut workspace_routing = if let Some((auth, account_id)) = auth
                 .as_ref()
                 .filter(|auth| {
@@ -399,15 +410,23 @@ impl AccountRequestProcessor {
                 let routing = if let Some(cached) = cached {
                     cached
                 } else {
+                    let runtime = self
+                        .thread_manager
+                        .runtime_auth_for_config(&config)
+                        .map_err(|_| WorkspaceRoutingError::DiscoveryFailed)?;
                     let mut recovery = self.auth_manager.unauthorized_recovery();
                     let mut discovery_auth = auth.clone();
                     let mut discovery_generation = auth_state.generation;
                     let response = loop {
-                        let client = BackendClient::from_auth(
+                        let client = BackendClient::from_auth_with_runtime(
                             &config.chatgpt_base_url,
                             &discovery_auth,
                             config.http_client_factory(),
-                        );
+                            runtime.as_ref(),
+                            /*headers*/ &Default::default(),
+                        )
+                        .await
+                        .map_err(|_| WorkspaceRoutingError::DiscoveryFailed)?;
                         match client.get_accounts_check().await {
                             Ok(response) => break response,
                             Err(error) => {
@@ -537,6 +556,7 @@ impl AccountRequestProcessor {
                 .unwrap_or_default();
             Ok(AccountRead {
                 account_state,
+                user_id,
                 workspace_routing,
                 workspace_name,
             })

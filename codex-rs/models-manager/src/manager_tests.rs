@@ -566,6 +566,9 @@ async fn injected_cache_write_error_does_not_fail_remote_refresh() {
         .await;
 
     assert_eq!(catalog.models, remote_models);
+    manager
+        .ensure_initialized(DEFAULT_HTTP_CLIENT_FACTORY)
+        .await;
     assert_eq!(
         manager
             .model_catalog_with_origins(RefreshStrategy::InMemory, DEFAULT_HTTP_CLIENT_FACTORY)
@@ -579,6 +582,27 @@ async fn injected_cache_write_error_does_not_fail_remote_refresh() {
             .collect::<Vec<_>>()
     );
     assert_eq!(endpoint.fetch_count(), 1);
+}
+
+#[tokio::test]
+async fn initialization_retains_loaded_catalogs_including_empty_responses() {
+    for models in [
+        Vec::new(),
+        vec![remote_model("remote", "Remote", /*priority*/ 0)],
+    ] {
+        let endpoint = TestModelsEndpoint::new(vec![models.clone()]);
+        let manager =
+            OpenAiModelsManager::new_without_cache(endpoint.clone(), /*auth_manager*/ None)
+                .with_provider_catalog();
+        manager
+            .ensure_initialized(DEFAULT_HTTP_CLIENT_FACTORY)
+            .await;
+        manager
+            .ensure_initialized(DEFAULT_HTTP_CLIENT_FACTORY)
+            .await;
+        assert_eq!(manager.get_remote_models().await, models);
+        assert_eq!(endpoint.fetch_count(), 1);
+    }
 }
 
 #[tokio::test]
@@ -1200,6 +1224,7 @@ async fn authoritative_catalog_access_rejection_invalidates_cache_until_refresh_
                     .await,
                 ModelsResponse::default()
             );
+            assert!(manager.refreshed_model_catalog().is_none());
         }
         let restarted =
             OpenAiModelsManager::new_with_cache(cache, endpoint, /*auth_manager*/ None)
@@ -1267,6 +1292,8 @@ async fn authoritative_catalog_refresh_failure_preserves_snapshot_and_freshness(
         let initial = manager
             .raw_model_catalog(RefreshStrategy::Online, DEFAULT_HTTP_CLIENT_FACTORY)
             .await;
+        let updates = manager.model_catalog_updates().unwrap();
+        let refreshed = manager.refreshed_model_catalog();
         let initial_info = manager
             .get_model_info("provider-model", &ModelsManagerConfig::default())
             .await;
@@ -1285,6 +1312,11 @@ async fn authoritative_catalog_refresh_failure_preserves_snapshot_and_freshness(
         );
         assert_eq!(manager.remote_models.read().await.entry, stored[0]);
         assert_eq!(cache.stored_entries(), stored);
+        assert!(
+            !updates.has_changed().unwrap(),
+            "failed fetch must not publish a refreshed catalog"
+        );
+        assert_eq!(manager.refreshed_model_catalog(), refreshed);
 
         let restarted = OpenAiModelsManager::new_with_cache(
             cache.clone(),

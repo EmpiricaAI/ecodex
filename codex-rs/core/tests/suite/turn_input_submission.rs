@@ -1,4 +1,5 @@
 use codex_core::NotSubmittedReason;
+use codex_core::PromptCacheTtl;
 use codex_core::RecoverTurnRequest;
 use codex_core::StartIfIdleSubmission;
 use codex_core::StartThreadOptions;
@@ -12,14 +13,18 @@ use codex_core::config::Constrained;
 use codex_core::context::ContextualUserFragment;
 use codex_core::context::InternalContextSource;
 use codex_core::context::InternalModelContextFragment;
+use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionDataInit;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartAdmission;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -47,14 +52,49 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use test_case::test_case;
 use tokio::sync::Barrier;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+
+#[tokio::test]
+async fn host_prompt_cache_ttl_applies_only_to_the_started_turn() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    for (prompt_cache_ttl, expected) in [
+        (Some(PromptCacheTtl::TwelveHours), Some("12h")),
+        (None, None),
+        (Some(PromptCacheTtl::ThirtyMinutes), Some("30m")),
+    ] {
+        let response = responses::mount_sse_once(&server, responses::sse_completed("cache")).await;
+        test.codex
+            .start_or_steer_turn(user_message_request("hello").on_start(TurnStartOptions {
+                prompt_cache_ttl,
+                ..Default::default()
+            }))
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        assert_eq!(
+            response
+                .single_request()
+                .body_json()
+                .get("prompt_cache_options"),
+            expected
+                .map(|ttl| serde_json::json!({ "ttl": ttl }))
+                .as_ref(),
+        );
+    }
+    Ok(())
+}
 
 /// Accepted steering changes future captures, while rejected input and automatic starts
 /// preserve the policy belonging to each turn.
@@ -306,6 +346,30 @@ async fn host_drain_allows_spawned_agent_input_but_not_automatic_work() -> anyho
     assert_eq!(
         child
             .start_or_steer_turn(user_message_request("external child input"))
+            .await?,
+        TurnInputSubmission::NotSubmitted {
+            reason: NotSubmittedReason::ServerDraining
+        },
+    );
+    // A remote agent submission has not already been admitted by this host,
+    // even when its caller supplies parent lineage.
+    assert_eq!(
+        child
+            .start_or_steer_turn(
+                TurnInputRequest::new(TurnInput::InterAgentCommunication(
+                    InterAgentCommunication::new(
+                        AgentPath::root(),
+                        AgentPath::try_from("/root/worker").expect("valid agent path"),
+                        Vec::new(),
+                        "agent input while draining".to_string(),
+                        /*trigger_turn*/ true,
+                    ),
+                ))
+                .on_start(TurnStartOptions {
+                    parent_turn_id: Some("parent-turn".to_string()),
+                    ..Default::default()
+                }),
+            )
             .await?,
         TurnInputSubmission::NotSubmitted {
             reason: NotSubmittedReason::ServerDraining
@@ -636,6 +700,7 @@ async fn recover_turn_if_idle_preserves_id_and_resumes_plan_mode() {
                 ..Default::default()
             },
             trace: None,
+            prompt_cache_ttl: None,
             cyber_access_program: None,
         })
         .await
@@ -893,6 +958,7 @@ async fn recovery_preserves_durable_turn_attribution(
                         ..Default::default()
                     },
                     trace: None,
+                    prompt_cache_ttl: None,
                     cyber_access_program: None,
                 })
                 .await?,
@@ -1118,7 +1184,32 @@ async fn continue_turn_if_idle_starts_new_turn_with_internal_input() {
     assert_eq!(mock.requests().len(), 1);
 }
 
-/// Concurrent submissions must start exactly one turn and steer the other message.
+struct CompletedInputRecorder(mpsc::UnboundedSender<(String, String, Option<Value>)>);
+
+impl TurnLifecycleContributor for CompletedInputRecorder {
+    fn on_item_completed_with_metadata<'a>(
+        &'a self,
+        _thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+        item: &'a TurnItem,
+        data: Option<&'a BTreeMap<String, Value>>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if let TurnItem::UserMessage(message) = item {
+                self.0
+                    .send((
+                        turn_store.level_id().to_owned(),
+                        message.message(),
+                        data.and_then(|data| data.get("test")).cloned(),
+                    ))
+                    .expect("completion receiver");
+            }
+        })
+    }
+}
+
+/// Concurrent submissions can reuse a client ID. Both completions must carry their own
+/// metadata to the accepting turn, whichever message wins the race to start it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_input_submission_reports_started_and_steered_for_concurrent_submissions() {
     let (release_response, response_gate) = oneshot::channel();
@@ -1139,7 +1230,11 @@ async fn turn_input_submission_reports_started_and_steered_for_concurrent_submis
         }],
     ])
     .await;
+    let (tx, mut completions) = mpsc::unbounded_channel();
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.turn_lifecycle_contributor(Arc::new(CompletedInputRecorder(tx)));
     let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_model("gpt-5.4")
         .build_with_streaming_server(&server)
         .await
@@ -1147,12 +1242,26 @@ async fn turn_input_submission_reports_started_and_steered_for_concurrent_submis
     let codex = Arc::clone(&test.codex);
     let barrier = Arc::new(Barrier::new(3));
 
+    let annotated = |text: &str| {
+        let mut request = TurnInputRequest::new(TurnInput::UserInput {
+            content: vec![UserInput::Text {
+                text: text.to_owned(),
+                text_elements: Vec::new(),
+            }],
+            client_id: Some("shared-id".to_owned()),
+        });
+        request.user_input_extension_data.insert(
+            "test".into(),
+            Value::from(format!("extension-test-marker:{text}")),
+        );
+        request
+    };
     let first_submission = tokio::spawn({
         let codex = Arc::clone(&codex);
         let barrier = Arc::clone(&barrier);
         async move {
             barrier.wait().await;
-            submit_user_message(codex.as_ref(), "first message").await
+            codex.start_or_steer_turn(annotated("first message")).await
         }
     });
     let second_submission = tokio::spawn({
@@ -1160,7 +1269,7 @@ async fn turn_input_submission_reports_started_and_steered_for_concurrent_submis
         let barrier = Arc::clone(&barrier);
         async move {
             barrier.wait().await;
-            submit_user_message(codex.as_ref(), "second message").await
+            codex.start_or_steer_turn(annotated("second message")).await
         }
     });
     barrier.wait().await;
@@ -1225,6 +1334,28 @@ async fn turn_input_submission_reports_started_and_steered_for_concurrent_submis
     assert!(request_bodies[0].to_string().contains(started_message));
     assert!(request_bodies[1].to_string().contains("first message"));
     assert!(request_bodies[1].to_string().contains("second message"));
+
+    let mut recorded = [
+        completions.try_recv().unwrap(),
+        completions.try_recv().unwrap(),
+    ];
+    recorded.sort_by(|a, b| a.1.cmp(&b.1));
+    for ((turn, message, data), expected) in recorded
+        .into_iter()
+        .zip(["first message", "second message"])
+    {
+        assert_eq!(&turn, started_turn_id);
+        assert_eq!(message, expected);
+        assert_eq!(
+            data,
+            Some(Value::from(format!("extension-test-marker:{expected}")))
+        );
+    }
+    assert!(
+        request_bodies
+            .iter()
+            .all(|body| !body.to_string().contains("extension-test-marker:"))
+    );
 
     server.shutdown().await;
 }

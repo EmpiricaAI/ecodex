@@ -740,6 +740,7 @@ pub(crate) async fn run_legacy_after_agent_hook(
         misalignment: None,
         message,
         codex_error_info: Some(CodexErrorInfo::Other),
+        rejected_audio_file_ids: Vec::new(),
     });
     sess.send_event(turn_context, event).await;
     true
@@ -802,6 +803,8 @@ pub(crate) async fn record_pending_input(
             client_id,
             metadata,
         } => {
+            // Prompt telemetry can contain full text. Emit it only for prompts selected for recording.
+            turn_context.session_telemetry.user_prompt(&content);
             sess.record_user_prompt_and_emit_turn_item(
                 turn_context.as_ref(),
                 model_info,

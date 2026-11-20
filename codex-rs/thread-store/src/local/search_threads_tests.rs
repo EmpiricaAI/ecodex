@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
+
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -10,33 +14,42 @@ use uuid::Uuid;
 use super::super::LocalThreadStore;
 use super::super::test_support::test_config;
 use super::super::test_support::write_session_file_with;
+use super::super::test_support::write_session_file_with_fork;
 use super::ThreadSearchItem;
 use super::cursor_from_thread_search_item;
+use crate::ListThreadsParams;
 use crate::SearchThreadsParams;
 use crate::SortDirection;
+use crate::ThreadRelationFilter;
 use crate::ThreadSortKey;
 use crate::ThreadStore;
 
 #[test]
-fn recency_cursor_includes_thread_id_tie_breaker() {
+fn time_sort_cursors_include_thread_id_tie_breaker() {
     let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000123")
         .expect("thread ID should parse");
     let item = ThreadSearchItem {
         item: ThreadItem {
             thread_id: Some(thread_id),
+            created_at: Some("2026-01-27T12:34:56Z".to_string()),
+            updated_at: Some("2026-01-27T12:34:56Z".to_string()),
             recency_at: Some("2026-01-27T12:34:56Z".to_string()),
             ..Default::default()
         },
         snippet: String::new(),
     };
 
-    let cursor = cursor_from_thread_search_item(&item, ThreadSortKey::RecencyAt)
-        .expect("cursor should build");
-
-    assert_eq!(
-        serde_json::to_string(&cursor).expect("cursor should serialize"),
-        format!("\"2026-01-27T12:34:56Z|{thread_id}\"")
-    );
+    for sort_key in [
+        ThreadSortKey::CreatedAt,
+        ThreadSortKey::UpdatedAt,
+        ThreadSortKey::RecencyAt,
+    ] {
+        let cursor = cursor_from_thread_search_item(&item, sort_key).expect("cursor should build");
+        assert_eq!(
+            serde_json::to_string(&cursor).expect("cursor should serialize"),
+            format!("\"2026-01-27T12:34:56Z|{thread_id}\"")
+        );
+    }
 }
 
 #[tokio::test]
@@ -135,6 +148,8 @@ async fn search_matches_selected_rollout_across_path_spellings_and_compression()
                 ] {
                     let page = store
                         .search_threads(SearchThreadsParams {
+                            include_attached_threads: false,
+                            account: None,
                             page_size: 10,
                             cursor: None,
                             sort_key: ThreadSortKey::CreatedAt,
@@ -159,5 +174,149 @@ async fn search_matches_selected_rollout_across_path_spellings_and_compression()
                 }
             }
         }
+    }
+}
+
+async fn write_named_rollout(home: &Path, id: Uuid, attached_to: Option<Uuid>) -> PathBuf {
+    let path = write_session_file_with_fork(
+        home,
+        home.join("sessions/2025/01/03"),
+        "2025-01-03T12-00-00",
+        id,
+        "searchable message",
+        Some("test-provider"),
+        attached_to,
+        attached_to.is_some(),
+        ThreadHistoryMode::Legacy,
+    )
+    .expect("write rollout");
+    codex_rollout::append_thread_name(home, ThreadId::from_u128(id.as_u128()), "matching title")
+        .await
+        .expect("save thread name");
+    path
+}
+
+fn inclusive_title_search() -> ListThreadsParams {
+    ListThreadsParams {
+        page_size: 10,
+        cursor: None,
+        sort_key: ThreadSortKey::CreatedAt,
+        sort_direction: SortDirection::Desc,
+        allowed_sources: vec![SessionSource::Cli],
+        model_providers: None,
+        cwd_filters: None,
+        section: None,
+        project_id: None,
+        archived: false,
+        search_term: Some("matching title".to_string()),
+        relation_filter: Some(ThreadRelationFilter::IncludeAttached),
+        use_state_db_only: false,
+    }
+}
+
+#[tokio::test]
+async fn title_and_content_search_return_attached_parent_without_state_db() {
+    let home = TempDir::new().expect("temp dir");
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let parent = Uuid::new_v4();
+    let child = Uuid::new_v4();
+    write_named_rollout(home.path(), child, Some(parent)).await;
+    let expected = vec![(
+        ThreadId::from_u128(child.as_u128()),
+        Some(ThreadId::from_u128(parent.as_u128())),
+    )];
+
+    let list = store
+        .list_threads(inclusive_title_search())
+        .await
+        .expect("search titles on disk");
+    assert_eq!(
+        list.items
+            .into_iter()
+            .map(|t| (t.thread_id, t.attached_to_thread_id))
+            .collect::<Vec<_>>(),
+        expected
+    );
+
+    let search = store
+        .search_threads(SearchThreadsParams {
+            page_size: 10,
+            cursor: None,
+            sort_key: ThreadSortKey::CreatedAt,
+            sort_direction: SortDirection::Desc,
+            allowed_sources: vec![SessionSource::Cli],
+            archived: false,
+            search_term: "searchable message".to_string(),
+            include_attached_threads: true,
+            account: None,
+        })
+        .await
+        .expect("search messages on disk");
+    assert_eq!(
+        search
+            .items
+            .into_iter()
+            .map(|hit| (hit.thread.thread_id, hit.thread.attached_to_thread_id))
+            .collect::<Vec<_>>(),
+        expected
+    );
+}
+
+#[tokio::test]
+async fn inclusive_title_search_finds_unindexed_matches_when_filesystem_scanning_is_allowed() {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite.clone(),
+        config.default_model_provider_id.clone(),
+    )
+    .await
+    .expect("initialize state database");
+    let parent = Uuid::new_v4();
+    let child = Uuid::new_v4();
+    let standalone = Uuid::new_v4();
+    let parent_path = write_named_rollout(home.path(), parent, /*attached_to*/ None).await;
+    write_named_rollout(home.path(), standalone, /*attached_to*/ None).await;
+    write_named_rollout(home.path(), child, Some(parent)).await;
+    let parent_id = ThreadId::from_u128(parent.as_u128());
+    let child_id = ThreadId::from_u128(child.as_u128());
+    let mut row = codex_state::ThreadMetadataBuilder::new(
+        parent_id,
+        parent_path,
+        Utc::now(),
+        SessionSource::Cli,
+    )
+    .build("test-provider");
+    row.first_user_message = Some("searchable message".to_string());
+    row.title = "matching title".to_string();
+    state_db
+        .upsert_thread(&row)
+        .await
+        .expect("index only the parent");
+    let store = LocalThreadStore::new(config, Some(state_db));
+    let all = HashMap::from([
+        (parent_id, None),
+        (child_id, Some(parent_id)),
+        (ThreadId::from_u128(standalone.as_u128()), None),
+    ]);
+    for (use_state_db_only, expected) in [
+        (true, HashMap::from([(parent_id, None)])),
+        (false, all.clone()),
+        (true, all),
+    ] {
+        let page = store
+            .list_threads(ListThreadsParams {
+                use_state_db_only,
+                ..inclusive_title_search()
+            })
+            .await
+            .expect("search titles");
+        assert_eq!(
+            page.items
+                .into_iter()
+                .map(|t| (t.thread_id, t.attached_to_thread_id))
+                .collect::<HashMap<_, _>>(),
+            expected
+        );
     }
 }

@@ -4,7 +4,7 @@ use super::*;
 use assert_matches::assert_matches;
 use pretty_assertions::assert_eq;
 
-fn screen(view: &AgentsOverviewView, width: u16, height: u16) -> String {
+pub(super) fn screen(view: &AgentsOverviewView, width: u16, height: u16) -> String {
     let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
     let mut buf = ratatui::buffer::Buffer::empty(area);
     view.render(area, &mut buf);
@@ -25,7 +25,7 @@ fn screen(view: &AgentsOverviewView, width: u16, height: u16) -> String {
 
 #[tokio::test]
 async fn live_center_keeps_status_order_across_progress_refreshes() {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     app.agents_overview.view_state.lock().unwrap().grouping = AgentsOverviewGrouping::Status;
     let ids = [1, 2, 3, 4, 5].map(ThreadId::from_u128);
     let mut threads = [
@@ -91,7 +91,11 @@ async fn live_center_keeps_status_order_across_progress_refreshes() {
             .unwrap();
         assert_eq!(app.agents_overview.visible_thread_ids[selected], ids[0]);
     }
-    app.agents_overview.pinned_thread_ids = Some(vec![ids[3], ids[2]]);
+    app.agents_overview.pins_by_backend = [(
+        crate::backend_id::BackendId::new(),
+        Some(vec![ids[3], ids[2]]),
+    )]
+    .into();
     for parent in [ids[0], ids[3]] {
         threads.push(overview_thread(
             ThreadId::new(),
@@ -273,10 +277,15 @@ async fn live_center_status_order_tracks_updates_while_filtered_and_pinned() {
     assert_eq!(rendered_titles(&view), vec!["Bravo", "Charlie", "Alpha"]);
     view.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     view.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    app.agents_overview.pinned_thread_ids = Some(vec![ids[0], ids[2]]);
+    app.agents_overview.pins_by_backend = [(
+        crate::backend_id::BackendId::new(),
+        Some(vec![ids[0], ids[2]]),
+    )]
+    .into();
     view = app.agents_overview_view(threads.clone(), Some(ids[1]));
     assert_eq!(rendered_titles(&view), vec!["Alpha", "Charlie", "Bravo"]);
-    app.agents_overview.pinned_thread_ids = Some(vec![]);
+    app.agents_overview.pins_by_backend =
+        [(crate::backend_id::BackendId::new(), Some(vec![]))].into();
     view = app.agents_overview_view(threads, Some(ids[1]));
     assert_eq!(rendered_titles(&view), vec!["Bravo", "Charlie", "Alpha"]);
 }
@@ -333,7 +342,11 @@ async fn live_center_columns() {
         ThreadStatus::Idle,
     ));
     crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, child);
-    app.agents_overview.pinned_thread_ids = Some(vec![current, ThreadId::from_u128(/*value*/ 44)]);
+    app.agents_overview.pins_by_backend = [(
+        crate::backend_id::BackendId::new(),
+        Some(vec![current, ThreadId::from_u128(/*value*/ 44)]),
+    )]
+    .into();
     app.agents_overview
         .unread
         .insert(ThreadId::from_u128(/*value*/ 47));
@@ -563,8 +576,17 @@ async fn live_center_rename_retains_target_when_status_leaves_filter() -> Result
 }
 
 #[tokio::test]
+async fn escape_returns_to_a_chat_that_is_still_starting() {
+    let mut app = make_test_app().await;
+    app.pending_startup_thread_start = true;
+    let mut view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    view.handle_key_event(KeyCode::Esc.into());
+    assert!(view.is_complete());
+}
+
+#[tokio::test]
 async fn live_center_navigation_and_complete_hints() {
-    let app = make_test_app().await;
+    let app = make_test_app_with_chat().await;
     let ready = ThreadId::from_u128(/*value*/ 42);
     let needs_you = ThreadId::from_u128(/*value*/ 43);
     let unloaded = ThreadId::from_u128(/*value*/ 44);
@@ -714,7 +736,7 @@ async fn live_center_fixed_shortcuts_yield_to_configured_actions() {
 
 #[tokio::test]
 async fn live_center_hints_follow_configured_bindings() {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     let config: TuiKeymap = toml::from_str(
         r#"
 [list]
@@ -729,7 +751,8 @@ toggle_pin = 'z p'
     )
     .unwrap();
     app.keymap = RuntimeKeymap::from_config(&config).unwrap();
-    app.agents_overview.pinned_thread_ids = Some(Vec::new());
+    app.agents_overview.pins_by_backend =
+        [(crate::backend_id::BackendId::new(), Some(Vec::new()))].into();
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     insta::assert_snapshot!(
         "live_center_custom_footer",
@@ -810,6 +833,9 @@ async fn backspace_edits_search_and_rename_without_deleting_tasks() {
         view.handle_paste("!".into());
         view.handle_key_event(KeyCode::Backspace.into());
         assert_eq!(screen(&view, /*width*/ 88, /*height*/ 16), initial);
+        if key == '/' {
+            assert_matches!(rx.try_recv(), Ok(AppEvent::SearchAgentsOverview(..)));
+        }
         assert!(rx.try_recv().is_err());
         view.handle_key_event(KeyCode::Esc.into());
     }
@@ -858,7 +884,7 @@ async fn overview_clears_voice_badge_after_async_close() -> Result<()> {
 
 #[tokio::test]
 async fn live_center_show_more_navigation_search_and_loading() {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.app_event_tx = AppEventSender::new(tx);
     app.agents_overview.view_state.lock().unwrap().has_more = true;
@@ -886,10 +912,15 @@ async fn live_center_show_more_navigation_search_and_loading() {
     }
     view.handle_key_event(KeyCode::Char('/').into());
     view.handle_paste("Older task".into());
+    let id = assert_matches!(rx.try_recv(), Ok(AppEvent::SearchAgentsOverview(id, _)) => id);
+    insta::assert_snapshot!(screen(&view, /*width*/ 80, /*height*/ 12).lines().nth(6).unwrap(), @"  ›   Searching history…");
+    app.apply_agents_overview_search_page(id, Vec::new(), Default::default(), /*ok*/ false);
     insta::assert_snapshot!(
         "live_center_show_more_search_retry",
         screen(&view, /*width*/ 80, /*height*/ 12)
     );
     view.handle_key_event(KeyCode::Enter.into());
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ShowMoreAgentsOverview));
+    let id = assert_matches!(rx.try_recv(), Ok(AppEvent::SearchAgentsOverview(id, _)) => id);
+    app.apply_agents_overview_search_page(id, Vec::new(), Default::default(), /*ok*/ true);
+    insta::assert_snapshot!(screen(&view, /*width*/ 80, /*height*/ 12).lines().nth(6).unwrap(), @"  ›   Show more matches");
 }

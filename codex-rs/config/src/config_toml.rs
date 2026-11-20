@@ -54,7 +54,6 @@ use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::Platform;
@@ -591,10 +590,6 @@ pub struct AutoReviewToml {
     pub circuit_break_action: Option<CircuitBreakAction>,
     /// Additional policy instructions inserted into the guardian prompt.
     pub policy: Option<String>,
-    /// Additional policy text inserted into the Guardian template's `{{ extra_policy }}` slot.
-    pub extra_policy: Option<String>,
-    /// Experimental full Guardian prompt template containing the tenant policy placeholder.
-    pub experimental_policy_template: Option<String>,
     /// Experimental replacement for the history-retrieval instructions when history tools
     /// and Apps are enabled. Omitted or blank values use the built-in prompt.
     pub experimental_conversation_history_prompt: Option<String>,
@@ -706,6 +701,8 @@ pub struct RealtimeAudioToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
+    /// Client provider preference when the model does not select a provider.
+    pub client_search_provider: Option<codex_protocol::openai_models::WebSearchProvider>,
     #[serde(
         default,
         deserialize_with = "deserialize_optional_web_search_tool_config"
@@ -879,39 +876,12 @@ impl ConfigToml {
                     .map(|_| SandboxMode::WorkspaceWrite)
             })
             .unwrap_or_default();
-        let effective_sandbox_mode = effective_sandbox_mode(
+        let permission_profile = crate::translate_legacy_permissions(
             resolved_sandbox_mode,
+            self.sandbox_workspace_write.as_ref(),
             Platform::native(),
             windows_sandbox_level,
         );
-
-        let permission_profile = match effective_sandbox_mode {
-            SandboxMode::ReadOnly => PermissionProfile::read_only(),
-            SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
-                Some(SandboxWorkspaceWrite {
-                    writable_roots,
-                    network_access,
-                    exclude_tmpdir_env_var,
-                    exclude_slash_tmp,
-                    writable_git,
-                }) => {
-                    let network_policy = if *network_access {
-                        NetworkSandboxPolicy::Enabled
-                    } else {
-                        NetworkSandboxPolicy::Restricted
-                    };
-                    PermissionProfile::workspace_write_with_git(
-                        writable_roots,
-                        network_policy,
-                        *exclude_tmpdir_env_var,
-                        *exclude_slash_tmp,
-                        *writable_git,
-                    )
-                }
-                None => PermissionProfile::workspace_write(),
-            },
-            SandboxMode::DangerFullAccess => PermissionProfile::Disabled,
-        };
         if configured_sandbox_mode.is_none()
             && let Some(constraint) = permission_profile_constraint
             && let Err(err) = constraint.can_set(&permission_profile)

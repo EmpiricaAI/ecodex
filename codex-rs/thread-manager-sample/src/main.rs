@@ -35,6 +35,7 @@ use codex_core_api::GhostSnapshotConfig;
 use codex_core_api::History;
 use codex_core_api::MemoriesConfig;
 use codex_core_api::ModelAvailabilityNuxConfig;
+use codex_core_api::ModelCatalogSettings;
 use codex_core_api::MultiAgentV2Config;
 use codex_core_api::NewThread;
 use codex_core_api::Notice;
@@ -52,6 +53,7 @@ use codex_core_api::StartIfIdleSubmission;
 use codex_core_api::StartThreadOptions;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
+use codex_core_api::ThreadStoreBuilder;
 use codex_core_api::ThreadStoreConfig;
 use codex_core_api::ToolSuggestConfig;
 use codex_core_api::TuiKeymap;
@@ -63,7 +65,6 @@ use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::bootstrap_auth_config;
-use codex_core_api::build_models_manager;
 use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
@@ -75,7 +76,6 @@ use codex_core_api::passthrough_image_store;
 use codex_core_api::resolve_bootstrap_respect_system_proxy;
 use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
-use codex_core_api::thread_store_from_config;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -129,7 +129,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         config.codex_self_exe.clone(),
         config.codex_linux_sandbox_exe.clone(),
     )?;
-    let thread_store = thread_store_from_config(&config, state_db.clone());
+    let thread_store = ThreadStoreBuilder::from_config(&config, state_db.clone()).build();
     let environment_manager = Arc::new(
         EnvironmentManager::from_codex_home(
             config.codex_home.clone(),
@@ -146,10 +146,15 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     install_image_generation_extension(&mut extensions, auth_manager.clone(), |config: &Config| {
         Some(config.codex_home.clone())
     });
-    let thread_manager = ThreadManager::new(
+    let startup = codex_core_api::build_startup_models(
         &config,
         Arc::clone(&auth_manager),
-        build_models_manager(&config, auth_manager),
+        installation_id,
+        Arc::new(ModelCatalogSettings::disk(config.codex_home.to_path_buf())),
+    );
+    let thread_manager = ThreadManager::new(
+        &config,
+        startup,
         CodexAppsToolsCache::default(),
         SessionSource::Exec,
         environment_manager,
@@ -159,7 +164,6 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         passthrough_image_store(),
         Arc::clone(&thread_store),
         local_agent_graph_store_from_state_db(state_db.as_ref()),
-        installation_id,
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
@@ -261,16 +265,19 @@ async fn new_config(
         explicit_permission_profile_mode: false,
         custom_permission_profiles: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
+        requested_approvals_reviewer: None,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
         base_instructions: None,
         base_instructions_provenance: None,
         developer_instructions: None,
+        guardian_policy_revision: 0,
         guardian_policy_config: None,
         guardian_extra_policy: None,
         guardian_policy_template: None,
         guardian_transcript_mode: Default::default(),
+        guardian_sync_elastic_budget: None,
         guardian_conversation_history_prompt: None,
         guardian_conversation_history_max_output_tokens: None,
         guardian_circuit_break_action: Default::default(),
@@ -295,6 +302,8 @@ async fn new_config(
         tui_auto_recap: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         tui_fullscreen_transcript: false,
+        tui_collapse_turn_details: false,
+        tui_sidebar_width_percent: None,
         tui_mouse_scroll_speed: None,
         tui_copy_on_select: Default::default(),
         tui_copy_on_select_clear_selection: false,
@@ -393,6 +402,7 @@ async fn new_config(
         rollout_budget: None,
         current_time_reminder: None,
         sleep_tool_mode: Default::default(),
+        runtime_auth_mode: Default::default(),
         features: Default::default(),
         prefer_mxc: false,
 

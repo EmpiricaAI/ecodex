@@ -5,11 +5,33 @@
 //! app-owned behavior.
 //! Return the large fixture on the heap so async scenarios do not embed it in their stack frames.
 
+use super::owned_transcript::tests::buffer_text;
 use super::*;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::test_support::boxed_future;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
+
+pub(crate) use super::cloud_switch_wait::ClipboardHandoff;
+pub(crate) use super::cloud_switch_wait::wait_for_cloud_switch;
+
+pub(super) fn enable_side_retention(app: &mut App) -> Result<()> {
+    app.config.features.enable(Feature::TuiWorkspace)?;
+    app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Owned;
+    app.keymap = crate::keymap::RuntimeKeymap::for_session(
+        &app.local_settings.tui.keymap,
+        app.local_settings.workspace_enabled(&app.config),
+    )
+    .map_err(color_eyre::eyre::Report::msg)?;
+    Ok(())
+}
+
+pub(super) fn side_frame(app: &mut App, tui: &mut tui::Tui, size: Size) -> Result<String> {
+    let size = tui.screen_size_for_event(&TuiEvent::Resize(size))?;
+    app.handle_draw_pre_render(tui, size)?;
+    app.render_chat_widget_frame(tui, size)?;
+    Ok(buffer_text(tui.terminal.previous_buffer()))
+}
 
 pub(crate) async fn make_test_app() -> Box<App> {
     let (mut chat_widget, app_event_tx, _rx, _op_rx) =
@@ -21,6 +43,7 @@ pub(crate) async fn make_test_app() -> Box<App> {
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     Box::new(App {
+        provider_writes: HashMap::new(),
         feature_write_lock: Arc::default(),
         config_notification_test_generation: 0,
         config_notification_test_pending: None,
@@ -28,8 +51,13 @@ pub(crate) async fn make_test_app() -> Box<App> {
         session_telemetry,
         terminal_size_tags: Vec::new(),
         app_event_tx,
+        backend_registry: Default::default(),
         chat_widget,
         workspace_command_runner: None,
+        backend_preference_context: backend_selection::BackendPreferenceContext::new(
+            &config,
+            Some(config.cwd.to_path_buf()),
+        ),
         launch_cwd: config.cwd.to_path_buf(),
         runtime_working_directory_override: None,
         local_settings: crate::local_settings::LocalSettings::from(&config),
@@ -74,6 +102,7 @@ pub(crate) async fn make_test_app() -> Box<App> {
         feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         app_server_target: crate::AppServerTarget::Embedded,
+        app_server_backend_id: None,
         pending_right_click_paste: None,
         right_click_paste_environment: super::right_click_paste::PasteEnvironment {
             primary: false,
@@ -100,6 +129,14 @@ pub(crate) async fn make_test_app() -> Box<App> {
         agent_navigation: AgentNavigationState::default(),
         agents_overview: Default::default(),
         side_threads: HashMap::new(),
+        saved_openings: Default::default(),
+        sidebars: HashMap::new(),
+        side_companions: HashMap::new(),
+        zoomed_thread: None,
+        exact_sidebar_width: None,
+        divider_drag: None,
+        pane_resize: None,
+        passive_link_drag: None,
         abandoned_side_threads: HashSet::new(),
         active_thread_id: None,
         active_thread_rx: None,

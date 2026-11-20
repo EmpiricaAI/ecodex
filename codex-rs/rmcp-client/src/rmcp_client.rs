@@ -14,10 +14,10 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::AuthProviderResolver;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_api::SharedAuthProvider;
 use codex_config::McpServerOAuthConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::McpServerEnvVar;
@@ -90,6 +90,7 @@ use crate::in_process_transport::InProcessTransportFactory;
 use crate::oauth::OAuthCredentialStore;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::OAuthRuntime;
+use crate::oauth::OAuthStreamableHttpClient;
 use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::ResolvedOAuthTokens;
 use crate::oauth::StoredOAuthTokens;
@@ -134,7 +135,7 @@ enum PendingTransport {
         transport: StreamableHttpClientTransport<StreamableHttpClientAdapter>,
     },
     StreamableHttpWithOAuth {
-        transport: StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
+        transport: StreamableHttpClientTransport<OAuthStreamableHttpClient>,
         oauth_runtime: OAuthRuntime,
     },
     StreamableHttpWithAccessTokenOnly {
@@ -183,7 +184,7 @@ enum TransportRecipe {
         pinned_credential_store: Arc<OnceLock<ResolvedOAuthCredentialStore>>,
         originator: AuthStorageOriginator,
         http_client: Arc<dyn HttpClient>,
-        auth_provider: Option<SharedAuthProvider>,
+        auth_provider: Option<Arc<dyn AuthProviderResolver>>,
         redirect_mode: StreamableHttpRedirectMode,
         oauth_refresh_mode: McpOAuthRefreshMode,
         initialize_deadline: Arc<StdMutex<Option<Instant>>>,
@@ -573,7 +574,7 @@ impl RmcpClient {
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
         http_client: Arc<dyn HttpClient>,
-        auth_provider: Option<SharedAuthProvider>,
+        auth_provider: Option<Arc<dyn AuthProviderResolver>>,
     ) -> Result<Self> {
         Self::new_streamable_http_client_with_protocol_mode(
             server_name,
@@ -601,7 +602,7 @@ impl RmcpClient {
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
         http_client: Arc<dyn HttpClient>,
-        auth_provider: Option<SharedAuthProvider>,
+        auth_provider: Option<Arc<dyn AuthProviderResolver>>,
         protocol_mode: McpProtocolMode,
     ) -> Result<Self> {
         Self::new_streamable_http_client_with_protocol_mode_and_redirect_mode(
@@ -633,7 +634,7 @@ impl RmcpClient {
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
         http_client: Arc<dyn HttpClient>,
-        auth_provider: Option<SharedAuthProvider>,
+        auth_provider: Option<Arc<dyn AuthProviderResolver>>,
         protocol_mode: McpProtocolMode,
         redirect_mode: StreamableHttpRedirectMode,
         oauth_refresh_mode: McpOAuthRefreshMode,
@@ -1850,7 +1851,9 @@ impl RmcpClient {
             .await
             {
                 Ok(result) => return Ok(result),
-                Err(error) if Self::is_retryable_tools_list_error(label, &error) => {
+                Err(error)
+                    if label == "tools/list" && Self::is_retryable_transport_error(&error) =>
+                {
                     let Some(retry_delay_ms) = retry_delay_ms else {
                         return Err(error);
                     };
@@ -1901,10 +1904,7 @@ impl RmcpClient {
         }
     }
 
-    fn is_retryable_tools_list_error(label: &str, error: &ClientOperationError) -> bool {
-        if label != "tools/list" {
-            return false;
-        }
+    pub(crate) fn is_retryable_transport_error(error: &ClientOperationError) -> bool {
         let ClientOperationError::Service(rmcp::service::ServiceError::TransportSend(error)) =
             error
         else {
@@ -2061,31 +2061,28 @@ async fn create_oauth_transport_and_runtime(
         McpOAuthRefreshMode::Legacy | McpOAuthRefreshMode::Coordinated => None,
     };
 
-    let auth_client = AuthClient::new(
-        StreamableHttpClientAdapter::new(
-            http_client,
-            default_headers,
-            /*auth_provider*/ None,
-            has_configured_headers,
-            redirect_mode,
-            initialize_deadline,
-        ),
-        manager,
-    );
-    let auth_manager = auth_client.auth_manager.clone();
-
-    let transport = StreamableHttpClientTransport::with_client(
-        auth_client,
-        StreamableHttpClientTransportConfig::with_uri(url.to_string()),
+    let http_client = StreamableHttpClientAdapter::new(
+        http_client,
+        default_headers,
+        /*auth_provider*/ None,
+        has_configured_headers,
+        redirect_mode,
+        initialize_deadline,
     );
 
     if use_stored_access_token_only {
         warn!(
             "stored OAuth refresh credentials could not be bound to their issuer for MCP server `{server_name}`; using the stored access token without refresh"
         );
-        return Ok(PendingTransport::StreamableHttpWithAccessTokenOnly { transport });
+        return Ok(PendingTransport::StreamableHttpWithAccessTokenOnly {
+            transport: StreamableHttpClientTransport::with_client(
+                AuthClient::new(http_client, manager),
+                StreamableHttpClientTransportConfig::with_uri(url.to_string()),
+            ),
+        });
     }
 
+    let auth_manager = Arc::new(Mutex::new(manager));
     let runtime = match coordinated_store {
         Some(store) => OAuthRuntime::Coordinated {
             auth_manager,
@@ -2100,6 +2097,10 @@ async fn create_oauth_transport_and_runtime(
             oauth_config.cloned(),
         )),
     };
+    let transport = StreamableHttpClientTransport::with_client(
+        OAuthStreamableHttpClient::new(http_client, runtime.clone()),
+        StreamableHttpClientTransportConfig::with_uri(url.to_string()),
+    );
 
     Ok(PendingTransport::StreamableHttpWithOAuth {
         transport,

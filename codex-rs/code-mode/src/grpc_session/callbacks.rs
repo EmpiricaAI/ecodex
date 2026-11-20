@@ -184,18 +184,22 @@ impl SessionInner {
         result: Result<serde_json::Value, String>,
     ) {
         let request = completion::request(&self.id, &invocation_id, result);
-        let mut client = self.client();
         tokio::select! {
             biased;
             _ = cancellation.cancelled() => {}
             // NotFound can mean an invocation in a live session was canceled.
             // Check cancellation before treating a completion error as fatal.
-            result = deadline::request(
-                self,
-                "tool invocation completion",
-                Duration::ZERO,
-                client.complete_tool_call(self.request(request)),
-            ) => {
+            result = async {
+                let _permit = self.completion_permits.acquire().await
+                    .map_err(|_| "code-mode completion queue is closed".to_string())?;
+                let mut client = self.client()?;
+                deadline::request(
+                    self,
+                    "tool invocation completion",
+                    Duration::ZERO,
+                    client.complete_tool_call(self.request(request)),
+                ).await
+            } => {
                 if let Err(error) = result
                     && !cancellation.is_cancelled()
                     && !self.stopped.is_cancelled()

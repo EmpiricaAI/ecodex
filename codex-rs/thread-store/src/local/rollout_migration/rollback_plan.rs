@@ -279,6 +279,11 @@ impl RollbackPlanner {
                     self.pending_turn_records.push(index);
                 }
             }
+            RolloutItem::RetainedContext(
+                codex_rollout::RetainedContextEvent::AcceptedFileAudio { evidence },
+            ) => {
+                self.assign_targeted_record(index, Some(&evidence.turn_id));
+            }
             RolloutItem::TokenUsageRecord(record) => {
                 self.assign_targeted_record(index, Some(record.turn_id.as_str()));
             }
@@ -307,6 +312,7 @@ impl RollbackPlanner {
                 codex_rollout::RetainedContextEvent::DeliveredAssistantMessage {
                     message,
                     acceptance_order,
+                    ..
                 },
             ) => {
                 // Nested calls have no response item; match them to instructions by acceptance order.

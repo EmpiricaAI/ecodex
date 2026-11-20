@@ -616,7 +616,7 @@ async fn automatic_admission_rechecks_plan_mode_without_committing_sparse_settin
         .acquire()
         .await
         .expect("acquire MCP refresh gate");
-    session.mcp_refresh.claim();
+    session.mcp_refresh.take_pending();
     assert!(!session.mcp_refresh.is_pending());
 
     for (submission_id, prepared) in [
@@ -734,6 +734,7 @@ async fn admission_revalidates_constraints_before_committing(kind: TurnStartKind
             misalignment: None,
             message: expected_message,
             codex_error_info: Some(CodexErrorInfo::BadRequest),
+            rejected_audio_file_ids: Vec::new(),
         }]
     );
     assert_eq!(session.thread_settings_snapshot().await, desired_settings);

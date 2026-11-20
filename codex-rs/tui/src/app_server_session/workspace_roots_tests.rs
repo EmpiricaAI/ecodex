@@ -111,6 +111,7 @@ stream_max_retries = 0
                         /*collaboration_mode*/ None,
                         /*output_schema*/ None,
                         /*cyber_access_program*/ None,
+                        /*cloud_selection*/ None,
                     )
                     .await?;
                 tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 30), async {
@@ -170,6 +171,7 @@ stream_max_retries = 0
                         session_config,
                         thread_id,
                         /*selected_profile*/ None,
+                        crate::app_server_session::SideChatStorage::Temporary,
                     )
                     .await?;
                 assert_eq!(side.session.runtime_workspace_roots, expected_roots);

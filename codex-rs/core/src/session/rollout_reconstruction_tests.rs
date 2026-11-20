@@ -10,6 +10,7 @@ use codex_history::InitialHistory;
 use codex_history::ResponseItemEnvelope;
 use codex_history::ResumedHistory;
 use codex_protocol::AgentPath;
+use codex_protocol::ContextWindowId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -21,6 +22,7 @@ use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::WorldStateItem;
 use codex_protocol::security_risk::SecurityRiskScore;
 use codex_protocol::turn_input::CyberAccessProgram;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use codex_rollout::ModelContextScan;
 use codex_rollout::ModelContextScanProgress;
 use core_test_support::responses::strip_metadata_from_items;
@@ -29,7 +31,6 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use test_case::test_case;
-use uuid::Uuid;
 
 #[tokio::test]
 async fn recorded_questions_share_queued_input_order_across_resume() {
@@ -126,8 +127,10 @@ async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
     let (session, turn_context) = make_session_and_context().await;
 
     let mut live = ContextManager::for_session(
-        &SessionSource::default(),
+        /*root_capabilities_restricted*/ false,
         &crate::config::ManagedFeatures::from(codex_features::Features::with_defaults()),
+        codex_guardian_context::ContextBudgeting::Fixed,
+        uuid_v7_item_id_generator_for_test(),
     );
     let mut items = Vec::new();
     let mut snapshots = Vec::new();
@@ -233,7 +236,19 @@ fn assistant_message(text: &str) -> ResponseItem {
 }
 
 fn annotated(items: Vec<ResponseItem>) -> Vec<ResponseItemEnvelope> {
-    items.into_iter().map(ResponseItemEnvelope::new).collect()
+    // Legacy replay assigns append identities without claiming prior sampling.
+    items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| ResponseItemEnvelope {
+            item,
+            metadata: Some(codex_history::CodexHarnessMetadata {
+                history_sequence: Some(index as u64 + 1),
+                sampled_through_sequence: Some(0),
+                ..Default::default()
+            }),
+        })
+        .collect()
 }
 
 fn inter_agent_assistant_message(text: &str) -> ResponseItem {
@@ -451,15 +466,14 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         root_turn_id: None,
+        direct_only_tool_namespaces: None,
         disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy(),
         approvals_reviewer: None,
-        sandbox_policy: turn_context.sandbox_policy(),
-        permission_profile: None,
+        permission_profile: turn_context.permission_profile(),
         active_permission_profile: None,
-        file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
         collaboration_mode: Some(turn_context.collaboration_mode()),
@@ -497,15 +511,14 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
     let mut previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         root_turn_id: None,
+        direct_only_tool_namespaces: None,
         disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy(),
         approvals_reviewer: None,
-        sandbox_policy: turn_context.sandbox_policy(),
-        permission_profile: None,
+        permission_profile: turn_context.permission_profile(),
         active_permission_profile: None,
-        file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: Some("comp-hash-a".to_string()),
         collaboration_mode: Some(turn_context.collaboration_mode()),
@@ -1442,13 +1455,13 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
 async fn reconstruct_history_restores_initial_window_from_session_meta() {
     let (session, turn_context) = make_session_and_context().await;
     let thread_id = ThreadId::default();
-    let initial_window_id = Uuid::now_v7();
+    let initial_window_id = ContextWindowId::new_uuid_v7();
     let rollout_items = vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
         meta: SessionMeta {
             session_id: thread_id.into(),
             id: thread_id,
             context_window: Some(SessionContextWindow {
-                window_id: initial_window_id.to_string(),
+                window_id: initial_window_id.clone(),
             }),
             ..SessionMeta::default()
         },
@@ -1460,7 +1473,10 @@ async fn reconstruct_history_restores_initial_window_from_session_meta() {
         .await;
 
     assert_eq!(reconstructed.window_number, 0);
-    assert_eq!(reconstructed.first_window_id, Some(initial_window_id));
+    assert_eq!(
+        reconstructed.first_window_id.as_ref(),
+        Some(&initial_window_id)
+    );
     assert_eq!(reconstructed.previous_window_id, None);
     assert_eq!(reconstructed.window_id, Some(initial_window_id));
 }
@@ -1469,17 +1485,17 @@ async fn reconstruct_history_restores_initial_window_from_session_meta() {
 async fn reconstruct_history_prefers_compacted_window_over_session_meta() {
     let (session, turn_context) = make_session_and_context().await;
     let thread_id = ThreadId::default();
-    let initial_window_id = Uuid::now_v7();
-    let compacted_first_window_id = Uuid::now_v7();
-    let compacted_previous_window_id = Uuid::now_v7();
-    let compacted_window_id = Uuid::now_v7();
+    let initial_window_id = ContextWindowId::new_uuid_v7();
+    let compacted_first_window_id = ContextWindowId::new_uuid_v7();
+    let compacted_previous_window_id = ContextWindowId::new_uuid_v7();
+    let compacted_window_id = ContextWindowId::new_uuid_v7();
     let rollout_items = vec![
         RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
                 id: thread_id,
                 context_window: Some(SessionContextWindow {
-                    window_id: initial_window_id.to_string(),
+                    window_id: initial_window_id.clone(),
                 }),
                 ..SessionMeta::default()
             },
@@ -1492,9 +1508,9 @@ async fn reconstruct_history_prefers_compacted_window_over_session_meta() {
             guardian_history: None,
             mcp_resource_origins: None,
             window_number: Some(2),
-            first_window_id: Some(compacted_first_window_id.to_string()),
-            previous_window_id: Some(compacted_previous_window_id.to_string()),
-            window_id: Some(compacted_window_id.to_string()),
+            first_window_id: Some(compacted_first_window_id.clone()),
+            previous_window_id: Some(compacted_previous_window_id.clone()),
+            window_id: Some(compacted_window_id.clone()),
             compaction_response_id: None,
             latest_token_usage_record: None,
             resume_metadata: None,
@@ -1591,7 +1607,11 @@ async fn bounded_replay_matches_full_replay_after_empty_turn_compactions(
             user_message("original task").into(),
         )],
     ));
-    let window_ids = [Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()];
+    let window_ids = [
+        ContextWindowId::new_uuid_v7(),
+        ContextWindowId::new_uuid_v7(),
+        ContextWindowId::new_uuid_v7(),
+    ];
     let current = matches!(compaction_format, CompactionFormat::Current);
     let mut latest_compaction_index = 0;
     for window_number in 1..=2 {
@@ -1605,23 +1625,25 @@ async fn bounded_replay_matches_full_replay_after_empty_turn_compactions(
             vec![
                 RolloutItem::Compacted(Box::new(CompactedItem {
                     message: String::new(),
-                    replacement_history: Some(annotated(vec![object!({
+                    replacement_history: Some(vec![ResponseItemEnvelope::new(object!({
                         "type": "compaction",
                         "id": format!("checkpoint-{window_number}"),
                         "encrypted_content": format!("summary-{window_number}"),
-                    })])),
+                    }))]),
                     retained_context: None,
                     guardian_history: Some(codex_history::GuardianHistoryCheckpoint(vec![
                         user_message("original task").into(),
                     ])),
                     mcp_resource_origins: None,
                     window_number: Some(window_number as u64),
-                    first_window_id: Some(window_ids[0].to_string()),
-                    previous_window_id: Some(window_ids[window_number - 1].to_string()),
-                    window_id: Some(window_ids[window_number].to_string()),
+                    first_window_id: Some(window_ids[0].clone()),
+                    previous_window_id: Some(window_ids[window_number - 1].clone()),
+                    window_id: Some(window_ids[window_number].clone()),
                     compaction_response_id: None,
                     latest_token_usage_record: None,
                     resume_metadata: current.then(|| codex_history::CompactionResumeMetadata {
+                        next_item_ordinal: None,
+                        rejected_audio_file_ids: Default::default(),
                         dynamic_tools: None,
                         multi_agent_version: None,
                         last_started_turn_id: Some(format!("wake-{window_number}")),
@@ -1691,7 +1713,14 @@ async fn bounded_replay_matches_full_replay_after_empty_turn_compactions(
         bounded.guardian_history.as_ref(),
         Some(&codex_history::GuardianHistoryCheckpoint(vec![
             user_message("original task").into(),
-            assistant_message("continued working").into()
+            ResponseItemEnvelope {
+                item: assistant_message("continued working"),
+                metadata: Some(codex_history::CodexHarnessMetadata {
+                    history_sequence: Some(2),
+                    sampled_through_sequence: Some(0),
+                    ..Default::default()
+                }),
+            }
         ])),
     );
     if current {
@@ -1958,14 +1987,14 @@ async fn completed_turn_suffix_after_compaction_overrides_resume_metadata(
 async fn reconstruct_history_preserves_legacy_compaction_count_with_session_meta_window() {
     let (session, turn_context) = make_session_and_context().await;
     let thread_id = ThreadId::default();
-    let initial_window_id = Uuid::now_v7();
+    let initial_window_id = ContextWindowId::new_uuid_v7();
     let rollout_items = vec![
         RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
                 id: thread_id,
                 context_window: Some(SessionContextWindow {
-                    window_id: initial_window_id.to_string(),
+                    window_id: initial_window_id.clone(),
                 }),
                 ..SessionMeta::default()
             },
@@ -2023,8 +2052,9 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
             complete: false,
         },
         codex_history::RetainedInputSource::Local(None),
+        &uuid_v7_item_id_generator_for_test(),
     );
-    retained.record(&answer);
+    retained.record(&answer, &uuid_v7_item_id_generator_for_test());
     let rollout_items = vec![
         RolloutItem::ResponseItem(user_message("before compact").into()),
         RolloutItem::ResponseItem(assistant_message("assistant reply").into()),
@@ -2136,15 +2166,14 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         root_turn_id: Some("root-turn".to_string()),
+        direct_only_tool_namespaces: None,
         disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy(),
         approvals_reviewer: None,
-        sandbox_policy: turn_context.sandbox_policy(),
-        permission_profile: None,
+        permission_profile: turn_context.permission_profile(),
         active_permission_profile: None,
-        file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
         collaboration_mode: Some(turn_context.collaboration_mode()),
@@ -2234,15 +2263,14 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         serde_json::to_value(Some(TurnContextItem {
             turn_id: Some(turn_context.sub_id.clone()),
             root_turn_id: Some("root-turn".to_string()),
+            direct_only_tool_namespaces: None,
             disabled_plugin_ids: None,
             #[allow(deprecated)]
             cwd: turn_context.cwd.clone(),
             approval_policy: turn_context.approval_policy(),
             approvals_reviewer: None,
-            sandbox_policy: turn_context.sandbox_policy(),
-            permission_profile: None,
+            permission_profile: turn_context.permission_profile(),
             active_permission_profile: None,
-            file_system_sandbox_policy: None,
             model: previous_model.to_string(),
             comp_hash: None,
             collaboration_mode: Some(turn_context.collaboration_mode()),
@@ -2264,15 +2292,14 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         root_turn_id: None,
+        direct_only_tool_namespaces: None,
         disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy(),
         approvals_reviewer: None,
-        sandbox_policy: turn_context.sandbox_policy(),
-        permission_profile: None,
+        permission_profile: turn_context.permission_profile(),
         active_permission_profile: None,
-        file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
         collaboration_mode: Some(turn_context.collaboration_mode()),
@@ -2407,15 +2434,14 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
     let current_context_item = TurnContextItem {
         turn_id: Some(current_turn_id.clone()),
         root_turn_id: None,
+        direct_only_tool_namespaces: None,
         disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy(),
         approvals_reviewer: None,
-        sandbox_policy: turn_context.sandbox_policy(),
-        permission_profile: None,
+        permission_profile: turn_context.permission_profile(),
         active_permission_profile: None,
-        file_system_sandbox_policy: None,
         model: current_model.to_string(),
         comp_hash: None,
         collaboration_mode: Some(turn_context.collaboration_mode()),
@@ -2542,15 +2568,14 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         root_turn_id: None,
+        direct_only_tool_namespaces: None,
         disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy(),
         approvals_reviewer: None,
-        sandbox_policy: turn_context.sandbox_policy(),
-        permission_profile: None,
+        permission_profile: turn_context.permission_profile(),
         active_permission_profile: None,
-        file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
         collaboration_mode: Some(turn_context.collaboration_mode()),
@@ -2727,15 +2752,14 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         root_turn_id: None,
+        direct_only_tool_namespaces: None,
         disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy(),
         approvals_reviewer: None,
-        sandbox_policy: turn_context.sandbox_policy(),
-        permission_profile: None,
+        permission_profile: turn_context.permission_profile(),
         active_permission_profile: None,
-        file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
         collaboration_mode: Some(turn_context.collaboration_mode()),

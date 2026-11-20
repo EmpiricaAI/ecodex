@@ -12,7 +12,6 @@ before:
 
 › draft while loading
 
-
 after:
 
   ∴ ecodex (v<VERSION>)  ·  turtles all the way down
@@ -20,7 +19,6 @@ after:
 
 
 › draft while loading
-
 
 ---
 fork lookup fallback:
@@ -32,7 +30,6 @@ before:
 
 › draft while loading
 
-
 after:
 
   ∴ ecodex (v<VERSION>)  ·  turtles all the way down
@@ -40,7 +37,6 @@ after:
 
 
 › draft while loading
-
 
 ---
 resume picker cancellation:

@@ -49,8 +49,12 @@ use toml_edit::Item as TomlItem;
 
 #[path = "config_manager_service_credential_edits.rs"]
 mod credential_edits;
+#[path = "config_manager_service_model_providers.rs"]
+mod model_providers;
 #[path = "config_manager_service_provider_setup.rs"]
 mod provider_setup;
+#[path = "config_manager_service_provider_write.rs"]
+mod provider_write;
 
 use credential_edits::CredentialProviderEdits;
 
@@ -157,8 +161,12 @@ impl ConfigManager {
 
         let json_value = serde_json::to_value(&effective_config_toml)
             .map_err(|err| ConfigManagerError::json("failed to serialize configuration", err))?;
-        let config: ApiConfig = serde_json::from_value(json_value)
+        let mut config: ApiConfig = serde_json::from_value(json_value)
             .map_err(|err| ConfigManagerError::json("failed to deserialize configuration", err))?;
+        config.client_search_provider = effective_config_toml
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.client_search_provider);
 
         let mut origins = layers.origins_with_path_filter(|segments| {
             layers

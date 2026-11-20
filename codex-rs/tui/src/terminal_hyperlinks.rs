@@ -9,6 +9,7 @@ mod source;
 pub(crate) use paragraph::HyperlinkParagraph;
 pub(crate) use paragraph::HyperlinkRows;
 pub(crate) use paragraph::HyperlinkText;
+pub(crate) use paragraph::mark_hyperlink_cells;
 pub(crate) use source::LineWrapPolicy;
 pub(crate) use source::LogicalLineSource;
 
@@ -209,7 +210,7 @@ pub(crate) fn lines_with_sources_eq(left: &[HyperlinkLine], right: &[HyperlinkLi
             .eq(right.iter().map(|line| &line.source))
 }
 
-fn source_span_width(span: &Span<'_>) -> usize {
+pub(crate) fn source_span_width(span: &Span<'_>) -> usize {
     span.content
         .graphemes(/*is_extended*/ true)
         .map(display_width)
@@ -235,13 +236,24 @@ impl HyperlinkLine {
     }
 
     pub(crate) fn push_span(&mut self, span: Span<'static>, destination: Option<&str>) {
+        if let Some(destination) = destination.and_then(web_destination) {
+            self.push_linked_span(span, self.source_width(), destination);
+        } else {
+            self.source = None;
+            self.line.push_span(span);
+        }
+    }
+
+    pub(crate) fn push_linked_span(
+        &mut self,
+        span: Span<'static>,
+        start: usize,
+        destination: String,
+    ) {
         self.source = None;
-        let start = self.source_width();
         let end = start + source_span_width(&span);
         self.line.push_span(span);
-        if end > start
-            && let Some(destination) = destination.and_then(web_destination)
-        {
+        if end > start {
             self.hyperlinks
                 .push(TerminalHyperlink::web(start..end, destination));
         }
@@ -470,24 +482,31 @@ pub(crate) fn remap_source_wrapped_line(
             let end = start + display_width(&text[range.clone()]);
             source_byte = range.end;
             source_column = end;
-            let hyperlinks = source
-                .hyperlinks
-                .iter()
-                .filter_map(|link| {
-                    let first = link.columns.start.max(start);
-                    let last = link.columns.end.min(end);
-                    (first < last).then(|| {
-                        link.with_columns(
-                            prefix_columns + first - start..prefix_columns + last - start,
-                        )
-                    })
-                })
-                .collect();
+            let hyperlinks =
+                project_hyperlink_columns(&source.hyperlinks, start..end, prefix_columns);
             HyperlinkLine {
                 line,
                 hyperlinks,
                 source: Some(logical.wrapped(range, wrapped.prefix_bytes)),
             }
+        })
+        .collect()
+}
+
+/// Translate links intersecting a source fragment into columns on the displayed row.
+pub(crate) fn project_hyperlink_columns(
+    links: &[TerminalHyperlink],
+    source: Range<usize>,
+    prefix: usize,
+) -> Vec<TerminalHyperlink> {
+    links
+        .iter()
+        .filter_map(|link| {
+            let first = link.columns.start.max(source.start);
+            let last = link.columns.end.min(source.end);
+            (first < last).then(|| {
+                link.with_columns(prefix + first - source.start..prefix + last - source.start)
+            })
         })
         .collect()
 }

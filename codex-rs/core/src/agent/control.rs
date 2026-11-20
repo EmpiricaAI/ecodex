@@ -24,7 +24,6 @@ use crate::turn_timing::now_unix_timestamp_ms;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_protocol::AgentPath;
-use codex_protocol::ResponseItemId;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -148,6 +147,7 @@ impl LocalAgentControl {
             .await
         {
             Ok(TurnInputSubmission::Started { turn_id, .. }) => Ok(turn_id),
+            Ok(TurnInputSubmission::Accepted) => unreachable!("user input returns a turn outcome"),
             Ok(TurnInputSubmission::Steered { .. }) => {
                 // MAv1 exposes an opaque `submission_id` to the model. The legacy
                 // `Op::UserInput` path returned a fresh ID for every steer, while the
@@ -212,6 +212,7 @@ impl LocalAgentControl {
             .await;
         let completed_at_ms = now_unix_timestamp_ms();
         let completed = ItemCompletedEvent {
+            content_token_count: None,
             thread_id,
             turn_id: turn_id.clone(),
             item,
@@ -259,20 +260,13 @@ impl LocalAgentControl {
         &self,
         agent_id: ThreadId,
         state: &Arc<ThreadManagerState>,
-        mut communication: InterAgentCommunication,
+        communication: InterAgentCommunication,
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
         let observers = state.extensions.message_lifecycle_contributors();
-        let delivery = (!observers.is_empty()).then(|| {
-            let message_id = communication
-                .id
-                .take()
-                .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| ResponseItemId::new("amsg"));
-            communication.id = Some(message_id.clone());
-            MessageDelivery::publish(context.sender_thread_id, message_id, observers)
-        });
+        let delivery = (!observers.is_empty())
+            .then(|| MessageDelivery::publish(context.sender_thread_id, observers));
         let log_content = crate::agent_communication::send_log_content(&communication);
         {
             // Keep unloaded delivery atomic with publication of a reloaded session.

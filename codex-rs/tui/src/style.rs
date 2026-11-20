@@ -10,6 +10,7 @@ use crate::terminal_palette::best_color;
 use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
 use crate::terminal_palette::effective_stdout_color_level;
+use crate::terminal_palette::indexed_color;
 use crate::terminal_palette::rgb_color;
 use crate::terminal_palette::stdout_color_level;
 use ratatui::style::Color;
@@ -83,13 +84,24 @@ pub fn user_message_style() -> Style {
     user_message_style_for(default_bg())
 }
 
+/// Blend the floating HUD slightly away from the terminal background in either theme.
+const SHORTCUT_HUD_TINT: f32 = 0.052;
+
+pub(crate) fn shortcut_hud_style() -> Style {
+    default_bg().map_or_else(Style::default, |bg| {
+        let shade = if is_light(bg) { 0 } else { 255 };
+        Style::default().bg(best_color(blend(
+            (shade, shade, shade),
+            bg,
+            SHORTCUT_HUD_TINT,
+        )))
+    })
+}
+
 /// Submitted prompts use a lighter fill than the editable composer in either theme.
-///
-/// Some terminals do not answer the optional default-color probe. Keep submitted prompts shaded
-/// with an ANSI-safe fallback instead of dropping the surface.
 pub(crate) fn history_prompt_style() -> Style {
     let Some(background) = default_bg() else {
-        return Style::default().bg(Color::DarkGray);
+        return history_prompt_fallback(effective_stdout_color_level());
     };
     let (foreground, alpha) = if is_light(background) {
         ((0, 0, 0), 0.02)
@@ -97,6 +109,20 @@ pub(crate) fn history_prompt_style() -> Style {
         ((255, 255, 255), 0.16)
     };
     Style::default().bg(best_color(blend(foreground, background, alpha)))
+}
+
+// These grays are exact entries in the xterm extended palette and have 8.4:1 contrast.
+// On terminals with only theme-defined colors, use the terminal's own foreground and background.
+fn history_prompt_fallback(level: StdoutColorLevel) -> Style {
+    match level {
+        StdoutColorLevel::TrueColor => Style::default()
+            .fg(rgb_color((238, 238, 238)))
+            .bg(rgb_color((68, 68, 68))),
+        StdoutColorLevel::Ansi256 => Style::default()
+            .fg(indexed_color(/*index*/ 255))
+            .bg(indexed_color(/*index*/ 238)),
+        StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown => Style::default(),
+    }
 }
 
 pub fn proposed_plan_style() -> Style {
@@ -177,8 +203,36 @@ pub(crate) fn secondary_text_style() -> Style {
         .not_bold()
 }
 
+/// Bring a focusable surface closer to the terminal background while keeping its text readable.
+pub(crate) fn quiet_workspace_style() -> Style {
+    let base = Style::default().not_bold().not_reversed().not_underlined();
+    let Some(bg) = default_bg() else {
+        return base.fg(Color::Reset).bg(Color::Reset).dim();
+    };
+    let fill = best_color(blend(user_message_bg_rgb(bg), bg, /*alpha*/ 0.40));
+    let foreground = default_fg().map_or(Color::Reset, |fg| {
+        best_color(blend(fg, bg, /*alpha*/ 0.66))
+    });
+    base.bg(fill).fg(readable_color_on(foreground, Some(fill)))
+}
+
 pub(crate) fn selection_style() -> Style {
     contrast::selection_style(default_bg(), effective_stdout_color_level())
+}
+
+/// Strengthen a control's fill using the terminal's surface tint and readable foreground.
+pub(crate) fn hover_style(style: Style) -> Style {
+    let (Some(terminal_bg), Some(surface)) = (default_bg(), background_rgb(style.bg)) else {
+        return style.underlined();
+    };
+    let fill = best_color(shade_rgb(shade_rgb(surface, terminal_bg), terminal_bg));
+    if fill == Color::Reset || Some(fill) == style.bg {
+        return style.underlined();
+    }
+    style.bg(fill).fg(readable_color_on(
+        style.fg.unwrap_or(Color::Reset),
+        Some(fill),
+    ))
 }
 
 /// Resolve emphasis on the shaded prompt surface, including its quantized background.
@@ -281,12 +335,16 @@ pub fn user_message_bg(terminal_bg: (u8, u8, u8)) -> Color {
 }
 
 pub(crate) fn user_message_bg_rgb(terminal_bg: (u8, u8, u8)) -> (u8, u8, u8) {
+    shade_rgb(terminal_bg, terminal_bg)
+}
+
+fn shade_rgb(surface: (u8, u8, u8), terminal_bg: (u8, u8, u8)) -> (u8, u8, u8) {
     let (top, alpha) = if is_light(terminal_bg) {
         ((0, 0, 0), 0.04)
     } else {
         ((255, 255, 255), 0.12)
     };
-    blend(top, terminal_bg, alpha)
+    blend(top, surface, alpha)
 }
 
 #[allow(clippy::disallowed_methods)]

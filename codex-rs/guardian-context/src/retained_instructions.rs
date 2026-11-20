@@ -250,17 +250,39 @@ impl ComposedContext {
         }
     }
 
-    /// Omit complete source revisions still present in the admitted reviewer history.
+    /// Omit complete source revisions in admitted history or required pending transcript entries.
     /// Missing host metadata, changed revisions and incomplete copies require redelivery.
     pub fn retain_new_instructions(&mut self, reviewer_history: &[ResponseItemEnvelope]) {
-        self.remove_delivered_instructions(reviewer_history);
-        // Read only section-scoped delivery proof. Coalesced tool output can contain
-        // identical notice text without establishing that the host delivered it.
-        let Some(previous) = reviewer_history
+        let transcript_sources = self.required_transcript_sources(|_, _| true);
+        self.remove_delivered_instructions(
+            reviewer_history
+                .iter()
+                .filter_map(|item| item.metadata.as_ref())
+                .flat_map(|metadata| &metadata.guardian_sources)
+                .chain(&transcript_sources),
+            crate::ContextBudgeting::Fixed,
+        );
+        let previous = reviewer_history
             .iter()
             .rev()
-            .find_map(|item| item.metadata.as_ref()?.guardian_retained_omissions)
-        else {
+            .find_map(|item| item.metadata.as_ref()?.guardian_retained_omissions);
+        self.prune_omission_notices(previous);
+    }
+
+    pub(crate) fn retain_selected_instructions(
+        &mut self,
+        previous: Option<GuardianRetainedOmissions>,
+    ) {
+        let transcript_sources = self.required_transcript_sources(|_, _| true);
+        self.remove_delivered_instructions(
+            transcript_sources.iter(),
+            crate::ContextBudgeting::Elastic,
+        );
+        self.prune_omission_notices(previous);
+    }
+
+    pub(crate) fn prune_omission_notices(&mut self, previous: Option<GuardianRetainedOmissions>) {
+        let Some(previous) = previous else {
             return;
         };
         self.sections.retain_mut(|section| {
@@ -276,9 +298,13 @@ impl ComposedContext {
                     || (previous.assistant_context && !notices.assistant_context)
                 {
                     if items.is_empty() {
-                        items.extend([START, END].map(|text| Budgeted::required(ContentItem::InputText { text: format!("{text}\n") }.into())));
+                        items.extend([START, END].map(|text| Budgeted::protected(ContentItem::InputText { text: format!("{text}\n") }.into())));
                     }
-                    items.insert(/*index*/ 1.min(items.len()), Budgeted::required(ContentItem::InputText { text: format!("{AVAILABILITY_CHANGED}\n") }.into()));
+                    if !items.iter().any(|item| matches!(&item.content,
+                        SectionContent::Other(ContentItem::InputText { text })
+                        if text.strip_suffix('\n') == Some(AVAILABILITY_CHANGED))) {
+                        items.insert(/*index*/ 1.min(items.len()), Budgeted::protected(ContentItem::InputText { text: format!("{AVAILABILITY_CHANGED}\n") }.into()));
+                    }
                 }
                 return true;
             }
@@ -290,19 +316,42 @@ impl ComposedContext {
         });
     }
 
-    fn remove_delivered_instructions(&mut self, reviewer_history: &[ResponseItemEnvelope]) {
-        let transcript_sources: HashSet<_> = self
-            .sections
-            .iter()
-            .filter(|section| section.id == "conversation_transcript")
-            .flat_map(|section| match &section.delivery {
-                SectionDelivery::UserContent(items) => items.as_slice(),
-                SectionDelivery::Message(_) => &[],
-            })
-            .filter_map(|item| item.source.as_ref())
-            .filter(|source| source.complete)
-            .cloned()
-            .collect();
+    pub(crate) fn required_transcript_sources(
+        &self,
+        selected: impl Fn(usize, usize) -> bool,
+    ) -> Vec<codex_history::RetainedSource> {
+        let mut sources = Vec::new();
+        for (section_index, section) in self.sections.iter().enumerate() {
+            if section.id != "conversation_transcript" {
+                continue;
+            }
+            let SectionDelivery::UserContent(items) = &section.delivery else {
+                continue;
+            };
+            sources.extend(
+                items
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, item)| {
+                        item.retention == crate::Retention::Required
+                            && selected(section_index, *index)
+                    })
+                    .filter_map(|(_, item)| item.source.as_ref())
+                    .filter(|source| source.complete)
+                    .cloned(),
+            );
+        }
+        sources
+    }
+
+    /// Sources must come from current reviewer history or required entries that survived selection.
+    pub(crate) fn remove_delivered_instructions<'a>(
+        &mut self,
+        delivered_sources: impl Iterator<Item = &'a codex_history::RetainedSource> + Clone,
+        budgeting: crate::ContextBudgeting,
+    ) -> bool {
+        let mut removed = false;
+        let truncations = &mut self.truncations;
         for section in self
             .sections
             .iter_mut()
@@ -313,16 +362,31 @@ impl ComposedContext {
             };
             // At most sixteen retained originals are checked; no history-sized index is needed.
             items.retain(|item| {
-                item.source.as_ref().is_none_or(|source| {
-                    !reviewer_history
-                        .iter()
-                        .filter_map(|item| item.metadata.as_ref())
-                        .flat_map(|metadata| &metadata.guardian_sources)
-                        .chain(&transcript_sources)
-                        .any(|delivered| delivered.complete && delivered == source)
-                })
+                let keep = item.source.as_ref().is_none_or(|source| {
+                    !delivered_sources.clone().any(|delivered| {
+                        delivered.complete
+                            && match budgeting {
+                                crate::ContextBudgeting::Fixed => delivered == source,
+                                // The candidate may have been capped; only the surviving
+                                // delivered copy must still be complete.
+                                crate::ContextBudgeting::Elastic => {
+                                    delivered.id == source.id
+                                        && delivered.revision == source.revision
+                                }
+                            }
+                    })
+                });
+                removed |= !keep;
+                if !keep && budgeting == crate::ContextBudgeting::Elastic {
+                    truncations.retain(|observation| {
+                        observation.component != "retained_user_instructions"
+                            || observation.source.as_ref() != item.source.as_ref()
+                    });
+                }
+                keep
             });
         }
+        removed
     }
 }
 

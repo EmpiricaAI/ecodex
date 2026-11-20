@@ -11,17 +11,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use crossterm::cursor::MoveTo;
 use crossterm::cursor::RestorePosition;
 use crossterm::cursor::SavePosition;
 use crossterm::queue;
 use image::DynamicImage;
-use image::ImageDecoder;
 use image::ImageFormat;
 use image::RgbaImage;
 use ratatui::layout::Rect;
 
 use crate::pets::ImageProtocol;
+use crate::pets::KittyPlacement;
 
 // Separate from the two image ids reserved for pets (0xC0DE and 0xC0DF).
 pub(crate) const FIRST_IMAGE_ID: u32 = 0xC100;
@@ -80,7 +79,7 @@ impl TranscriptImage {
         if max_width == 0 || !metadata.is_file() || metadata.len() > 32 * 1024 * 1024 {
             return None;
         }
-        let mut reader = image::ImageReader::open(path)
+        let reader = image::ImageReader::open(path)
             .ok()?
             .with_guessed_format()
             .ok()?;
@@ -88,15 +87,7 @@ impl TranscriptImage {
         // screenshots usable, but never allocate hundreds of MB for an optional thumbnail.
         let mut limits = image::Limits::default();
         limits.max_alloc = Some(32 * 1024 * 1024);
-        reader.limits(limits.clone());
-        let mut decoder = reader.into_decoder().ok()?;
-        limits.reserve(decoder.total_bytes()).ok()?;
-        decoder.set_limits(limits).ok()?;
-        let orientation = decoder.orientation().ok();
-        let mut image = DynamicImage::from_decoder(decoder).ok()?;
-        if let Some(orientation) = orientation {
-            image.apply_orientation(orientation);
-        }
+        let image = crate::image_decode::decode_oriented(reader, limits).ok()?;
         Some(
             image
                 .thumbnail(max_width.min(image.width()), max_height.min(image.height()))
@@ -138,7 +129,7 @@ impl TranscriptImage {
         writer: &mut impl Write,
         area: Rect,
         first_row: usize,
-        id: u32,
+        placement: KittyPlacement,
     ) -> Result<Option<tempfile::NamedTempFile>> {
         let (top, bottom) = match self.protocol {
             ImageProtocol::Sixel => (
@@ -173,7 +164,7 @@ impl TranscriptImage {
                     } else {
                         crate::pets::kitty_transmit_png_with_id
                     };
-                    let command = transmit(png.path(), self.columns, area.height, Some(id))?;
+                    let command = transmit(png.path(), self.columns, area.height, placement)?;
                     file = (self.protocol == ImageProtocol::KittyLocalFile).then_some(png);
                     command.into_bytes()
                 }
@@ -185,8 +176,8 @@ impl TranscriptImage {
         let Ok(payload) = payload else {
             return Ok(None);
         };
-        queue!(writer, SavePosition, MoveTo(area.x, area.y))?;
-        writer.write_all(&payload)?;
+        queue!(writer, SavePosition)?;
+        placement.draw(writer, area, &payload)?;
         queue!(writer, RestorePosition)?;
         Ok(file)
     }

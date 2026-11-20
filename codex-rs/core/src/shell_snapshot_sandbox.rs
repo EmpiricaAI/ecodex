@@ -17,6 +17,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
@@ -164,7 +165,9 @@ impl ShellSnapshotSandbox {
                     additional_permissions,
                 },
                 permissions: &self.permissions,
-                sandbox: self.sandbox,
+                workspace_roots: None,
+                runtime_readable_paths: &[],
+                selection: SandboxSelection::Explicit(self.sandbox),
                 enforce_managed_network: self.enforce_managed_network,
                 environment_id: Some(&self.environment_id),
                 network: self.network.as_ref(),
@@ -173,7 +176,8 @@ impl ShellSnapshotSandbox {
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
             })
-            .context("failed to prepare shell snapshot sandbox")?;
+            .context("failed to prepare shell snapshot sandbox")?
+            .into_command_request();
         let workspace_roots = self
             .workspace_roots
             .iter()

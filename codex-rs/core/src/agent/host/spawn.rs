@@ -133,6 +133,12 @@ pub(super) async fn create_spawn(
         .into());
     }
     options.reserved_thread_id = Some(reservation.thread_id);
+    if let Some(admission) = reservation.turn_admission {
+        options.thread_extension_init.insert(admission);
+    }
+    if let Some(accounting) = reservation.usage_accounting {
+        options.thread_extension_init.insert(accounting);
+    }
     let child = state
         .spawn_host_child_thread(
             options,

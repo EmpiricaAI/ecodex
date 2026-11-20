@@ -1,4 +1,6 @@
 use super::*;
+use crate::McpServerKey;
+use crate::McpServerPermissions;
 use crate::mcp::tests::test_elicitation_config;
 use async_channel::Receiver;
 use codex_protocol::models::PermissionProfile;
@@ -386,14 +388,12 @@ fn elicitation_fixture(
             LifecycleRegistration(active_elicitations.clone())
         })
     });
-    let mut config = test_elicitation_config(
-        "independent-mcp",
-        approval_policy,
-        permission_profile.clone(),
+    let mut config =
+        test_elicitation_config("independent-mcp", approval_policy, permission_profile);
+    Arc::make_mut(&mut config).server_permissions.insert(
+        McpServerKey::unscoped("another-independent-mcp"),
+        McpServerPermissions::Thread,
     );
-    Arc::make_mut(&mut config)
-        .server_permission_profiles
-        .insert("another-independent-mcp".to_string(), permission_profile);
     let manager = ElicitationRequestManager::new(
         config,
         reviewer.map(|reviewer| reviewer as Arc<dyn ElicitationReviewer>),
@@ -402,6 +402,7 @@ fn elicitation_fixture(
     );
     let (tx_event, events) = async_channel::bounded(1);
     let sender = manager.make_sender(
+        McpServerKey::unscoped("independent-mcp"),
         "independent-mcp".to_string(),
         Some(tx_event),
         &ClientMcpExtensions::default(),
@@ -664,6 +665,7 @@ async fn strict_auto_review_respects_explicit_elicitation_denials() {
                 ("another-independent-mcp", None),
             ] {
                 let sender = manager.make_sender(
+                    McpServerKey::unscoped(server_name),
                     server_name.into(),
                     /*tx_event*/ None,
                     &ClientMcpExtensions::default(),
@@ -677,14 +679,6 @@ async fn strict_auto_review_respects_explicit_elicitation_denials() {
                 );
             }
         }
-        manager.router.set_auto_deny(/*auto_deny*/ true);
-        assert_eq!(
-            send_elicitation(&sender, Some(json!(true))).await,
-            ElicitationResponse {
-                meta: None,
-                ..strict_auto_review_decline()
-            },
-        );
         assert_eq!(
             (
                 reviewer.calls.load(Relaxed),
@@ -780,10 +774,22 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
     ));
     config.mcp_server_catalog = catalog.build();
     let servers = crate::effective_mcp_servers(&config, Some(&auth));
-    config.set_server_permission_profiles(
-        &servers,
-        [("attached".to_string(), PermissionProfile::read_only())],
-    );
+    let attachment = |permissions| {
+        let sandbox = codex_exec_server::FileSystemSandboxContext::from_permission_profile(
+            permissions,
+            codex_utils_path_uri::PathUri::from_host_native_path(std::env::temp_dir()).unwrap(),
+        );
+        let sandbox = Arc::new(sandbox);
+        // Hosted Apps must still use thread permissions when a local environment is attached.
+        [
+            ("attached".to_string(), Arc::clone(&sandbox)),
+            (
+                codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                sandbox,
+            ),
+        ]
+    };
+    config.set_server_permissions(&servers, attachment(PermissionProfile::read_only()));
 
     let manager = ElicitationRequestManager::new(
         Arc::new(config.clone()),
@@ -792,11 +798,13 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
         ElicitationRequestRouter::default(),
     );
     let attached = manager.make_sender(
+        McpServerKey::unscoped("attached"),
         "attached".to_string(),
         /*tx_event*/ None,
         &ClientMcpExtensions::default(),
     );
     let hosted = manager.make_sender(
+        McpServerKey::unscoped(crate::CODEX_APPS_MCP_SERVER_NAME),
         crate::CODEX_APPS_MCP_SERVER_NAME.to_string(),
         /*tx_event*/ None,
         &ClientMcpExtensions::default(),
@@ -811,10 +819,7 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
         ElicitationAction::Accept
     );
 
-    config.set_server_permission_profiles(
-        &servers,
-        [("attached".to_string(), PermissionProfile::Disabled)],
-    );
+    config.set_server_permissions(&servers, attachment(PermissionProfile::Disabled));
     assert!(manager.update(
         Arc::new(config.clone()),
         /*reviewer*/ None,
@@ -834,10 +839,7 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
         .mcp_server_catalog
         .with_materialized_servers(configured_servers);
     let servers = crate::effective_mcp_servers(&config, Some(&auth));
-    config.set_server_permission_profiles(
-        &servers,
-        [("attached".to_string(), PermissionProfile::Disabled)],
-    );
+    config.set_server_permissions(&servers, attachment(PermissionProfile::Disabled));
     assert!(manager.update(
         Arc::new(config.clone()),
         /*reviewer*/ None,
@@ -849,7 +851,7 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
     );
 
     let servers = crate::effective_mcp_servers(&config, /*auth*/ None);
-    config.set_server_permission_profiles(&servers, std::iter::empty());
+    config.set_server_permissions(&servers, std::iter::empty());
     assert!(manager.update(
         Arc::new(config.clone()),
         /*reviewer*/ None,
@@ -889,6 +891,7 @@ fn verification_fixture(
     );
     let (tx, events) = async_channel::bounded(1);
     let sender = manager.make_sender(
+        McpServerKey::unscoped(crate::CODEX_APPS_MCP_SERVER_NAME),
         crate::CODEX_APPS_MCP_SERVER_NAME.into(),
         Some(tx),
         &ClientMcpExtensions::new([(
@@ -960,6 +963,7 @@ async fn user_verification_requires_the_app_even_when_policy_would_approve_or_de
 async fn user_verification_cancels_when_no_app_can_receive_the_request() {
     let (manager, _, _) = verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
     let sender = manager.make_sender(
+        McpServerKey::unscoped(crate::CODEX_APPS_MCP_SERVER_NAME),
         crate::CODEX_APPS_MCP_SERVER_NAME.into(),
         /*tx_event*/ None,
         &ClientMcpExtensions::new([(
@@ -992,6 +996,7 @@ async fn user_verification_cancels_for_an_event_receiver_without_host_activation
     let (manager, _, _) = verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
     let (tx, events) = async_channel::bounded(1);
     let sender = manager.make_sender(
+        McpServerKey::unscoped(crate::CODEX_APPS_MCP_SERVER_NAME),
         crate::CODEX_APPS_MCP_SERVER_NAME.into(),
         Some(tx),
         &ClientMcpExtensions::default(),
@@ -1077,6 +1082,7 @@ async fn user_verification_rejects_attached_servers_even_if_they_use_the_plugin_
         }
         let (tx, events) = async_channel::bounded(1);
         let sender = manager.make_sender(
+            McpServerKey::unscoped(name),
             name.into(),
             Some(tx),
             &ClientMcpExtensions::new([(

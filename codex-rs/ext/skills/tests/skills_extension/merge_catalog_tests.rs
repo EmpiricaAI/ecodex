@@ -16,6 +16,12 @@ use serde_json::json;
 #[path = "source_telemetry_tests.rs"]
 mod source_telemetry_tests;
 
+#[path = "tool_metrics_tests.rs"]
+mod tool_metrics_tests;
+
+#[path = "name_resolution_tests.rs"]
+mod name_resolution_tests;
+
 fn cloud_skill(name: &str) -> SkillCatalogEntry {
     let package = format!("skill://Plugin_123/{name}");
     SkillCatalogEntry::new(
@@ -145,6 +151,7 @@ impl MergeHarness {
         &self,
         step: &ExtensionData,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+        step.get_or_init(|| self.catalog_metrics.clone() as Arc<dyn ExtensionMetrics>);
         if let Some(snapshots) = &self.snapshots {
             step.insert(snapshots.clone());
         }
@@ -155,12 +162,17 @@ impl MergeHarness {
             step.insert(plugins.as_ref().clone());
         }
         let selected_plugins = step.get::<SelectedPluginSnapshot>().unwrap_or_default();
+        let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
         prepare_step(
             &self.registry,
             codex_extension_api::StepPreparationInput {
                 selected_plugins: &selected_plugins,
                 turn_id: self.turn_store.level_id(),
-                ready_selected_capability_roots: &self.roots,
+                ready_selected_capability_roots: &self
+                    .roots
+                    .iter()
+                    .map(|root| AccessedSelectedCapabilityRoot { root, fs: &access })
+                    .collect::<Vec<_>>(),
                 executor_capability_discovery: self.discovery.as_ref(),
                 executor_capability_discovery_v2: self.snapshots.as_deref(),
                 session_store: &self.session_store,
@@ -899,10 +911,12 @@ async fn v2_reads_preserve_content_routes_with_bounded_installations() -> TestRe
             "next_cursor": null,
         }),
     );
-    assert_eq!(
-        call_tool(&tools, "installations", json!({"package": "e0/work"})).await?,
-        json!({"installations": locations, "next_cursor": null}),
-    );
+    for package in ["e0/work", first.name.as_str()] {
+        assert_eq!(
+            call_tool(&tools, "installations", json!({"package": package})).await?,
+            json!({"installations": locations, "next_cursor": null}),
+        );
+    }
     assert_eq!(
         call_tool(
             &tools,
@@ -948,15 +962,17 @@ async fn v2_reads_preserve_content_routes_with_bounded_installations() -> TestRe
         call_tool(&tools, "read", json!({"package": "e0/work"})).await?,
         read,
     );
-    assert_eq!(
-        call_tool(
-            &tools,
-            "read",
-            json!({"package": first.id.0, "source": source})
-        )
-        .await?,
-        selected,
-    );
+    for package in [&first.id.0, &first.name] {
+        assert_eq!(
+            call_tool(
+                &tools,
+                "read",
+                json!({"package": package, "source": source})
+            )
+            .await?,
+            selected,
+        );
+    }
     for source in [
         json!({"kind": "cloud"}),
         json!({"kind": "executor", "environment_id": "missing"}),

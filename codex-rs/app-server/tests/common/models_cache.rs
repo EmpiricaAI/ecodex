@@ -32,6 +32,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         upgrade: preset.upgrade.as_ref().map(Into::into),
         model_messages: Some(ModelMessages {
             apps: None,
+            plugins: None,
             content_filter_guidance: None,
             persistent_instructions: None,
             tools: None,
@@ -55,6 +56,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         availability_nux: preset.availability_nux.clone(),
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
+        web_search_provider: None,
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_image_detail_original: false,
         context_window: Some(272_000),

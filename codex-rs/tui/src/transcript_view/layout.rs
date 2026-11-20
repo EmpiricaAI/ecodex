@@ -127,6 +127,7 @@ struct CachedLayout {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct CellPresentation {
+    summarized: bool,
     separated: bool,
     shares_prompt_background: bool,
     turn_tip_space: bool,
@@ -151,6 +152,7 @@ impl TranscriptView {
             self.disclosure.expanded.extend(ids);
         }
         CellPresentation {
+            summarized: false,
             separated: false,
             shares_prompt_background: false,
             turn_tip_space: false,
@@ -238,6 +240,27 @@ impl TranscriptView {
         }
         let mode = self.mode;
         let mut presentation = self.content_presentation(cell.as_ref(), full_content, mode);
+        let mut turn_header = None;
+        if !full_content && let Some(row) = self.turn_row(cells, index) {
+            let ids = row.ids();
+            presentation.expanded = self.disclosure.is_expanded(ids);
+            presentation.summarized = true;
+            match &row {
+                turn_details::TurnRow::Prompt { label, .. } => {
+                    let arrow = if presentation.expanded { "▾" } else { "▸" };
+                    turn_header = Some(format!("{arrow} {label}"));
+                }
+                turn_details::TurnRow::Tools(_) => {
+                    if presentation.expanded {
+                        self.disclosure.expanded.extend(ids.iter().cloned());
+                    }
+                    return Some(self.cache.get(cell, width, presentation, || {
+                        row.layout(width, presentation.expanded, Vec::new())
+                    }));
+                }
+                _ => return Some(Arc::new(TextLayout::new(Vec::new(), width))),
+            }
+        }
         let shortcut = self
             .disclosure
             .keymap
@@ -245,8 +268,8 @@ impl TranscriptView {
         let shares_prompt_background = is_rich_user_prompt(cell.as_ref(), mode)
             && (0..index)
                 .rev()
-                .find(|&previous| {
-                    let previous = &cells[previous];
+                .find(|&previous_index| {
+                    let previous = &cells[previous_index];
                     let key = EntryKey::cell(previous);
                     if let Some(layout) = self.search.match_layout(key).or_else(|| {
                         self.snapshot()
@@ -254,6 +277,9 @@ impl TranscriptView {
                             .cloned()
                     }) {
                         return layout.row_count() > 0;
+                    }
+                    if !full_content && let Some(row) = self.turn_row(cells, previous_index) {
+                        return !row.ids().is_empty();
                     }
                     let previous_presentation =
                         self.content_presentation(previous.as_ref(), self.detailed, mode);
@@ -278,6 +304,9 @@ impl TranscriptView {
                 cell_content_layout(cell.as_ref(), width, mode, presentation, shortcut);
             if shares_prompt_background {
                 layout = layout.without_leading_blank_row();
+            }
+            if let Some(label) = turn_header {
+                layout = layout.with_turn_disclosure(label);
             }
             layout
         }))
@@ -376,6 +405,10 @@ impl LayoutCache {
             return visible;
         }
         self.get(cell, width, presentation, render).row_count() > 0
+    }
+
+    pub(super) fn clear_summaries(&mut self) {
+        self.entries.retain(|entry| !entry.presentation.summarized);
     }
 
     pub(super) fn clear(&mut self) {

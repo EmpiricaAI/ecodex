@@ -586,6 +586,9 @@ pub struct GetAccountParams {
 #[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
     pub account: Option<Account>,
+    /// ChatGPT user ID belonging to this account response, when available.
+    #[serde(default)]
+    pub user_id: Option<String>,
     pub requires_openai_auth: bool,
     #[experimental("account/read.workspaceRouting")]
     pub workspace_routing: Option<WorkspaceRouting>,
@@ -634,6 +637,8 @@ pub enum GatewayOAuthStatus {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GatewayOAuthChangedNotification {
+    /// Identifies the completed device login attempt.
+    pub login_id: Option<String>,
     /// Authorization handoff, sent only to the connection that started login.
     pub auth_url: Option<String>,
     pub provider_id: String,
@@ -652,6 +657,33 @@ impl std::fmt::Debug for GatewayOAuthChangedNotification {
     }
 }
 
+/// Read credential readiness for a configured provider without starting browser login.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GatewayOAuthReadParams {
+    /// Defaults to the current provider when omitted.
+    #[ts(optional = nullable)]
+    pub model_provider: Option<String>,
+}
+
+pub type NullableGatewayOAuthReadParams = Option<GatewayOAuthReadParams>;
+
+/// Authorize a configured provider without changing the default or any thread's provider.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GatewayOAuthLoginParams {
+    /// Defaults to the current provider when omitted.
+    #[ts(optional = nullable)]
+    pub model_provider: Option<String>,
+    /// Select device authorization when the server advertises support for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub device_auth: bool,
+}
+
+pub type NullableGatewayOAuthLoginParams = Option<GatewayOAuthLoginParams>;
+
 /// Current effective gateway policy and credential readiness; never contains credentials.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -661,6 +693,10 @@ pub struct GatewayOAuthReadResponse {
     pub provider_name: String,
     /// Whether the selected provider uses gateway OAuth, even when already signed in.
     pub required: bool,
+    /// Whether the administrator configured a device authorization endpoint.
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    pub supports_device_auth: bool,
     /// Null when the effective provider does not use gateway OAuth.
     pub status: Option<GatewayOAuthStatus>,
     pub error: Option<String>,
@@ -669,7 +705,26 @@ pub struct GatewayOAuthReadResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct GatewayOAuthLoginResponse {}
+pub struct GatewayOAuthLoginResponse {
+    pub prompt: Option<GatewayOAuthPrompt>,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GatewayOAuthPrompt {
+    pub login_id: String,
+    pub verification_url: String,
+    pub user_code: String,
+}
+
+impl std::fmt::Debug for GatewayOAuthPrompt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayOAuthPrompt")
+            .field("login_id", &self.login_id)
+            .finish_non_exhaustive()
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -856,4 +911,32 @@ pub struct AccountLoginCompletedNotification {
 #[ts(export_to = "v2/")]
 pub enum DesktopOnboardingEntrypoint {
     LifeSciences,
+}
+
+/// Optional security reminder bound to the account that fetched it. Unavailable or
+/// ineligible accounts return no notice; this read never changes account security.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GetAccountSecuritySetupResponse {
+    pub notice: Option<AccountSecuritySetupNotice>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSecuritySetupNotice {
+    pub account_id: String,
+    pub user_id: String,
+    pub title: String,
+    pub description: String,
+    pub action: AccountSecuritySetupAction,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSecuritySetupAction {
+    pub label: String,
+    pub url: String,
 }

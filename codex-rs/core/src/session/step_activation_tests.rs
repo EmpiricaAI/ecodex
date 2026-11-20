@@ -1,4 +1,5 @@
 use super::*;
+use crate::McpRefreshReason;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::agents_md_manager::SessionInstructions;
 use crate::session::Submission;
@@ -360,6 +361,10 @@ impl GatedModelsManager {
 }
 
 impl ModelsManager for GatedModelsManager {
+    fn ensure_initialized(&self, factory: HttpClientFactory) -> ModelsManagerFuture<'_, ()> {
+        self.inner.ensure_initialized(factory)
+    }
+
     fn model_catalog_with_origins(
         &self,
         strategy: RefreshStrategy,
@@ -608,7 +613,7 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         .acquire()
         .await
         .expect("MCP refresh lock");
-    session.mark_mcp_runtime_dirty();
+    session.mark_mcp_runtime_dirty(McpRefreshReason::ExplicitInvalidation);
     let capture_cancel = CancellationToken::new();
     let mut during = Box::pin(tokio::task::unconstrained(
         session.capture_step_context(Arc::clone(&turn), &capture_cancel),
@@ -1066,6 +1071,7 @@ async fn activation_must_match_the_retained_turn_authority(change: ManagedPolicy
     });
     assert!(
         !turn
+            .permission_profile()
             .file_system_sandbox_policy()
             .has_full_disk_write_access()
     );

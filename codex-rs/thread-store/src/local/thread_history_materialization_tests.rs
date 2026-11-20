@@ -138,7 +138,7 @@ async fn split_homes_support_backfill_listing_and_paginated_history() {
             Vec::new(),
         )
         .with_history_mode(ThreadHistoryMode::Paginated)
-        .with_initial_window_id("window-1".to_string()),
+        .with_initial_window_id(codex_protocol::ContextWindowId::new_uuid_v7()),
     )
     .await
     .expect("create paginated rollout");
@@ -236,6 +236,7 @@ async fn split_homes_support_backfill_listing_and_paginated_history() {
                     thread_id,
                     "turn-1",
                     TurnItem::AgentMessage(AgentMessageItem {
+                        moderation: None,
                         id: "agent-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "done".to_string(),
@@ -330,6 +331,7 @@ async fn paginated_live_append_materializes_turn_items_and_state() {
                     thread_id,
                     "turn-1",
                     TurnItem::AgentMessage(AgentMessageItem {
+                        moderation: None,
                         id: "agent-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "done".to_string(),
@@ -646,6 +648,7 @@ async fn paginated_realtime_items_materialize_separately_in_rollout_order() {
                     thread_id,
                     "turn-1",
                     TurnItem::AgentMessage(AgentMessageItem {
+                        moderation: None,
                         id: "agent-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "Result".to_string(),
@@ -772,7 +775,7 @@ async fn paginated_realtime_items_materialize_separately_in_rollout_order() {
             history_mode: ThreadHistoryMode::Legacy,
             history_base: None,
             subagent_history_start_ordinal: None,
-            initial_window_id: "window-1".to_string(),
+            initial_window_id: codex_protocol::ContextWindowId::new_uuid_v7(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(home.path().to_path_buf()),
@@ -1573,6 +1576,7 @@ async fn projection_preserves_exact_lifecycle_timestamps() {
     for (index, (started_at_ms, completed_at_ms)) in timestamps.iter().enumerate() {
         items.push(RolloutItem::EventMsg(EventMsg::ItemCompleted(
             ItemCompletedEvent {
+                content_token_count: None,
                 thread_id,
                 turn_id: "turn-1".to_string(),
                 item: TurnItem::UserMessage(UserMessageItem {
@@ -1791,13 +1795,13 @@ async fn summary_items_use_final_answers_and_ignore_nonterminal_messages() {
     )
     .await
     .expect("state runtime");
-    let mut builder = codex_state::ThreadMetadataBuilder::new(
+    let builder = codex_state::ThreadMetadataBuilder::new(
         thread_id,
         home.path().join("missing-rollout.jsonl"),
         Utc::now(),
         SessionSource::Cli,
-    );
-    builder.history_mode = ThreadHistoryMode::Paginated;
+    )
+    .with_history_mode(ThreadHistoryMode::Paginated);
     runtime
         .upsert_thread(&builder.build(config.default_model_provider_id.as_str()))
         .await
@@ -2524,7 +2528,10 @@ async fn paused_projection_releases_writer_and_retains_progress_when_stopped() {
             rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 1);
         let (sender, receiver) = tokio::sync::mpsc::channel(2);
         super::read_projection_batches(
-            rollout_path.as_path(),
+            &super::ProjectionRollout {
+                path: rollout_path.clone(),
+                reads: Default::default(),
+            },
             before.0 as u64,
             before.1 as u64,
             thread_id,
@@ -2718,7 +2725,10 @@ async fn blank_and_rejected_rollout_lines_advance_projection() {
     let checks = Cell::new(0);
     assert!(
         super::read_projection_batches(
-            rollout_path.as_path(),
+            &super::ProjectionRollout {
+                path: rollout_path.clone(),
+                reads: Default::default(),
+            },
             /*start_offset*/ 0,
             /*expected_ordinal*/ 0,
             thread_id,
@@ -3087,7 +3097,7 @@ async fn create_paginated_subagent_thread(
             history_mode: ThreadHistoryMode::Paginated,
             history_base,
             subagent_history_start_ordinal,
-            initial_window_id: "window-1".to_string(),
+            initial_window_id: codex_protocol::ContextWindowId::new_uuid_v7(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(std::env::current_dir().expect("cwd")),
@@ -3165,6 +3175,7 @@ fn contains_user_message(items: &[RolloutItem], expected: &str) -> bool {
 
 fn completed_item(thread_id: ThreadId, turn_id: &str, item: TurnItem) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id,
         turn_id: turn_id.to_string(),
         item,
@@ -3175,6 +3186,7 @@ fn completed_item(thread_id: ThreadId, turn_id: &str, item: TurnItem) -> Rollout
 
 fn agent_message(id: &str, phase: MessagePhase) -> TurnItem {
     TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: id.to_string(),
         content: vec![AgentMessageContent::Text {
             text: id.to_string(),

@@ -33,6 +33,7 @@ async fn rejected_voice_start_does_not_leave_local_capture_active() -> Result<()
             &mut app_server,
             AppEvent::CodexOp(Op::RealtimeConversationStart {
                 thread_id,
+                attempt_id: 1,
                 offer_sdp: String::from("v=0\r\n").into(),
             }),
         ))
@@ -123,6 +124,7 @@ async fn background_voice_closes_with_its_owner_not_the_visible_thread() -> Resu
             app.handle_polled_backend_event(
                 &source,
                 crate::backend_id::BackendId::new(),
+                &mut std::collections::HashMap::new(),
                 crate::app_server_session::AppServerSessionEvent {
                     backend_id: source.backend_id(),
                     event: codex_app_server_client::AppServerEvent::ServerNotification(Box::new(

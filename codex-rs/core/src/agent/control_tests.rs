@@ -27,7 +27,7 @@ use crate::context::ManagedDeveloperInstructions;
 use crate::context::ModelInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::SubagentNotification;
-use crate::context::world_state::IncrementalToolsHint;
+use crate::context::world_state::IncrementalToolsUpdate;
 use crate::init_state_db;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::SessionSettingsUpdate;
@@ -49,6 +49,7 @@ use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_models_manager::manager::ModelCatalogSettings;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
@@ -622,6 +623,7 @@ async fn on_event_updates_status_from_task_complete() {
                 misalignment: None,
                 message: "denied".to_string(),
                 codex_error_info: None,
+                rejected_audio_file_ids: Vec::new(),
             }),
             AgentStatus::Errored("denied".to_string()),
         ),
@@ -646,6 +648,7 @@ async fn on_event_updates_status_from_error() {
         misalignment: None,
         message: "boom".to_string(),
         codex_error_info: None,
+        rejected_audio_file_ids: Vec::new(),
     }));
 
     let expected = AgentStatus::Errored("boom".to_string());
@@ -1170,10 +1173,13 @@ async fn cancelled_v2_send_finishes_reload_registration() {
             .is_some()
     );
 
+    let mut sender_config = harness.config.clone();
+    sender_config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    sender_config.requested_approvals_reviewer = Some(ApprovalsReviewer::AutoReview);
     let followup_request = |message: &str| SendRequest {
         caller: parent_id,
         target: AgentTarget::Id(child_id),
-        resume_config: harness.config.clone(),
+        resume_config: sender_config.clone(),
         input: AgentInput::Message {
             message: AgentMessage::Plaintext(message.to_string()),
             mode: MessageDeliveryMode::TriggerTurn,
@@ -1220,6 +1226,11 @@ async fn cancelled_v2_send_finishes_reload_registration() {
             .registry
             .evicted_environments(child_id)
             .is_none()
+    );
+    assert_eq!(
+        reloaded.config_snapshot().await.approvals_reviewer,
+        ApprovalsReviewer::User,
+        "reload must preserve the worker's reviewer instead of inheriting its sender's request",
     );
     // Evict and reload again with the single child slot. This also catches a leaked
     // pin or pending residency reservation left behind by the cancelled sender.
@@ -2436,6 +2447,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
                 internal_chat_message_metadata_passthrough: None,
             }),
             RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id: parent_thread_id,
                 turn_id: "parent-turn".to_string(),
                 item: TurnItem::UserMessage(UserMessageItem {
@@ -2456,6 +2468,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
                         service_tier: None,
                         approval_policy: AskForApproval::Never,
                         approvals_reviewer: ApprovalsReviewer::User,
+                        requested_approvals_reviewer: None,
                         permission_profile: PermissionProfile::workspace_write(),
                         active_permission_profile: None,
                         cwd: harness.config.cwd.clone(),
@@ -2495,11 +2508,9 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
         .get_thread(child_thread_id)
         .await
         .expect("child thread should be registered");
+    let child_history = child_thread.session.clone_history().await;
     assert!(
-        history_contains_text(
-            child_thread.session.clone_history().await.raw_items(),
-            "paginated parent context",
-        ),
+        history_contains_text(child_history.raw_items(), "paginated parent context"),
         "bounded parent context should remain model-visible to the child"
     );
     child_thread.ensure_rollout_materialized().await;
@@ -2546,6 +2557,12 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
     assert!(
         copied_idless_context.id().is_some_and(|id| !id.is_empty()),
         "copied model context should receive response item ids before persistence"
+    );
+    assert!(
+        child_history
+            .raw_items()
+            .any(|item| item == &copied_idless_context.item),
+        "the child should see the same backfilled item that was persisted"
     );
     let copied_parent_context_count = lines
         .iter()
@@ -2700,6 +2717,8 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
 
     let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
     let parent_resume_metadata = codex_history::CompactionResumeMetadata {
+        next_item_ordinal: None,
+        rejected_audio_file_ids: Default::default(),
         dynamic_tools: None,
         multi_agent_version: Some(MultiAgentVersion::V2),
         last_started_turn_id: Some("parent-turn".to_string()),
@@ -3334,7 +3353,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marke
         role: "developer".to_string(),
         tools: Arc::from([serde_json::json!({"type": "function", "name": "compacted_tool"})]),
     };
-    let tools_update = ContextualUserFragment::into(IncrementalToolsHint(
+    let tools_update = ContextualUserFragment::into(IncrementalToolsUpdate(
         codex_prompts::ResolvedIncrementalToolMessages::default().tool_update_hint,
     ));
     let replacement_history = vec![
@@ -3413,7 +3432,10 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marke
         }),
     };
     let mut retained_context = codex_history::RetainedContext::default();
-    retained_context.record(&answer_event);
+    retained_context.record(
+        &answer_event,
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
     retained_context.record_sender_user_messages(delivery.metadata.as_ref().unwrap());
     parent_thread
         .session
@@ -3497,7 +3519,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marke
                         || matches!(item, ResponseItem::Message {
                             internal_chat_message_metadata_passthrough: Some(metadata), ..
                         } if metadata.content_item_kinds.as_ref().is_some_and(|kinds| {
-                            kinds.iter().any(|kind| kind.as_str() == IncrementalToolsHint::KIND)
+                            kinds.iter().any(|kind| kind.as_str() == IncrementalToolsUpdate::KIND)
                         }))
                 })
                 .cloned()
@@ -3785,8 +3807,14 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
         let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
         harness.manager = ThreadManager::new(
             &parent_config,
-            auth_manager.clone(),
-            crate::thread_manager::build_models_manager(&parent_config, auth_manager),
+            crate::build_startup_models(
+                &parent_config,
+                auth_manager.clone(),
+                uuid::Uuid::new_v4().to_string(),
+                Arc::new(ModelCatalogSettings::disk(
+                    parent_config.codex_home.to_path_buf(),
+                )),
+            ),
             crate::CodexAppsToolsCache::default(),
             SessionSource::Exec,
             Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -3794,12 +3822,9 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             Arc::new(crate::test_support::EmptyUserInstructionsProvider),
             /*analytics_events_client*/ None,
             crate::thread_manager::passthrough_image_store(),
-            crate::thread_manager::thread_store_from_config(
-                &parent_config,
-                harness.state_db.clone(),
-            ),
+            crate::ThreadStoreBuilder::from_config(&parent_config, harness.state_db.clone())
+                .build(),
             crate::thread_manager::local_agent_graph_store_from_state_db(harness.state_db.as_ref()),
-            uuid::Uuid::new_v4().to_string(),
             /*attestation_provider*/ None,
             /*external_time_provider*/ None,
         );
@@ -3858,6 +3883,8 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
                 compaction_response_id: None,
                 latest_token_usage_record: None,
                 resume_metadata: Some(codex_history::CompactionResumeMetadata {
+                    next_item_ordinal: None,
+                    rejected_audio_file_ids: Default::default(),
                     dynamic_tools: None,
                     multi_agent_version: Some(MultiAgentVersion::V2),
                     last_started_turn_id: None,
@@ -3905,7 +3932,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             })),
         ]);
         rollout_items.push(rollout_response_item(ContextualUserFragment::into(
-            IncrementalToolsHint(
+            IncrementalToolsUpdate(
                 codex_prompts::ResolvedIncrementalToolMessages::default().tool_update_hint,
             ),
         )));
@@ -3977,7 +4004,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
                         if matches!(&envelope.item, ResponseItem::Message {
                             internal_chat_message_metadata_passthrough: Some(metadata), ..
                         } if metadata.content_item_kinds.as_ref().is_some_and(|kinds| {
-                            kinds.iter().any(|kind| kind.as_str() == IncrementalToolsHint::KIND)
+                            kinds.iter().any(|kind| kind.as_str() == IncrementalToolsUpdate::KIND)
                         })) =>
                         Some(envelope.item.clone()),
                     _ => None,
@@ -3993,6 +4020,8 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
         assert_eq!(
             inherited_state,
             Some(codex_history::CompactionResumeMetadata {
+                next_item_ordinal: None,
+                rejected_audio_file_ids: Default::default(),
                 dynamic_tools: None,
                 multi_agent_version: Some(MultiAgentVersion::V2),
                 last_started_turn_id: None,
@@ -4943,8 +4972,12 @@ async fn resume_thread_subagent_restores_stored_metadata() {
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
     let manager = ThreadManager::new(
         &config,
-        auth_manager.clone(),
-        crate::thread_manager::build_models_manager(&config, auth_manager),
+        crate::build_startup_models(
+            &config,
+            auth_manager.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            Arc::new(ModelCatalogSettings::disk(config.codex_home.to_path_buf())),
+        ),
         crate::CodexAppsToolsCache::default(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -4954,7 +4987,6 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         crate::thread_manager::passthrough_image_store(),
         thread_store.clone(),
         /*agent_graph_store*/ None,
-        uuid::Uuid::new_v4().to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );

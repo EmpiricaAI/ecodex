@@ -10,7 +10,6 @@ use crate::loader::load_plugin_skill_inventory;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::plugin_capability_summary_from_root;
 use crate::loader::refresh_non_curated_plugin_cache;
-use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::REMOTE_WORKSPACE_MARKETPLACE_NAME;
@@ -1862,12 +1861,14 @@ async fn unresolved_display_assets_does_not_satisfy_display_cache_reads() {
         .prepare_remote_installed_plugins_cache_generation(auth.as_ref())
         .unwrap();
     assert_eq!(
-        manager.write_remote_installed_plugins_cache_snapshot(
-            generation,
-            plugins.clone(),
-            auth.as_ref(),
-            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Skip),
-        ),
+        manager
+            .write_remote_installed_plugins_cache_snapshot(
+                generation,
+                plugins.clone(),
+                auth.as_ref(),
+                RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Skip),
+            )
+            .map(|update| update.metadata_change_id.is_some()),
         Some(true)
     );
     assert!(
@@ -1885,12 +1886,16 @@ async fn unresolved_display_assets_does_not_satisfy_display_cache_reads() {
         .expect("runtime metadata is ready");
     assert_eq!(runtime[0].plugins.len(), 1);
     assert_eq!(
-        manager.write_remote_installed_plugins_cache_snapshot(
-            generation,
-            plugins.clone(),
-            auth.as_ref(),
-            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Include),
-        ),
+        manager
+            .write_remote_installed_plugins_cache_snapshot(
+                generation,
+                plugins.clone(),
+                auth.as_ref(),
+                RemoteInstalledPluginsCachePublication::Refresh(
+                    InstalledPluginDisplayAssets::Include
+                ),
+            )
+            .map(|update| update.metadata_change_id.is_some()),
         Some(false)
     );
     assert_eq!(
@@ -1900,12 +1905,14 @@ async fn unresolved_display_assets_does_not_satisfy_display_cache_reads() {
         Some(runtime)
     );
     assert_eq!(
-        manager.write_remote_installed_plugins_cache_snapshot(
-            generation,
-            plugins,
-            auth.as_ref(),
-            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Skip),
-        ),
+        manager
+            .write_remote_installed_plugins_cache_snapshot(
+                generation,
+                plugins,
+                auth.as_ref(),
+                RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Skip),
+            )
+            .map(|update| update.metadata_change_id.is_some()),
         Some(false)
     );
     assert!(
@@ -6151,7 +6158,9 @@ plugins = true
         .mount(&server)
         .await;
 
-    let mut config = load_config(tmp.path(), tmp.path()).await;
+    let mut config = load_config(tmp.path(), tmp.path())
+        .await
+        .with_plugin_recommendations_enabled(/*enabled*/ true);
     config.chatgpt_base_url = server.uri();
     let manager = std::sync::Arc::new(test_plugins_manager(tmp.path().to_path_buf()));
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
@@ -6160,7 +6169,6 @@ plugins = true
     manager.maybe_start_remote_plugin_caches_refresh(
         &config,
         Some(auth.clone()),
-        /*prefetch_recommendations*/ true,
         /*on_effective_plugins_changed*/ None,
     );
 
@@ -6881,10 +6889,13 @@ enabled = true
             .write()
             .expect("refresh state lock");
         assert!(matches!(
-            state.requested.as_ref().map(|request| request.git_mode),
+            state
+                .pending_configured_plugins_refresh
+                .as_ref()
+                .map(|request| request.git_mode),
             Some(PluginGitMode::Manual)
         ));
-        state.last_refreshed = state.requested.take();
+        state.last_refreshed = state.pending_configured_plugins_refresh.take();
         state.in_flight = false;
     }
 
@@ -6896,8 +6907,8 @@ enabled = true
             .write()
             .expect("refresh state lock");
         assert!(!state.in_flight);
-        assert!(state.requested.is_none());
-        state.requested = state.last_refreshed.clone();
+        assert!(state.pending_configured_plugins_refresh.is_none());
+        state.pending_configured_plugins_refresh = state.last_refreshed.clone();
         state.in_flight = true;
     }
 
@@ -6917,7 +6928,10 @@ enabled = true
         .non_curated_cache_refresh_state
         .read()
         .expect("refresh state lock");
-    let request = state.requested.as_ref().expect("pending refresh");
+    let request = state
+        .pending_configured_plugins_refresh
+        .as_ref()
+        .expect("pending refresh");
     assert!(matches!(request.git_mode, PluginGitMode::Automatic));
     assert_eq!(
         request.configured_plugin_sources[0]
@@ -7128,12 +7142,15 @@ enabled = true
     );
 
     assert!(
-        refresh_non_curated_plugin_cache_force_reinstall(
+        refresh_non_curated_plugin_cache_with_mode(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            &["sample-plugin@debug".to_string()],
+            ["sample-plugin@debug"],
+            NonCuratedCacheRefreshMode::ForceReinstall,
+            PluginGitMode::Automatic,
         )
         .expect("cache refresh should reinstall unchanged local version")
+        .cache_refreshed
     );
 
     assert_eq!(
@@ -7544,6 +7561,7 @@ fn remote_installed_plugins_cache_refresh_coalesces_materializations() {
         authenticated_account_id: Some("account-123".to_string()),
     };
     let change = |name: &str| EffectivePluginsChange {
+        metadata_change_id: None,
         materialized_remote_plugins: vec![materialization(name)],
     };
     let callback = |count: std::sync::Arc<std::sync::atomic::AtomicUsize>| {
@@ -7586,6 +7604,7 @@ fn remote_installed_plugins_cache_refresh_coalesces_materializations() {
     assert_eq!(
         request.change,
         EffectivePluginsChange {
+            metadata_change_id: None,
             materialized_remote_plugins: vec![materialization("alpha"), materialization("beta"),],
         }
     );
@@ -7647,11 +7666,13 @@ remote_plugin = true
         &config,
         Some(auth.clone()),
         /*on_effective_plugins_changed*/ None,
+        InstalledPluginSyncSource::PluginInstalled,
     );
     second_manager.maybe_start_remote_installed_plugin_bundle_sync(
         &config,
         Some(auth),
         /*on_effective_plugins_changed*/ None,
+        InstalledPluginSyncSource::PluginInstalled,
     );
 
     let _guard = first_manager
@@ -7943,6 +7964,7 @@ async fn failed_installed_plugin_pagination_preserves_inventory_and_releases_mut
         &config,
         Some(auth),
         /*on_effective_plugins_changed*/ None,
+        InstalledPluginSyncSource::PluginInstalled,
     );
     // Starting the sync acquires the gate synchronously, so this waits for its release.
     let _guard = tokio::time::timeout(
@@ -7995,21 +8017,27 @@ fn reconciliation_fences_refresh_publication_and_recovers_after_cancellation() {
         .expect("capture concurrent refresh generation");
 
     assert_eq!(
-        manager.write_remote_installed_plugins_cache_snapshot(
-            stale_refresh_generation,
-            Vec::new(),
-            /*auth*/ None,
-            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Include),
-        ),
+        manager
+            .write_remote_installed_plugins_cache_snapshot(
+                stale_refresh_generation,
+                Vec::new(),
+                /*auth*/ None,
+                RemoteInstalledPluginsCachePublication::Refresh(
+                    InstalledPluginDisplayAssets::Include
+                ),
+            )
+            .map(|update| update.metadata_change_id.is_some()),
         None
     );
     assert_eq!(
-        manager.write_remote_installed_plugins_cache_snapshot(
-            reconcile_generation,
-            vec![remote_installed_linear_plugin()],
-            /*auth*/ None,
-            RemoteInstalledPluginsCachePublication::Reconcile,
-        ),
+        manager
+            .write_remote_installed_plugins_cache_snapshot(
+                reconcile_generation,
+                vec![remote_installed_linear_plugin()],
+                /*auth*/ None,
+                RemoteInstalledPluginsCachePublication::Reconcile,
+            )
+            .map(|update| update.metadata_change_id.is_some()),
         Some(true)
     );
     let cancelled_generation = manager
@@ -8027,24 +8055,30 @@ fn reconciliation_fences_refresh_publication_and_recovers_after_cancellation() {
         .remote_installed_plugins_cache_generation_if_current(/*auth*/ None)
         .expect("capture refresh generation after cancellation");
     assert_eq!(
-        manager.write_remote_installed_plugins_cache_snapshot(
-            refresh_generation,
-            vec![remote_installed_plugin("beta")],
-            /*auth*/ None,
-            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Include),
-        ),
+        manager
+            .write_remote_installed_plugins_cache_snapshot(
+                refresh_generation,
+                vec![remote_installed_plugin("beta")],
+                /*auth*/ None,
+                RemoteInstalledPluginsCachePublication::Refresh(
+                    InstalledPluginDisplayAssets::Include
+                ),
+            )
+            .map(|update| update.metadata_change_id.is_some()),
         Some(true)
     );
     let retry_generation = manager
         .begin_remote_installed_plugins_reconcile(/*auth*/ None)
         .expect("begin retry after cancellation");
     assert_eq!(
-        manager.write_remote_installed_plugins_cache_snapshot(
-            retry_generation,
-            vec![remote_installed_plugin("beta")],
-            /*auth*/ None,
-            RemoteInstalledPluginsCachePublication::Reconcile,
-        ),
+        manager
+            .write_remote_installed_plugins_cache_snapshot(
+                retry_generation,
+                vec![remote_installed_plugin("beta")],
+                /*auth*/ None,
+                RemoteInstalledPluginsCachePublication::Reconcile,
+            )
+            .map(|update| update.metadata_change_id.is_some()),
         Some(true)
     );
 }

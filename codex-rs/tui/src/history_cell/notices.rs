@@ -108,7 +108,7 @@ pub(crate) fn new_warning_event(message: String) -> WarningHistoryCell {
     }
 }
 
-pub(crate) fn new_usage_warning_event(message: String) -> WarningHistoryCell {
+pub(crate) fn new_visible_warning_event(message: String) -> WarningHistoryCell {
     WarningHistoryCell {
         visible_in_transcript: true,
         ..new_warning_event(message)
@@ -339,6 +339,13 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     }
     let lines: Vec<Line<'static>> = vec![line.into()];
     PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_interruption_notice() -> PlainHistoryCell {
+    PlainHistoryCell::new(vec![
+        Line::from("■ Conversation interrupted - use /feedback if something went wrong")
+            .style(crate::style::secondary_text_style()),
+    ])
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {

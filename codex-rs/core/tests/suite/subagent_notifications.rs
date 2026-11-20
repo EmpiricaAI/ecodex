@@ -1131,7 +1131,8 @@ async fn spawned_child_receives_forked_parent_context(
             .expect("legacy child thread id"),
     )?;
     // Read the acknowledged fork from storage without flushing the live child first.
-    let reopened_store = codex_core::thread_store_from_config(&test.config, /*state_db*/ None);
+    let reopened_store =
+        codex_core::ThreadStoreBuilder::from_config(&test.config, /*state_db*/ None).build();
     let persisted = reopened_store
         .load_latest_model_context(LoadThreadHistoryParams {
             thread_id: child_thread_id,
@@ -2005,14 +2006,21 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
                 .as_ref()
                 .is_some_and(|history| !history.is_empty())
         );
+        let expected_window =
+            codex_protocol::ContextWindowId::parse(window_ids[1]).expect("UUIDv7 child window");
         assert_eq!(
             (
                 checkpoint.window_number,
-                checkpoint.first_window_id.as_deref(),
-                checkpoint.previous_window_id.as_deref(),
-                checkpoint.window_id.as_deref(),
+                checkpoint.first_window_id.as_ref(),
+                checkpoint.previous_window_id.as_ref(),
+                checkpoint.window_id.as_ref(),
             ),
-            (Some(0), Some(window_ids[1]), None, Some(window_ids[1]))
+            (
+                Some(0),
+                Some(&expected_window),
+                None,
+                Some(&expected_window)
+            )
         );
         assert!(
             child_request.has_message_with_input_texts("developer", |message| {

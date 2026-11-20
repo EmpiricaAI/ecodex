@@ -1,5 +1,6 @@
-//! Publishes resolved MCP configuration and host timing rollouts for future turns.
+//! Publishes refreshable configuration while preserving unrelated session settings.
 
+use crate::McpRefreshReason;
 use std::sync::Arc;
 
 use crate::ConfigRefreshOutcome;
@@ -25,7 +26,7 @@ impl Session {
             config.disable_mcp_enterprise_auth();
             state.session_configuration.original_config_do_not_use = Arc::new(config);
             self.services.mcp_runtime.invalidate_resource_caches();
-            self.mark_mcp_runtime_dirty();
+            self.mark_mcp_runtime_dirty(McpRefreshReason::EnterpriseAuthDisabled);
         }
         self.services.mcp_runtime.quiesce_ema().await;
         self.schedule_mcp_prewarm();
@@ -97,6 +98,10 @@ impl Session {
         if !matches!(scope, RuntimeConfigRefresh::UserFiles) {
             for (feature, description) in [
                 (Feature::Mcp20260728, "MCP protocol"),
+                (
+                    Feature::DaybreakProgramPropagation,
+                    "Daybreak helper propagation",
+                ),
                 (Feature::CodexAppsMcp20260728, "Codex Apps MCP protocol"),
             ] {
                 if let Err(err) = config
@@ -192,7 +197,11 @@ impl Session {
             if matches!(scope, RuntimeConfigRefresh::Mcp) {
                 self.services.mcp_runtime.invalidate_resource_caches();
             }
-            self.mark_mcp_runtime_dirty();
+            self.mark_mcp_runtime_dirty(match scope {
+                RuntimeConfigRefresh::User => McpRefreshReason::UserConfigReloaded,
+                RuntimeConfigRefresh::Mcp => McpRefreshReason::McpConfigReloaded,
+                RuntimeConfigRefresh::UserFiles => McpRefreshReason::UserConfigFilesReloaded,
+            });
             let new_config = notify_contributors
                 .then(|| self.build_effective_session_config(&state.session_configuration));
             (previous_config, new_config)

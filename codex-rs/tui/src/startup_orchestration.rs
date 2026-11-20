@@ -374,6 +374,7 @@ pub(super) async fn run_main_inner(
         workload_identity_selected,
         std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),
     )?;
+    let cloud_preview_available = app_server_target.uses_embedded_network_policy();
     let remote_cwd_override = cli
         .cwd
         .clone()
@@ -624,7 +625,7 @@ pub(super) async fn run_main_inner(
         && !app_server_target.uses_remote_workspace();
     if auto_start_daemon
         && daemon_exclusion.is_none()
-        && [Feature::BedrockSetupWizard, Feature::GcpSetupWizard]
+        && [Feature::GcpSetupWizard, Feature::GatewaySetupWizard]
             .into_iter()
             .any(|feature| {
                 should_show_provider_setup_wizard(
@@ -646,8 +647,13 @@ pub(super) async fn run_main_inner(
             .flatten()
             .is_none()
     {
-        // Provider setup wizards configure their provider through the embedded server.
-        daemon_exclusion = Some("Cloud provider sign-in");
+        // These wizards use credentials from the launch environment and rebuild the
+        // embedded server with the selected provider after onboarding.
+        daemon_exclusion = Some(if config.features.enabled(Feature::GcpSetupWizard) {
+            "GCP sign-in"
+        } else {
+            daemon_startup::GATEWAY_SIGN_IN_EXCLUSION
+        });
         app_server_target = AppServerTarget::Embedded;
     }
     if auto_start_daemon
@@ -665,9 +671,10 @@ pub(super) async fn run_main_inner(
                 // responsive while it checks the running server or prepares an installation.
                 // Preserve saved daemon settings until any mismatch is confirmed in recovery.
                 let result =
-                    codex_app_server_daemon::start_with_features(&Default::default()).await;
+                    codex_app_server_daemon::start_with_features_classified(&Default::default())
+                        .await;
                 daemon_telemetry::record_start(&config, &result).await;
-                match result {
+                match result.map_err(|err| err.error) {
                     Ok(output) => Ok(Some(output)),
                     #[cfg(windows)]
                     Err(err) if err.is::<codex_app_server_daemon::DetachedLaunchRestricted>() => {
@@ -780,6 +787,7 @@ pub(super) async fn run_main_inner(
     }
     let selection_reason = match (&app_server_target, daemon_exclusion) {
         (AppServerTarget::Remote { .. }, _) => "explicit_remote",
+        (AppServerTarget::Cloud, _) => "cloud",
         _ if cli.agents_overview => "agents",
         _ if elevated_warning.is_some() => "elevated_windows",
         (_, Some("--no-daemon")) => "explicit_no_daemon",
@@ -809,16 +817,9 @@ pub(super) async fn run_main_inner(
         ),
     ]);
     let selected_local_daemon = matches!(app_server_target, AppServerTarget::LocalDaemon { .. });
-    // Record the first connection attempt's actual mode, including embedded fallback; never reconnects.
-    let launch_telemetry = move |target: &AppServerTarget, connected: bool| {
+    let launch_telemetry = move |app_server_mode| {
         let Some(metrics) = metrics else {
             return Vec::new();
-        };
-        let app_server_mode = match (connected, target) {
-            (false, _) => "unconfirmed",
-            (true, AppServerTarget::Embedded) => "in_process",
-            (true, AppServerTarget::LocalDaemon { .. }) => "local_daemon",
-            (true, AppServerTarget::Remote { .. }) => "remote",
         };
         // Use a fixed category, not the versioned or user-provided terminal identifier.
         let terminal_info = codex_terminal_detection::terminal_info();
@@ -870,7 +871,8 @@ pub(super) async fn run_main_inner(
                         "config_override"
                     }
                 }
-                Some("Bedrock sign-in") => "bedrock_sign_in",
+                Some("GCP sign-in") => "gcp_sign_in",
+                Some(daemon_startup::GATEWAY_SIGN_IN_EXCLUSION) => "gateway_sign_in",
                 Some(daemon_startup::WSL_DRVFS_EXCLUSION) => "wsl_drvfs",
                 Some("this Windows launcher") => "windows_detach_restricted",
                 Some("daemon feature settings") => "daemon_compatibility",
@@ -922,7 +924,7 @@ pub(super) async fn run_main_inner(
             if let Some(worktree) = managed_worktree.as_ref() {
                 worktree.report_startup_failure();
             }
-            launch_telemetry.record(&app_server_target, /*connected*/ false);
+            drop(launch_telemetry);
             if let Some(otel) = otel {
                 let _ = otel
                     .shutdown_with_timeout(INTERACTIVE_OTEL_SHUTDOWN_TIMEOUT)
@@ -943,7 +945,7 @@ pub(super) async fn run_main_inner(
             if let Some(worktree) = managed_worktree.as_ref() {
                 worktree.report_startup_failure();
             }
-            launch_telemetry.record(&app_server_target, /*connected*/ false);
+            drop(launch_telemetry);
             if let Some(otel) = otel {
                 let _ = otel
                     .shutdown_with_timeout(INTERACTIVE_OTEL_SHUTDOWN_TIMEOUT)
@@ -1036,6 +1038,13 @@ pub(super) async fn run_main_inner(
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
+    if let Some(error) = state_db.as_ref().and_then(|db| db.diagnostic_logs_error()) {
+        tracing::warn!(
+            event.name = "diagnostic_database_unavailable",
+            error,
+            "diagnostic database unavailable"
+        );
+    }
 
     if let Err(err) = screen_reader_result {
         tracing::warn!("Could not save screen-reader detection: {err}");
@@ -1059,6 +1068,7 @@ pub(super) async fn run_main_inner(
         state_db,
         environment_manager,
         embedded_network_policy,
+        cloud_preview_available,
         managed_worktree.clone(),
         daemon_startup_warning,
         managed_daemon,

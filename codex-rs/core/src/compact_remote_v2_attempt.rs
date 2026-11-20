@@ -1,8 +1,10 @@
 //! Builds and sends foreground and speculative remote V2 compaction attempts.
 
 use crate::context::UserGoalUpdate;
+use codex_login::AuthOwner;
 use codex_protocol::ResponseItemId;
 use codex_protocol::openai_models::CatalogModel;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -15,6 +17,7 @@ use crate::compact::CompactionAnalyticsDetails;
 use crate::compact_remote_history::trim_function_call_history_to_fit_context_window;
 use crate::context::world_state::WorldState;
 use crate::context_manager::ContextManager;
+use crate::context_manager::rejected_audio;
 use crate::context_manager::replace_unresolvable_image_files;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::CompactionPrefix;
@@ -31,10 +34,12 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::CompactionTraceContext;
+use codex_tools::ToolSpec;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 pub(super) struct RemoteCompactV2Attempt {
+    pub(super) rejected_audio_file_ids: BTreeSet<String>,
     pub(super) input_goal_ids: HashSet<ResponseItemId>,
     pub(super) trace_input_history: Option<Vec<ResponseItem>>,
     pub(super) prompt_input: Vec<ResponseItem>,
@@ -61,7 +66,7 @@ pub(crate) struct BackgroundCompactionCandidate {
 pub(crate) struct BackgroundCompactionInput {
     prefix: CompactionPrefix,
     turn_state: Option<String>,
-    window: (String, u64, uuid::Uuid),
+    window: (String, u64, codex_protocol::ContextWindowId),
     base_instructions: BaseInstructions,
     input: Vec<ResponseItem>,
     metadata: Vec<Option<CodexHarnessMetadata>>,
@@ -83,18 +88,16 @@ pub(super) async fn run_remote_compact_v2_attempt(
         trace_input_history,
         base_instructions,
         mut input,
-        prompt_input_metadata,
-        transport,
+        mut prompt_input_metadata,
+        mut transport,
         captured_window,
     ) = match input {
         RemoteCompactV2AttemptInput::Foreground(client_session) => {
             let model_info = turn_context.model_info();
             let mut history = sess.clone_history().await;
             let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
-            let tools_in_history = step_context.settings.model_info.use_responses_lite
-                && history
-                    .raw_items()
-                    .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
+            let tools_in_history = step_context.incremental_tools_feature().is_some()
+                && history.has_tool_declarations();
             let base_instructions = if tools_in_history {
                 BaseInstructions {
                     text: String::new(),
@@ -162,23 +165,27 @@ pub(super) async fn run_remote_compact_v2_attempt(
             input.base_instructions,
             input.input,
             input.metadata,
-            CompactionRequestTransport::Background(
-                input.turn_state,
-                input.prefix.auth_owner_generation,
-            ),
+            CompactionRequestTransport::Background(input.turn_state, input.prefix.auth_owner),
             Some(input.window),
         ),
     };
-    let tools_in_history = model_info.use_responses_lite
+    let mut unavailable =
+        rejected_audio::unavailable_file_audio(&input, sess.services.image_store.as_ref()).await;
+    rejected_audio::project_compaction_audio(&mut input, &mut prompt_input_metadata, &unavailable);
+    let tools_in_history = step_context.incremental_tools_feature().is_some()
         && input
             .iter()
             .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
     let tool_router = &step_context.tool_router;
-    input.push(ResponseItem::CompactionTrigger {});
-    let prompt = Prompt {
+    let mut prompt = Prompt {
         input,
         tools: if tools_in_history {
-            Arc::default()
+            tool_router
+                .model_visible_specs()
+                .iter()
+                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. }))
+                .cloned()
+                .collect()
         } else {
             tool_router.model_visible_specs()
         },
@@ -186,6 +193,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         base_instructions,
         output_schema: None,
         output_schema_strict: true,
+        prompt_cache_ttl: turn_context.prompt_cache_ttl,
         cyber_access_program: turn_context.cyber_access_program,
     };
 
@@ -199,36 +207,69 @@ pub(super) async fn run_remote_compact_v2_attempt(
         }
     };
     responses_metadata.tool_namespaces_info = tool_router.tool_namespaces_info().cloned();
-    let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
-        "model": model_info.slug.as_str(),
-        "instructions": prompt.base_instructions.text.as_str(),
-        "input": &prompt.input,
-        "parallel_tool_calls": prompt.parallel_tool_calls,
-    }));
-    let compaction_output_result = run_remote_compaction_request_v2(
-        sess,
-        step_context,
-        &prompt,
-        &responses_metadata,
-        transport,
-    )
-    .await;
-    trace_attempt.record_result(
-        compaction_output_result
-            .as_ref()
-            .map(|output| std::slice::from_ref(&output.compaction_output)),
+    // The file may disappear after the availability check, or the store may
+    // defer validation to Responses. Retry only an unambiguously rejected ID.
+    let mut submitted_audio = rejected_audio::SubmittedFileAudio::from_request(
+        &prompt.input,
+        /*accepted*/ None,
+        prompt
+            .input
+            .iter()
+            .zip(&prompt_input_metadata)
+            .filter_map(|(item, metadata)| {
+                rejected_audio::clear_checkpoint(item, metadata.as_ref())
+            }),
     );
     let RemoteCompactionV2Output {
         compaction_output,
         response_id,
         token_usage,
-    } = compaction_output_result?;
-    let mut prompt_input = prompt.input;
-    prompt_input.pop();
+    } = loop {
+        prompt.input.push(ResponseItem::CompactionTrigger {});
+        let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
+            "model": model_info.slug.as_str(),
+            "instructions": prompt.base_instructions.text.as_str(),
+            "input": &prompt.input,
+            "parallel_tool_calls": prompt.parallel_tool_calls,
+        }));
+        let compaction_output_result = run_remote_compaction_request_v2(
+            sess,
+            step_context,
+            &prompt,
+            &responses_metadata,
+            &mut transport,
+            submitted_audio.as_ref(),
+        )
+        .await;
+        trace_attempt.record_result(
+            compaction_output_result
+                .as_ref()
+                .map(|output| std::slice::from_ref(&output.compaction_output)),
+        );
+        prompt.input.pop();
+        match compaction_output_result {
+            Ok(output) => break output,
+            Err(error) => {
+                let Some(id) = submitted_audio
+                    .take()
+                    .and_then(|audio| audio.rejected_file_id(error.details()))
+                else {
+                    return Err(error);
+                };
+                unavailable.insert(id);
+                rejected_audio::project_compaction_audio(
+                    &mut prompt.input,
+                    &mut prompt_input_metadata,
+                    &unavailable,
+                );
+            }
+        }
+    };
     Ok(RemoteCompactV2Attempt {
+        rejected_audio_file_ids: unavailable,
         input_goal_ids,
         trace_input_history,
-        prompt_input,
+        prompt_input: prompt.input,
         prompt_input_metadata,
         compaction_output,
         compaction_response_id: response_id,
@@ -244,25 +285,22 @@ pub(crate) async fn capture_background_input(
     mut snapshot: ContextManager,
     base_instructions: BaseInstructions,
     turn_state: Option<String>,
-    auth_owner_generation: Option<u64>,
-    window: (String, u64, uuid::Uuid),
+    auth_owner: Option<AuthOwner>,
+    window: (String, u64, codex_protocol::ContextWindowId),
 ) -> BackgroundCompactionInput {
-    let base_instructions = if step_context.settings.model_info.use_responses_lite
-        && snapshot
-            .raw_items()
-            .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
-    {
-        BaseInstructions {
-            text: String::new(),
-            provenance: None,
-        }
-    } else {
-        base_instructions
-    };
+    let base_instructions =
+        if step_context.incremental_tools_feature().is_some() && snapshot.has_tool_declarations() {
+            BaseInstructions {
+                text: String::new(),
+                provenance: None,
+            }
+        } else {
+            base_instructions
+        };
     let prefix = CompactionPrefix {
         generation: snapshot.history_version(),
         len: snapshot.annotated_items().len(),
-        auth_owner_generation,
+        auth_owner,
     };
     trim_function_call_history_to_fit_context_window(
         &mut snapshot,
@@ -271,6 +309,7 @@ pub(crate) async fn capture_background_input(
         &base_instructions,
     );
     snapshot.normalize_history(&step_context.settings.model_info.input_modalities);
+    snapshot.project_file_audio_for_prompt();
     let (mut input, metadata): (Vec<_>, Vec<_>) = snapshot
         .into_annotated_items()
         .into_iter()
@@ -304,7 +343,7 @@ pub(crate) async fn run_background_compaction(
             sess.services.image_store.as_ref(),
         ) => {},
     }
-    let prefix = prepared_input.prefix;
+    let prefix = prepared_input.prefix.clone();
     let metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Auto,
         CompactionReason::ContextLimit,

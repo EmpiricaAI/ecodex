@@ -13,10 +13,20 @@ use crate::bottom_pane::textarea::EditTarget;
 
 impl ChatComposer {
     pub(crate) fn insert_str(&mut self, text: &str) {
-        self.insert_str_at_target(self.draft.textarea.edit_target(), text);
+        self.insert_str_at_target(
+            self.draft.textarea.edit_target(),
+            text,
+            ShellPrefixHandling::Interpret,
+        );
     }
 
-    fn insert_str_at_target(&mut self, target: EditTarget, text: &str) {
+    fn insert_str_at_target(
+        &mut self,
+        target: EditTarget,
+        text: &str,
+        shell_prefix: ShellPrefixHandling,
+    ) {
+        self.draft.skill_completion_space = None;
         if !text.is_empty() && self.sparkle.draft.get() == sparkle::SparkleDraft::Untouched {
             self.dismiss_sparkle();
         }
@@ -24,7 +34,9 @@ impl ChatComposer {
         let elements_before = target
             .replaces_text()
             .then(|| self.draft.textarea.element_payloads());
-        let inserts_shell_prefix = target.start() == 0 && text.starts_with('!');
+        let inserts_shell_prefix = matches!(shell_prefix, ShellPrefixHandling::Interpret)
+            && target.start() == 0
+            && text.starts_with('!');
         self.draft.textarea.insert_str_at_target(target, text);
         if let Some(elements_before) = elements_before {
             self.reconcile_deleted_elements(elements_before);
@@ -60,7 +72,15 @@ impl ChatComposer {
                     textarea.replace_vim_text(&ch.to_string());
                 }
             }
-            FlushResult::Typed(ch) => textarea.insert_str_at(snapshot.cursor, &ch.to_string()),
+            FlushResult::Typed(ch) => {
+                if let Some(space) = self.draft.skill_completion_space_for_char(ch) {
+                    let space = space + usize::from(self.draft.is_bash_mode);
+                    textarea.replace_range(space..space + 1, &ch.to_string());
+                    snapshot.cursor = space + ch.len_utf8();
+                } else {
+                    textarea.insert_str_at(snapshot.cursor, &ch.to_string());
+                }
+            }
             FlushResult::Paste(pasted) => textarea.insert_str_at(snapshot.cursor, &pasted),
             FlushResult::None => {}
         }
@@ -80,6 +100,23 @@ impl ChatComposer {
         if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
             self.apply_paste(pasted);
         }
+    }
+
+    pub(in crate::bottom_pane) fn paste_handoff_deadline(&self) -> Option<Instant> {
+        if self.draft.disable_paste_burst {
+            return None;
+        }
+        self.draft.paste_burst.handoff_deadline()
+    }
+
+    /// Display flushed text without losing the window for its trailing paste keys.
+    pub(in crate::bottom_pane) fn flush_handoff_paste(&mut self, now: Instant) -> bool {
+        let deadline = self.paste_handoff_deadline();
+        let flushed = self.handle_paste_burst_flush(now);
+        if flushed && let Some(deadline) = deadline.filter(|deadline| *deadline >= now) {
+            self.draft.paste_burst.preserve_window_until(deadline);
+        }
+        flushed
     }
 
     /// Enable or disable paste-burst handling.
@@ -126,7 +163,15 @@ impl ChatComposer {
                 true
             }
             FlushResult::Typed(ch) => {
+                let completion_space = self.draft.skill_completion_space_for_char(ch);
+                let started_vim_edit = completion_space.is_some() && self.begin_direct_vim_edit();
+                if let Some(space) = completion_space {
+                    self.draft.textarea.replace_range(space..space + 1, "");
+                }
                 self.insert_str(ch.to_string().as_str());
+                if started_vim_edit {
+                    self.finish_vim_edit();
+                }
                 true
             }
             FlushResult::None => false,
@@ -153,6 +198,15 @@ impl ChatComposer {
     ///
     /// Composer edits clear paste-burst Enter suppression and sync popups.
     pub(super) fn apply_paste(&mut self, pasted: String) -> bool {
+        self.apply_paste_with_shell_prefix(pasted, ShellPrefixHandling::Interpret)
+    }
+
+    pub(super) fn apply_paste_with_shell_prefix(
+        &mut self,
+        pasted: String,
+        shell_prefix: ShellPrefixHandling,
+    ) -> bool {
+        self.draft.skill_completion_space = None;
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let pasted = sanitize_user_text(pasted.into());
         if self.history_search.is_some() {
@@ -200,7 +254,7 @@ impl ChatComposer {
             let cursor = self.draft.textarea.cursor();
             self.draft.textarea.insert_str_at(cursor, " ");
         } else {
-            self.insert_str_at_target(target, &pasted);
+            self.insert_str_at_target(target, &pasted, shell_prefix);
         }
         if is_blockquote {
             let textarea = &mut self.draft.textarea;
@@ -216,11 +270,13 @@ impl ChatComposer {
     }
 
     pub(super) fn handle_paste_tab(&mut self, key: KeyEvent, now: Instant) -> bool {
-        if key.code != KeyCode::Tab
-            || !key.modifiers.is_empty()
-            || self.draft.disable_paste_burst
-            || !self.draft.textarea.allows_paste_burst()
-        {
+        key.code == KeyCode::Tab
+            && key.modifiers.is_empty()
+            && self.append_recent_paste_separator('\t', now)
+    }
+
+    pub(super) fn append_recent_paste_separator(&mut self, separator: char, now: Instant) -> bool {
+        if self.draft.disable_paste_burst || !self.draft.textarea.allows_paste_burst() {
             return false;
         }
 
@@ -228,7 +284,7 @@ impl ChatComposer {
         if self
             .draft
             .paste_burst
-            .append_control_char_if_active('\t', now)
+            .append_control_char_if_active(separator, now)
         {
             return true;
         }
@@ -245,7 +301,7 @@ impl ChatComposer {
             return self
                 .draft
                 .paste_burst
-                .append_control_char_if_active('\t', now);
+                .append_control_char_if_active(separator, now);
         }
 
         false

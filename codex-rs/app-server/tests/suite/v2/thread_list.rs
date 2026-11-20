@@ -102,6 +102,8 @@ async fn list_threads_with_sort(
     mcp.request(|request_id| ClientRequest::ThreadList {
         request_id,
         params: codex_app_server_protocol::ThreadListParams {
+            include_attached_threads: false,
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -144,6 +146,8 @@ async fn list_threads_for_relation(
     mcp.request(|request_id| ClientRequest::ThreadList {
         request_id,
         params: codex_app_server_protocol::ThreadListParams {
+            include_attached_threads: false,
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -777,6 +781,8 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            include_attached_threads: false,
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -819,17 +825,10 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
 #[tokio::test]
 async fn thread_list_respects_search_term_filter() -> Result<()> {
     let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        r#"
-model = "mock-model"
-approval_policy = "never"
-suppress_unstable_features_warning = true
-
-[features]
-sqlite = true
-"#,
-    )?;
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::Sqlite)
+        .write(codex_home.path())?;
 
     let older_match = create_fake_rollout(
         codex_home.path(),
@@ -854,6 +853,24 @@ sqlite = true
         "needle suffix",
         Some("mock_provider"),
         /*git_info*/ None,
+    )?;
+
+    create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T13-00-00",
+        "2025-01-02T13:00:00Z",
+        "needle on another provider",
+        Some("other_provider"),
+        /*git_info*/ None,
+    )?;
+    let exec_match = create_fake_rollout_with_source(
+        codex_home.path(),
+        "2025-01-02T14-00-00",
+        "2025-01-02T14:00:00Z",
+        "exec needle",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::Exec,
     )?;
 
     // `thread/list` applies `search_term` on the sqlite fast path. This test creates
@@ -886,39 +903,32 @@ sqlite = true
         /*cwd_filters*/ None,
         "mock_provider",
         /*search_term*/ None,
+        /*include_attached_threads*/ false,
     )
     .await?;
-    assert_eq!(repaired_page.items.len(), 3);
+    assert_eq!(repaired_page.items.len(), 5);
 
     let mut mcp = init_mcp(codex_home.path()).await?;
-    let request_id = mcp
-        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
-            excluded_thread_ids: None,
-            attached_to_thread_id: None,
-            originators: None,
-            cursor: None,
-            limit: Some(10),
-            sort_key: None,
-            sort_direction: None,
-            model_providers: Some(vec!["mock_provider".to_string()]),
-            source_kinds: None,
-            archived: None,
-            section_id: None,
-            project_id: None,
-            cwd: None,
-            use_state_db_only: false,
-            search_term: Some("needle".to_string()),
-            parent_thread_id: None,
-            ancestor_thread_id: None,
-        })
-        .await?;
-    let ThreadListResponse {
-        data, next_cursor, ..
-    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
-
-    assert_eq!(next_cursor, None);
-    let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
-    assert_eq!(ids, vec![newer_match, older_match]);
+    for (mut params, expected_ids) in [
+        (json!({}), vec![&newer_match, &older_match]),
+        (
+            json!({"includeAttachedThreads": true}),
+            vec![&newer_match, &older_match],
+        ),
+        (
+            json!({"includeAttachedThreads": true, "sourceKinds": ["exec"]}),
+            vec![&exec_match],
+        ),
+    ] {
+        params["limit"] = json!(10);
+        params["searchTerm"] = json!("needle");
+        let request_id = mcp.send_raw_request("thread/list", Some(params)).await?;
+        let response: ThreadListResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+        assert_eq!(response.next_cursor, None);
+        let ids: Vec<_> = response.data.iter().map(|thread| &thread.id).collect();
+        assert_eq!(ids, expected_ids);
+    }
 
     Ok(())
 }
@@ -964,6 +974,8 @@ async fn thread_search_returns_content_matches() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            include_attached_threads: false,
+            current_account_only: false,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1019,6 +1031,8 @@ async fn thread_search_returns_content_matches() -> Result<()> {
 
     let request_id = mcp
         .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            include_attached_threads: false,
+            current_account_only: false,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1068,7 +1082,7 @@ async fn thread_search_matches_json_escaped_content() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
 
-    let search_term = r#"quoted "needle" \ path"#;
+    let search_term = "find  \"needle\"\nunder\tC:\\docs";
     let thread_id = create_fake_rollout(
         codex_home.path(),
         "2025-01-02T10-00-00",
@@ -1081,6 +1095,8 @@ async fn thread_search_matches_json_escaped_content() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            include_attached_threads: false,
+            current_account_only: false,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1095,7 +1111,7 @@ async fn thread_search_matches_json_escaped_content() -> Result<()> {
 
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].thread.id, thread_id);
-    assert_eq!(data[0].snippet, search_term);
+    assert_eq!(data[0].snippet, r#"find "needle" under C:\docs"#);
 
     Ok(())
 }
@@ -1126,6 +1142,8 @@ async fn thread_search_filters_by_source_kind() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            include_attached_threads: false,
+            current_account_only: false,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1168,14 +1186,17 @@ async fn thread_list_db_only_errors_distinguish_unavailable_database_from_empty_
     let other_home = TempDir::new()?;
     create_minimal_config(home.path())?;
     let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
-    let config = Arc::new(
-        ConfigBuilder::default()
-            .codex_home(home.path().to_path_buf())
-            .fallback_cwd(Some(home.path().to_path_buf()))
-            .loader_overrides(loader_overrides.clone())
-            .build()
-            .await?,
-    );
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .loader_overrides(loader_overrides.clone())
+        .build()
+        .await?;
+    // Diagnostic storage failure must not disable database-only history listing.
+    let logs_home = home.path().join("unavailable-logs");
+    std::fs::write(&logs_home, "not a directory")?;
+    config.sqlite = config.sqlite.clone().with_local_logs_home(logs_home);
+    let config = Arc::new(config);
     let right_db = codex_state::StateRuntime::init(
         config.sqlite_config().clone(),
         config.model_provider_id.clone(),
@@ -1300,6 +1321,8 @@ sqlite = true
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            include_attached_threads: false,
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1339,6 +1362,8 @@ sqlite = true
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            include_attached_threads: false,
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1371,6 +1396,8 @@ sqlite = true
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            include_attached_threads: false,
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1434,15 +1461,15 @@ async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result
         ),
     ] {
         let created_at = DateTime::parse_from_rfc3339(created_at)?.with_timezone(&Utc);
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             codex_home.path().join(format!("{thread_id}.jsonl")),
             created_at,
             source,
-        );
-        builder.model_provider = Some(model_provider.to_string());
-        builder.cwd = codex_home.path().to_path_buf();
-        builder.cli_version = Some("0.0.0".to_string());
+        )
+        .with_model_provider(Some(model_provider.to_string()))
+        .with_cwd(codex_home.path().to_path_buf())
+        .with_cli_version("0.0.0".to_string());
         let mut metadata = builder.build(model_provider);
         metadata.preview = Some("child thread".to_string());
         metadata.first_user_message = metadata.preview.clone();
@@ -1559,6 +1586,8 @@ async fn thread_list_relation_filters_reject_invalid_requests() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            include_attached_threads: false,
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1588,6 +1617,8 @@ async fn thread_list_relation_filters_reject_invalid_requests() -> Result<()> {
     let thread_id = ThreadId::new().to_string();
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            include_attached_threads: false,
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1828,6 +1859,8 @@ async fn thread_list_reports_loaded_subagent_direct_input_capability() -> Result
 
     let request_id = mcp
         .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            include_attached_threads: false,
+            current_account_only: false,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1881,6 +1914,8 @@ async fn thread_list_reports_loaded_subagent_direct_input_capability() -> Result
         .request(|request_id| ClientRequest::ThreadList {
             request_id,
             params: codex_app_server_protocol::ThreadListParams {
+                include_attached_threads: false,
+                current_account_only: false,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -2549,6 +2584,7 @@ async fn thread_list_sort_recency_at_uses_state_db_order_with_provider_filter() 
         /*cwd_filters*/ None,
         "mock_provider",
         /*search_term*/ None,
+        /*include_attached_threads*/ false,
     )
     .await?;
     state_db
@@ -2705,6 +2741,8 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
     } = {
         let request_id = mcp
             .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                include_attached_threads: false,
+                current_account_only: false,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -2749,6 +2787,8 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
     } = {
         let request_id = mcp
             .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                include_attached_threads: false,
+                current_account_only: false,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -3183,6 +3223,8 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            include_attached_threads: false,
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -3210,5 +3252,118 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
     assert_eq!(error.error.code, -32600);
     assert_eq!(error.error.message, "invalid cursor: not-a-cursor");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_account_history_refills_list_and_search() -> Result<()> {
+    let home = TempDir::new()?;
+    create_minimal_config(home.path())?;
+    app_test_support::write_chatgpt_auth(
+        home.path(),
+        app_test_support::ChatGptAuthFixture::new("token")
+            .chatgpt_user_id("me")
+            .chatgpt_account_id("team")
+            .account_id("team"),
+        codex_config::types::AuthCredentialsStoreMode::File,
+    )?;
+    let (stamp, timestamp) = timestamp_at(
+        /*year*/ 2025, /*month*/ 1, /*day*/ 5, /*hour*/ 12, /*minute*/ 0,
+        /*second*/ 0,
+    );
+    let mut ids = Vec::new();
+    for _ in 0..6 {
+        ids.push(app_test_support::create_fake_paginated_rollout(
+            home.path(),
+            &stamp,
+            &timestamp,
+            "fixture-preview",
+            Some("openai"),
+            /*git_info*/ None,
+        )?);
+    }
+    // With tied creation times, the largest ID is first. Give it to the other user.
+    ids.sort_unstable_by(|a, b| b.cmp(a));
+    for (id, (user, account, preview, scoped)) in ids.iter().zip([
+        (Some("other-needle-user"), Some("team"), "needle", true),
+        (Some("me"), Some("team"), "needle", true),
+        (Some("me"), None, "partial", true),
+        (None, None, "shared", true),
+        (Some("legacy-user"), Some("legacy-team"), "needle", false),
+        (Some("me"), Some("other-team"), "other workspace", true),
+    ]) {
+        let path = rollout_path(home.path(), &stamp, id);
+        let text = fs::read_to_string(&path)?;
+        let (header, rest) = text.split_once('\n').expect("session header");
+        let mut header: serde_json::Value = serde_json::from_str(header)?;
+        header["payload"]["creator_user_id"] = json!(user);
+        header["payload"]["creator_account_id"] = json!(account);
+        // Attribution predates enforcement: an absent marker keeps old history shared.
+        if scoped {
+            header["payload"]["account_scoped"] = json!(true);
+        }
+        let rest = rest.replace("fixture-preview", preview);
+        fs::write(path, format!("{header}\n{rest}"))?;
+    }
+
+    let mut server = init_mcp(home.path()).await?;
+    for (limit, db_only) in [(4, false), (4, true), (1, false), (1, true)] {
+        let params = json!({
+            "currentAccountOnly": true,
+            "sortKey": "created_at",
+            "limit": limit,
+            "useStateDbOnly": db_only,
+        });
+        let request = server.send_raw_request("thread/list", Some(params)).await?;
+        let list: ThreadListResponse = server.read_response(request).await?;
+        assert_eq!(
+            list.data.into_iter().map(|t| t.id).collect::<Vec<_>>(),
+            ids[1..=limit]
+        );
+    }
+
+    // The foreign header matches the raw search, but reading its snippet would hit invalid UTF-8.
+    let foreign = rollout_path(home.path(), &stamp, &ids[0]);
+    let intact = fs::read_to_string(&foreign)?;
+    let (header, rest) = intact.split_once('\n').expect("session header");
+    fs::write(
+        &foreign,
+        [header.as_bytes(), b"\n\xff\n", rest.as_bytes()].concat(),
+    )?;
+    let mut cursor = None;
+    for expected_id in [&ids[1], &ids[4]] {
+        let params = json!({
+            "currentAccountOnly": true,
+            "sortKey": "created_at",
+            "limit": 1,
+            "cursor": cursor,
+            "searchTerm": "needle",
+        });
+        let request = server
+            .send_raw_request("thread/search", Some(params))
+            .await?;
+        let search: ThreadSearchResponse = server.read_response(request).await?;
+        assert_eq!(
+            search
+                .data
+                .into_iter()
+                .map(|t| t.thread.id)
+                .collect::<Vec<_>>(),
+            vec![expected_id.clone()]
+        );
+        cursor = search.next_cursor;
+    }
+    assert_eq!(cursor, None);
+    fs::write(foreign, intact)?;
+
+    let request = server
+        .send_login_account_api_key_request("sk-test-key")
+        .await?;
+    let _: codex_app_server_protocol::LoginAccountResponse = server.read_response(request).await?;
+    let request = server
+        .send_raw_request("thread/list", Some(json!({"currentAccountOnly": true})))
+        .await?;
+    let list: ThreadListResponse = server.read_response(request).await?;
+    assert_eq!(list.data.len(), 6);
     Ok(())
 }

@@ -32,6 +32,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::ConnectorRuntimeManager;
 use codex_connectors::ConnectorSnapshot;
 use codex_connectors::connector_runtime_context_key;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_login::CodexAuth;
 use codex_model_provider::CHATGPT_CODEX_BASE_URL;
 use codex_protocol::mcp::ClientMcpExtensions;
@@ -43,6 +44,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_rmcp_client::McpOAuthRefreshMode;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::ReadResourceRequestParams;
@@ -50,7 +52,9 @@ use rmcp::model::ReadResourceResult;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::McpPermissionSource;
 use crate::McpProtocolMode;
+use crate::McpServerKey;
 use crate::McpServerSource;
 use crate::ResolvedMcpCatalog;
 use crate::connection_manager::McpConnectionSet;
@@ -114,6 +118,13 @@ pub struct McpPermissionPromptAutoApproveContext {
     pub tool_approval_mode: Option<AppToolApproval>,
 }
 
+/// Which rules a registered MCP server uses.
+#[derive(Debug, Clone)]
+pub enum McpServerPermissions {
+    Thread,
+    Environment(Arc<FileSystemSandboxContext>),
+}
+
 /// MCP runtime settings derived from `codex_core::config::Config`.
 ///
 /// Each published runtime and prepared call owns one immutable copy of these
@@ -158,6 +169,8 @@ pub struct McpConfig {
     pub approval_policy: Constrained<AskForApproval>,
     /// Permission profile captured with the connections and approval policy.
     pub permission_profile: PermissionProfile,
+    /// Host working directory used to interpret thread permissions.
+    pub host_cwd: AbsolutePathBuf,
     /// Configuration layers used to evaluate Apps tool policy and reviewer selection.
     pub config_layer_stack: ConfigLayerStack,
     pub plugins: codex_config::types::PluginsConfigToml,
@@ -167,8 +180,8 @@ pub struct McpConfig {
     pub environment_cwds: HashMap<String, PathUri>,
     /// Effective backends captured with the environment handles, including local fallback.
     pub environment_use_mxc: HashMap<String, bool>,
-    /// Explicit server permissions; unresolved or unavailable servers have no entry.
-    pub server_permission_profiles: HashMap<String, PermissionProfile>,
+    /// Permissions for registered servers. Unavailable servers have no entry.
+    pub server_permissions: HashMap<McpServerKey, McpServerPermissions>,
     /// Host-supplied re-exec binary. Probe its sandbox capability before advertising it.
     /// Never infer this from PATH or an MCP server's configuration.
     pub codex_self_exe: Option<PathBuf>,
@@ -200,7 +213,7 @@ pub struct McpConfig {
     pub host_owned_apps_protocol_mode: McpProtocolMode,
     /// Client-side elicitation capabilities advertised during MCP initialization.
     pub client_elicitation_capability: ElicitationCapability,
-    /// Resolved MCP registrations keyed by logical server name.
+    /// Resolved MCP registrations keyed by exact server identity.
     pub mcp_server_catalog: ResolvedMcpCatalog,
     /// Plugin declarations used to attribute connector tools to plugin display names.
     /// MCP registrations retain their own package attribution in the catalog.
@@ -212,51 +225,81 @@ pub const DEFAULT_OPTIONAL_MCP_STARTUP_GRACE: Duration = Duration::from_secs(1);
 
 impl McpConfig {
     /// Resolves enabled runtime servers against the exact attachment permissions being published.
-    pub fn set_server_permission_profiles(
+    pub fn set_server_permissions(
         &mut self,
-        servers: &HashMap<String, EffectiveMcpServer>,
-        environment_profiles: impl IntoIterator<Item = (String, PermissionProfile)>,
+        servers: &HashMap<McpServerKey, EffectiveMcpServer>,
+        environment_sandboxes: impl IntoIterator<Item = (String, Arc<FileSystemSandboxContext>)>,
     ) {
-        let environment_profiles = environment_profiles.into_iter().collect::<HashMap<_, _>>();
-        self.server_permission_profiles = servers
+        let environment_sandboxes = environment_sandboxes.into_iter().collect::<HashMap<_, _>>();
+        self.server_permissions = servers
             .iter()
             .filter(|(_, server)| server.enabled())
-            .filter_map(|(server_name, _)| {
-                let server = self.mcp_server_catalog.server(server_name)?;
-                let permission_profile = if server
+            .filter_map(|(server_key, _)| {
+                let server = self.mcp_server_catalog.server(server_key)?;
+                let permissions = if server
                     .source()
-                    .is_host_owned_apps(server_name, server.config())
+                    .is_host_owned_apps(server_key.name(), server.config())
                 {
-                    &self.permission_profile
-                } else if let Some(permission_profile) =
-                    environment_profiles.get(&server.config().environment_id)
+                    McpServerPermissions::Thread
+                } else if let Some(sandbox) =
+                    environment_sandboxes.get(&server.config().environment_id)
                 {
-                    permission_profile
+                    McpServerPermissions::Environment(Arc::clone(sandbox))
                 } else if server.config().is_local_environment()
                     || matches!(server.source(), McpServerSource::SelectedPlugin(_))
                 {
-                    &self.permission_profile
+                    McpServerPermissions::Thread
                 } else {
                     return None;
                 };
-                Some((server_name.clone(), permission_profile.clone()))
+                Some((server_key.clone(), permissions))
             })
             .collect();
     }
 
+    /// Returns this server's rules and the environment or host folders they apply to.
+    pub fn permission_source_for_server(
+        &self,
+        server: &McpServerKey,
+    ) -> Option<McpPermissionSource<'_>> {
+        Some(match self.server_permissions.get(server)? {
+            McpServerPermissions::Environment(sandbox) => McpPermissionSource::Environment {
+                environment_id: &self
+                    .mcp_server_catalog
+                    .server(server)?
+                    .config()
+                    .environment_id,
+                sandbox,
+            },
+            McpServerPermissions::Thread => McpPermissionSource::Thread {
+                profile: &self.permission_profile,
+                host_cwd: &self.host_cwd,
+            },
+        })
+    }
+
     /// Returns this server's published permission authority.
-    pub fn permission_profile_for_server(&self, server_name: &str) -> Option<&PermissionProfile> {
-        self.server_permission_profiles.get(server_name)
+    pub fn permission_profile_for_server(
+        &self,
+        server: &McpServerKey,
+    ) -> Option<&PermissionProfile> {
+        Some(match self.server_permissions.get(server)? {
+            McpServerPermissions::Thread => &self.permission_profile,
+            McpServerPermissions::Environment(sandbox) => &sandbox.permissions,
+        })
     }
 
     /// Standalone discovery and resource reads must not inherit thread execution authority.
-    pub fn for_threadless_operations(&self, servers: &HashMap<String, EffectiveMcpServer>) -> Self {
+    pub fn for_threadless_operations(
+        &self,
+        servers: &HashMap<McpServerKey, EffectiveMcpServer>,
+    ) -> Self {
         let mut config = self.clone();
         config.permission_profile = PermissionProfile::default();
-        config.server_permission_profiles = servers
+        config.server_permissions = servers
             .iter()
             .filter(|(_, server)| server.enabled())
-            .map(|(name, _)| (name.clone(), PermissionProfile::default()))
+            .map(|(key, _)| (key.clone(), McpServerPermissions::Thread))
             .collect();
         config
     }
@@ -267,9 +310,9 @@ impl McpConfig {
 pub struct ToolPluginContext {
     plugin_display_names_by_connector_id: HashMap<String, Vec<String>>,
     disabled_connector_ids: HashSet<String>,
-    plugin_display_names_by_mcp_server_name: HashMap<String, Vec<String>>,
-    plugin_ids_by_mcp_server_name: HashMap<String, String>,
-    selected_plugin_mcp_server_names: HashSet<String>,
+    plugin_display_names_by_server: HashMap<McpServerKey, Vec<String>>,
+    plugin_ids_by_server: HashMap<McpServerKey, String>,
+    selected_plugin_server_keys: HashSet<McpServerKey>,
 }
 
 impl ToolPluginContext {
@@ -284,21 +327,21 @@ impl ToolPluginContext {
             .unwrap_or(&[])
     }
 
-    pub fn plugin_display_names_for_mcp_server_name(&self, server_name: &str) -> &[String] {
-        self.plugin_display_names_by_mcp_server_name
-            .get(server_name)
+    pub fn plugin_display_names_for_server(&self, server_key: &McpServerKey) -> &[String] {
+        self.plugin_display_names_by_server
+            .get(server_key)
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
 
-    pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<&str> {
-        self.plugin_ids_by_mcp_server_name
-            .get(server_name)
+    pub fn plugin_id_for_server(&self, server_key: &McpServerKey) -> Option<&str> {
+        self.plugin_ids_by_server
+            .get(server_key)
             .map(String::as_str)
     }
 
-    pub(crate) fn is_selected_plugin_mcp_server(&self, server_name: &str) -> bool {
-        self.selected_plugin_mcp_server_names.contains(server_name)
+    pub(crate) fn is_selected_plugin_server(&self, server_key: &McpServerKey) -> bool {
+        self.selected_plugin_server_keys.contains(server_key)
     }
 
     fn from_config(config: &McpConfig) -> Self {
@@ -318,25 +361,20 @@ impl ToolPluginContext {
                 );
         }
 
-        for (server_name, attribution) in config
-            .mcp_server_catalog
-            .plugin_attributions_by_server_name()
-        {
+        for (server_key, attribution) in config.mcp_server_catalog.plugin_attributions_by_server() {
+            tool_plugin_context.plugin_display_names_by_server.insert(
+                server_key.clone(),
+                vec![attribution.display_name().to_string()],
+            );
             tool_plugin_context
-                .plugin_display_names_by_mcp_server_name
-                .insert(
-                    server_name.clone(),
-                    vec![attribution.display_name().to_string()],
-                );
-            tool_plugin_context
-                .plugin_ids_by_mcp_server_name
-                .insert(server_name, attribution.plugin_id().to_string());
+                .plugin_ids_by_server
+                .insert(server_key, attribution.plugin_id().to_string());
         }
-        tool_plugin_context.selected_plugin_mcp_server_names.extend(
+        tool_plugin_context.selected_plugin_server_keys.extend(
             config
                 .mcp_server_catalog
-                .selected_plugin_server_names()
-                .map(str::to_string),
+                .selected_plugin_server_keys()
+                .cloned(),
         );
 
         for plugin_names in tool_plugin_context
@@ -344,7 +382,7 @@ impl ToolPluginContext {
             .values_mut()
             .chain(
                 tool_plugin_context
-                    .plugin_display_names_by_mcp_server_name
+                    .plugin_display_names_by_server
                     .values_mut(),
             )
         {
@@ -361,13 +399,6 @@ pub fn host_owned_codex_apps_enabled(config: &McpConfig, auth: Option<&CodexAuth
 
 pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {
     config.mcp_server_catalog.configured_servers()
-}
-
-pub fn effective_mcp_servers(
-    config: &McpConfig,
-    auth: Option<&CodexAuth>,
-) -> HashMap<String, EffectiveMcpServer> {
-    effective_mcp_servers_from_configured(configured_mcp_servers(config), config, auth)
 }
 
 pub(crate) fn is_trusted_chatgpt_mcp_server(
@@ -403,31 +434,17 @@ pub(crate) fn is_trusted_chatgpt_mcp_server(
         })
 }
 
-/// Converts a materialized server map to its auth-gated runtime view.
-///
-/// Compatibility built-ins and extension overlays must already be reflected in
-/// `configured_servers`; this function does not synthesize missing servers.
-///
-/// # Panics
-///
-/// Panics if a materialized server is missing from the catalog.
-pub fn effective_mcp_servers_from_configured(
-    configured_servers: HashMap<String, McpServerConfig>,
+/// Materializes auth-gated registrations, keyed by catalog identity rather than display name.
+pub fn effective_mcp_servers(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
-) -> HashMap<String, EffectiveMcpServer> {
-    let mut servers = configured_servers
-        .into_iter()
-        .map(|(name, mut server)| {
-            #[expect(
-                clippy::expect_used,
-                reason = "materialized servers must have catalog registrations"
-            )]
-            let registration = config
-                .mcp_server_catalog
-                .server(&name)
-                .expect("materialized MCP server must have a catalog registration");
-            match server.auth.clone() {
+) -> HashMap<McpServerKey, EffectiveMcpServer> {
+    let mut servers = config
+        .mcp_server_catalog
+        .servers()
+        .map(|(key, registration)| {
+            let mut server = registration.config().clone();
+            match &server.auth {
                 McpServerAuth::ChatGpt => {
                     if !is_trusted_chatgpt_mcp_server(&server.transport, &config.chatgpt_base_url) {
                         server.auth = McpServerAuth::OAuth;
@@ -435,18 +452,16 @@ pub fn effective_mcp_servers_from_configured(
                 }
                 McpServerAuth::OAuth | McpServerAuth::EmaAuth => {}
             }
-            (
-                name,
-                EffectiveMcpServer::from_config_with_policy(
-                    server,
-                    registration.credential_policy(),
-                )
-                .with_agent_plugin(registration.source().is_agent_plugin()),
+            let effective = EffectiveMcpServer::from_config_with_policy(
+                server,
+                registration.credential_policy(),
             )
+            .with_agent_plugin(registration.source().is_agent_plugin());
+            (key.clone(), effective)
         })
         .collect::<HashMap<_, _>>();
     if !host_owned_codex_apps_enabled(config, auth) {
-        servers.remove(CODEX_APPS_MCP_SERVER_NAME);
+        servers.retain(|key, _| key.name() != CODEX_APPS_MCP_SERVER_NAME);
     }
     servers
 }
@@ -455,9 +470,14 @@ pub fn tool_plugin_context(config: &McpConfig) -> ToolPluginContext {
     ToolPluginContext::from_config(config)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn read_mcp_resource(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
+    runtime_auth: Option<(
+        codex_runtime_agent_instance::RuntimeAuthSlot,
+        codex_features::RuntimeAuthMode,
+    )>,
     runtime_context: McpRuntimeContext,
     codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
     tool_catalog_cache: crate::McpToolCatalogCache,
@@ -465,7 +485,7 @@ pub async fn read_mcp_resource(
     params: ReadResourceRequestParams,
 ) -> anyhow::Result<ReadResourceResult> {
     let mut mcp_servers = effective_mcp_servers(config, auth);
-    mcp_servers.retain(|name, _| name == server);
+    mcp_servers.retain(|key, _| config.mcp_server_catalog.legacy_server_name(key) == Some(server));
     let cancel_token = CancellationToken::new();
     let runtime_config = config.for_threadless_operations(&mcp_servers);
     let manager = McpConnectionSet::new(
@@ -475,6 +495,7 @@ pub async fn read_mcp_resource(
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
+            runtime_auth,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::new(runtime_config),
             plugins_available: false,
@@ -497,7 +518,10 @@ pub async fn read_mcp_resource(
     )
     .await;
 
-    let result = manager.read_resource(server, params).await;
+    let result = match manager.resolve_server_name(server) {
+        Some(key) => manager.read_resource(key, params).await,
+        None => Err(anyhow::anyhow!("unknown MCP server '{server}'")),
+    };
     cancel_token.cancel();
     result
 }
@@ -520,6 +544,10 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     auth_manager: Option<&Arc<codex_login::AuthManager>>,
+    runtime_auth: Option<(
+        codex_runtime_agent_instance::RuntimeAuthSlot,
+        codex_features::RuntimeAuthMode,
+    )>,
     runtime_context: McpRuntimeContext,
     codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
     tool_catalog_cache: crate::McpToolCatalogCache,
@@ -527,7 +555,12 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     server_name: Option<&str>,
 ) -> McpServerStatusSnapshot {
     let mut mcp_servers = effective_mcp_servers(config, auth);
-    mcp_servers.retain(|name, _| server_name.is_none_or(|selected| name == selected));
+    mcp_servers.retain(|key, _| {
+        config
+            .mcp_server_catalog
+            .legacy_server_name(key)
+            .is_some_and(|name| server_name.is_none_or(|selected| name == selected))
+    });
     if mcp_servers.is_empty() {
         return McpServerStatusSnapshot {
             server_infos: HashMap::new(),
@@ -542,8 +575,17 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         };
     }
 
+    let named_servers = mcp_servers
+        .iter()
+        .filter_map(|(key, server)| {
+            config
+                .mcp_server_catalog
+                .legacy_server_name(key)
+                .map(|name| (name.to_owned(), server.clone()))
+        })
+        .collect::<HashMap<_, _>>();
     let auth_status_entries = compute_auth_statuses(
-        mcp_servers.iter(),
+        named_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind,
         auth,
@@ -553,7 +595,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     )
     .await;
 
-    let server_names = mcp_servers.keys().cloned().collect();
+    let server_names = named_servers.into_keys().collect();
 
     let cancel_token = CancellationToken::new();
     let runtime_config = config.for_threadless_operations(&mcp_servers);
@@ -564,6 +606,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
+            runtime_auth,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::new(runtime_config),
             plugins_available: false,
@@ -866,7 +909,7 @@ pub(crate) async fn collect_mcp_server_status_snapshot_from_manager(
         };
         let tool_name = tool.name.clone();
         tools_by_server
-            .entry(tool_info.server_name)
+            .entry(tool_info.server_name().to_owned())
             .or_default()
             .insert(tool_name, tool);
     }
@@ -874,7 +917,13 @@ pub(crate) async fn collect_mcp_server_status_snapshot_from_manager(
     // Status-only discovery has no event channel. Report OAuth and EMA failures from the completed
     // connection attempt instead of retaining the credential-presence status read beforehand.
     let mut auth_statuses = auth_statuses_from_entries(&auth_status_entries);
-    for server_name in mcp_connection_manager.authentication_failed_servers().await {
+    for key in mcp_connection_manager.authentication_failed_servers().await {
+        let Some(server_name) = mcp_connection_manager
+            .legacy_server_name(&key)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
         if auth_statuses.get(&server_name) == Some(&McpAuthStatus::OAuth)
             || auth_status_entries
                 .get(&server_name)

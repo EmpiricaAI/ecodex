@@ -4,6 +4,7 @@ use super::LocalAgentControl;
 use super::LocalAgentRuntime;
 use super::runtime::AgentTreeMembership;
 use crate::agent::AgentStatus;
+use crate::agent::host::AgentRuntimeServices;
 use crate::agent::registry::EvictedEnvironments;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -77,9 +78,17 @@ impl ThreadManagerState {
                 .collect();
             let runtime = &thread.session.services.local_agent_runtime;
             let _ = runtime.mailboxes.enqueue(thread_id, /*id*/ None, mail);
+            // Reuse the same effective configuration snapshot as a fork. This includes live
+            // permissions and network restrictions that a profile name cannot reconstruct.
+            let (config, ..) = thread.session.fork_config().await;
             // Preserve configured bindings across eviction without retaining turn-only attachments.
             // Raw bindings keep the original pending owner configuration alive.
             let environments = EvictedEnvironments {
+                config: Arc::new(config),
+                has_independent_service_tier: matches!(
+                    &thread.session.agent_runtime,
+                    AgentRuntimeServices::Host(services) if services.service_tier.is_none()
+                ),
                 selections: thread.environment_selections().await,
                 bindings: thread
                     .session
@@ -167,15 +176,15 @@ impl LocalAgentRuntime {
     /// Pins and touches the registered runtime without waiting for unrelated eviction.
     pub(crate) async fn pin_v2_residency(
         &self,
-        state: &ThreadManagerState,
-        thread: &Arc<CodexThread>,
+        thread: &CodexThread,
     ) -> CodexResult<Option<tokio::sync::OwnedRwLockReadGuard<()>>> {
         if !is_resident_candidate(thread) {
             return Ok(None);
         }
         let guard = Arc::clone(&thread.residency_gate).read_owned().await;
         let thread_id = thread.session.thread_id;
-        if !Arc::ptr_eq(thread, &state.get_thread(thread_id).await?) {
+        let registered = self.upgrade()?.get_thread(thread_id).await?;
+        if !std::ptr::eq(thread, registered.as_ref()) {
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
         self.residency.touch(thread_id);
@@ -327,7 +336,7 @@ async fn is_unloadable(thread: &CodexThread) -> bool {
             | AgentStatus::Completed(_)
             | AgentStatus::Errored(_)
             | AgentStatus::Interrupted
-    ) && thread.session.active_turn.lock().await.is_none()
+    ) && !thread.has_active_turn().await
         && !thread.session.has_outstanding_durable_sleep()
         && !thread
             .session

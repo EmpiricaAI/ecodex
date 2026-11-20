@@ -36,7 +36,9 @@ pub use codex_history::RetainedContextEvent;
 pub use codex_history::RetainedInputSource;
 pub use codex_history::RolloutItem;
 pub use codex_history::RolloutLine;
+pub use codex_history::next_model_id_ordinals;
 pub use codex_history::resume_multi_agent_version;
+pub use codex_history::stamp_item_ordinals;
 pub(crate) use codex_protocol::protocol;
 
 /// Decodes a persisted rollout record without Serde's flattened-envelope buffering.
@@ -123,6 +125,8 @@ pub use list::ThreadSortKey;
 pub use list::ThreadsPage;
 pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_rollout_path_by_rollout_id;
+pub use list::find_rollout_path_by_rollout_id_excluding;
+pub use list::find_rollout_paths_by_rollout_ids;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
@@ -163,6 +167,7 @@ pub use session_index::append_thread_name;
 pub use session_index::find_thread_meta_by_name_str;
 pub use session_index::find_thread_meta_candidates_by_name_str;
 pub use session_index::find_thread_name_by_id;
+pub use session_index::find_thread_name_entries_by_ids;
 pub use session_index::find_thread_names_by_ids;
 pub use session_index::remove_thread_name_entries;
 pub use state_db::StateDbHandle;

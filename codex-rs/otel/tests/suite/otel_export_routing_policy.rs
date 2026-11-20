@@ -34,15 +34,22 @@ use codex_protocol::ToolName;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ToolResultLogConfig;
 use codex_protocol::models::ImageReference;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
 use codex_protocol::protocol::GuardianAssessmentStatus;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use eventsource_stream::Event as StreamEvent;
 
 fn log_attributes(record: &SdkLogRecord) -> BTreeMap<String, String> {
@@ -874,16 +881,91 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
         .with_auth_env(auth_env_metadata());
         let root_span = tracing::info_span!("root");
         let _root_guard = root_span.enter();
-        manager.conversation_starts(
-            "openai",
-            /*reasoning_effort*/ None,
-            ReasoningSummary::Auto,
-            /*context_window*/ None,
-            /*auto_compact_token_limit*/ None,
-            AskForApproval::Never,
-            SandboxPolicy::DangerFullAccess,
-            Vec::new(),
+        let cwd = tempfile::tempdir().expect("telemetry cwd");
+        let root_write = FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Write,
         );
+        for permission_profile in [
+            PermissionProfile::Disabled,
+            PermissionProfile::read_only(),
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::unrestricted(),
+                NetworkSandboxPolicy::Restricted,
+            ),
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+                    FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Tmpdir,
+                    },
+                    FileSystemAccessMode::Write,
+                )]),
+                NetworkSandboxPolicy::Restricted,
+            ),
+            PermissionProfile::workspace_write(),
+            // Effective workspace roots are explicit paths without a full-root grant.
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+                    AbsolutePathBuf::from_absolute_path(cwd.path())
+                        .expect("absolute writable workspace")
+                        .into(),
+                    FileSystemAccessMode::Write,
+                )]),
+                NetworkSandboxPolicy::Restricted,
+            ),
+            PermissionProfile::External {
+                network: NetworkSandboxPolicy::Enabled,
+            },
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(vec![root_write.clone()]),
+                NetworkSandboxPolicy::Enabled,
+            ),
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(vec![root_write.clone()]),
+                NetworkSandboxPolicy::Restricted,
+            ),
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(vec![
+                    root_write.clone(),
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Path {
+                            path: "file:///%00/bad/path/YQ"
+                                .parse()
+                                .expect("opaque writable URI"),
+                        },
+                        FileSystemAccessMode::Write,
+                    ),
+                ]),
+                NetworkSandboxPolicy::Enabled,
+            ),
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(vec![
+                    root_write,
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Tmpdir,
+                        },
+                        FileSystemAccessMode::Read,
+                    ),
+                ]),
+                NetworkSandboxPolicy::Enabled,
+            ),
+        ] {
+            manager.conversation_starts(
+                "openai",
+                /*reasoning_effort*/ None,
+                ReasoningSummary::Auto,
+                /*context_window*/ None,
+                /*auto_compact_token_limit*/ None,
+                AskForApproval::Never,
+                &permission_profile,
+                cwd.path(),
+                Vec::new(),
+                /*legacy_multi_agent_disabled_sources*/ &[],
+            );
+        }
         let agent_identity_telemetry = AgentIdentityTelemetry {
             agent_id: "agent-runtime-otel".to_string(),
             task_id: "task-run-otel".to_string(),
@@ -912,6 +994,31 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
 
     let logs = log_exporter.get_emitted_logs().expect("log export");
     let conversation_log = find_log_by_event_name(&logs, "codex.conversation_starts");
+    let expected_policy_labels = vec![
+        "danger-full-access",
+        "read-only",
+        "external-sandbox",
+        "workspace-write",
+        "workspace-write",
+        "workspace-write",
+        "external-sandbox",
+        "danger-full-access",
+        "external-sandbox",
+        "workspace-write",
+        "workspace-write",
+    ];
+    assert_eq!(
+        logs.iter()
+            .map(|log| log_attributes(&log.record))
+            .filter(|attributes| {
+                attributes
+                    .get("event.name")
+                    .is_some_and(|name| name == "codex.conversation_starts")
+            })
+            .map(|attributes| attributes["sandbox_policy"].clone())
+            .collect::<Vec<_>>(),
+        expected_policy_labels,
+    );
     let conversation_log_attrs = log_attributes(&conversation_log.record);
     assert_eq!(
         conversation_log_attrs
@@ -991,6 +1098,21 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
         find_span_event_by_name_attr(&spans[0].events.events, "codex.conversation_starts");
     let conversation_trace_attrs = span_event_attributes(conversation_trace_event);
     assert_eq!(
+        spans[0]
+            .events
+            .events
+            .iter()
+            .map(span_event_attributes)
+            .filter(|attributes| {
+                attributes
+                    .get("event.name")
+                    .is_some_and(|name| name == "codex.conversation_starts")
+            })
+            .map(|attributes| attributes["sandbox_policy"].clone())
+            .collect::<Vec<_>>(),
+        expected_policy_labels,
+    );
+    assert_eq!(
         conversation_trace_attrs
             .get("auth.env_provider_key_present")
             .map(String::as_str),
@@ -1062,6 +1184,7 @@ fn otel_export_routing_policy_routes_websocket_connect_auth_observability() {
                 .with_filter(filter_fn(OtelProvider::trace_export_filter)),
         );
 
+    let (metrics, metric_exporter) = build_metrics_with_defaults(&[]).unwrap();
     tracing::subscriber::with_default(subscriber, || {
         tracing::callsite::rebuild_interest_cache();
         let manager = SessionTelemetry::new(
@@ -1076,7 +1199,9 @@ fn otel_export_routing_policy_routes_websocket_connect_auth_observability() {
             "tty".to_string(),
             SessionSource::Cli,
         )
-        .with_auth_env(auth_env_metadata());
+        .with_auth_env(auth_env_metadata())
+        .with_product_sku(Some("codex"))
+        .with_metrics_without_metadata_tags(metrics);
         let root_span = tracing::info_span!("root");
         let _root_guard = root_span.enter();
         let agent_identity_telemetry = AgentIdentityTelemetry {
@@ -1093,14 +1218,37 @@ fn otel_export_routing_policy_routes_websocket_connect_auth_observability() {
             Some("managed"),
             Some("reload"),
             "/responses",
-            /*connection_reused*/ false,
+            /*reauth*/ true,
             Some("req-ws-401"),
             Some("ray-ws-401"),
             Some("missing_authorization_header"),
             Some("token_expired"),
             Some(&agent_identity_telemetry),
         );
+        manager.shutdown_metrics().unwrap();
     });
+
+    let exported = latest_metrics(&metric_exporter);
+    let expected_labels = BTreeMap::from([
+        ("product_sku".to_string(), "codex".to_string()),
+        ("reauth".to_string(), "true".to_string()),
+        ("success".to_string(), "false".to_string()),
+    ]);
+    let counter = find_metric(&exported, codex_otel::WEBSOCKET_CONNECT_COUNT_METRIC).unwrap();
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = counter.data() else {
+        panic!("expected connect counter");
+    };
+    let point = sum.data_points().next().expect("failed handshake");
+    assert_eq!(point.value(), 1);
+    assert_eq!(attributes_to_map(point.attributes()), expected_labels);
+
+    let duration = find_metric(&exported, codex_otel::WEBSOCKET_CONNECT_DURATION_METRIC).unwrap();
+    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = duration.data() else {
+        panic!("expected connect duration histogram");
+    };
+    let point = histogram.data_points().next().expect("failed handshake");
+    assert_eq!((point.count(), point.sum()), (1, 17.0));
+    assert_eq!(attributes_to_map(point.attributes()), expected_labels);
 
     logger_provider.force_flush().expect("flush logs");
     tracer_provider.force_flush().expect("flush traces");

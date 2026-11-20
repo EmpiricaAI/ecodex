@@ -167,6 +167,7 @@ impl App {
                 /*session_start_source*/ None,
                 remote_cwd.as_deref(),
                 selected_profile.as_ref(),
+                self.backend_preference_context.local_cwd.as_deref(),
             )),
         )
         .await;
@@ -220,6 +221,8 @@ impl App {
                 return Ok(AppRunControl::Continue);
             }
         }
+        self.backend_registry
+            .register_started(app_server.backend_id(), &started)?;
         self.agents_overview
             .blank_sessions
             .insert(thread_id, started.clone());

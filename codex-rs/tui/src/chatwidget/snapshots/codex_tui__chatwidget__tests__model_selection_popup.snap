@@ -1,26 +1,19 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-assertion_line: 3447
-expression: "render_bottom_popup(&chat, 80)"
+assertion_line: 3361
+expression: popup
 ---
   Select Model and Effort
 
 ↑
-  14. GPT-6-Astra                                       Frontier intelligence
-                                                        for the most demanding
-                                                        work.
-  15. GPT-6-Sol                                         Previous generation
-                                                        workhorse model.
-  16. GPT-6-Luna                                        Fast and affordable
-                                                        model for easier tasks.
-  17. GPT-5.6-Sol                                       Older generation
-                                                        workhorse model.
-  18. GPT-6.1 Terra                                     GPT-6.1 Terra Codex
-                                                        model.
-  19. GPT-5.6-Terra                                     Older balanced model for
-                                                        straightforward work.
-  20. GPT-5.6-Luna                                      Older fast and efficient
-                                                        model.
-› 21. GPT-5.5 (current)                                 Legacy coding model.
+  4. GPT-6.1-Sol         Previous generation model for coding and everyday work.
+  5. GPT-6-Astra         Previous generation model for complex coding and
+                         professional work.
+  6. GPT-6-Sol           Legacy model for coding and everyday work.
+  7. GPT-6-Luna          Fast and affordable model for easier tasks.
+  8. GPT-5.6-Sol         Legacy model for coding and everyday work.
+  9. GPT-5.6-Terra       Legacy balanced model for agentic coding.
+      GPT-5.6-Luna       Legacy fast model for simpler tasks.
+›     GPT-5.5 (current)  Legacy coding model.
 
   enter select · esc back

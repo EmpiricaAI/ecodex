@@ -10,11 +10,13 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnModerationMetadataEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::turn_input::CyberAccessProgram;
+use codex_protocol::turn_input::PromptCacheTtl;
 use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use serde_json::value::RawValue;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -77,6 +79,40 @@ pub struct MemorySummarizeOutput {
 #[derive(Clone, Debug)]
 pub struct ResponseId(pub String);
 
+/// A bounded reason for removing a replayed reasoning item from model input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ReasoningRemovalReason {
+    OrganizationMismatch,
+    EndUserMismatch,
+    ModelMismatch,
+    PrefixMismatch,
+    TurnBoundary,
+    Other,
+}
+
+impl ReasoningRemovalReason {
+    /// Every metric category, including unrecognized API reasons.
+    pub const ALL: [Self; 6] = [
+        Self::OrganizationMismatch,
+        Self::EndUserMismatch,
+        Self::ModelMismatch,
+        Self::PrefixMismatch,
+        Self::TurnBoundary,
+        Self::Other,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OrganizationMismatch => "organization_mismatch",
+            Self::EndUserMismatch => "end_user_mismatch",
+            Self::ModelMismatch => "model_mismatch",
+            Self::PrefixMismatch => "prefix_mismatch",
+            Self::TurnBoundary => "turn_boundary",
+            Self::Other => "other",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ResponseEvent {
     Created {
@@ -103,6 +139,9 @@ pub enum ResponseEvent {
         response_id: String,
         token_usage: Option<TokenUsage>,
         usage_metadata: Option<ResponseUsageMetadata>,
+        /// Reported reasoning removals by bounded reason. Missing or non-array
+        /// reports are unavailable; an empty map means no removals were reported.
+        reasoning_removals: Option<BTreeMap<ReasoningRemovalReason, i64>>,
         /// Did the model affirmatively end its turn? Some providers do not set this,
         /// so we rely on fallback logic when this is `None`.
         end_turn: Option<bool>,
@@ -277,6 +316,11 @@ impl Serialize for ResponsesApiTools {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PromptCacheOptions {
+    pub ttl: PromptCacheTtl,
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct ResponsesApiRequest {
     // Keep routing fields first: serde serializes struct fields in declaration order, and
@@ -297,6 +341,8 @@ pub struct ResponsesApiRequest {
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_options: Option<PromptCacheOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -321,6 +367,7 @@ impl<'a> From<&'a ResponsesApiRequest> for ResponseCreateWsRequest<'a> {
             include: &request.include,
             service_tier: request.service_tier.as_deref(),
             prompt_cache_key: request.prompt_cache_key.as_deref(),
+            prompt_cache_options: request.prompt_cache_options,
             text: request.text.as_ref(),
             generate: None,
             client_metadata: request.client_metadata.clone(),
@@ -351,6 +398,8 @@ pub struct ResponseCreateWsRequest<'a> {
     pub include: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_options: Option<PromptCacheOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<&'a TextControls>,
     #[serde(skip_serializing_if = "Option::is_none")]

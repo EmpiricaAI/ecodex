@@ -591,6 +591,7 @@ impl TranscriptView {
         cells: &[Arc<dyn HistoryCell>],
         inserted: Range<usize>,
     ) {
+        self.invalidate_turn_details_from(/*index*/ 0);
         // With only a header and live output, the first older page extends the canonical tail.
         if !inserted.is_empty()
             && inserted.end == cells.len()
@@ -598,7 +599,7 @@ impl TranscriptView {
         {
             self.last_tail = cells.last().map(EntryKey::cell);
         }
-        self.prepend_snapshot_history(cells, inserted.clone());
+        let inserted = self.prepend_snapshot_history(cells, inserted);
         if let Position::Reading(anchor) = self.position {
             let index = self.resolve(cells, anchor);
             self.position = Position::Reading(Anchor {

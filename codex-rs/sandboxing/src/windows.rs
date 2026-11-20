@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemPolicyProjection;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -30,6 +31,35 @@ pub struct WindowsSandboxFilesystemOverrides {
     pub additional_deny_write_paths: Vec<AbsolutePathBuf>,
 }
 
+impl WindowsSandboxFilesystemOverrides {
+    /// Resolve filesystem overrides for the selected Windows sandbox using the child's environment.
+    pub fn resolve(
+        sandbox: SandboxType,
+        permission_profile: &PermissionProfile,
+        sandbox_policy_cwd: &AbsolutePathBuf,
+        windows_sandbox_level: WindowsSandboxLevel,
+        workload_env: &HashMap<String, String>,
+    ) -> Result<Option<Self>, String> {
+        let use_elevated = windows_sandbox_uses_elevated_backend(windows_sandbox_level);
+        if use_elevated {
+            resolve_windows_elevated_filesystem_overrides(
+                sandbox,
+                permission_profile,
+                sandbox_policy_cwd,
+                use_elevated,
+                workload_env,
+            )
+        } else {
+            resolve_windows_restricted_token_filesystem_overrides(
+                sandbox,
+                permission_profile,
+                sandbox_policy_cwd,
+                windows_sandbox_level,
+            )
+        }
+    }
+}
+
 pub fn windows_sandbox_uses_elevated_backend(sandbox_level: WindowsSandboxLevel) -> bool {
     matches!(sandbox_level, WindowsSandboxLevel::Elevated)
 }
@@ -42,32 +72,6 @@ pub fn permission_profile_supports_windows_restricted_token_sandbox(
             !file_system.to_sandbox_policy().has_full_disk_write_access()
         }
         PermissionProfile::Disabled | PermissionProfile::External { .. } => false,
-    }
-}
-
-pub fn unsupported_windows_restricted_token_sandbox_reason(
-    sandbox: SandboxType,
-    permission_profile: &PermissionProfile,
-    sandbox_policy_cwd: &AbsolutePathBuf,
-    windows_sandbox_level: WindowsSandboxLevel,
-) -> Option<String> {
-    if windows_sandbox_level == WindowsSandboxLevel::Elevated {
-        resolve_windows_elevated_filesystem_overrides(
-            sandbox,
-            permission_profile,
-            sandbox_policy_cwd,
-            windows_sandbox_level == WindowsSandboxLevel::Elevated,
-            &HashMap::new(),
-        )
-        .err()
-    } else {
-        resolve_windows_restricted_token_filesystem_overrides(
-            sandbox,
-            permission_profile,
-            sandbox_policy_cwd,
-            windows_sandbox_level,
-        )
-        .err()
     }
 }
 
@@ -119,10 +123,11 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
         );
     }
 
-    let additional_deny_read_paths = codex_windows_sandbox::resolve_windows_deny_read_paths(
-        &file_system_sandbox_policy,
-        sandbox_policy_cwd,
-    )?;
+    let resolved = file_system_sandbox_policy
+        .resolve_for_enforcement(sandbox_policy_cwd, FileSystemPolicyProjection::Native)
+        .map_err(|err| err.to_string())?;
+    let additional_deny_read_paths =
+        codex_windows_sandbox::expand_windows_deny_read_paths(&resolved, sandbox_policy_cwd)?;
     if !additional_deny_read_paths.is_empty() {
         return Err(
             "windows unelevated restricted-token sandbox cannot enforce deny-read restrictions directly; refusing to run unsandboxed"
@@ -135,8 +140,7 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
         sandbox_policy_cwd.as_path(),
     );
     let legacy_writable_roots = legacy_projection.get_writable_roots_with_cwd(sandbox_policy_cwd);
-    let split_writable_roots =
-        file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let split_writable_roots = resolved.writable_roots;
     let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
         .iter()
         .map(|root| normalize_windows_override_path(root.root.as_path()))
@@ -153,21 +157,11 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
         );
     }
 
-    for writable_root in &split_writable_roots {
-        for read_only_subpath in &writable_root.read_only_subpaths {
-            if split_writable_roots.iter().any(|candidate| {
-                candidate.root.as_path() != writable_root.root.as_path()
-                    && candidate
-                        .root
-                        .as_path()
-                        .starts_with(read_only_subpath.as_path())
-            }) {
-                return Err(
-                    "windows unelevated restricted-token sandbox cannot reopen writable descendants under read-only carveouts directly; refusing to run unsandboxed"
-                        .to_string(),
-                );
-            }
-        }
+    if has_reopened_writable_descendant(&split_writable_roots) {
+        return Err(
+            "windows unelevated restricted-token sandbox cannot reopen writable descendants under read-only carveouts directly; refusing to run unsandboxed"
+                .to_string(),
+        );
     }
 
     let mut additional_deny_write_paths = BTreeSet::new();
@@ -247,13 +241,13 @@ pub fn resolve_windows_elevated_filesystem_overrides(
     #[cfg(not(target_os = "windows"))]
     let _ = workload_env;
 
-    let additional_deny_read_paths = codex_windows_sandbox::resolve_windows_deny_read_paths(
-        &file_system_sandbox_policy,
-        sandbox_policy_cwd,
-    )?;
+    let resolved = file_system_sandbox_policy
+        .resolve_for_enforcement(sandbox_policy_cwd, FileSystemPolicyProjection::Native)
+        .map_err(|err| err.to_string())?;
+    let additional_deny_read_paths =
+        codex_windows_sandbox::expand_windows_deny_read_paths(&resolved, sandbox_policy_cwd)?;
 
-    let split_writable_roots =
-        file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let split_writable_roots = resolved.writable_roots;
     if has_reopened_writable_descendant(&split_writable_roots) {
         return Err(
             "windows elevated sandbox cannot reopen writable descendants under read-only carveouts directly; refusing to run unsandboxed"
@@ -281,8 +275,8 @@ pub fn resolve_windows_elevated_filesystem_overrides(
         .iter()
         .map(|root| normalize_path(root.root.to_path_buf()))
         .collect();
-    let split_readable_roots: Vec<PathBuf> = file_system_sandbox_policy
-        .get_readable_roots_with_cwd(sandbox_policy_cwd)
+    let split_readable_roots: Vec<PathBuf> = resolved
+        .readable_roots
         .into_iter()
         .map(AbsolutePathBuf::into_path_buf)
         .map(&normalize_path)
@@ -362,7 +356,7 @@ pub fn resolve_windows_elevated_filesystem_overrides(
 
     Ok(Some(WindowsSandboxFilesystemOverrides {
         read_roots_include_platform_defaults: read_roots_override.is_some()
-            && file_system_sandbox_policy.include_platform_defaults(),
+            && resolved.include_platform_defaults,
         read_roots_override,
         write_roots_override,
         additional_deny_read_paths,

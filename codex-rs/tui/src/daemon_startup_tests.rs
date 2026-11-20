@@ -45,21 +45,21 @@ fn feature_overrides_allow_daemon_without_allowing_arbitrary_config() {
 }
 
 #[test]
-fn daemon_launch_telemetry_records_once_on_connection_or_early_return() {
-    for connected in [false, true] {
+fn daemon_launch_telemetry_records_once_on_connection_update_or_early_return() {
+    for mode in [Some("in_process"), Some("update_requested"), None] {
         let observations = std::cell::RefCell::new(Vec::new());
-        let launch = daemon_telemetry::Launch(Some(|target: &AppServerTarget, actual: bool| {
-            observations.borrow_mut().push((target.clone(), actual));
+        let launch = daemon_telemetry::Launch(Some(|actual| {
+            observations.borrow_mut().push(actual);
             Vec::new()
         }));
-        if connected {
-            launch.record(&AppServerTarget::Embedded, connected);
+        if let Some(mode) = mode {
+            launch.record(mode);
         } else {
             drop(launch);
         }
         assert_eq!(
             observations.into_inner(),
-            vec![(AppServerTarget::Embedded, connected)]
+            vec![mode.unwrap_or("unconfirmed")]
         );
     }
 }
@@ -413,6 +413,10 @@ fn daemon_exclusion_warning_snapshot() {
         format!(
             "Running without the shared background server: {} requires embedded mode.",
             daemon_startup::WSL_DRVFS_EXCLUSION
+        ),
+        format!(
+            "Running without the shared background server: {} requires embedded mode.",
+            daemon_startup::GATEWAY_SIGN_IN_EXCLUSION
         ),
     ]);
     let text = cell

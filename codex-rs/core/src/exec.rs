@@ -37,6 +37,7 @@ use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecOutputStream;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
@@ -49,8 +50,6 @@ use codex_sandboxing::record_filesystem_sandbox_violation;
 use codex_sandboxing::resolve_windows_elevated_filesystem_overrides;
 #[cfg(test)]
 use codex_sandboxing::resolve_windows_restricted_token_filesystem_overrides;
-#[cfg(test)]
-use codex_sandboxing::unsupported_windows_restricted_token_sandbox_reason;
 #[cfg(any(test, target_os = "windows"))]
 use codex_sandboxing::windows_sandbox_uses_elevated_backend;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -352,7 +351,7 @@ pub async fn build_exec_request(
     let ExecParams {
         command,
         cwd,
-        mut env,
+        env,
         expiration,
         capture_policy,
         network,
@@ -374,13 +373,16 @@ pub async fn build_exec_request(
     );
     tracing::debug!("Sandbox type: {sandbox_type:?}");
 
-    if let Some(network) = network.as_ref() {
-        network
-            .apply_to_env_for_optional_environment(&mut env, network_environment_id.as_deref())
+    let (env, managed_network) = if let Some(network) = network.as_ref() {
+        let prepared = network
+            .prepare_for_optional_environment(env, network_environment_id.as_deref())
             .map_err(|err| {
                 network_proxy_environment_error(network_environment_id.as_deref(), err)
             })?;
-    }
+        (prepared.env, Some(prepared.sandbox_context))
+    } else {
+        (env, None)
+    };
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -396,7 +398,7 @@ pub async fn build_exec_request(
         args: args.to_vec(),
         cwd,
         env,
-        managed_network: None,
+        managed_network,
         additional_permissions: None,
     };
     let options = ExecOptions {
@@ -407,7 +409,9 @@ pub async fn build_exec_request(
         .transform(SandboxTransformRequest {
             command,
             permissions: permission_profile,
-            sandbox: sandbox_type,
+            workspace_roots: None,
+            runtime_readable_paths: &[],
+            selection: SandboxSelection::Explicit(sandbox_type),
             enforce_managed_network,
             environment_id: network_environment_id.as_deref(),
             network: network.as_ref(),
@@ -419,8 +423,8 @@ pub async fn build_exec_request(
             },
             use_legacy_landlock,
             windows_sandbox_level,
-        })
-        .map_err(CodexErr::from)?;
+        })?
+        .into_command_request();
     // These hints belong to the native Windows backend. Other backends use
     // the materialized profile and must not project executor paths onto this host.
     let windows_sandbox_workspace_roots = if sandbox_type == SandboxType::WindowsRestrictedToken {

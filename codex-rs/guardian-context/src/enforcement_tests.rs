@@ -87,6 +87,66 @@ fn native_agent_admission_uses_current_history_and_preserves_identity() {
         assert_eq!(admitted.into_messages(), expected);
     }
 
+    // Both budgeting modes keep a Required or protected call rather than its
+    // earlier Optional duplicate, which can be evicted under budget pressure.
+    let exact: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type": "function_call", "call_id": "exact", "name": "exec_command", "arguments": "{}"
+    }))
+    .unwrap();
+    for action in [
+        Budgeted::required(Box::new(exact.clone().into())),
+        Budgeted::protected(Box::new(exact.clone().into())),
+    ] {
+        let pending = ComposedContext {
+            sections: vec![
+                SectionOutput {
+                    id: "conversation_transcript",
+                    delivery: SectionDelivery::Message(Budgeted::optional(
+                        Box::new(exact.clone().into()),
+                        BudgetPriority::Tool,
+                    )),
+                },
+                SectionOutput {
+                    id: "planned_action",
+                    delivery: SectionDelivery::Message(action),
+                },
+            ],
+            truncations: Vec::new(),
+        };
+        let exact_budget = section_tokens(&pending.sections[1]);
+        let mut expected = pending.clone();
+        expected.sections.remove(/*index*/ 0);
+        let mut fixed = pending.clone();
+        crate::prepare_sync_delivery(&mut fixed, &[]).unwrap();
+        let fixed = fixed
+            .enforce_budget(
+                RequestBudget {
+                    max_input_tokens: exact_budget,
+                    existing_context_tokens: 0,
+                },
+                "evidence omitted".to_owned(),
+                HistoryTruncation::Preserve,
+            )
+            .unwrap();
+        assert_eq!(fixed.sections, expected.sections);
+        let config =
+            crate::budget::tests::complete_minimum_budget(crate::ElasticBudgetConfig::default());
+        let admitted = pending
+            .prepare_elastic_entries(&config)
+            .unwrap()
+            .prepare_sync_delivery(&[])
+            .unwrap()
+            .enforce_budget(
+                RequestBudget {
+                    max_input_tokens: exact_budget,
+                    existing_context_tokens: 0,
+                },
+                "evidence omitted".to_owned(),
+            )
+            .unwrap();
+        assert_eq!(admitted.sections, expected.sections);
+    }
+
     let mut conflicting = context;
     let SectionDelivery::Message(message) = &mut conflicting.sections[1].delivery else {
         panic!("native message")
@@ -300,9 +360,14 @@ fn planned_action_budget_omits_descriptions_without_changing_arguments() {
                 sections: vec![crate::ContextSection::PlannedAction(action.clone())],
             };
             let profile = &crate::ContextProfile::synchronous();
-            let transcript = profile
-                .prepare_transcript(context.transcript_entries(), /*entry_number_offset*/ 0);
-            context.compose(presentation, transcript)
+            crate::prepare_context(
+                std::borrow::Cow::Owned(context),
+                profile,
+                /*entry_number_offset*/ 0,
+                presentation,
+                crate::ContextBudgeting::Fixed,
+                &[],
+            )
         }
         .unwrap();
         let mut required_items = required.iter().map(|item| text(item)).collect::<Vec<_>>();
@@ -335,7 +400,7 @@ fn planned_action_budget_omits_descriptions_without_changing_arguments() {
 #[test]
 fn budget_reserves_existing_context_and_preserves_required_messages() {
     let trusted = crate::PreviousReviews::try_from_fragments(vec![crate::PreviousReview {
-        id: codex_protocol::ResponseItemId::new("review"),
+        id: codex_protocol_test_support::uuid_v7_item_id_generator_for_test()("review"),
         fragment: "verified review".to_owned(),
     }])
     .unwrap()

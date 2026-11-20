@@ -58,6 +58,7 @@ pub(crate) enum ConfigEditor {
     StatusLine,
     TerminalTitle,
     Keyboard,
+    ModelProviders,
     SessionPickerLayout,
     ResumeDirectory,
     CopyOnSelect,
@@ -74,6 +75,7 @@ pub(crate) enum ResumeCurrentAvailability {
 /// Effective state the panel cannot derive from the `Tui` preferences alone.
 #[derive(Clone, Copy)]
 pub(crate) struct ConfigPanelStatus {
+    pub(crate) transcript_mode: crate::transcript_mode::TranscriptMode,
     pub(crate) copy_on_select: bool,
     pub(crate) right_click_paste: Result<bool, &'static str>,
     pub(crate) custom_notification_filters: bool,
@@ -138,6 +140,7 @@ impl ConfigEditorHandoff {
 impl ConfigEditor {
     fn value(self, tui: &Tui, status: ConfigPanelStatus) -> ConfigSettingValue {
         let label = match self {
+            Self::ModelProviders => "Choose".to_string(),
             Self::Theme => tui.theme.clone().unwrap_or_else(|| "Automatic".to_string()),
             Self::SessionPickerLayout => match tui.session_picker_view.unwrap_or_default() {
                 codex_config::types::SessionPickerViewMode::Comfortable => "Comfortable",
@@ -271,7 +274,7 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
         tui.notification_settings.notifications,
         Notifications::Enabled(false)
     );
-    vec![
+    let mut settings = vec![
         ConfigSetting {
             section: ConfigSection::Appearance,
             label: "Theme",
@@ -408,6 +411,13 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
             value: ConfigEditor::ResumeDirectory.value(tui, status),
         },
         ConfigSetting {
+            section: ConfigSection::Sessions,
+            label: "Model providers",
+            description: "Choose the default provider for new chats on the connected server",
+            keywords: "provider gateway endpoint model default",
+            value: ConfigEditor::ModelProviders.value(tui, status),
+        },
+        ConfigSetting {
             section: ConfigSection::TextSelection,
             label: "Copy on select",
             description: "Copy transcript, footer, and composer selections on release; Auto follows terminal defaults",
@@ -436,7 +446,20 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
             keywords: "clipboard mouse paste automatic",
             value: ConfigEditor::RightClickPaste.value(tui, status),
         },
-    ]
+    ];
+    if status.transcript_mode.is_owned() {
+        settings.push(ConfigSetting {
+            section: ConfigSection::Sessions,
+            label: "Collapse turn details",
+            description: "Summarize tool calls in the conversation",
+            keywords: "collapse_turn_details fullscreen transcript expand history",
+            value: ConfigSettingValue::Toggle {
+                setting: ConfigToggle::CollapseTurnDetails,
+                enabled: ConfigToggle::CollapseTurnDetails.enabled(tui),
+            },
+        });
+    }
+    settings
 }
 
 pub(crate) struct ConfigPanel {

@@ -1,4 +1,4 @@
-//! Verifies V2 discovery, plugin acceptance across auth changes, and cache behavior.
+//! Verifies executor discovery, merged plugin routing, acceptance across auth changes, and caching.
 
 use anyhow::Context;
 use anyhow::Result;
@@ -193,22 +193,24 @@ impl ContextContributor for DiscoveryRecorder {
     }
 }
 
-struct Executor {
-    url: String,
-    inventory: Arc<Mutex<Option<Value>>>,
-    requests: Arc<Mutex<Vec<Value>>>,
+pub(super) struct Executor {
+    pub(super) url: String,
+    pub(super) inventory: Arc<Mutex<Option<Value>>>,
+    pub(super) requests: Arc<Mutex<Vec<Value>>>,
     _task: AbortOnDropHandle<Result<()>>,
 }
 
 #[derive(Clone, Copy)]
-enum DiscoveryFailure {
+pub(super) enum DiscoveryFailure {
     None,
     Server,
     Disconnect,
+    #[cfg_attr(windows, expect(dead_code, reason = "executor hook tests run on Unix"))]
+    TurnGrant,
 }
 
 impl Executor {
-    async fn start(supports_v2: bool, failure: DiscoveryFailure) -> Result<Self> {
+    pub(super) async fn start(supports_v2: bool, failure: DiscoveryFailure) -> Result<Self> {
         Self::start_with_version(supports_v2, failure, "0.164.0").await
     }
 
@@ -265,23 +267,27 @@ impl Executor {
                             match failure {
                                 // Exhaust the environment's one transport replay so the cache sees Err.
                                 DiscoveryFailure::Disconnect if attempt < 2 => break,
+                                DiscoveryFailure::TurnGrant if request["params"]["sandbox"].to_string().contains("turn-only-skills") => {
+                                    socket.send(Message::Text(json!({"id":request["id"],"error":{"code":-32004,"message":"turn discovery failed"}}).to_string().into())).await?;
+                                    continue;
+                                }
                                 DiscoveryFailure::Server if attempt == 0 => {
                                     socket.send(Message::Text(json!({"id":request["id"],"error":{"code":-32004,"message":"fixture discovery failure"}}).to_string().into())).await?;
                                     continue;
                                 }
-                                DiscoveryFailure::None | DiscoveryFailure::Server | DiscoveryFailure::Disconnect => {}
+                                DiscoveryFailure::None | DiscoveryFailure::Server | DiscoveryFailure::Disconnect | DiscoveryFailure::TurnGrant => {}
                             }
                         }
                         let result = match request["method"].as_str() {
                             Some("initialize") => Some(json!({"sessionId":"acquisition-only", "environmentInfo": {
                                 "shell":{"name":"bash","path":"/bin/bash"},
                                 "executorVersion":version,
-                                "capabilities":{"sandboxedFileStreaming":true,"capabilityDiscoveryV2":supports_v2}
+                                "capabilities":{"sandboxedFileStreaming":true,"capabilityDiscoverySandbox":true,"capabilityDiscoveryV2":supports_v2}
                             }})),
                             Some("environment/info") => Some(json!({
                                 "shell":{"name":"bash","path":"/bin/bash"},
                                 "executorVersion":version,
-                                "capabilities":{"sandboxedFileStreaming":true,"capabilityDiscoveryV2":supports_v2}
+                                "capabilities":{"sandboxedFileStreaming":true,"capabilityDiscoverySandbox":true,"capabilityDiscoveryV2":supports_v2}
                             })),
                             Some("capabilityRoots/discoverV1") => Some(json!({
                                 "roots": request["params"]["roots"].as_array().context("V1 roots")?
@@ -537,7 +543,9 @@ async fn v2_discovery_failures_retry_or_remain_cached_by_error_kind() -> Result<
                 // Two disconnected attempts, then one shared successful retry in the same cache.
                 3
             }
-            DiscoveryFailure::None => unreachable!("the test only exercises failures"),
+            DiscoveryFailure::None | DiscoveryFailure::TurnGrant => {
+                unreachable!("the test only exercises startup failures")
+            }
         };
         assert_eq!(
             executor
@@ -579,7 +587,6 @@ async fn check_acquisition(enabled: bool, version: &'static str) -> Result<()> {
         &mut extensions,
         codex_skills_extension::SkillProviders::new().with_executor_provider(Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
-                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
                 /*restriction_product*/ None,
             ),
         )),
@@ -842,6 +849,126 @@ async fn check_acquisition(enabled: bool, version: &'static str) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v1_reuses_session_and_turn_discovery_across_model_steps() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let executor = Executor::start(/*supports_v2*/ false, DiscoveryFailure::None).await?;
+    let model = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_exec_server_url(executor.url.clone())
+        .with_config(|config| {
+            config.update_plan_enabled = true;
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .unwrap();
+            config
+                .features
+                .disable(Feature::ExecutorCapabilityDiscoveryV2)
+                .unwrap();
+            config.permissions.approval_policy = codex_core::config::Constrained::allow_any(
+                codex_protocol::protocol::AskForApproval::OnRequest,
+            );
+            config
+                .permissions
+                .set_permission_profile(
+                    codex_protocol::models::PermissionProfile::from_runtime_permissions(
+                        &codex_protocol::permissions::FileSystemSandboxPolicy::restricted(
+                            Vec::new(),
+                        ),
+                        codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+                    ),
+                )
+                .unwrap();
+        })
+        .build_with_auto_env(&model)
+        .await?;
+    let selection = test.codex.environment_selections().await.remove(0);
+    let mut config =
+        core_test_support::test_codex::environment_config_for_selection(&test.config, &selection);
+    config.selected_capability_roots = vec![codex_protocol::capabilities::SelectedCapabilityRoot {
+        id: "legacy-root".to_string(),
+        location: codex_protocol::capabilities::CapabilityRootLocation::Environment {
+            environment_id: selection.environment_id.clone(),
+            path: selection.cwd.clone(),
+        },
+    }];
+    test.codex.environment_ready(&selection, config).await?;
+    let permissions = codex_protocol::request_permissions::RequestPermissionProfile {
+        file_system: Some(
+            codex_protocol::models::FileSystemPermissions::from_read_write_path_uris(
+                Some(vec![selection.cwd.join("approved")?]),
+                /*write*/ None,
+            ),
+        ),
+        ..Default::default()
+    };
+    let mut sequence = vec![responses::sse(vec![
+        responses::ev_function_call(
+            "grant",
+            "request_permissions",
+            &json!({
+                "permissions": permissions,
+            })
+            .to_string(),
+        ),
+        responses::ev_completed("grant"),
+    ])];
+    for id in ["first-step", "second-step"] {
+        sequence.push(responses::sse(vec![
+            responses::ev_function_call(
+                id,
+                "update_plan",
+                r#"{"plan":[{"step":"Inspect skills","status":"completed"}]}"#,
+            ),
+            responses::ev_completed(id),
+        ]));
+    }
+    sequence.push(responses::sse(vec![responses::ev_completed("done")]));
+    let responses = responses::mount_sse_sequence(&model, sequence).await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Inspect the approved skills across two steps.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let request = core_test_support::wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestPermissions(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: request.call_id,
+            response: codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions,
+                scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            },
+        })
+        .await?;
+    core_test_support::wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(responses.requests().len(), 4);
+    let requests = executor.requests.lock().await;
+    let discovery = requests
+        .iter()
+        .filter(|request| request["method"] == "capabilityRoots/discoverV1")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        discovery.len(),
+        2,
+        "unchanged steps reuse both discovery scopes"
+    );
+    assert_ne!(
+        discovery[0]["params"]["roots"][0]["sandbox"],
+        discovery[1]["params"]["roots"][0]["sandbox"]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_contexts() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
@@ -886,10 +1013,10 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
     assert_eq!(calls().await, 1);
     let restricted = codex_exec_server::DiscoverV2CapabilitiesRequest {
         sandbox: Some(
-            codex_exec_server::FileSystemSandboxContext::from_legacy_sandbox_policy(
-                codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+            codex_exec_server::FileSystemSandboxContext::from_permission_profile(
+                codex_protocol::models::PermissionProfile::read_only(),
                 request.cwd.clone(),
-            )?,
+            ),
         ),
         ..request.clone()
     };
@@ -996,6 +1123,7 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
 
 struct Cloud {
     available: AtomicBool,
+    mcp_url: String,
     ready: mpsc::UnboundedSender<(Arc<McpResourceClient>, oneshot::Sender<()>)>,
 }
 
@@ -1013,7 +1141,14 @@ impl PluginProvider for Cloud {
                         enabled: true,
                         display_name: "Demo".into(),
                         version: "1".into(),
-                        mcp_servers: Default::default(),
+                        mcp_servers: [(
+                            "notes".into(),
+                            json!({
+                                "url": self.mcp_url,
+                                "default_tools_approval_mode": "approve",
+                            }),
+                        )]
+                        .into(),
                         connector_ids: Vec::new(),
                         locations: vec![PluginSourceLocation::Cloud {
                             resource_uri: "plugin://plugin_demo".into(),
@@ -1041,7 +1176,7 @@ impl ToolLifecycleContributor for Cloud {
     }
 }
 
-/// Auth refresh updates plugin acceptance before merging skills and capturing the next step.
+/// Merged installations route separately and share plugin acceptance across auth refreshes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1057,11 +1192,18 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
                 "discoveryRoot":{"id":"codex-home-skills","path":"file:///"},"metadata":null}]}],
         "skills":[],"warnings":[]
     }));
+    let second_executor = Executor::start(/*supports_v2*/ true, DiscoveryFailure::None).await?;
+    let inventory = executor.inventory.lock().await.clone();
+    *second_executor.inventory.lock().await = inventory;
     let server = responses::start_mock_server().await;
-    let apps = AppsTestServer::mount(&server).await?;
+    let apps = AppsTestServer::mount_with_tools(&server, Arc::new(std::sync::Mutex::new(vec![json!({
+        "name": "echo", "description": "Read a note.", "annotations": {"readOnlyHint": true},
+        "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}
+    })]))).await?;
     let (ready, mut steps) = mpsc::unbounded_channel();
     let cloud = Arc::new(Cloud {
         available: AtomicBool::new(true),
+        mcp_url: format!("{}/api/codex/ps/mcp", apps.chatgpt_base_url),
         ready,
     });
     let mut extensions = ExtensionRegistryBuilder::new();
@@ -1069,7 +1211,7 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
     let manager = Arc::new(codex_exec_server::EnvironmentManager::default_for_tests());
     install_plugin_providers(
         &mut extensions,
-        PluginProviders::new(Arc::new(ExecutorPluginProvider::new(manager.clone())))
+        PluginProviders::new(Arc::new(ExecutorPluginProvider::new(manager)))
             .with_cloud_provider(cloud.clone()),
     );
     install_with_providers(
@@ -1093,7 +1235,7 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
             }))
             .with_executor_provider(Arc::new(
                 ExecutorSkillProvider::new_with_restriction_product(
-                    manager, /*restriction_product*/ None,
+                    /*restriction_product*/ None,
                 ),
             )),
         |_config: &Config| SkillsExtensionConfig {
@@ -1106,8 +1248,14 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
             shadow_selection_enabled: false,
         },
     );
-    // Rotate auth, revoke the owning plugin, then reuse the revoked state.
+    // Call both installations, then preserve the skill-read/auth-rotation/revocation flow.
+    let installations = [
+        ("env-a", "mcp__74afdff5f493__notes", &executor),
+        ("env-b", "mcp__14afef09931d__notes", &second_executor),
+    ];
     let cases = [
+        ("initial", true),
+        ("initial", true),
         ("initial", true),
         ("rotated", true),
         ("removed", false),
@@ -1116,7 +1264,14 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
     let model_responses = (0..cases.len())
         .map(|step| {
             let mut events = vec![responses::ev_response_created(&format!("response-{step}"))];
-            if step + 1 < cases.len() {
+            if let Some((environment, namespace, _)) = installations.get(step) {
+                events.push(responses::ev_function_call_with_namespace(
+                    &format!("call-{environment}"),
+                    namespace,
+                    "echo",
+                    &json!({"title": environment}).to_string(),
+                ));
+            } else if step + 1 < cases.len() {
                 events.push(responses::ev_function_call_with_namespace(
                     &format!("read-{step}"),
                     "skills",
@@ -1131,6 +1286,7 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
     let model = responses::mount_sse_sequence(&server, model_responses).await;
     let test = apps_enabled_builder(apps.chatgpt_base_url)
         .with_exec_server_url(executor.url.clone())
+        .with_model_info_override("gpt-5.5", |model| model.supports_search_tool = false)
         .with_auth(CodexAuth::from_external_chatgpt_tokens(
             "header.e30.initial",
             "account",
@@ -1142,11 +1298,28 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
             config.features.enable(Feature::Plugins).unwrap();
             config
                 .features
+                .enable(Feature::MultiEnvironmentMcp)
+                .unwrap();
+            config
+                .features
                 .enable(Feature::ExecutorCapabilityDiscoveryV2)
                 .unwrap();
         })
         .build_with_auto_env(&server)
         .await?;
+    let mut selections = Vec::new();
+    for (environment, _, executor) in installations {
+        test.thread_manager
+            .environment_manager()
+            .upsert_environment(
+                environment.into(),
+                executor.url.clone(),
+                /*connect_timeout*/ None,
+            )?;
+        let mut selection = test.executor_environment().selection().clone();
+        selection.environment_id = environment.into();
+        selections.push(selection);
+    }
     let rotate = async {
         for (index, &(revision, available)) in cases.iter().enumerate().skip(1) {
             let (client, resume) = tokio::time::timeout(Duration::from_secs(15), steps.recv())
@@ -1174,7 +1347,10 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
         anyhow::Ok(())
     };
     tokio::try_join!(
-        test.submit_turn("Inspect the accepted plugin skill."),
+        test.submit_turn_with_environments(
+            "Read a note on each computer, then inspect the accepted plugin skill.",
+            Some(selections),
+        ),
         rotate
     )?;
     let requests = model.requests();
@@ -1186,6 +1362,26 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
             .rfind(|text| text.starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG))
             .expect("latest skill instructions");
         assert_eq!(skills.contains("Accepted plugin skill"), available);
+        for (_, namespace, _) in installations {
+            assert_eq!(request.tool_by_name(namespace, "echo").is_some(), available);
+        }
+    }
+    for (environment, _, executor) in installations {
+        let mut calls = Vec::new();
+        for request in executor.requests.lock().await.iter() {
+            if request["method"] == "http/request" {
+                let params: HttpRequestParams = serde_json::from_value(request["params"].clone())?;
+                let Some(body) = params.body else { continue };
+                let body: Value = serde_json::from_slice(body.as_ref())?;
+                if body["method"] == "tools/call" {
+                    calls.push((
+                        body["params"]["name"].clone(),
+                        body["params"]["arguments"].clone(),
+                    ));
+                }
+            }
+        }
+        assert_eq!(calls, vec![(json!("echo"), json!({"title": environment}))]);
     }
     let mut bodies = requests
         .iter()
@@ -1206,7 +1402,7 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
     insta::assert_snapshot!(
         "plugin_acceptance_auth_refresh",
         context_snapshot::format_context_snapshot(
-            "Mid-turn auth refresh preserves skill context and executor access. Revoking the plugin removes cloud skill instructions and denies executor reads.",
+            "Two installations of one cloud plugin route MCP calls through their own executors. Mid-turn auth refresh preserves skill context and executor access; revocation removes both MCPs and cloud skill instructions and denies executor reads.",
             &bodies
                 .iter()
                 .map(context_snapshot::SnapshotEntry::body)

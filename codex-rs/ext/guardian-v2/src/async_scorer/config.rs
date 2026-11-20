@@ -79,11 +79,8 @@ impl GuardianV2Config {
             enabled: Some(config.features.enabled(codex_features::Feature::GuardianV2)),
             ..configured
         });
-        resolved.policy =
-            GuardianPolicyLoader::new(Some(&legacy), config.config_layer_stack.requirements());
-        resolved.review_multi_agent_calls = config
-            .features
-            .enabled(codex_features::Feature::GuardianNativeMultiAgentHistory);
+        resolved.policy = GuardianPolicyLoader::new(Some(&legacy));
+        resolved.review_multi_agent_calls = config.guardian_native_multi_agent_history_enabled();
         resolved.multi_agent_namespace = config.multi_agent_v2.tool_namespace.clone();
         Ok(resolved)
     }
@@ -91,8 +88,9 @@ impl GuardianV2Config {
     pub(super) fn policy_for_model(
         &self,
         model: Option<&codex_protocol::openai_models::ModelInfo>,
+        requirements: &codex_config::ConfigRequirements,
     ) -> GuardianModelPolicy {
-        self.policy.resolve(model)
+        self.policy.resolve(model, requirements)
     }
 
     pub(crate) fn with_model_defaults(
@@ -267,13 +265,10 @@ impl GuardianV2Config {
             );
         }
 
-        let policy = GuardianPolicyLoader::new(
-            Some(&FeatureToml::Config(GuardianV2ConfigToml {
-                enabled: Some(true),
-                ..configured.clone()
-            })),
-            &codex_config::ConfigRequirements::default(),
-        );
+        let policy = GuardianPolicyLoader::new(Some(&FeatureToml::Config(GuardianV2ConfigToml {
+            enabled: Some(true),
+            ..configured.clone()
+        })));
         Ok(Self {
             local_overrides: configured.clone(),
             review_multi_agent_calls: false,

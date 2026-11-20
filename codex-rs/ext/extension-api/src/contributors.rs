@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -255,6 +256,18 @@ pub trait TurnLifecycleContributor: Send + Sync {
         Box::pin(std::future::ready(()))
     }
 
+    /// Observes the same completion with host-supplied data for a recorded user input.
+    /// The default forwards to [`Self::on_item_completed`].
+    fn on_item_completed_with_metadata<'a>(
+        &'a self,
+        thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+        item: &'a TurnItem,
+        _user_input_extension_data: Option<&'a BTreeMap<String, serde_json::Value>>,
+    ) -> ExtensionFuture<'a, ()> {
+        self.on_item_completed(thread_store, turn_store, item)
+    }
+
     /// Called before the host drops the completed turn runtime and turn store.
     /// The callback completes before the host emits the turn-complete event.
     fn on_turn_stop<'a>(&'a self, input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
@@ -362,11 +375,18 @@ pub trait SkillInvocationContributor: Send + Sync {
     }
 }
 
+/// A selected capability root bound to filesystem access for the current callback.
+#[derive(Clone, Copy)]
+pub struct AccessedSelectedCapabilityRoot<'a> {
+    pub root: &'a SelectedCapabilityRoot,
+    pub fs: &'a dyn codex_file_system::EnvironmentAccess,
+}
+
 /// Runtime inputs shared by preparation, tool construction, and later context consumers.
 #[derive(Clone, Copy)]
 pub struct StepPreparationInput<'a> {
     pub turn_id: &'a str,
-    pub ready_selected_capability_roots: &'a [SelectedCapabilityRoot],
+    pub ready_selected_capability_roots: &'a [AccessedSelectedCapabilityRoot<'a>],
     pub executor_capability_discovery: Option<&'a ExecutorCapabilityDiscoverySnapshot>,
     pub executor_capability_discovery_v2: Option<&'a [ExecutorCapabilityDiscoveryV2Snapshot]>,
     /// Captured plugin policy; an empty snapshot represents no selected plugins.

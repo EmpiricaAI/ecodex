@@ -17,8 +17,10 @@ use super::*;
 
 pub(super) struct Disclosure {
     pub(super) expanded: HashSet<String>,
-    pub(super) focused: Option<Vec<String>>,
+    pub(super) focused: Option<(EntryKey, Vec<String>)>,
     pub(super) resume_after_approval: Option<(ThreadId, String)>,
+    // Resolve against the next layout, once a toggled live row has also been rebuilt.
+    pub(super) anchor_control: Option<EntryKey>,
     pub(super) live_ids: Vec<String>,
     pub(super) keymap: RuntimeKeymap,
 }
@@ -29,6 +31,7 @@ impl Default for Disclosure {
             expanded: HashSet::new(),
             focused: None,
             resume_after_approval: None,
+            anchor_control: None,
             live_ids: Vec::new(),
             keymap: RuntimeKeymap::defaults(),
         }
@@ -64,11 +67,26 @@ impl TranscriptView {
         cells: &[Arc<dyn HistoryCell>],
         ids: Vec<String>,
     ) -> bool {
-        // Disclosure follows its activity into history instead of an unrelated next live tail.
+        let previous = std::mem::replace(&mut self.disclosure.live_ids, ids);
+        let ids = &self.disclosure.live_ids;
+        if previous != *ids {
+            self.live_key = None;
+        }
+        // A completed single search retains its reading position even after its control goes away.
         if self.snapshot().is_none()
             && let Position::Reading(anchor) = self.position
             && anchor.key == EntryKey::Live
-            && let Some(index) = self.canonical_activity_index(cells, &self.disclosure.live_ids)
+            && let Some(index) = self.canonical_activity_index(cells, &previous).or_else(|| {
+                let id = previous
+                    .iter()
+                    .find_map(|id| id.strip_prefix("summary:web:"))?;
+                (anchor.index..cells.len()).rfind(|&index| {
+                    cells[index]
+                        .as_any()
+                        .downcast_ref::<crate::history_cell::WebSearchCell>()
+                        .is_some_and(|search| search.is_completed() && search.call_id() == id)
+                })
+            })
             && let Some(cell) = cells.get(index)
         {
             self.position = Position::Reading(Anchor {
@@ -78,21 +96,27 @@ impl TranscriptView {
                 row_bias: 0,
             });
         }
-        if self.disclosure.live_ids != ids {
-            self.live_key = None;
+        if self.snapshot().is_none()
+            && let Some((_, focused)) = &self.disclosure.focused
+            && focused.iter().any(|id| id.starts_with("summary:web:"))
+            && self.canonical_activity_index(cells, focused).is_none()
+        {
+            self.disclosure.focused = None;
         }
-        let expanded = self.disclosure.is_expanded(&ids);
+        let expanded = self.disclosure.is_expanded(ids);
         if expanded {
             self.disclosure.expanded.extend(ids.iter().cloned());
         }
-        self.disclosure.live_ids = ids;
         expanded
     }
 
     pub(super) fn activity_ids(&self, cells: &[Arc<dyn HistoryCell>], index: usize) -> Vec<String> {
         cells.get(index).map_or_else(
             || self.disclosure.live_ids.clone(),
-            |cell| cell.activity_ids(),
+            |cell| match self.turn_row(cells, index) {
+                Some(row) if !self.is_search_expanded(EntryKey::cell(cell)) => row.ids().to_vec(),
+                _ => cell.activity_ids(),
+            },
         )
     }
 
@@ -103,6 +127,9 @@ impl TranscriptView {
         index: usize,
     ) -> Arc<[String]> {
         let key = cells.get(index).map_or(EntryKey::Live, EntryKey::cell);
+        if self.is_search_expanded(key) {
+            return self.activity_ids(cells, index).into();
+        }
         self.snapshot()
             .and_then(|snapshot| snapshot.activities.get(&key))
             .cloned()
@@ -121,7 +148,7 @@ impl TranscriptView {
             .disclosure
             .focused
             .as_ref()
-            .is_some_and(|focused| ids.iter().any(|id| focused.contains(id)));
+            .is_some_and(|(_, focused)| ids.iter().any(|id| focused.contains(id)));
         if !focused || !layout.disclosure {
             return;
         }
@@ -138,6 +165,13 @@ impl TranscriptView {
                     .fg(accent_color())
                     .bold()
                     .remove_modifier(Modifier::DIM),
+            );
+        } else if layout.is_turn_disclosure() {
+            buf.set_style(
+                area,
+                Style::default()
+                    .fg(crate::style::user_message_accent_color())
+                    .bold(),
             );
         } else if row == usize::from(layout.separated) {
             buf.set_style(area, Style::default().underlined());
@@ -205,7 +239,7 @@ impl TranscriptView {
             .disclosure
             .focused
             .as_ref()
-            .and_then(|ids| self.canonical_activity_index(cells, ids));
+            .and_then(|(_, ids)| self.canonical_activity_index(cells, ids));
         let Some(focused) = focused else {
             self.disclosure.focused = None;
             return None;
@@ -304,21 +338,31 @@ impl TranscriptView {
     }
 
     fn focus_activity(&mut self, cells: &[Arc<dyn HistoryCell>], index: usize) -> bool {
-        if self
-            .current_layout(cells, index)
-            .is_none_or(|layout| !layout.disclosure)
-        {
+        let Some(layout) = self.layout(cells, index) else {
             return false;
-        }
+        };
+        let Some(control) = layout.disclosure_row() else {
+            return false;
+        };
         let ids = self.activity_ids(cells, index);
-        let header_visible = self.visible.iter().any(|row| {
-            row.layout.disclosure
-                && row.activity_ids.iter().any(|id| ids.contains(id))
-                && row.row == usize::from(row.layout.separated)
+        let row = if matches!(
+            self.turn_row(cells, index),
+            Some(turn_details::TurnRow::Prompt { .. })
+        ) {
+            control
+        } else {
+            usize::from(layout.separated)
+        };
+        let visible = self.visible.iter().any(|visible| {
+            visible.row == row && visible.activity_ids.iter().any(|id| ids.contains(id))
         });
-        self.disclosure.focused = Some(ids);
-        if !header_visible {
+        self.disclosure.focused = Some((self.entry_key(cells, index), ids));
+        if !visible {
             self.jump_to_entry(cells, index);
+            if let Position::Reading(anchor) = &mut self.position {
+                anchor.offset = layout.position_at(row, /*column*/ 0);
+                anchor.row_bias = layout.row_for_offset(anchor.offset) as isize - row as isize;
+            }
         }
         true
     }
@@ -328,10 +372,18 @@ impl TranscriptView {
         if ids.is_empty() {
             return;
         }
-        let key = self.entry_key(cells, index);
+        let key = cells.get(index).map_or(EntryKey::Live, EntryKey::cell);
         let matched = self.is_search_expanded(key);
+        self.disclosure.anchor_control = None;
         let previous_top = self.visible.first().map(|visible| {
             let offset = visible.layout.position_at(visible.row, /*column*/ 0);
+            if !matched
+                && offset == 0
+                && visible.layout.disclosure_row() == Some(visible.row)
+                && visible.activity_ids.iter().any(|id| ids.contains(id))
+            {
+                self.disclosure.anchor_control = Some(key);
+            }
             (
                 visible.key,
                 Arc::clone(&visible.activity_ids),
@@ -343,6 +395,12 @@ impl TranscriptView {
         if self.search.has_active_query() && !matched {
             if let Some(snapshot) = &mut self.held_reading {
                 snapshot.pinned.remove(&key);
+                if let Some(details) = &self.turn_details {
+                    for child in details.child_keys(index) {
+                        snapshot.pinned.remove(&child);
+                        snapshot.activities.remove(&child);
+                    }
+                }
             }
         } else {
             self.release_live_reading();
@@ -353,7 +411,11 @@ impl TranscriptView {
             .and_then(|(key, top_ids, offset, row_bias)| {
                 let unchanged = cells.iter().position(|cell| EntryKey::cell(cell) == key);
                 let top = unchanged.or_else(|| self.canonical_activity_index(cells, &top_ids))?;
-                let preserve_offset = unchanged.is_some() && top != index;
+                let prompt = matches!(
+                    self.turn_row(cells, top),
+                    Some(turn_details::TurnRow::Prompt { .. })
+                );
+                let preserve_offset = unchanged.is_some() && (top != index || prompt);
                 Some(Anchor {
                     key: cells.get(top).map_or(EntryKey::Live, EntryKey::cell),
                     index: top,
@@ -372,7 +434,7 @@ impl TranscriptView {
         } else {
             self.disclosure.expanded.extend(ids.iter().cloned());
         }
-        self.disclosure.focused = Some(ids);
+        self.disclosure.focused = Some((key, ids));
         self.position = Position::Reading(anchor);
         self.cache.clear();
         self.live_key = None;
@@ -383,14 +445,17 @@ impl TranscriptView {
     }
 
     pub(super) fn disclosure_footer(&self, width: u16) -> Option<TranscriptFooter> {
-        if !self.is_activity_focused() {
-            return None;
-        }
+        let (key, ids) = self.disclosure.focused.as_ref()?;
+        let toggle = if self.disclosure.is_expanded(ids) || self.is_search_expanded(*key) {
+            "collapse"
+        } else {
+            "expand"
+        };
         let keymap = &self.disclosure.keymap;
         let hints: Vec<_> = [
             (ListAction::MoveUp, "previous"),
             (ListAction::MoveDown, "next"),
-            (ListAction::Accept, "details"),
+            (ListAction::Accept, toggle),
             (ListAction::Cancel, "back"),
         ]
         .into_iter()

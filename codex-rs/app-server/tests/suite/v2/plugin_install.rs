@@ -77,6 +77,9 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
+#[path = "plugin_runtime_auth.rs"]
+mod runtime_auth_tests;
+
 // Plugin install tests wait on connector discovery after the install response path
 // starts, which is noticeably slower on Windows CI.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -2126,7 +2129,8 @@ async fn plugin_install_remote_auth_setup_respects_activation_policy(
 ) -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    let oauth_server = MockServer::start().await;
+    // A pooled endpoint can receive late requests from a previous test subprocess.
+    let oauth_server = MockServer::builder().start().await;
     let bundle_url = mount_remote_plugin_bundle(
         &server,
         /*status_code*/ 200,

@@ -7,6 +7,7 @@ mod list_threads;
 mod live_writer;
 mod model_context;
 mod move_thread_to_section;
+mod original_history;
 mod paginated_fork;
 mod pending_thread_metadata;
 mod projects;
@@ -60,6 +61,7 @@ use tokio::sync::OwnedMutexGuard;
 use tokio::sync::OwnedRwLockReadGuard;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::sync::RwLock;
+use tokio::sync::Semaphore;
 
 use crate::AddThreadAttachmentOutcome;
 use crate::AddThreadAttachmentParams;
@@ -152,6 +154,9 @@ pub struct LocalThreadStore {
     writer_lock_coordinator: Arc<WriterLockCoordinator>,
     state_db: Option<StateDbHandle>,
     thread_history_db: Arc<OnceCell<sqlx::SqlitePool>>,
+    /// Queue local history writers before they take a pool connection so readers
+    /// can use the other connections while SQLite's single writer is busy.
+    thread_history_writer: Arc<Semaphore>,
     thread_data_cleanup: Option<Arc<ThreadDataCleanup>>,
     #[cfg(test)]
     startup_migration_retry_gate: Option<Arc<StartupMigrationRetryGate>>,
@@ -182,8 +187,8 @@ struct LiveWriterLocks {
 
 #[derive(Default)]
 struct ThreadCoordination {
-    // Serialize writes and capture consistent fork snapshots.
-    writer: Arc<Mutex<()>>,
+    // Serializes writes and holds the next item ordinal observed in this writer’s rollout.
+    writer: Arc<Mutex<u64>>,
     // Forks hold a shared lease until their child reference is durable; deletion, archive, and
     // unarchive require exclusive access. Keeping this separate from `writer` lets the source
     // accept writes during child initialization, including MCP startup that can take 30 seconds.
@@ -201,7 +206,7 @@ impl LiveWriterLocks {
             .clone()
     }
 
-    async fn lock(&self, thread_id: ThreadId) -> OwnedMutexGuard<()> {
+    async fn lock(&self, thread_id: ThreadId) -> OwnedMutexGuard<u64> {
         self.coordination(thread_id)
             .await
             .writer
@@ -280,6 +285,7 @@ impl LocalThreadStore {
             writer_lock_coordinator,
             state_db,
             thread_history_db: Arc::new(OnceCell::new()),
+            thread_history_writer: Arc::new(Semaphore::new(/* permits */ 1)),
             thread_data_cleanup: None,
             #[cfg(test)]
             startup_migration_retry_gate: None,
@@ -616,6 +622,14 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { model_context::load_latest_model_context(self, params).await })
     }
 
+    fn read_original_history(
+        &self,
+        thread_id: ThreadId,
+        request: crate::OriginalHistoryRequest,
+    ) -> ThreadStoreFuture<'_, crate::OriginalHistoryRead> {
+        Box::pin(original_history::read(self, thread_id, request))
+    }
+
     fn is_model_context_current(
         &self,
         params: LoadThreadHistoryParams,
@@ -895,7 +909,6 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ItemCompletedEvent;
-    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadHistoryMode;
     use codex_protocol::protocol::ThreadMemoryMode;
@@ -1059,14 +1072,14 @@ mod tests {
         tokio::fs::write(&stale_rollout_path, "malformed session metadata\n")
             .await
             .expect("write stale rollout");
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             stale_rollout_path,
             chrono::Utc::now(),
             SessionSource::Cli,
-        );
-        builder.history_mode = ThreadHistoryMode::Paginated;
-        builder.cwd = home.path().to_path_buf();
+        )
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_cwd(home.path().to_path_buf());
         let mut metadata = builder.build("test-provider");
         metadata.preview = Some("original user message".to_string());
         metadata.first_user_message = Some("original user message".to_string());
@@ -1141,14 +1154,13 @@ mod tests {
             RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 root_turn_id: None,
+                direct_only_tool_namespaces: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(serde_json::json!(cwd)).expect("absolute cwd"),
                 approval_policy,
                 approvals_reviewer: None,
-                sandbox_policy: SandboxPolicy::DangerFullAccess,
-                permission_profile: None,
+                permission_profile: codex_protocol::models::PermissionProfile::Disabled,
                 active_permission_profile: None,
-                file_system_sandbox_policy: None,
                 model: model.to_string(),
                 comp_hash: None,
                 collaboration_mode: None,
@@ -1246,6 +1258,7 @@ mod tests {
         live_thread
             .append_items(&[
                 RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                    moderation: None,
                     message: "commentary".to_string(),
                     phase: Some(MessagePhase::Commentary),
                     memory_citation: None,
@@ -1771,14 +1784,14 @@ mod tests {
             .await
             .expect("shutdown initial writer");
 
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             home.path().join("missing-rollout.jsonl"),
             chrono::Utc::now(),
             SessionSource::Exec,
-        );
-        builder.history_mode = ThreadHistoryMode::Legacy;
-        builder.cwd = home.path().to_path_buf();
+        )
+        .with_history_mode(ThreadHistoryMode::Legacy)
+        .with_cwd(home.path().to_path_buf());
         let metadata = builder.build("test-provider");
         runtime
             .upsert_thread(&metadata)
@@ -2329,6 +2342,7 @@ mod tests {
             .await
             .expect("create paginated thread");
         let paginated_item = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id,
             turn_id: "turn-1".to_string(),
             item: TurnItem::UserMessage(UserMessageItem {
@@ -2392,7 +2406,7 @@ mod tests {
             history_mode: ThreadHistoryMode::Legacy,
             history_base: None,
             subagent_history_start_ordinal: None,
-            initial_window_id: uuid::Uuid::now_v7().to_string(),
+            initial_window_id: codex_protocol::ContextWindowId::new_uuid_v7(),
             runtime_workspace_roots: None,
             metadata: thread_metadata(),
         }

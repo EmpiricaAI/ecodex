@@ -62,6 +62,9 @@ pub struct TurnInputRequest {
     /// Optional host-assigned UUID for the Responses message created from [`TurnInput::UserInput`].
     /// Ignored for all other inputs, including raw user-role Responses items.
     pub user_item_uuid: Option<uuid::Uuid>,
+    /// Host-supplied, extension-keyed data for this user input's completion.
+    /// Travels with the individual input and is never included in model input.
+    pub user_input_extension_data: BTreeMap<String, Value>,
     pub thread_settings: ThreadSettingsOverrides,
     pub start: TurnStartOptions,
     pub additional_context: BTreeMap<String, AdditionalContextEntry>,
@@ -110,6 +113,8 @@ pub struct RecoverTurnRequest {
     pub turn_id: String,
     pub thread_settings: ThreadSettingsOverrides,
     pub trace: Option<W3cTraceContext>,
+    /// Cache lifetime to reapply when resuming this turn.
+    pub prompt_cache_ttl: Option<PromptCacheTtl>,
     /// Program recorded in the interrupted turn's persisted context.
     pub cyber_access_program: Option<CyberAccessProgram>,
 }
@@ -120,6 +125,7 @@ impl TurnInputRequest {
         Self {
             input,
             user_item_uuid: None,
+            user_input_extension_data: BTreeMap::new(),
             thread_settings: ThreadSettingsOverrides::default(),
             start: TurnStartOptions::default(),
             additional_context: BTreeMap::new(),
@@ -212,6 +218,15 @@ pub enum CyberAccessProgram {
     DaybreakRed,
 }
 
+/// Minimum lifetime requested for new prompt cache entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PromptCacheTtl {
+    #[serde(rename = "30m")]
+    ThirtyMinutes,
+    #[serde(rename = "12h")]
+    TwelveHours,
+}
+
 /// Options for the new-turn branch of a submission.
 ///
 /// Core only records these options when input starts a turn. When input steers,
@@ -226,8 +241,13 @@ pub struct TurnStartOptions {
     /// Structured-output schema for a new turn. When steering, Core rejects
     /// the input if the active turn uses a different schema.
     pub final_output_json_schema: Option<Value>,
+    /// Direct-only tool namespaces for a new turn. Omission inherits the thread's
+    /// configuration. An empty list clears it for this turn. Ignored when steering.
+    pub direct_only_tool_namespaces: Option<Vec<String>>,
     /// Service tier for a new turn, without changing the thread's preference.
     pub service_tier: Option<String>,
+    /// Lifetime requested for new Responses prompt cache entries during this turn.
+    pub prompt_cache_ttl: Option<PromptCacheTtl>,
     /// Parent turn lineage recorded if this request starts a new turn.
     pub parent_turn_id: Option<String>,
     /// Agent owning the parent turn, retained when recovering delegated work.
@@ -247,6 +267,9 @@ pub struct TurnStartOptions {
 /// resolved causal root, including when steering preserves an existing turn.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TurnInputSubmission {
+    /// Core accepted an agent follow-up through native message delivery. The
+    /// receiving turn may still be running or finishing, so no turn ID is implied.
+    Accepted,
     /// Core started a turn. Persistent thread settings and start options were applied.
     Started {
         turn_id: String,

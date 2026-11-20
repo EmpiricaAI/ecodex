@@ -3,17 +3,19 @@ use super::account_processor::EnterpriseLoginTarget;
 use super::thread_input::ensure_direct_input_allowed;
 use super::*;
 use codex_config::types::McpServerAuth;
+use codex_core::McpRefreshReason;
 use codex_mcp::McpServerSource;
 use codex_mcp::ReadResourceRequestParams;
 use codex_mcp::ema_auth_scope;
 use codex_mcp::resolve_oauth_callback;
 use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_rmcp_client::EnterpriseOAuthLoginRequest;
+use codex_rmcp_client::McpRequestTrace;
 use std::future::Future;
 
 use crate::thread_state::ThreadStateManager;
 
-const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+const MCP_THREAD_ID_META_KEY: &str = "threadId";
 
 #[derive(Clone)]
 pub(crate) struct McpRequestProcessor {
@@ -163,7 +165,11 @@ impl McpRequestProcessor {
             }
         };
         let effective_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
-        let Some(server) = effective_servers.get(&name) else {
+        let Some((key, server)) = mcp_config
+            .mcp_server_catalog
+            .resolve_server_name(&name)
+            .and_then(|key| effective_servers.get(key).map(|server| (key, server)))
+        else {
             return Err(invalid_request(format!(
                 "No MCP server named '{name}' found."
             )));
@@ -242,7 +248,7 @@ impl McpRequestProcessor {
                     scope,
                     EnterpriseLoginTarget {
                         thread_id,
-                        server_name: name.clone(),
+                        server_key: key.clone(),
                         registration,
                     },
                 )
@@ -351,7 +357,9 @@ impl McpRequestProcessor {
                 Err(err) => (false, Some(err.to_string())),
             };
             if success && !enterprise {
-                thread_manager.invalidate_mcp_runtimes().await;
+                thread_manager
+                    .invalidate_mcp_runtimes_for(McpRefreshReason::McpOAuthLoginCompleted)
+                    .await;
             }
 
             let notification = ServerNotification::McpServerOauthLoginCompleted(
@@ -391,7 +399,7 @@ impl McpRequestProcessor {
                 .await;
             outgoing.send_result(request, result).await;
         };
-        tokio::spawn(AuthStorageOriginator::current().scope(task));
+        self.spawn_mcp_request(request_id, task).await;
         Ok(())
     }
 
@@ -428,8 +436,15 @@ impl McpRequestProcessor {
                 }
                 None => self.load_global_config().await?,
             };
-            let mcp_manager = self.thread_manager.mcp_manager();
-            let auth = self.auth_manager.auth().await;
+            let mcp_manager = thread
+                .as_ref()
+                .map(|thread| thread.mcp_manager())
+                .unwrap_or_else(|| self.thread_manager.mcp_manager());
+            self.thread_manager
+                .runtime_auth_for_mcp_manager(&config, &mcp_manager)
+                .map_err(|error| internal_error(error.to_string()))?;
+            let auth = mcp_manager.auth_manager().auth().await;
+            let runtime_auth = mcp_manager.runtime_auth_for_config(&config);
             let (mcp_config, runtime_context) = match thread.as_ref() {
                 Some(thread) => thread.runtime_mcp_config_and_context(&config).await,
                 None => (
@@ -444,6 +459,7 @@ impl McpRequestProcessor {
                 &mcp_config,
                 auth.as_ref(),
                 Some(&self.auth_manager),
+                runtime_auth,
                 runtime_context,
                 mcp_manager.codex_apps_tools_cache(),
                 mcp_manager.tool_catalog_cache(),
@@ -460,19 +476,17 @@ impl McpRequestProcessor {
                     if !matches!(server.auth, McpServerAuth::EmaAuth) {
                         continue;
                     }
+                    let Some(key) = mcp_config.mcp_server_catalog.resolve_server_name(&name) else {
+                        continue;
+                    };
+                    let registration = mcp_config.mcp_server_catalog.server(key);
                     let (selected_config, mut selected) = thread
-                        .mcp_server_status_snapshot(
-                            &name,
-                            detail,
-                            mcp_config.mcp_server_catalog.server(&name),
-                        )
+                        .mcp_server_status_snapshot(&name, detail, registration)
                         .await
                         .map_err(|error| {
                             internal_error(format!("failed to read MCP server status: {error:#}"))
                         })?;
-                    if selected_config.mcp_server_catalog.server(&name)
-                        != mcp_config.mcp_server_catalog.server(&name)
-                    {
+                    if selected_config.mcp_server_catalog.server(key) != registration {
                         continue;
                     }
                     snapshot.server_infos.remove(&name);
@@ -558,8 +572,10 @@ impl McpRequestProcessor {
             .map(|name| McpServerStatus {
                 name: name.clone(),
                 runtime_status: runtime_statuses.get(name).copied().map(Into::into),
-                plugin_id: mcp_config.mcp_server_catalog.server(name).and_then(
-                    |server| match server.source() {
+                plugin_id: mcp_config
+                    .mcp_server_catalog
+                    .server_by_name(name)
+                    .and_then(|server| match server.source() {
                         McpServerSource::Plugin(plugin)
                         | McpServerSource::SelectedPlugin(plugin) => {
                             Some(plugin.plugin_id().to_owned())
@@ -567,12 +583,9 @@ impl McpRequestProcessor {
                         McpServerSource::Config
                         | McpServerSource::Compatibility { .. }
                         | McpServerSource::Extension { .. } => None,
-                    },
-                ),
-                http_origin: mcp_config
-                    .mcp_server_catalog
-                    .server(name)
-                    .and_then(|server| match &server.config().transport {
+                    }),
+                http_origin: mcp_config.mcp_server_catalog.server_by_name(name).and_then(
+                    |server| match &server.config().transport {
                         McpServerTransportConfig::StreamableHttp { url, .. } => {
                             url::Url::parse(url).ok().and_then(|url| {
                                 matches!(url.scheme(), "http" | "https")
@@ -580,7 +593,8 @@ impl McpRequestProcessor {
                             })
                         }
                         McpServerTransportConfig::Stdio { .. } => None,
-                    }),
+                    },
+                ),
                 server_info: server_infos.remove(name),
                 server_capabilities: server_capabilities.remove(name),
                 tool_list_meta: tool_list_meta.remove(name).map(Arc::unwrap_or_clone),
@@ -611,6 +625,7 @@ impl McpRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let outgoing = Arc::clone(&self.outgoing);
         let McpResourceReadParams {
+            meta,
             thread_id,
             origin_call_id,
             server,
@@ -619,7 +634,24 @@ impl McpRequestProcessor {
             target,
         } = params;
         let mut resource_params = ReadResourceRequestParams::new(uri);
-        let mut meta = serde_json::Map::new();
+        let mut meta = meta.unwrap_or_default();
+        let is_codex_apps = server == codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+        let reserved_key = meta.iter().find_map(|(key, value)| match key.as_str() {
+            "x-codex-turn-metadata"
+            | MCP_THREAD_ID_META_KEY
+            | codex_mcp::MCP_CONNECTION_LEASE_META_KEY => Some(key.as_str()),
+            "connector_id" | "link_id" if is_codex_apps => Some(key.as_str()),
+            // This legacy routing hint can override an explicit app and account target.
+            "_codex_apps" if is_codex_apps && value.get("resource_uri").is_some() => {
+                Some("_codex_apps.resource_uri")
+            }
+            _ => None,
+        });
+        if let Some(key) = reserved_key {
+            return Err(invalid_request(format!(
+                "reserved resource read metadata key: {key}"
+            )));
+        }
         if let Some(connector_id) = connector_id {
             meta.insert(
                 "x-codex-turn-metadata".to_string(),
@@ -631,7 +663,7 @@ impl McpRequestProcessor {
         if origin_call_id.is_none()
             && let Some(target) = target
         {
-            if server != codex_mcp::CODEX_APPS_MCP_SERVER_NAME
+            if !is_codex_apps
                 || target.connector_id.trim().is_empty()
                 || target
                     .link_id
@@ -654,23 +686,27 @@ impl McpRequestProcessor {
 
         if let Some(thread_id) = thread_id {
             let (_, thread) = self.load_thread(&thread_id).await?;
-            let request_id = request_id.clone();
+            let response_request_id = request_id.clone();
 
             let task = async move {
-                let origin_call_id =
-                    origin_call_id.filter(|_| server == codex_mcp::CODEX_APPS_MCP_SERVER_NAME);
+                let origin_call_id = origin_call_id.filter(|_| is_codex_apps);
                 let result = match origin_call_id.as_deref() {
                     Some(call_id) => {
                         thread
-                            .read_mcp_resource_for_call(call_id, &resource_params.uri)
+                            .read_mcp_resource_for_call(call_id, resource_params)
                             .await
                     }
                     None => thread.read_mcp_resource(&server, resource_params).await,
                 };
-                Self::send_mcp_resource_read_response(outgoing, request_id, result, origin_call_id)
-                    .await;
+                Self::send_mcp_resource_read_response(
+                    outgoing,
+                    response_request_id,
+                    result,
+                    origin_call_id,
+                )
+                .await;
             };
-            tokio::spawn(AuthStorageOriginator::current().scope(task));
+            self.spawn_mcp_request(request_id, task).await;
             return Ok(());
         }
 
@@ -683,19 +719,24 @@ impl McpRequestProcessor {
         let mcp_config = mcp_manager.runtime_config(&config).await;
         let codex_apps_tools_cache = mcp_manager.codex_apps_tools_cache();
         let tool_catalog_cache = mcp_manager.tool_catalog_cache();
-        let auth = self.auth_manager.auth().await;
+        self.thread_manager
+            .runtime_auth_for_mcp_manager(&config, &mcp_manager)
+            .map_err(|error| internal_error(error.to_string()))?;
+        let runtime_auth = mcp_manager.runtime_auth_for_config(&config);
+        let auth = mcp_manager.auth_manager().auth().await;
         let environment_manager = self.thread_manager.environment_manager();
         // This threadless resource-read path has no turn cwd or turn-selected
         // environment. Use config cwd only as the local stdio fallback; named
         // environment stdio MCPs must declare their own absolute cwd.
         let runtime_context =
             McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
-        let request_id = request_id.clone();
+        let response_request_id = request_id.clone();
 
         let task = async move {
             let result = read_mcp_resource_without_thread(
                 &mcp_config,
                 auth.as_ref(),
+                runtime_auth,
                 runtime_context,
                 codex_apps_tools_cache,
                 tool_catalog_cache,
@@ -705,11 +746,14 @@ impl McpRequestProcessor {
             .await
             .and_then(|result| serde_json::to_value(result).map_err(anyhow::Error::from));
             Self::send_mcp_resource_read_response(
-                outgoing, request_id, result, /*origin_call_id*/ None,
+                outgoing,
+                response_request_id,
+                result,
+                /*origin_call_id*/ None,
             )
             .await;
         };
-        tokio::spawn(AuthStorageOriginator::current().scope(task));
+        self.spawn_mcp_request(request_id, task).await;
         Ok(())
     }
 
@@ -745,7 +789,7 @@ impl McpRequestProcessor {
         let (_, thread) = self.load_thread(&thread_id).await?;
         ensure_direct_input_allowed(thread.as_ref()).await?;
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
-        let request_id = request_id.clone();
+        let response_request_id = request_id.clone();
 
         let task = async move {
             let result = thread
@@ -753,10 +797,24 @@ impl McpRequestProcessor {
                 .await
                 .map(McpServerToolCallResponse::from)
                 .map_err(mcp_operation_error);
-            outgoing.send_result(request_id, result).await;
+            outgoing.send_result(response_request_id, result).await;
         };
-        tokio::spawn(AuthStorageOriginator::current().scope(task));
+        self.spawn_mcp_request(request_id, task).await;
         Ok(())
+    }
+
+    fn spawn_mcp_request<'a>(
+        &'a self,
+        request_id: &'a ConnectionRequestId,
+        task: impl Future<Output = ()> + Send + 'static,
+    ) -> impl Future<Output = ()> + 'a {
+        // Bound the dispatcher future before awaiting the request trace lookup.
+        let task = Box::pin(task);
+        async move {
+            let trace =
+                McpRequestTrace::from_w3c(self.outgoing.request_trace_context(request_id).await);
+            tokio::spawn(AuthStorageOriginator::current().scope(trace.scope(task)));
+        }
     }
 }
 
@@ -778,7 +836,7 @@ fn with_mcp_tool_call_thread_id_meta(
     match meta {
         Some(serde_json::Value::Object(mut map)) => {
             map.insert(
-                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                MCP_THREAD_ID_META_KEY.to_string(),
                 serde_json::Value::String(thread_id.to_string()),
             );
             Some(serde_json::Value::Object(map))
@@ -786,7 +844,7 @@ fn with_mcp_tool_call_thread_id_meta(
         None => {
             let mut map = serde_json::Map::new();
             map.insert(
-                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                MCP_THREAD_ID_META_KEY.to_string(),
                 serde_json::Value::String(thread_id.to_string()),
             );
             Some(serde_json::Value::Object(map))

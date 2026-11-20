@@ -6,14 +6,22 @@
 
 use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
+use crate::keymap::KeymapContextSet;
 use crate::keymap::bindings_for_action;
 use crate::keymap::keymap_action_ids;
 
 mod select_mode;
 
 impl App {
-    pub(super) fn should_recover_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
-        let active_contexts = self.active_keymap_contexts();
+    pub(super) fn should_recover_vim_insert_escape(
+        &self,
+        tui: &tui::Tui,
+        key_event: KeyEvent,
+    ) -> bool {
+        let active_contexts = self.key_chord_contexts(tui);
+        if self.focused_sidebar_chooser(tui) {
+            return false;
+        }
         let rename_active = self
             .chat_widget
             .selected_index_for_active_view(AGENTS_OVERVIEW_VIEW_ID)
@@ -92,10 +100,12 @@ impl App {
         if self.overlay.is_none() && self.chat_widget.handle_quick_dial_menu(key_event) {
             return None;
         }
+        let contexts = self.key_chord_contexts(tui);
         let select_mode_chord = self.select_mode_owns_chord(tui, key_event);
         if (matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(key_event))
             || (tui.is_owned_screen()
                 && self.overlay.is_none()
+                && !self.focused_sidebar_chooser(tui)
                 && self.chat_widget.no_modal_or_popup_active()
                 && self.transcript_view.owns_interaction_key(key_event)
                 && (self.transcript_view.has_active_interaction()
@@ -103,36 +113,43 @@ impl App {
                     || crate::transcript_view::JumpTarget::from_key(key_event).is_none())))
             && !select_mode_chord
         {
-            let close_chord = tui.is_owned_screen()
+            let close = tui.is_owned_screen()
                 && self.overlay.is_none()
                 && self.transcript_view.is_detailed()
                 && !self.transcript_view.has_active_interaction()
-                && !self.backtrack.overlay_preview_active
-                && match self.key_chord_matcher.clone().advance(
-                    key_event,
-                    &self.keymap.chords,
-                    self.active_keymap_contexts(),
-                ) {
-                    crate::keymap::KeyChordMatch::Completed(event) => {
-                        self.keymap.pager.close_transcript.is_pressed(event)
-                    }
-                    crate::keymap::KeyChordMatch::Pending(prefix) => {
-                        self.keymap.chords.bindings.iter().any(|binding| {
-                            binding.action.context == crate::keymap::KeymapContext::Pager
-                                && binding.action.action == "close_transcript"
-                                && binding.chord.prefix == prefix
-                        })
-                    }
-                    crate::keymap::KeyChordMatch::PassThrough
-                    | crate::keymap::KeyChordMatch::Cancelled
-                    | crate::keymap::KeyChordMatch::Ignored => false,
-                };
-            if !close_chord {
+                && !self.backtrack.overlay_preview_active;
+            let allowed = |action: crate::keymap::KeymapActionId| {
+                (close
+                    && action.context == crate::keymap::KeymapContext::Pager
+                    && action.action == "close_transcript")
+                    || (action.is_side_pane() && contexts.contains_action(action))
+            };
+            let chord = match self.key_chord_matcher.clone().advance(
+                key_event,
+                &self.keymap.chords,
+                contexts,
+            ) {
+                crate::keymap::KeyChordMatch::Completed(event) => {
+                    self.keymap.chords.bindings.iter().any(|binding| {
+                        allowed(binding.action)
+                            && crate::keymap::dispatch_event(binding.action) == Some(event)
+                    })
+                }
+                crate::keymap::KeyChordMatch::Pending(prefix) => self
+                    .keymap
+                    .chords
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.chord.prefix == prefix && allowed(binding.action)),
+                crate::keymap::KeyChordMatch::PassThrough
+                | crate::keymap::KeyChordMatch::Cancelled
+                | crate::keymap::KeyChordMatch::Ignored => false,
+            };
+            if !chord {
                 self.cancel_pending_key_chord();
                 return Some(key_event);
             }
         }
-        let contexts = self.active_keymap_contexts();
         let was_pending = self.key_chord_matcher.is_pending();
         if !was_pending
             && contexts.is_warnings()
@@ -165,8 +182,8 @@ impl App {
             .advance(key_event, &self.keymap.chords, contexts)
         {
             crate::keymap::KeyChordMatch::PassThrough => {
-                if was_pending && !self.key_chord_matcher.is_pending() {
-                    self.set_key_chord_hint_override(/*items*/ None);
+                if was_pending {
+                    self.chat_widget.request_redraw();
                 }
                 Some(key_event)
             }
@@ -174,55 +191,82 @@ impl App {
                 if self.backtrack.primed && !self.backtrack.overlay_preview_active {
                     self.reset_backtrack_state();
                 }
-                self.set_key_chord_hint_override(self.key_chord_matcher.pending_hint_items(
-                    &self.keymap.chords,
-                    tui.terminal.last_known_screen_size.width,
-                ));
-                tui.frame_requester()
-                    .schedule_frame_in(crate::keymap::KEY_CHORD_TIMEOUT);
+                tui.frame_requester().schedule_frame();
                 None
             }
             crate::keymap::KeyChordMatch::Completed(dispatch_event) => {
-                self.set_key_chord_hint_override(/*items*/ None);
-                // Keep the real key so the newly opened config editor ignores it until release.
+                self.chat_widget.request_redraw();
+                // A view transition needs the physical completion key to suppress held input.
                 self.routed_key_activation = Some(KeyBinding::from_event(key_event));
                 Some(dispatch_event)
             }
             crate::keymap::KeyChordMatch::Cancelled => {
-                self.set_key_chord_hint_override(/*items*/ None);
+                self.chat_widget.request_redraw();
                 None
             }
             crate::keymap::KeyChordMatch::Ignored => None,
         }
     }
 
-    pub(super) fn expire_pending_key_chord(&mut self) {
+    pub(super) fn expire_pending_key_chord(&mut self, tui: &tui::Tui) {
         if self.chat_widget.take_key_chord_reset() {
             self.cancel_pending_key_chord();
         }
-        let contexts = self.active_keymap_contexts();
+        let contexts = self.key_chord_contexts(tui);
         if self.key_chord_matcher.expire(contexts) {
-            self.set_key_chord_hint_override(/*items*/ None);
+            self.chat_widget.request_redraw();
         }
     }
 
     pub(super) fn cancel_pending_key_chord(&mut self) {
         self.chat_widget.cancel_quick_dial_menu();
         if self.key_chord_matcher.cancel() {
-            self.set_key_chord_hint_override(/*items*/ None);
+            self.chat_widget.request_redraw();
         }
     }
 
-    fn set_key_chord_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
-        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
-            overlay.key_chord_hint = items.clone();
+    fn focused_sidebar_chooser(&self, tui: &tui::Tui) -> bool {
+        self.conversation_focus_available(tui)
+            && self.chooser_focus() == Some(super::sidebar::PaneFocus::Sidebar)
+            && self.sidebar_chooser_available()
+    }
+
+    fn key_chord_contexts(&self, tui: &tui::Tui) -> crate::keymap::KeymapContextSet {
+        let contexts = self.active_keymap_contexts();
+        if !self.conversation_focus_available(tui) {
+            return contexts;
         }
-        self.agents_overview
-            .view_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .key_chord_hint = items.clone();
-        self.chat_widget.set_footer_hint_override(items);
+        if self.focused_sidebar_chooser(tui) {
+            let contexts = KeymapContextSet::focused_sidebar_chooser();
+            return if self.can_nudge_side_width(tui) {
+                contexts.with_sidebar_resize().with_focused_side_pane()
+            } else {
+                contexts
+            };
+        }
+        let mut contexts = contexts.with_pane_directions();
+        if self.sidebar_has_focus() && self.sidebar_chooser_available() {
+            contexts = contexts.with_focused_sidebar();
+        }
+        if self.open_pane_focus().is_some() {
+            contexts = contexts.with_open_pane();
+        }
+        if self.can_resize_sidebar(tui) {
+            contexts = contexts.with_sidebar_resize();
+        }
+        if self.can_nudge_side_width(tui) {
+            contexts = contexts.with_focused_side_pane();
+        }
+        if self.main_composer_shortcut_available() {
+            contexts = contexts.with_main_composer_focus();
+        }
+        if self.switchable_side_child().is_some() {
+            contexts.with_side_pane()
+        } else if self.sidebar_chooser_available() {
+            contexts.with_sidebar_chooser()
+        } else {
+            contexts
+        }
     }
 
     pub(super) fn active_keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
@@ -597,7 +641,9 @@ impl App {
         }
 
         if side_return_shortcut_matches(key_event)
-            && self.maybe_return_from_side(tui, app_server).await
+            && self
+                .maybe_return_from_side(tui, app_server, key_event)
+                .await
         {
             return;
         }

@@ -220,6 +220,13 @@
         }
       ]
     },
+    "BedrockProviderId": {
+      "enum": [
+        "amazon-bedrock",
+        "amazon-bedrock-runtime"
+      ],
+      "type": "string"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -1606,10 +1613,34 @@
           "type": "object"
         },
         {
-          "properties": {
-            "audio_url": {
-              "type": "string"
+          "anyOf": [
+            {
+              "properties": {
+                "audio_url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "audio_url"
+              ],
+              "title": "AudioUrlFunctionCallOutputContentItem",
+              "type": "object"
             },
+            {
+              "properties": {
+                "file_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_id"
+              ],
+              "title": "FileIdFunctionCallOutputContentItem",
+              "type": "object"
+            }
+          ],
+          "description": "Inline audio data or an uploaded file loaded by the Responses API.",
+          "properties": {
             "type": {
               "enum": [
                 "input_audio"
@@ -1619,7 +1650,6 @@
             }
           },
           "required": [
-            "audio_url",
             "type"
           ],
           "title": "InputAudioFunctionCallOutputContentItem",
@@ -1670,6 +1700,42 @@
         "roots"
       ],
       "type": "object"
+    },
+    "GatewayOAuthLoginParams": {
+      "description": "Authorize a configured provider without changing the default or any thread's provider.",
+      "properties": {
+        "deviceAuth": {
+          "description": "Select device authorization when the server advertises support for it.",
+          "type": "boolean"
+        },
+        "modelProvider": {
+          "description": "Defaults to the current provider when omitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "GatewayOAuthReadParams": {
+      "description": "Read credential readiness for a configured provider without starting browser login.",
+      "properties": {
+        "modelProvider": {
+          "description": "Defaults to the current provider when omitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "GcpProviderId": {
+      "enum": [
+        "gcp"
+      ],
+      "type": "string"
     },
     "GetAccountParams": {
       "properties": {
@@ -2160,6 +2226,14 @@
     },
     "McpResourceReadParams": {
       "properties": {
+        "_meta": {
+          "additionalProperties": true,
+          "description": "Additional MCP request metadata. Account and turn routing keys are reserved.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "connectorId": {
           "type": [
             "string",
@@ -2438,11 +2512,33 @@
             "integer",
             "null"
           ]
+        },
+        "modelProvider": {
+          "description": "List models for this configured provider instead of the app-server default.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
     },
     "ModelProviderCapabilitiesReadParams": {
+      "type": "object"
+    },
+    "ModelProviderConfigWriteParams": {
+      "additionalProperties": false,
+      "properties": {
+        "settings": {
+          "$ref": "#/definitions/ProviderSettingsPatch"
+        }
+      },
+      "required": [
+        "settings"
+      ],
+      "type": "object"
+    },
+    "ModelProviderListParams": {
       "type": "object"
     },
     "MultiAgentMode": {
@@ -2879,6 +2975,124 @@
         "recencyAt"
       ],
       "type": "string"
+    },
+    "ProviderSettingsPatch": {
+      "description": "Omitted patch fields preserve their values. Explicit null clears a nullable field.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "baseUrl": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "envKey": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "providerId": {
+              "description": "Omit or pass null to allocate a new custom provider ID.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "customGateway"
+              ],
+              "title": "CustomGatewayProviderSettingsPatchType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CustomGatewayProviderSettingsPatch",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "AWS configuration fields for built-in Bedrock providers.",
+          "properties": {
+            "profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "providerId": {
+              "$ref": "#/definitions/BedrockProviderId"
+            },
+            "region": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "bedrock"
+              ],
+              "title": "BedrockProviderSettingsPatchType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "providerId",
+            "type"
+          ],
+          "title": "BedrockProviderSettingsPatch",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "GCP configuration fields. Credential-file paths refer to the app-server host.",
+          "properties": {
+            "credentialFile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "location": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "projectId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "providerId": {
+              "$ref": "#/definitions/GcpProviderId"
+            },
+            "type": {
+              "enum": [
+                "gcp"
+              ],
+              "title": "GcpProviderSettingsPatchType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "providerId",
+            "type"
+          ],
+          "title": "GcpProviderSettingsPatch",
+          "type": "object"
+        }
+      ]
     },
     "RealtimeConversationVersion": {
       "enum": [
@@ -4795,6 +5009,10 @@
       ],
       "type": "object"
     },
+    "ThreadItemOutputDeferral": {
+      "properties": {},
+      "type": "object"
+    },
     "ThreadItemsListAnchor": {
       "description": "An exclusive item position within the requested visible turn.",
       "oneOf": [
@@ -4843,6 +5061,17 @@
             }
           ],
           "description": "Opaque continuation cursor or an exclusive item anchor in the requested visible turn. An item anchor requires a non-empty `turnId`; ascending (the default) returns items after it, and descending returns items before it. Continue with the returned string cursor."
+        },
+        "deferOutput": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadItemOutputDeferral"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a single turn, choose which saved outputs to fetch separately by item ID."
         },
         "limit": {
           "description": "Optional item page size.",
@@ -4901,6 +5130,10 @@
             "boolean",
             "null"
           ]
+        },
+        "currentAccountOnly": {
+          "description": "Show local history visible to the current ChatGPT account. Defaults to false.",
+          "type": "boolean"
         },
         "cursor": {
           "description": "Opaque pagination cursor returned by a previous call.",
@@ -8012,7 +8245,14 @@
           "type": "string"
         },
         "params": {
-          "type": "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GatewayOAuthReadParams"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -8035,7 +8275,14 @@
           "type": "string"
         },
         "params": {
-          "type": "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GatewayOAuthLoginParams"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -8066,6 +8313,54 @@
         "method"
       ],
       "title": "Account/gatewayOAuth/cancelRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "modelProvider/list"
+          ],
+          "title": "ModelProvider/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelProviderListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ModelProvider/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "modelProvider/config/write"
+          ],
+          "title": "ModelProvider/config/writeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelProviderConfigWriteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ModelProvider/config/writeRequest",
       "type": "object"
     },
     {
@@ -8399,6 +8694,29 @@
         "method"
       ],
       "title": "Account/logoutRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/securitySetup/read"
+          ],
+          "title": "Account/securitySetup/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/securitySetup/readRequest",
       "type": "object"
     },
     {

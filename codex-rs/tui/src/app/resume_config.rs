@@ -98,6 +98,7 @@ impl App {
         let uses_remote_workspace_or_environment =
             crate::uses_remote_workspace_or_environment(&target, &self.environment_manager);
         if uses_remote_workspace_or_environment
+            && !matches!(target, AppServerTarget::Cloud)
             && self.harness_overrides.cwd.is_none()
             && app_server.remote_cwd_override().is_none()
             && matches!(resume_cwd_mode, Some(ResumeCwdMode::Current))
@@ -239,7 +240,7 @@ impl App {
         clippy::too_many_arguments,
         reason = "The destination target is explicit alongside the existing trust interaction inputs."
     )]
-    async fn confirm_directory_trust_for_target(
+    pub(super) async fn confirm_directory_trust_for_target(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,

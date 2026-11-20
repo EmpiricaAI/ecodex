@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
+use crate::compact_pending_input::is_retained_pending_mail;
 use crate::context::BaseInstructionsFragment;
 use crate::context::CompactionSummary;
 use crate::context::ContextualUserFragment;
@@ -25,7 +26,6 @@ use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::state::AutoCompactWindowIds;
-use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -39,6 +39,7 @@ use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::truncate_annotated_text;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
+use codex_http_client::RetryAfter;
 use codex_protocol::ResponseItemId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
@@ -322,6 +323,7 @@ async fn run_compact_task_inner_impl(
         let prompt = Prompt {
             input: turn_input,
             base_instructions,
+            prompt_cache_ttl: turn_context.prompt_cache_ttl,
             cyber_access_program: turn_context.cyber_access_program,
             ..Default::default()
         };
@@ -342,23 +344,6 @@ async fn run_compact_task_inner_impl(
             Ok(response) => {
                 break response;
             }
-            Err(err)
-                if matches!(
-                    err.details(),
-                    CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
-                ) =>
-            {
-                return Err(err);
-            }
-            Err(e)
-                if matches!(
-                    e.details(),
-                    CodexErrorDetails::SessionBudgetExceeded
-                        | CodexErrorDetails::ResponseIncomplete(_)
-                ) =>
-            {
-                return Err(e);
-            }
             Err(e) if matches!(e.details(), CodexErrorDetails::ContextWindowExceeded) => {
                 if turn_input_len > 1 {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
@@ -372,22 +357,24 @@ async fn run_compact_task_inner_impl(
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
                 return Err(e);
             }
-            Err(e) => {
-                if retries < max_retries {
-                    retries += 1;
-                    let delay = backoff(retries);
-                    sess.notify_stream_error(
-                        turn_context.as_ref(),
-                        format!("Reconnecting... {retries}/{max_retries}"),
-                        e,
-                    )
-                    .await;
-                    tokio::time::sleep(delay).await;
-                    continue;
-                } else {
+            Err(e) if retries < max_retries => {
+                retries += 1;
+                let Some(delay) = e.retry_delay(retries) else {
                     return Err(e);
-                }
+                };
+                let retry_after = e.retry_after();
+                sess.notify_stream_error(
+                    turn_context.as_ref(),
+                    format!("Reconnecting... {retries}/{max_retries}"),
+                    e,
+                )
+                .await;
+                let retry_at = retry_after
+                    .map(RetryAfter::deadline)
+                    .unwrap_or_else(|| tokio::time::Instant::now() + delay);
+                tokio::time::sleep_until(retry_at).await;
             }
+            Err(e) => return Err(e),
         }
     };
 
@@ -413,19 +400,47 @@ async fn run_compact_task_inner_impl(
         // belongs to this compaction turn.
         summary_item.set_turn_id_if_missing(&turn_context.sub_id);
     }
+    // Use the final compactor input, so an overflow retry cannot restore discarded input.
+    let pending_sequence =
+        crate::compact_pending_input::pending_mail_sequence(history.annotated_items());
+    if let Some(first) = pending_sequence {
+        let summary = new_history
+            .pop()
+            .ok_or_else(|| CodexErr::Fatal("local compaction summary is missing".to_string()))?;
+        new_history.extend(
+            history
+                .annotated_items()
+                .iter()
+                .filter(|envelope| is_retained_pending_mail(envelope, first))
+                .cloned(),
+        );
+        new_history.sort_by_key(|envelope| {
+            envelope
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.history_sequence)
+        });
+        new_history = crate::compact_remote_v2::truncate_retained_messages_for_remote_compaction(
+            new_history,
+            COMPACT_USER_MESSAGE_MAX_TOKENS,
+            &history.file_audio_durations,
+        );
+        new_history =
+            crate::compact_pending_input::insert_summary(new_history, summary, pending_sequence);
+    }
+    let rendered = world_state.render_full_with_host_roster().await;
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
-
-    let (new_history, world_state_baseline) = build_compaction_replacement_history(
-        sess.as_ref(),
-        &replacement_step_context,
-        &world_state,
-        new_history,
-    )
-    .await;
+    let (updates, world_state_baseline) = sess
+        .assemble_initial_context(&replacement_step_context, rendered)
+        .await;
+    let (prefix, context) = split_prefix_updates(updates);
+    let new_history =
+        assemble_compaction_history(new_history, prefix, merge_world_state_updates(context));
     sess.replace_compacted_history(
         new_history,
         replacement_step_context.to_turn_context_item(),
         world_state_baseline,
+        /*rejected_audio_file_ids*/ Default::default(),
         CompactedHistoryMetadata {
             input_goal_ids,
             message: summary_text,

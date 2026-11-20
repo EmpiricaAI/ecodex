@@ -28,6 +28,7 @@ use crossterm::event::KeyModifiers;
 use std::time::Duration;
 use tokio::time::Instant;
 
+pub(crate) const CHORD_REVEAL_DELAY: Duration = Duration::from_millis(/*millis*/ 350);
 pub(crate) const KEY_CHORD_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 1);
 
 const FIRST_DISPATCH_FUNCTION_KEY: u8 = codex_config::types::MAX_FUNCTION_KEY + 1;
@@ -53,6 +54,15 @@ const VOICE_TOGGLE: u32 = 1 << 17;
 const RAW_KEY_CAPTURE: u32 = 1 << 18;
 const VOICE_TOGGLE_BLOCKED: u32 = 1 << 19;
 const TRANSCRIPT_ACTIONS: u32 = 1 << 20;
+const BACKEND_CYCLING: u32 = 1 << 21;
+const SIDE_PANE: u32 = 1 << 22;
+const MAIN_COMPOSER_FOCUS: u32 = 1 << 23;
+const PANE_DIRECTION: u32 = 1 << 24;
+const OPEN_PANE: u32 = 1 << 25;
+const FOCUSED_SIDE_PANE: u32 = 1 << 26;
+const SIDEBAR_CHOOSER: u32 = 1 << 27;
+const SIDEBAR_RESIZE: u32 = 1 << 28;
+const FOCUSED_SIDEBAR: u32 = 1 << 29;
 
 const TRANSCRIPT_BROWSING: u32 = 1 << 14;
 
@@ -65,6 +75,11 @@ impl KeymapContextSet {
     /// Other global actions remain inactive so existing list remaps keep priority.
     pub(crate) const fn activity() -> Self {
         Self(context_bit(KeymapContext::List) | context_bit(KeymapContext::Global) | ACTIVITY_FOCUS)
+    }
+
+    /// Offer backend cycling only while the new conversation control is visible.
+    pub(crate) const fn with_backend_cycling(self) -> Self {
+        Self(self.0 | BACKEND_CYCLING)
     }
 
     /// Add only the detail-close action to an owned composer path.
@@ -150,8 +165,65 @@ impl KeymapContextSet {
         }
     }
 
+    pub(crate) const fn with_pane_directions(self) -> Self {
+        Self(self.0 | PANE_DIRECTION)
+    }
+
+    pub(crate) const fn with_main_composer_focus(self) -> Self {
+        Self(self.0 | MAIN_COMPOSER_FOCUS)
+    }
+
+    pub(crate) const fn with_open_pane(self) -> Self {
+        Self(self.0 | OPEN_PANE)
+    }
+
+    pub(crate) const fn with_sidebar_resize(self) -> Self {
+        Self(self.0 | SIDEBAR_RESIZE)
+    }
+
+    pub(crate) const fn with_focused_side_pane(self) -> Self {
+        Self(self.0 | FOCUSED_SIDE_PANE)
+    }
+
+    pub(crate) const fn with_focused_sidebar(self) -> Self {
+        Self(self.0 | FOCUSED_SIDEBAR)
+    }
+
+    pub(crate) const fn focused_sidebar_chooser() -> Self {
+        Self(SIDE_PANE | PANE_DIRECTION | MAIN_COMPOSER_FOCUS)
+            .with_focused_sidebar()
+            .with(KeymapContext::List)
+    }
+
+    pub(crate) const fn with_sidebar_chooser(self) -> Self {
+        Self(self.0 | SIDEBAR_CHOOSER)
+    }
+
+    pub(crate) const fn with_side_pane(self) -> Self {
+        Self(self.0 | SIDE_PANE)
+    }
+
     /// Whether this input path can dispatch the action, including focus-specific exclusions.
     pub(crate) fn contains_action(self, action: KeymapActionId) -> bool {
+        if action.context == KeymapContext::Global && action.action == "change_host" {
+            return self.0 & BACKEND_CYCLING != 0;
+        }
+        if action.is_side_pane() {
+            let required = match action.action {
+                "focus_pane_left" | "focus_pane_right" => PANE_DIRECTION,
+                "move_divider_left" | "move_divider_right" => FOCUSED_SIDE_PANE,
+                "toggle_pane_zoom" => OPEN_PANE,
+                "sidebar_up" | "sidebar_down" => FOCUSED_SIDEBAR,
+                "equalize_pane_widths"
+                | "minimize_pane_width"
+                | "maximize_pane_width"
+                | "resize_panes" => SIDEBAR_RESIZE,
+                "focus_main_composer" => MAIN_COMPOSER_FOCUS,
+                "focus_sidebar_content" | "focus_sidebar_tabs" => SIDE_PANE | SIDEBAR_CHOOSER,
+                _ => SIDE_PANE,
+            };
+            return self.0 & required != 0;
+        }
         if action.context == KeymapContext::Chat && action.action == "open_presets" {
             return self.contains(KeymapContext::Chat)
                 && self.contains(KeymapContext::Global)
@@ -476,11 +548,67 @@ pub(crate) enum KeyChordMatch {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct PendingChord {
-    // Persistent leader menus have no deadline.
-    started_at: Option<Instant>,
-    prefix: KeyBinding,
+pub(crate) struct PendingChord {
+    pub(crate) started_at: Instant,
+    persistent: bool,
+    pub(crate) prefix: KeyBinding,
     contexts: KeymapContextSet,
+}
+
+impl PendingChord {
+    pub(crate) fn actions(self, keymap: &RuntimeChordKeymap) -> Vec<(KeymapActionId, Vec<String>)> {
+        let mut actions = Vec::<(KeymapActionId, Vec<String>)>::new();
+        for binding in self.completions(keymap) {
+            let action = binding.action;
+            let key = binding.chord.completion.display_label();
+            if let Some((_, keys)) = actions.iter_mut().find(|(id, _)| *id == action) {
+                keys.push(key);
+            } else {
+                actions.push((action, vec![key]));
+            }
+        }
+        actions
+    }
+
+    pub(crate) fn guide(
+        self,
+        keymap: &RuntimeChordKeymap,
+        is_available: impl Fn(KeymapActionId) -> bool,
+    ) -> Option<crate::bottom_pane::ShortcutHud> {
+        use crate::bottom_pane::ShortcutHud;
+        use ratatui::style::Stylize;
+        let rows: Vec<_> = self
+            .actions(keymap)
+            .into_iter()
+            .filter(|(action, _)| is_available(*action))
+            .map(|(action, keys)| {
+                ShortcutHud::item(
+                    keys.join(" / "),
+                    crate::keymap_setup::action_label(action.action).into(),
+                )
+            })
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
+        Some(ShortcutHud::new(
+            self.prefix.display_label(),
+            rows,
+            vec!["Esc cancel".dim().into()],
+        ))
+    }
+
+    pub(crate) fn completions(
+        self,
+        keymap: &RuntimeChordKeymap,
+    ) -> impl Iterator<Item = &RuntimeChordBinding> {
+        keymap.bindings.iter().filter(move |binding| {
+            let (code, modifiers) = binding.chord.completion.parts();
+            keymap
+                .binding_for_completion(self.prefix, KeyEvent::new(code, modifiers), self.contexts)
+                .is_some_and(|active| std::ptr::eq(active, *binding))
+        })
+    }
 }
 
 /// Tracks one pending chord or leader menu without buffering ordinary input.
@@ -494,64 +622,39 @@ impl KeyChordMatcher {
         self.pending.is_some()
     }
 
-    /// Derive one presentation for the pending chord from the matcher that owns it.
-    pub(crate) fn pending_hint_items(
+    /// Workspace leaders support pane-specific labels and wheel passthrough.
+    pub(crate) fn workspace_leader(&self) -> Option<PendingChord> {
+        self.pending
+            .filter(|p| p.persistent && p.contexts.0 & PANE_DIRECTION != 0)
+    }
+
+    pub(crate) fn visible_pending(
+        &self,
+        frames: &crate::tui::FrameRequester,
+    ) -> Option<PendingChord> {
+        let pending = self.pending?;
+        let elapsed = pending.started_at.elapsed();
+        if elapsed < CHORD_REVEAL_DELAY {
+            frames.schedule_frame_in(CHORD_REVEAL_DELAY - elapsed);
+            return None;
+        }
+        if !pending.persistent {
+            let remaining = KEY_CHORD_TIMEOUT.checked_sub(elapsed)?;
+            if remaining.is_zero() {
+                return None;
+            }
+            frames.schedule_frame_in(remaining);
+        }
+        Some(pending)
+    }
+
+    pub(crate) fn guide(
         &self,
         keymap: &RuntimeChordKeymap,
-        width: u16,
-    ) -> Option<Vec<(String, String)>> {
-        let pending = self.pending?;
-        let mut items = vec![(pending.prefix.display_label(), "then".to_string())];
-        for binding in keymap
-            .bindings
-            .iter()
-            .filter(|binding| {
-                let (code, modifiers) = binding.chord.completion.parts();
-                keymap
-                    .binding_for_completion(
-                        pending.prefix,
-                        KeyEvent::new(code, modifiers),
-                        pending.contexts,
-                    )
-                    .is_some_and(|active| std::ptr::eq(active, *binding))
-            })
-            .take(/*n*/ 6)
-        {
-            let label = match binding.action.action {
-                "open_presets" if pending.started_at.is_none() => "presets",
-                "focus_activity" => "activity",
-                "find_transcript" => "find",
-                "open_warnings" => "warnings",
-                action => action,
-            };
-            items.push((
-                binding.chord.completion.display_label(),
-                label.replace('_', " "),
-            ));
-        }
-        items.push(("esc".to_string(), "cancel".to_string()));
-        if crate::bottom_pane::footer_hint_items_line(&items).width() > usize::from(width) {
-            let compact: Vec<_> = items[1..]
-                .iter()
-                .map(|(key, action)| {
-                    let action = match action.as_str() {
-                        "activity" => "inspect",
-                        action => action,
-                    };
-                    (key.clone(), action.to_string())
-                })
-                .collect();
-            let mut fitting = Vec::new();
-            for item in compact {
-                fitting.push(item);
-                if crate::bottom_pane::footer_hint_items_line(&fitting).width() > usize::from(width)
-                {
-                    fitting.pop();
-                }
-            }
-            return Some(fitting);
-        }
-        Some(items)
+        frames: &crate::tui::FrameRequester,
+    ) -> Option<crate::bottom_pane::ShortcutHud> {
+        let pending = self.visible_pending(frames)?;
+        pending.guide(keymap, |_| true)
     }
 
     pub(crate) fn cancel(&mut self) -> bool {
@@ -561,9 +664,7 @@ impl KeyChordMatcher {
     pub(crate) fn expire(&mut self, contexts: KeymapContextSet) -> bool {
         if self.pending.is_some_and(|pending| {
             pending.contexts != contexts
-                || pending
-                    .started_at
-                    .is_some_and(|started_at| started_at.elapsed() >= KEY_CHORD_TIMEOUT)
+                || (!pending.persistent && pending.started_at.elapsed() >= KEY_CHORD_TIMEOUT)
         }) {
             self.pending = None;
             return true;
@@ -592,7 +693,7 @@ impl KeyChordMatcher {
 
         if let Some(pending) = self.pending.take() {
             if crate::key_hint::plain(KeyCode::Esc).is_press(key_event)
-                || (pending.started_at.is_none() && chord_stroke_matches(pending.prefix, key_event))
+                || (pending.persistent && chord_stroke_matches(pending.prefix, key_event))
             {
                 return KeyChordMatch::Cancelled;
             }
@@ -625,7 +726,8 @@ impl KeyChordMatcher {
                             && binding.action.context.overlaps(KeymapContext::Global)))
             });
             self.pending = Some(PendingChord {
-                started_at: (!persistent).then(Instant::now),
+                started_at: Instant::now(),
+                persistent,
                 prefix,
                 contexts,
             });

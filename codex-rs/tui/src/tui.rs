@@ -11,6 +11,7 @@ use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -71,6 +72,7 @@ mod input_boundary;
 mod job_control;
 mod keyboard_modes;
 mod link_pointer;
+pub(crate) use link_pointer::PointerShape;
 mod notification_preview;
 #[cfg(test)]
 #[path = "tui/owned_screen_tests.rs"]
@@ -248,7 +250,7 @@ mod tests {
     }
 }
 
-pub fn set_modes() -> Result<()> {
+fn set_modes() -> Result<tmux::Options> {
     ensure_virtual_terminal_processing()?;
 
     execute!(stdout(), EnableBracketedPaste)?;
@@ -262,13 +264,13 @@ pub fn set_modes() -> Result<()> {
     // Some terminals (notably legacy Windows consoles) do not support
     // keyboard enhancement flags. Attempt to enable them, but continue
     // gracefully if unsupported.
-    keyboard_modes::enable_keyboard_enhancement(&mut stdout());
+    let options = keyboard_modes::enable_keyboard_enhancement(&mut stdout());
 
     #[cfg(not(windows))]
     let _ = execute!(stdout(), EnableFocusChange);
     #[cfg(windows)]
     let _ = execute!(stdout(), DisableFocusChange);
-    Ok(())
+    Ok(options)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -503,7 +505,7 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
     let mut restore_guard = TerminalInitializationGuard { active: true };
-    set_modes()?;
+    let tmux_options = set_modes()?;
 
     set_panic_hook();
 
@@ -579,7 +581,15 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     // trust and other protected startup screens have finished accepting their security decisions.
     crate::terminal_palette::set_default_colors_from_startup_probe(/*colors*/ None);
 
-    let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
+    let mut tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
+    if std::env::var_os("TMUX").is_some()
+        && !["ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_VERSION"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some())
+        && !crossterm::style::Colored::ansi_color_disabled_memoized()
+    {
+        tui.tmux_kitty_image_base = tmux_options.kitty_image_base;
+    }
     let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
     let initialized_terminal = InitializedTerminal {
         terminal: tui,
@@ -688,9 +698,19 @@ impl MouseCapture {
     }
 }
 
+// Zero denotes scrollback mode or a pane without Kitty passthrough.
+static TMUX_FULLSCREEN_IMAGE_BASE: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn tmux_fullscreen_image_base() -> Option<u32> {
+    std::num::NonZeroU32::new(TMUX_FULLSCREEN_IMAGE_BASE.load(Ordering::Relaxed))
+        .map(std::num::NonZeroU32::get)
+}
+
 pub struct Tui {
     pub(crate) link_hover: link_pointer::LinkHover,
     frame_requester: FrameRequester,
+    shortcut_hud: Option<crate::bottom_pane::ShortcutHud>,
+    pub(crate) shortcut_hud_area: Option<Rect>,
     draw_tx: broadcast::Sender<()>,
     pub(super) event_broker: Arc<EventBroker>,
     pub(crate) terminal_size_tags: crate::terminal_size_telemetry::LaunchTags,
@@ -770,6 +790,8 @@ impl Tui {
         Self {
             link_hover: link_pointer::LinkHover::default(),
             frame_requester,
+            shortcut_hud: None,
+            shortcut_hud_area: None,
             draw_tx,
             event_broker: Arc::new(event_broker),
             terminal_size_tags: Vec::new(),
@@ -806,10 +828,22 @@ impl Tui {
         self.alt_screen_enabled = enabled;
     }
 
+    fn record_owned_screen(&mut self, owned: bool) {
+        self.owned_screen = owned;
+        TMUX_FULLSCREEN_IMAGE_BASE.store(
+            if owned {
+                self.terminal.tmux_kitty_image_base.unwrap_or_default()
+            } else {
+                0
+            },
+            Ordering::Relaxed,
+        );
+    }
+
     /// Defer a fresh fullscreen launch until its first synchronized frame is ready.
     pub(crate) fn prepare_owned_screen(&mut self, owned: bool) -> Result<()> {
         if owned && self.alt_screen_enabled && !self.is_alt_screen_active() {
-            self.owned_screen = true;
+            self.record_owned_screen(/*owned*/ true);
             self.frame_requester.schedule_frame();
             Ok(())
         } else {
@@ -838,11 +872,11 @@ impl Tui {
             self.leave_alt_screen_for_handoff()
         };
         if let Err(error) = transition {
-            self.owned_screen = self.is_alt_screen_active();
+            self.record_owned_screen(self.is_alt_screen_active());
             self.terminal.invalidate_viewport();
             return Err(error);
         }
-        self.owned_screen = owned;
+        self.record_owned_screen(owned);
         self.frame_requester.schedule_frame();
         Ok(())
     }
@@ -1318,6 +1352,54 @@ impl Tui {
         Ok(())
     }
 
+    /// A pager may draw several times while handling an event. Decorate only frames from its owner.
+    pub(crate) fn with_shortcut_hud<T>(
+        &mut self,
+        hud: Option<crate::bottom_pane::ShortcutHud>,
+        render: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let previous = std::mem::replace(&mut self.shortcut_hud, hud);
+        let result = render(self);
+        self.shortcut_hud = previous;
+        result
+    }
+
+    /// On standalone screens, paste, loss of focus and mouse input dismiss pending chords.
+    /// A press on the visible guide belongs to the guide rather than the control beneath it.
+    pub(crate) fn dismiss_shortcut_on_input(
+        &self,
+        event: &TuiEvent,
+        matcher: &mut crate::keymap::KeyChordMatcher,
+    ) -> bool {
+        let covered = match event {
+            TuiEvent::Paste(_) | TuiEvent::FocusLost => false,
+            TuiEvent::Mouse(mouse) if mouse.kind != crossterm::event::MouseEventKind::Moved => {
+                matches!(mouse.kind, crossterm::event::MouseEventKind::Down(_))
+                    && self.shortcut_hud_contains(*mouse)
+            }
+            _ => return false,
+        };
+        if matcher.cancel() {
+            self.frame_requester.schedule_frame();
+            return covered;
+        }
+        false
+    }
+
+    pub(crate) fn shortcut_hud_contains(&self, mouse: crossterm::event::MouseEvent) -> bool {
+        self.shortcut_hud_area
+            .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+    }
+
+    pub(crate) fn draw_with_shortcut_hud(
+        &mut self,
+        height: u16,
+        hud: Option<crate::bottom_pane::ShortcutHud>,
+        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
+    ) -> Result<()> {
+        self.with_shortcut_hud(hud, |tui| tui.draw(height, draw_fn))
+    }
+
     pub fn draw(
         &mut self,
         height: u16,
@@ -1405,7 +1487,10 @@ impl Tui {
                 self.suspend_context.set_cursor_y(inline_area_bottom);
             }
 
-            terminal.draw_with_size(screen_size, &mut self.retained_images, draw_fn)
+            terminal.draw_with_size(screen_size, &mut self.retained_images, |frame| {
+                draw_fn(frame);
+                self.shortcut_hud_area = self.shortcut_hud.as_ref().map(|hud| hud.paint(frame));
+            })
         })??;
         Ok(())
     }
@@ -1419,6 +1504,7 @@ impl Tui {
         }
 
         let terminal = &mut self.terminal;
+        terminal.mark_pet_placeholders(request.as_ref());
         let state = &mut self.ambient_pet_image_state;
         stdout().sync_update(|_| {
             match crate::pets::render_ambient_pet_image(terminal.backend_mut(), state, request) {
@@ -1438,6 +1524,7 @@ impl Tui {
         }
 
         let terminal = &mut self.terminal;
+        terminal.mark_pet_placeholders(request.as_ref());
         let state = &mut self.pet_picker_preview_image_state;
         stdout().sync_update(|_| {
             match crate::pets::render_pet_picker_preview_image(
@@ -1471,10 +1558,11 @@ impl Tui {
     /// This is the feature-gated counterpart to `draw`. It intentionally skips
     /// `pending_viewport_area`, whose cursor-position heuristic is part of the legacy path, and
     /// instead lets transcript reflow rebuild scrollback before the frame is rendered.
-    pub fn draw_with_resize_reflow(
+    pub(crate) fn draw_with_resize_reflow(
         &mut self,
         height: u16,
         screen_size: Size,
+        hud: Option<crate::bottom_pane::ShortcutHud>,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
@@ -1543,6 +1631,7 @@ impl Tui {
 
             terminal.draw_with_size(screen_size, &mut self.retained_images, |frame| {
                 draw_fn(frame);
+                self.shortcut_hud_area = hud.as_ref().map(|hud| hud.paint(frame));
             })
         })??;
         Ok(())

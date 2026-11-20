@@ -44,7 +44,7 @@ impl ChatWidget {
     /// both the agent turn lifecycle and MCP startup lifecycle.
     pub(super) fn update_task_running_state(&mut self) {
         self.bottom_pane.set_task_running(
-            self.turn_lifecycle.agent_turn_running
+            self.turn_lifecycle.is_running_or_admitted()
                 || self.review.is_review_mode
                 || self.mcp_startup_status.is_some(),
         );
@@ -320,6 +320,12 @@ impl ChatWidget {
         }
 
         None
+    }
+
+    pub(crate) fn has_unsent_input(&self) -> bool {
+        !self.composer_is_empty()
+            || self.pending_image_submission.is_some()
+            || self.has_queued_follow_up_messages()
     }
 
     pub(crate) fn has_queued_follow_up_messages(&self) -> bool {

@@ -5,7 +5,6 @@
     reason = "shared test helpers assert successful operations"
 )]
 
-use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -14,82 +13,16 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use chrono::DateTime;
-use chrono::Utc;
 use codex_message_board::*;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
-use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_state::SqliteConfig;
-use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 
-struct Host {
-    clock: AtomicI64,
-    fail_clock: AtomicBool,
-    agent_path_calls: AtomicUsize,
-    members: HashMap<ThreadId, AgentPath>,
-    active: AtomicBool,
-    fail_notifications: AtomicBool,
-    notifications: Mutex<Vec<(ThreadId, PostMetadata)>>,
-}
-
-impl MessageBoardHost for Host {
-    fn agent_path(&self, caller: ThreadId) -> BoxFuture<'_, Result<AgentPath>> {
-        Box::pin(async move {
-            self.agent_path_calls.fetch_add(1, Ordering::SeqCst);
-            self.members
-                .get(&caller)
-                .cloned()
-                .ok_or_else(|| CodexErr::ThreadNotFound(caller))
-        })
-    }
-
-    fn resolve_agent(&self, path: AgentPath) -> BoxFuture<'_, Result<ThreadId>> {
-        Box::pin(async move {
-            self.members
-                .iter()
-                .find_map(|(id, member)| (*member == path).then_some(*id))
-                .ok_or_else(|| CodexErr::InvalidRequest("unknown agent".into()))
-        })
-    }
-
-    fn current_time(&self, _caller: ThreadId) -> BoxFuture<'_, Result<DateTime<Utc>>> {
-        Box::pin(async move {
-            if self.fail_clock.load(Ordering::SeqCst) {
-                return Err(CodexErr::Io(std::io::Error::other("clock unavailable")));
-            }
-            Ok(DateTime::parse_from_rfc3339("2026-09-18T12:00:00Z")
-                .map_err(|error| CodexErr::Io(std::io::Error::other(error)))?
-                .with_timezone(&Utc)
-                + chrono::Duration::seconds(self.clock.fetch_add(1, Ordering::SeqCst)))
-        })
-    }
-
-    fn notify(
-        &self,
-        recipient: ThreadId,
-        post: PostPreview,
-    ) -> BoxFuture<'_, Result<NotificationDelivery>> {
-        Box::pin(async move {
-            if self.fail_notifications.load(Ordering::SeqCst) {
-                return Err(CodexErr::Io(std::io::Error::other(
-                    "notification transport failed",
-                )));
-            }
-            if !self.active.load(Ordering::SeqCst) {
-                return Ok(NotificationDelivery::SkippedInactive);
-            }
-            self.notifications
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((recipient, post.metadata));
-            Ok(NotificationDelivery::Accepted)
-        })
-    }
-}
+mod common;
+use common::Host;
 
 #[tokio::test]
 async fn opening_board_preserves_posts_when_corruption_has_no_startup_recovery() {
@@ -246,7 +179,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
             next_offset_chars: 3,
         }
     );
-    resumed
+    let unsubscribed = resumed
         .set_subscription(
             root,
             SubscriptionRequest {
@@ -257,6 +190,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         )
         .await
         .unwrap();
+    assert_eq!(unsubscribed.last_message_id, Some(metadata.message_id));
     // Posting to an existing channel must not re-enable its subscription.
     resumed
         .post(
@@ -1087,15 +1021,17 @@ async fn check_tools_cover_channel_discussions_subscriptions_and_escaped_preview
     // The subscribed author receives no self-notices; the child is unsubscribed.
     assert_eq!(*host.notifications.lock().unwrap(), Vec::new());
     let (last, last_reply) = last.unwrap();
-    assert!(
-        tool("subscribe")
-            .handle(board_tool_call(
-                "subscribe",
-                json!({"channel_name":"Workflow","thread_id":last.thread_id})
-            ))
-            .await
-            .is_err()
-    );
+    for invalid_target in [
+        json!({"channel_name":"Workflow","thread_id":last.thread_id}),
+        json!({"channel_name":"missing"}),
+    ] {
+        assert!(
+            tool("subscribe")
+                .handle(board_tool_call("subscribe", invalid_target))
+                .await
+                .is_err()
+        );
+    }
     let subscribed = tool("subscribe")
         .handle(board_tool_call(
             "subscribe",
@@ -2004,6 +1940,89 @@ async fn silent_appends_preserve_evidence_and_explicit_subscriptions()
 }
 
 #[tokio::test]
+async fn bulk_subscriptions_are_atomic_and_scoped_to_the_caller_and_supplied_channels() -> Result<()>
+{
+    use SubscriptionChange::Subscribe;
+    use SubscriptionChange::Unsubscribe;
+    use std::collections::BTreeMap;
+
+    let dir = tempfile::tempdir()?;
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let owner = ThreadId::new();
+    let reviewer = ThreadId::new();
+    let host = Arc::new(Host {
+        clock: AtomicI64::default(),
+        fail_clock: AtomicBool::default(),
+        agent_path_calls: AtomicUsize::default(),
+        members: [
+            (owner, AgentPath::root()),
+            (reviewer, AgentPath::root().join("reviewer").unwrap()),
+        ]
+        .into(),
+        active: AtomicBool::new(true),
+        fail_notifications: AtomicBool::default(),
+        notifications: Mutex::default(),
+    });
+    let board = LocalBoard::new(sqlite, owner.into());
+    let writer = board.read_write().open(host.clone()).await?;
+    let reader = board.read_only().open(host.clone()).await?;
+    for name in ["build", "release"] {
+        writer
+            .create_channel(
+                owner,
+                CreateChannelRequest {
+                    channel_name: name.into(),
+                    description: None,
+                    subscription: Subscribe,
+                },
+            )
+            .await?;
+    }
+    reader
+        .set_subscriptions(
+            reviewer,
+            &BTreeMap::from([("build", Subscribe), ("release", Subscribe)]),
+        )
+        .await?;
+    let both = vec!["build".to_owned(), "release".to_owned()];
+    assert!(
+        reader
+            .set_subscriptions(
+                reviewer,
+                &BTreeMap::from([("build", Unsubscribe), ("missing", Subscribe)])
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        reader
+            .subscribed_channels(reviewer, PageRequest::default())
+            .await?
+            .results,
+        both
+    );
+    reader
+        .set_subscriptions(reviewer, &BTreeMap::from([("build", Unsubscribe)]))
+        .await?;
+    assert_eq!(
+        reader
+            .subscribed_channels(reviewer, PageRequest::default())
+            .await?
+            .results,
+        vec!["release".to_owned()]
+    );
+    assert_eq!(
+        reader
+            .subscribed_channels(owner, PageRequest::default())
+            .await?
+            .results,
+        both
+    );
+    assert!(host.notifications.lock().unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn local_board_setup_survives_reopen() -> Result<()> {
     use serde_json::json;
     let dir = tempfile::tempdir()?;
@@ -2105,7 +2124,7 @@ async fn local_board_setup_survives_reopen() -> Result<()> {
 }
 
 #[tokio::test]
-async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
+async fn storage_namespaces_preserve_isolation_reopen_and_deletion() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
     let root = ThreadId::new();
@@ -2121,7 +2140,7 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
         notifications: Mutex::default(),
     });
     for storage_namespace in ["queue", "goals"] {
-        // Opening a board must not modify another runtime database.
+        // Opening and deleting a board must not modify another runtime database.
         let runtime_database = sqlite
             .open_read_write_pool(&dir.path().join(format!("{storage_namespace}_1.sqlite")))
             .await
@@ -2134,7 +2153,7 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
         let options = LocalBoardOptions {
             storage_namespace: storage_namespace.into(),
         };
-        let descriptor = LocalBoard::new(sqlite.clone(), identity).with_options(options);
+        let descriptor = LocalBoard::new(sqlite.clone(), identity).with_options(options.clone());
         let writer = descriptor.read_write().open(host.clone()).await?;
         let seed = PostRequest {
             request_id: "seed".into(),
@@ -2161,7 +2180,7 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
         drop(writer);
         let reopened = descriptor.read_write().open(host.clone()).await?;
         assert_eq!(
-            reopened.read_post(child, read).await?,
+            reopened.read_post(child, read.clone()).await?,
             PostContent {
                 metadata,
                 text: seed.text.clone(),
@@ -2169,6 +2188,43 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
                 next_offset_chars: seed.text.chars().count(),
             }
         );
+        let survivor = LocalBoard::new(sqlite.clone(), SessionId::new())
+            .with_options(LocalBoardOptions {
+                storage_namespace: storage_namespace.into(),
+            })
+            .read_write()
+            .open(host.clone())
+            .await?;
+        let survivor_metadata = survivor.post(root, seed.clone()).await?;
+        let after_deletion = PostRequest {
+            request_id: "after-deletion".into(),
+            destination: PostDestination::Channel("records".into()),
+            ..seed.clone()
+        };
+        let late_append = AppendRequest {
+            request_id: "late-append".into(),
+            destination: PostDestination::NewChannel("late-evidence".into()),
+            text: seed.text.clone(),
+        };
+        let deleted_ids = [identity, SessionId::new()];
+        LocalAgentMessageBoard::delete_boards(&sqlite, &options, &deleted_ids).await?;
+        assert!(reopened.read_post(root, read).await.is_err());
+        assert!(reopened.post(root, seed.clone()).await.is_err());
+        assert!(reopened.append(root, late_append.clone()).await.is_err());
+        assert_eq!(survivor.post(root, seed.clone()).await?, survivor_metadata);
+        survivor.post(root, after_deletion.clone()).await?;
+        survivor.append(root, late_append.clone()).await?;
+        // Fresh pools must retain both markers, including the board never opened before deletion.
+        drop((reopened, survivor));
+        for deleted_id in deleted_ids {
+            let deleted = LocalBoard::new(sqlite.clone(), deleted_id)
+                .with_options(options.clone())
+                .read_write()
+                .open(host.clone())
+                .await?;
+            assert!(deleted.post(root, seed.clone()).await.is_err());
+            assert!(deleted.append(root, late_append.clone()).await.is_err());
+        }
         assert_eq!(
             legacy
                 .read_post(
@@ -2187,6 +2243,17 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
                 next_offset_chars: seed.text.chars().count(),
             }
         );
+        legacy.post(root, after_deletion).await?;
+        let unopened_options = LocalBoardOptions {
+            storage_namespace: format!("unopened_{storage_namespace}"),
+        };
+        LocalAgentMessageBoard::delete_boards(&sqlite, &unopened_options, &[identity]).await?;
+        assert!(
+            !tokio::fs::try_exists(dir.path().join(format!(
+                "message_board_unopened_{storage_namespace}_1.sqlite"
+            )))
+            .await?
+        );
         assert_eq!(
             sqlx::query_scalar::<_, String>(
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
@@ -2202,3 +2269,6 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
 
 #[path = "local_board/mcp_tests.rs"]
 mod mcp;
+
+#[path = "local_board/read_view_tests.rs"]
+mod read_view;

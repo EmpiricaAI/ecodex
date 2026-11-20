@@ -10,6 +10,20 @@ ignore = [
     "RUSTSEC-2025-0141", # bincode via syntect; remove when syntect drops or updates it
     "RUSTSEC-2026-0118", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
     "RUSTSEC-2026-0119", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
+    # TODO(ioanbudea): after upgrading Rust to 1.96+, upgrade Rama to use
+    # hickory-proto >=0.26.2 and remove these temporary exceptions.
+    "RUSTSEC-2026-0487", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
+    "RUSTSEC-2026-0489", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
+    "RUSTSEC-2026-0490", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
+    "RUSTSEC-2026-0491", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
+    # DNSSEC-only advisories published 2026-11-12; DNSSEC is disabled even with
+    # all workspace features enabled. Reassess before enabling DNSSEC; remove
+    # after the tracked Rust/Rama upgrade replaces Hickory 0.25 with >=0.26.2.
+    "RUSTSEC-2026-0504", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
+    "RUSTSEC-2026-0505", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
+    "RUSTSEC-2026-0511", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
+    "RUSTSEC-2026-0512", # hickory-proto 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
+    "RUSTSEC-2026-0514", # hickory-resolver 0.25.2 via rama-dns/rama-tcp in codex-network-proxy; DNSSEC is disabled even with all workspace features; reassess before enabling DNSSEC; remove after the Rust/Rama upgrade uses Hickory >=0.26.2
     "RUSTSEC-2026-0194", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
     "RUSTSEC-2026-0195", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
     "RUSTSEC-2026-0370", # zvariant 4.2.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
@@ -25,4 +39,6 @@ ignore = [
     "RUSTSEC-2026-0410", # zstd-safe 7.2.4 pulls in zstd-sys 2.0.16. Its allocator bug only affects wasm32, and Codex ships native binaries. Remove when the lockfile uses zstd-sys >=2.1.2.
     # Reviewed 2026-10-29.
     "RUSTSEC-2026-0418", # libz-sys 1.1.29 via curl-sys/curl in codex-http-client is Windows-only and skips the affected probe; cc is locked to 1.2.55 (<1.6.0). Remove when libz-sys >=1.1.31; reassess if used on Unix with cc >=1.6.0.
+    # Reviewed 2026-11-05.
+    "RUSTSEC-2026-0441", # pin-utils 0.1.0 via AWS Smithy and loom under tokio-graceful; unmaintained with no patched release; remove when these paths drop pin-utils
 ]

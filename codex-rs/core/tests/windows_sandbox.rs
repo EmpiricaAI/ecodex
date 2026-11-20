@@ -7,6 +7,9 @@
 #![cfg(target_os = "windows")]
 #![allow(clippy::expect_used)]
 
+#[path = "windows_sandbox/repository_skills_tests.rs"]
+mod repository_skills_tests;
+
 use anyhow::Context;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::TurnInputRequest;
@@ -37,6 +40,7 @@ use codex_protocol::user_input::UserInput;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::WindowsSandboxProxySettingsMode;
@@ -514,7 +518,9 @@ async fn windows_elevated_temp_only_core_and_direct_spawn_enforce_carveouts() ->
                             additional_permissions: None,
                         },
                         permissions: &permission_profile,
-                        sandbox: SandboxType::WindowsRestrictedToken,
+                        workspace_roots: None,
+                        runtime_readable_paths: &[],
+                        selection: SandboxSelection::Explicit(SandboxType::WindowsRestrictedToken),
                         enforce_managed_network: false,
                         environment_id: None,
                         network: None,

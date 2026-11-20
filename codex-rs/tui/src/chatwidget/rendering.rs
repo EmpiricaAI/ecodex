@@ -4,6 +4,7 @@ use super::provider_error::ProviderErrorNotice;
 use super::transcript::ActiveCellLayoutCache;
 use super::transcript::ActiveCellLayoutCacheKey;
 use super::*;
+use crate::keymap::KeymapContext;
 use crate::render::RectExt;
 use crate::terminal_hyperlinks::HyperlinkParagraph;
 use crate::wrapping::RtOptions;
@@ -290,12 +291,15 @@ impl ChatWidget {
             options.separate_status_line = options.command_popup_placement
                 != crate::bottom_pane::CommandPopupPlacement::AboveComposer;
             let bottom_pane = self.bottom_pane.backdrop_with_options(options);
-            let above_composer = if self.quick_dial_menu {
+            let above_composer = if self.quick_dial_menu && !options.floating_shortcuts {
                 RenderableItem::Owned(Box::new(self.quick_dial_hud()))
-            } else if let Some(pending) = &self.safety_recourse
-                && !self.bottom_pane.has_active_view()
-            {
-                RenderableItem::Borrowed(&pending.notice)
+            } else if let Some(backend) = self.visible_new_backend_control() {
+                let mut spans = vec!["  ".into(), backend.into()];
+                let keymap = self.bottom_pane.keymap();
+                if let Some(key) = keymap.primary_hint(KeymapContext::Global, "change_host") {
+                    spans.extend(["  ".into(), key.into(), " to cycle".dim()]);
+                }
+                RenderableItem::Owned(Box::new(Paragraph::new(Line::from(spans))))
             } else {
                 return bottom_pane;
             };

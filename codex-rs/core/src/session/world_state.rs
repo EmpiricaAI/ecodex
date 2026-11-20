@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use super::session::Session;
 use super::step_context::StepContext;
+use super::turn_context::TurnContext;
+use crate::agent::host::AgentRuntimeServices;
+use crate::agent::host::AgentSessionReader;
 use crate::connectors;
 use crate::context::TokenBudgetContext;
 use crate::context::world_state::AgentsMdState;
@@ -23,6 +26,7 @@ use crate::context::world_state::RealtimeState;
 use crate::context::world_state::ToolsState;
 use crate::context::world_state::TopLevelToolsState;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::format_agent_paths;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_extension_api::WorldStateContributionInput;
@@ -36,16 +40,28 @@ use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ContentItemNamespace;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolName;
-
-const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
-const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
+use codex_tools::ToolSpec;
 
 impl Session {
+    pub(super) fn host_roster_reader(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<&Arc<dyn AgentSessionReader>> {
+        if turn_context.config.include_environment_context
+            && turn_context.multi_agent_version == MultiAgentVersion::V2
+            && let AgentRuntimeServices::Host(services) = &self.agent_runtime
+        {
+            services.session_reader.as_ref()
+        } else {
+            None
+        }
+    }
+
     pub(crate) async fn current_window_uses_incremental_tools(
         &self,
         step_context: &StepContext,
     ) -> bool {
-        if !step_context.settings.model_info.use_responses_lite {
+        if step_context.incremental_tools_feature().is_none() {
             return false;
         }
         let state = self.state.lock().await;
@@ -134,30 +150,17 @@ impl Session {
                 model_instructions,
             )
         };
-        let environment_subagents = if turn_context.config.include_environment_context {
+        let environment_subagents = if turn_context.config.include_environment_context
+            && matches!(self.agent_runtime, AgentRuntimeServices::Controller)
+        {
             match turn_context.multi_agent_version {
-                MultiAgentVersion::V2 => {
-                    let agent_paths = self
-                        .services
+                MultiAgentVersion::V2 => format_agent_paths(
+                    self.services
                         .agent_control
                         .child_agent_paths(self.thread_id)
-                        .await;
-                    let mut lines =
-                        Vec::with_capacity(agent_paths.len().min(MAX_ENVIRONMENT_SUBAGENTS));
-                    let mut rendered_bytes = "  <subagents>\n  </subagents>\n".len();
-                    for agent_path in agent_paths {
-                        if lines.len() == MAX_ENVIRONMENT_SUBAGENTS {
-                            break;
-                        }
-                        let line = format!(r#"<agent name="{agent_path}" />"#);
-                        let line_bytes = "    \n".len() + line.len();
-                        if rendered_bytes + line_bytes <= MAX_ENVIRONMENT_SUBAGENT_BYTES {
-                            rendered_bytes += line_bytes;
-                            lines.push(line);
-                        }
-                    }
-                    lines.join("\n")
-                }
+                        .await
+                        .into_iter(),
+                ),
                 MultiAgentVersion::Disabled | MultiAgentVersion::V1 => {
                     self.services
                         .local_agent_runtime
@@ -169,6 +172,29 @@ impl Session {
             String::new()
         };
         let mut world_state = WorldState::default();
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::CommandSessionsWorldState)
+        {
+            let mut sessions =
+                crate::unified_exec::command_sessions_state(&self.services.unified_exec_manager)
+                    .await;
+            if step_context
+                .tool_router
+                .exposes_tool(&ToolName::plain("write_stdin"))
+            {
+                world_state.add_section(sessions);
+            } else {
+                sessions.polling_unavailable = true;
+                world_state.add_section(crate::context::world_state::DisabledCommandSessionsState(
+                    sessions,
+                ));
+            }
+        } else {
+            world_state
+                .add_section(crate::context::world_state::DisabledCommandSessionsState::default());
+        }
         let extension_metrics = super::extension_metrics::from_session_telemetry(
             step_context.session_telemetry.clone(),
         );
@@ -176,12 +202,21 @@ impl Session {
             !new_window && self.preserve_parent_tool_declarations();
         if incremental_tools && !preserve_parent_tool_declarations {
             let specs = step_context.tool_router.model_visible_specs();
+            let specs = specs
+                .iter()
+                .filter(|tool| !matches!(tool, ToolSpec::WebSearch { .. }))
+                .cloned()
+                .collect::<Vec<_>>();
             let definitions = codex_tools::create_tools_json_for_responses_lite(&specs)?;
-            world_state.add_section(TopLevelToolsState::new(
+            let mut top_level = TopLevelToolsState::new(
                 model_messages.incremental_tools(),
                 definitions,
                 Some(Arc::clone(&extension_metrics)),
-            )?);
+            )?;
+            if let Some(entries) = step_context.tool_router.exec_definitions() {
+                top_level = top_level.with_incremental_exec_tools(Some(entries));
+            }
+            world_state.add_section(top_level);
         }
         world_state.add_section(model_state);
         let token_budget_enabled = turn_context.config.features.enabled(Feature::TokenBudget)
@@ -191,7 +226,7 @@ impl Session {
                 .resolved_context_window()
                 .is_some();
         if token_budget_enabled {
-            let window_ids = self.state.lock().await.auto_compact_window_ids();
+            let window_ids = self.state.lock().await.auto_compact_window_ids().clone();
             world_state.add_section(TokenBudgetContext::new(
                 turn_context
                     .session_source
@@ -234,7 +269,7 @@ impl Session {
         if turn_context.config.include_permissions_instructions {
             let environment = step_context.environments.primary();
             let sandbox = environment
-                .filter(|environment| environment.environment.is_remote())
+                .filter(|environment| environment.environment().is_remote())
                 .map(|environment| {
                     environment.sandbox_context(/*additional_permissions*/ None)
                 });
@@ -278,14 +313,13 @@ impl Session {
             ));
         }
         if !crate::guardian::is_basic_session_source(&turn_context.session_source) {
-            let send_user_message_async_available =
-                !turn_context.session_source.is_non_root_agent()
-                    && step_context
-                        .settings
-                        .model_info
-                        .experimental_supported_tools
-                        .iter()
-                        .any(|tool| tool == "send_user_message_async");
+            let send_user_message_async_available = !turn_context.root_capabilities_restricted
+                && step_context
+                    .settings
+                    .model_info
+                    .experimental_supported_tools
+                    .iter()
+                    .any(|tool| tool == "send_user_message_async");
             world_state.add_section(PersistentModeState::new(
                 turn_context.config.features.persistent_execution_enabled(
                     step_context.settings.effective_reasoning_effort().as_ref(),
@@ -295,6 +329,7 @@ impl Session {
             ));
         }
         if turn_context.config.include_environment_context {
+            world_state.host_roster_reader = self.host_roster_reader(turn_context).cloned();
             let current_date = if turn_context.config.include_environment_context_time {
                 self.read_clock_for_context(turn_context, "environment_date")
                     .await?
@@ -342,9 +377,15 @@ impl Session {
         ));
         let plugins_usage_instructions_available =
             step_context.mcp.plugins_available() && model_info.include_plugin_usage_instructions;
-        world_state.add_section(PluginsInstructionsState::new(
-            plugins_usage_instructions_available,
-        ));
+        let plugins_state = {
+            let state = self.state.lock().await;
+            PluginsInstructionsState::new(
+                plugins_usage_instructions_available,
+                model_messages.generic_plugin(),
+                state.history.raw_items(),
+            )
+        };
+        world_state.add_section(plugins_state);
         if turn_context
             .config
             .features

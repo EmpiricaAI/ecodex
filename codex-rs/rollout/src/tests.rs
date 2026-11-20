@@ -25,11 +25,11 @@ use crate::RolloutItem;
 use crate::RolloutLine;
 use crate::find_rollout_path_by_rollout_id;
 use crate::find_thread_path_by_id_str;
-use crate::list::Cursor;
 use crate::list::ThreadItem;
 use crate::list::ThreadSortKey;
 use crate::list::ThreadsPage;
 use crate::list::get_threads;
+use crate::list::parse_cursor;
 use crate::list::read_head_for_summary;
 use crate::rollout_date_parts;
 use anyhow::Result;
@@ -140,17 +140,15 @@ async fn insert_state_db_thread(
         .with_ymd_and_hms(2025, 1, 3, 12, 0, 0)
         .single()
         .expect("valid datetime");
-    let mut builder = codex_state::ThreadMetadataBuilder::new(
+    let builder = codex_state::ThreadMetadataBuilder::new(
         thread_id,
         rollout_path.to_path_buf(),
         created_at,
         SessionSource::Cli,
-    );
-    builder.model_provider = Some(TEST_PROVIDER.to_string());
-    builder.cwd = home.to_path_buf();
-    if archived {
-        builder.archived_at = Some(created_at);
-    }
+    )
+    .with_model_provider(Some(TEST_PROVIDER.to_string()))
+    .with_cwd(home.to_path_buf())
+    .with_archived_at(archived.then_some(created_at));
     let mut metadata = builder.build(TEST_PROVIDER);
     metadata.first_user_message = Some("Hello from user".to_string());
     metadata.preview = metadata.first_user_message.clone();
@@ -807,6 +805,7 @@ async fn test_list_conversations_latest_first() {
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
                 history_mode: Default::default(),
+                attached_to_thread_id: None,
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -833,6 +832,7 @@ async fn test_list_conversations_latest_first() {
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
                 history_mode: Default::default(),
+                attached_to_thread_id: None,
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -859,6 +859,7 @@ async fn test_list_conversations_latest_first() {
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
                 history_mode: Default::default(),
+                attached_to_thread_id: None,
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -960,7 +961,7 @@ async fn test_pagination_cursor() {
         .join(format!("rollout-2025-03-04T09-00-00-{u4}.jsonl"));
     let updated_page1: Vec<Option<String>> =
         page1.items.iter().map(|i| i.updated_at.clone()).collect();
-    let expected_cursor1: Cursor = serde_json::from_str("\"2025-03-04T09-00-00\"").unwrap();
+    let expected_cursor1 = parse_cursor(&format!("2025-03-04T09:00:00Z|{u4}")).unwrap();
     let expected_page1 = ThreadsPage {
         items: vec![
             ThreadItem {
@@ -978,6 +979,7 @@ async fn test_pagination_cursor() {
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
                 history_mode: Default::default(),
+                attached_to_thread_id: None,
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -1004,6 +1006,7 @@ async fn test_pagination_cursor() {
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
                 history_mode: Default::default(),
+                attached_to_thread_id: None,
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -1048,7 +1051,7 @@ async fn test_pagination_cursor() {
         .join(format!("rollout-2025-03-02T09-00-00-{u2}.jsonl"));
     let updated_page2: Vec<Option<String>> =
         page2.items.iter().map(|i| i.updated_at.clone()).collect();
-    let expected_cursor2: Cursor = serde_json::from_str("\"2025-03-02T09-00-00\"").unwrap();
+    let expected_cursor2 = parse_cursor(&format!("2025-03-02T09:00:00Z|{u2}")).unwrap();
     let expected_page2 = ThreadsPage {
         items: vec![
             ThreadItem {
@@ -1066,6 +1069,7 @@ async fn test_pagination_cursor() {
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
                 history_mode: Default::default(),
+                attached_to_thread_id: None,
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -1092,6 +1096,7 @@ async fn test_pagination_cursor() {
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
                 history_mode: Default::default(),
+                attached_to_thread_id: None,
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -1146,6 +1151,7 @@ async fn test_pagination_cursor() {
             git_origin_url: None,
             source: Some(SessionSource::VSCode),
             history_mode: Default::default(),
+            attached_to_thread_id: None,
             parent_thread_id: None,
             agent_nickname: None,
             agent_role: None,
@@ -1355,6 +1361,7 @@ async fn test_get_thread_contents() {
             git_origin_url: None,
             source: Some(SessionSource::VSCode),
             history_mode: Default::default(),
+            attached_to_thread_id: None,
             parent_thread_id: None,
             agent_nickname: None,
             agent_role: None,
@@ -1593,6 +1600,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         ordinal: None,
         item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
+                account_scoped: false,
                 attached_thread: false,
                 creator_user_id: None,
                 creator_account_id: None,
@@ -1692,7 +1700,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_timestamp_only_cursor_skips_same_second_filesystem_ties() {
+async fn test_filesystem_cursor_pages_through_same_timestamp_ties() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
 
@@ -1754,7 +1762,7 @@ async fn test_timestamp_only_cursor_skips_same_second_filesystem_ties() {
         .join(format!("rollout-2025-07-01T00-00-00-{u2}.jsonl"));
     let updated_page1: Vec<Option<String>> =
         page1.items.iter().map(|i| i.updated_at.clone()).collect();
-    let expected_cursor1: Cursor = serde_json::from_str(&format!("\"{ts}\"")).unwrap();
+    let expected_cursor1 = parse_cursor(&format!("{ts}|{u2}")).unwrap();
     let expected_page1 = ThreadsPage {
         items: vec![
             ThreadItem {
@@ -1772,6 +1780,7 @@ async fn test_timestamp_only_cursor_skips_same_second_filesystem_ties() {
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
                 history_mode: Default::default(),
+                attached_to_thread_id: None,
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -1798,6 +1807,7 @@ async fn test_timestamp_only_cursor_skips_same_second_filesystem_ties() {
                 git_origin_url: None,
                 source: Some(SessionSource::VSCode),
                 history_mode: Default::default(),
+                attached_to_thread_id: None,
                 parent_thread_id: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -1816,27 +1826,31 @@ async fn test_timestamp_only_cursor_skips_same_second_filesystem_ties() {
     };
     assert_eq!(page1, expected_page1);
 
-    let page2 = get_threads(
-        home,
-        /*page_size*/ 2,
-        page1.next_cursor.as_ref(),
-        ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES.as_slice(),
-        Some(provider_filter.as_slice()),
-        /*cwd_filters*/ None,
-        TEST_PROVIDER,
-    )
-    .await
-    .unwrap();
-    // The filesystem fallback only has second-precision timestamps in filenames. The primary
-    // SQLite-backed listing uses unique millisecond timestamps and does not have this tie.
-    let expected_page2 = ThreadsPage {
-        items: Vec::new(),
-        next_cursor: None,
-        num_scanned_files: 3,
-        reached_scan_cap: false,
-    };
-    assert_eq!(page2, expected_page2);
+    let legacy_cursor = parse_cursor(ts).unwrap();
+    for (cursor, expected_ids) in [
+        (expected_cursor1, vec![thread_id_from_uuid(u1)]),
+        (legacy_cursor, vec![]),
+    ] {
+        let page = get_threads(
+            home,
+            /*page_size*/ 2,
+            Some(&cursor),
+            ThreadSortKey::CreatedAt,
+            INTERACTIVE_SESSION_SOURCES.as_slice(),
+            Some(provider_filter.as_slice()),
+            /*cwd_filters*/ None,
+            TEST_PROVIDER,
+        )
+        .await
+        .unwrap();
+        let ids: Vec<_> = page
+            .items
+            .iter()
+            .map(|item| item.thread_id.unwrap())
+            .collect();
+        assert_eq!(ids, expected_ids);
+        assert_eq!(page.next_cursor, None);
+    }
 }
 
 #[tokio::test]

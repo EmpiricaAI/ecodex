@@ -129,9 +129,6 @@ impl AgentsOverviewView {
 
     pub(super) fn center_footer_hints(&self) -> Vec<(String, String)> {
         let state = self.state();
-        if let Some(items) = &state.key_chord_hint {
-            return items.clone();
-        }
         let mut hints = Vec::new();
         if !state.help
             && !state.editing_metadata()
@@ -146,8 +143,10 @@ impl AgentsOverviewView {
         }
         let cancel = if state.help {
             self.keymap.primary_hint(ListAction::Cancel)
-        } else {
+        } else if state.editing_metadata() || self.can_return_to_chat {
             self.center_list_hint(ListAction::Cancel)
+        } else {
+            None
         };
         if let Some(hint) = cancel {
             hints.push((hint.display_label(), "back".into()));

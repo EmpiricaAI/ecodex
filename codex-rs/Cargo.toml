@@ -6,6 +6,7 @@ members = [
     "analytics",
     "agent-graph-store",
     "agent-message-board-client",
+    "agent-message-board-host",
     "agent-identity",
     "agent-roles",
     "backend-client",
@@ -56,6 +57,7 @@ members = [
     "hooks",
     "history",
     "http-client",
+    "http-headers-helper",
     "secrets",
     "exec",
     "file-system",
@@ -148,6 +150,7 @@ members = [
     "utils/cli",
     "utils/elapsed",
     "utils/sandbox-summary",
+    "utils/model-facing-id",
     "utils/sleep-inhibitor",
     "utils/approval-presets",
     "utils/oss",
@@ -172,7 +175,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.167.2"
+version = "0.170.0"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
@@ -223,12 +226,14 @@ codex-code-mode-runtime = { path = "code-mode-runtime" }
 codex-plugin-host = { path = "plugin-host" }
 codex-home = { path = "codex-home" }
 codex-http-client = { path = "http-client" }
+codex-http-headers-helper = { path = "http-headers-helper" }
 codex-websocket-auth = { path = "websocket-auth" }
 codex-websocket-client = { path = "websocket-client" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-agent-message-board-client = { path = "agent-message-board-client" }
 codex-agent-message-board-extension = { path = "ext/agent-message-board" }
+codex-agent-message-board-host = { path = "agent-message-board-host" }
 codex-message-board = { path = "message-board" }
 codex-message-board-mcp = { path = "message-board-mcp" }
 codex-connectors-extension = { path = "ext/connectors" }
@@ -255,6 +260,7 @@ codex-goal-extension = { path = "ext/goal" }
 codex-git-attribution = { path = "ext/git-attribution" }
 codex-guardian-reviewer = { path = "ext/guardian-reviewer" }
 codex-guardian-v2 = { path = "ext/guardian-v2" }
+codex-guardian-v3 = { path = "ext/guardian-v3" }
 codex-history-notes-extension = { path = "ext/history-notes" }
 codex-image-generation-extension = { path = "ext/image-generation" }
 codex-external-agent-migration = { path = "external-agent-migration" }
@@ -328,6 +334,7 @@ codex-utils-head-tail-buffer = { path = "utils/head-tail-buffer" }
 codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
+codex-utils-model-facing-id = { path = "utils/model-facing-id" }
 codex-utils-oss = { path = "utils/oss" }
 codex-utils-output-truncation = { path = "utils/output-truncation" }
 codex-utils-path = { path = "utils/path-utils" }
@@ -420,7 +427,7 @@ iana-time-zone = "0.1.64"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
-ignore = "0.4.23"
+ignore = "0.4.30"
 image = { version = "^0.25.9", default-features = false }
 include_dir = "0.7.4"
 indexmap = "2.12.0"
@@ -566,6 +573,7 @@ tree-sitter-powershell = "=0.26.4"
 ts-rs = "11"
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uds_windows = "1.1.0"
+unicode-linebreak = "0.1.5"
 unicode-normalization = "0.1.25"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"
@@ -574,6 +582,7 @@ urlencoding = "2.1"
 uuid = "1"
 v8 = "=152.2.0"
 vt100 = "0.16.2"
+vtparse = "0.6.2"
 walkdir = "2.5.0"
 webbrowser = "1.2.2"
 which = "8"
@@ -599,8 +608,8 @@ zstd = "0.13"
 wiremock = "0.6"
 zeroize = "1.8.2"
 
-[workspace.lints]
-rust = {}
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(codex_bazel)'] }
 
 [workspace.lints.clippy]
 await_holding_invalid_type = "deny"
@@ -709,4 +718,4 @@ v8 = { git = "https://github.com/seanh-oai/rusty_v8.git", rev = "350c5a859a9b3c8
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }
 
 [patch."ssh://git@github.com/openai-oss-forks/tungstenite-rs.git"]
-tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "bc589d684755a8c02da0fc7e58d0861cbfc306f1" }

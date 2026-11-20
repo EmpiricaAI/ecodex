@@ -155,6 +155,9 @@ mod winutil;
 #[cfg(target_os = "windows")]
 mod workspace_acl;
 
+mod cmd_script;
+pub use cmd_script::cmd_script_command_line;
+
 mod deny_read_resolver;
 #[cfg(target_os = "windows")]
 mod uninstall_windows;
@@ -265,9 +268,8 @@ pub use conpty::spawn_conpty_process_as_user;
 pub use deny_read_acl::apply_deny_read_acls;
 #[cfg(target_os = "windows")]
 pub use deny_read_acl::plan_deny_read_acl_paths;
-pub use deny_read_resolver::GLOB_SCAN_PROGRAM;
+pub use deny_read_resolver::expand_windows_deny_read_paths;
 pub use deny_read_resolver::resolve_windows_deny_read_paths;
-pub use deny_read_resolver::resolve_windows_deny_read_paths_in_environment;
 #[cfg(target_os = "windows")]
 pub use deny_read_state::sync_persistent_deny_read_acls;
 #[cfg(target_os = "windows")]

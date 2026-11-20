@@ -95,6 +95,9 @@ fn is_unsupported_untrusted_approval_policy_error(err: &std::io::Error) -> bool 
     )
 }
 
+pub use codex_agent_message_board_host::delete_agent_message_boards;
+pub use codex_agent_message_board_host::install_agent_message_board;
+
 mod analytics_utils;
 mod app_info;
 mod app_server_tracing;
@@ -673,7 +676,7 @@ pub async fn run_main_with_transport_options(
         Ok(state_db_init) => state_db_init,
         Err(err) => {
             return Err(std::io::Error::other(format!(
-                "failed to initialize sqlite state runtime under {}: {err}",
+                "failed to initialize sqlite state runtime under {}: {err:#}",
                 config.sqlite_config().home().display()
             )));
         }
@@ -715,8 +718,15 @@ pub async fn run_main_with_transport_options(
         });
     }
 
-    let analytics_events_client =
-        analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+    let runtime_auth_slot = config
+        .features
+        .enabled(Feature::RuntimeAgentInstances)
+        .then(codex_runtime_agent_instance::RuntimeAuthSlot::default);
+    let analytics_events_client = analytics_events_client_from_config(
+        Arc::clone(&auth_manager),
+        &config,
+        runtime_auth_slot.clone(),
+    );
     let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
         outgoing_tx,
         analytics_events_client.clone(),
@@ -764,6 +774,14 @@ pub async fn run_main_with_transport_options(
         .with(log_db_layer)
         .with(otel_layers)
         .try_init();
+    if let Some(error) = state_db.as_ref().and_then(|db| db.diagnostic_logs_error()) {
+        tracing::warn!(
+            event.name = "diagnostic_database_unavailable",
+            error,
+            "diagnostic database unavailable"
+        );
+    }
+
     #[cfg(unix)]
     if let Some(Err(err)) = nofile_limit_result {
         warn!(%err, "failed to raise managed app-server file descriptor limit");
@@ -885,6 +903,9 @@ pub async fn run_main_with_transport_options(
 
     let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
         RemoteControlStartConfig {
+            runtime_auth: runtime_auth_slot
+                .clone()
+                .map(|slot| (slot, config.runtime_auth_mode)),
             remote_control_url: config.chatgpt_base_url.clone(),
             installation_id: installation_id.clone(),
             policy: remote_control_policy,
@@ -1025,6 +1046,7 @@ pub async fn run_main_with_transport_options(
                 &auth_manager,
             ))),
             auth_manager,
+            runtime_auth_slot,
             installation_id,
             code_mode_session_provider,
             rpc_transport: analytics_rpc_transport(&transport),

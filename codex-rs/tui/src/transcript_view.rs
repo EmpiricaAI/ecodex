@@ -21,6 +21,7 @@ mod select_mode;
 mod selection;
 mod snapshot;
 mod text;
+mod turn_details;
 mod turn_tip;
 
 use std::sync::Arc;
@@ -124,6 +125,7 @@ pub(crate) struct TranscriptView {
     last_tail: Option<EntryKey>,
     last_click: Option<(std::time::Instant, u16, u16, u8)>,
     disclosure: disclosure::Disclosure,
+    turn_details: Option<turn_details::TurnDetails>,
 }
 
 impl Default for TranscriptView {
@@ -164,6 +166,7 @@ impl Default for TranscriptView {
             last_tail: None,
             last_click: None,
             disclosure: disclosure::Disclosure::default(),
+            turn_details: None,
         }
     }
 }
@@ -204,6 +207,16 @@ impl TranscriptView {
         if area.is_empty() {
             self.tail_visible = false;
             return;
+        }
+        if let Some(key) = self.disclosure.anchor_control.take()
+            && let Position::Reading(mut anchor) = self.position
+            && anchor.key == key
+            && let Some(layout) = self.layout(cells, anchor.index)
+            && let Some(row) = layout.disclosure_row()
+        {
+            anchor.offset = layout.position_at(row, /*column*/ 0);
+            anchor.row_bias = layout.row_for_offset(anchor.offset) as isize - row as isize;
+            self.position = Position::Reading(anchor);
         }
         let initial_start = self.start(cells);
         let initial_position = self.position;
@@ -342,6 +355,67 @@ impl TranscriptView {
         placements
     }
 
+    /// Reflow the captured live owner without treating a passive paint as reading new output.
+    pub(crate) fn render_parked(
+        &mut self,
+        area: Rect,
+        buffer: &mut Buffer,
+        cells: &[Arc<dyn HistoryCell>],
+        active: Option<&dyn HistoryCell>,
+        auxiliary: &[HyperlinkLine],
+        collapse_turn_details: bool,
+    ) {
+        let width = area.width;
+        let unseen_activity = self.unseen_activity;
+        let (summary, expanded) = self.sync_live_tool_summary(cells, collapse_turn_details, active);
+        let disclose = !self.disclosure.live_ids.is_empty() && self.mode == HistoryRenderMode::Rich;
+        let mode = self.mode;
+        let lines = |width| {
+            let mut lines = active.map_or_else(Vec::new, |c| c.transcript_hyperlink_lines(width));
+            if !lines.is_empty() && !auxiliary.is_empty() {
+                lines.push("".into());
+            }
+            lines.extend_from_slice(auxiliary);
+            (!lines.is_empty()).then_some(lines)
+        };
+        self.sync_search_live_tail(width, /*key*/ None, lines);
+        if self.detailed {
+            self.sync_live_tail(width, /*key*/ None, lines);
+        } else if let Some(row) = summary {
+            self.sync_live_layout(width, /*key*/ None, |width| {
+                Some(row.layout(width, expanded, auxiliary.to_vec()))
+            });
+        } else {
+            self.sync_live_activity_tail(width, /*key*/ None, expanded && disclose, |width| {
+                let activity = active.map_or_else(Vec::new, |cell| {
+                    if disclose && expanded {
+                        cell.expanded_hyperlink_lines(width)
+                    } else {
+                        crate::history_cell::fullscreen_session_lines(
+                            cell, width, /*detailed*/ false, mode,
+                        )
+                    }
+                });
+                let mut auxiliary = auxiliary.to_vec();
+                if activity.is_empty() && auxiliary.is_empty() {
+                    return None;
+                }
+                if !activity.is_empty() && !auxiliary.is_empty() {
+                    auxiliary.insert(0, "".into());
+                }
+                Some(ActivityTranscriptLines {
+                    activity,
+                    auxiliary,
+                    disclosure: active
+                        .filter(|_| disclose)
+                        .and_then(|cell| cell.activity_disclosure(width)),
+                })
+            });
+        }
+        self.render(area, buffer, cells);
+        self.unseen_activity = unseen_activity;
+    }
+
     pub(crate) fn sync_live_tail(
         &mut self,
         width: u16,
@@ -385,8 +459,8 @@ impl TranscriptView {
         self.live_separated = None;
         self.live_continuation = key.is_some_and(|key| key.is_stream_continuation);
         let live = layout(width).map(Arc::new);
-        if self.live.as_ref().map(|layout| layout.text())
-            != live.as_ref().map(|layout| layout.text())
+        if self.live.as_ref().map(|layout| layout.activity_content())
+            != live.as_ref().map(|layout| layout.activity_content())
         {
             if !self.is_following() && revision_changed && live.is_some() {
                 self.unseen_activity = true;

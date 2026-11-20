@@ -142,13 +142,16 @@ fn codex_apps_mcp_protocol_can_be_enabled_independently_of_generic_mcp() {
 }
 
 #[test]
-fn default_enabled_features_are_stable() {
+fn default_enabled_features_have_shipped() {
     for spec in crate::FEATURES {
         // Instant interrupts are enabled by default while retaining their development stage.
         if spec.default_enabled && spec.id != Feature::InstantInterrupt {
             assert!(
-                matches!(spec.stage, Stage::Stable | Stage::Removed),
-                "feature `{}` is enabled by default but is not stable/removed ({:?})",
+                matches!(
+                    spec.stage,
+                    Stage::Stable | Stage::Deprecated | Stage::Removed
+                ),
+                "feature `{}` is enabled by default at stage {:?}",
                 spec.key,
                 spec.stage
             );
@@ -329,6 +332,8 @@ max_recent_non_user_entries = 12
     assert_eq!(
         features.guardianv2,
         Some(FeatureToml::Config(crate::GuardianV2ConfigToml {
+            sync_elastic_budgeting: None,
+            sync_elastic_sections: None,
             transcript_mode: None,
             async_classifier_mode: None,
             async_classifier_conversation_token_limit: Some(120_000),

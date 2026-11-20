@@ -1,11 +1,12 @@
-//! Bounded, display-only subset of the `codex-tui/1` tree contract.
-//!
-//! The wire tree is independent of its producer. Producers normalize text into leaf nodes and
-//! arrays into composite nodes; unsupported primitives and properties fail deserialization. This
-//! first slice renders one horizontal line of plain text, links, rows, spacers, dividers, and
-//! numeric gaps. Links underline their text. Keys are preserved for future reconciliation.
+//! Display elements for the terminal UI and their JSON representation.
 
+mod decode;
 mod render;
+mod theme;
+
+pub(crate) use render::PreparedUiTree;
+use theme::Color;
+use theme::TextWeight;
 
 #[cfg(test)]
 #[path = "ui_tree_tests.rs"]
@@ -14,46 +15,59 @@ mod tests;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// A single display node, or no content.
-pub(crate) type UiTree = Option<UiNode>;
+const MAX_GAP: u64 = (1 << 53) - 1;
+const MAX_TEXT_BYTES: usize = 16 * 1024;
+
+/// A nullable root with bounded depth, node count, and total UTF-8 leaf bytes.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct UiTree(pub(crate) Option<UiNode>);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum UiNode {
     Text {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        key: Option<Key>,
+        #[serde(default, skip_serializing_if = "is_default")]
         props: TextProps,
+        children: Vec<Option<UiNode>>,
     },
     Link {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        key: Option<Key>,
         props: LinkProps,
-        children: Vec<UiTree>,
+        children: Vec<Option<UiNode>>,
     },
     Row {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        key: Option<Key>,
-        props: StackProps,
-        children: Vec<UiTree>,
+        props: RowProps,
+        children: Vec<Option<UiNode>>,
     },
-    Spacer {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        key: Option<Key>,
+    Bold {
+        children: Vec<Option<UiNode>>,
     },
-    Divider {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        key: Option<Key>,
+    Italic {
+        children: Vec<Option<UiNode>>,
     },
+    Underline {
+        children: Vec<Option<UiNode>>,
+    },
+    #[serde(untagged)]
+    String(String),
 }
 
-impl UiNode {
-    pub(crate) fn text(key: Option<Key>, text: impl Into<String>) -> Self {
-        Self::Text {
-            key,
-            props: TextProps { text: text.into() },
-        }
-    }
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct TextProps {
+    #[serde(
+        deserialize_with = "decode::optional_token",
+        skip_serializing_if = "Option::is_none"
+    )]
+    color: Option<Color>,
+    #[serde(
+        deserialize_with = "decode::optional_token",
+        skip_serializing_if = "Option::is_none"
+    )]
+    weight: Option<TextWeight>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    italic: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    underline: Option<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -64,7 +78,7 @@ pub(crate) struct LinkProps {
     pub(crate) title: Option<String>,
 }
 
-/// An absolute HTTP(S) destination safe to embed in a terminal hyperlink.
+/// An absolute HTTP(S) URL without control characters, at most 8 KiB in UTF-8.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "String")]
 pub(crate) struct LinkHref(String);
@@ -84,27 +98,38 @@ impl TryFrom<&str> for LinkHref {
         crate::terminal_hyperlinks::web_destination(value)
             .filter(|destination| destination == value)
             .map(Self)
-            .ok_or("link href must be an absolute HTTP(S) URL without control characters")
+            .ok_or("link href must be an absolute HTTP(S) URL of at most 8 KiB without control characters")
     }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum Key {
-    String(String),
-    Number(serde_json::Number),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TextProps {
-    pub(crate) text: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct StackProps {
-    /// Numeric spacing uses the profile's four-point scale.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) gap: Option<f64>,
+pub(crate) struct RowProps {
+    /// Horizontal spacing in terminal columns, expressed as a non-negative JavaScript-safe integer.
+    #[serde(deserialize_with = "decode::gap")]
+    pub(crate) gap: u64,
+    #[serde(
+        default,
+        deserialize_with = "decode::optional_token",
+        skip_serializing_if = "Option::is_none"
+    )]
+    background: Option<Color>,
+    #[serde(
+        default,
+        deserialize_with = "decode::token",
+        skip_serializing_if = "is_default"
+    )]
+    wrap: RowWrap,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RowWrap {
+    #[default]
+    Nowrap,
+    Wrap,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }

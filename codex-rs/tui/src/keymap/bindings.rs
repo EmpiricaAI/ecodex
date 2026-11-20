@@ -103,12 +103,40 @@ pub(crate) struct KeymapActionId {
 }
 
 impl KeymapActionId {
+    pub(crate) fn is_side_pane(self) -> bool {
+        self.context == KeymapContext::Global
+            && matches!(
+                self.action,
+                "focus_main_composer"
+                    | "focus_sidebar_content"
+                    | "focus_sidebar_tabs"
+                    | "hide_pane"
+                    | "close_sidebar_tab"
+                    | "sidebar_up"
+                    | "sidebar_down"
+                    | "focus_pane_left"
+                    | "focus_pane_right"
+                    | "minimize_pane_width"
+                    | "maximize_pane_width"
+                    | "equalize_pane_widths"
+                    | "resize_panes"
+                    | "move_divider_left"
+                    | "move_divider_right"
+                    | "toggle_pane_zoom"
+            )
+    }
+
     /// Whether two actions can be active together, including list-specific exceptions.
     pub(super) fn overlaps(self, other: Self) -> bool {
         use KeymapContext::Chat;
         use KeymapContext::Global;
         use KeymapContext::List;
 
+        if self.is_side_pane() && matches!(other.context, List | KeymapContext::Pager)
+            || other.is_side_pane() && matches!(self.context, List | KeymapContext::Pager)
+        {
+            return true;
+        }
         match (self.context, other.context) {
             // Presets cannot open while a list owns input.
             (Chat, List) => self.action != "open_presets",
@@ -284,11 +312,28 @@ macro_rules! define_runtime_action_bindings {
 
 define_runtime_action_bindings! {
     "global" => Global, app, global [
+        change_host,
         open_agents,
         open_transcript,
         find_transcript,
         select_transcript,
         focus_activity,
+        focus_main_composer,
+        focus_sidebar_content,
+        focus_sidebar_tabs,
+        hide_pane,
+        close_sidebar_tab,
+        sidebar_up,
+        sidebar_down,
+        focus_pane_left,
+        focus_pane_right,
+        minimize_pane_width,
+        maximize_pane_width,
+        equalize_pane_widths,
+        resize_panes,
+        move_divider_left,
+        move_divider_right,
+        toggle_pane_zoom,
         open_warnings => runtime_only,
         open_external_editor,
         copy,

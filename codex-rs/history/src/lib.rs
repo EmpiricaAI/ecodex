@@ -66,6 +66,15 @@ pub struct ResponseItemEnvelope {
 ///
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct CodexHarnessMetadata {
+    /// Thread-local append sequence. Compaction keeps the identities of retained inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_sequence: Option<u64>,
+
+    /// Highest input sequence included in a regular request that recorded model output.
+    /// Compaction carries this checkpoint without advancing it. Never model-visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampled_through_sequence: Option<u64>,
+
     /// Complete retained records actually delivered by this Guardian message. Host-only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guardian_sources: Vec<RetainedSource>,
@@ -85,6 +94,10 @@ pub struct CodexHarnessMetadata {
     /// Original retained evidence represented by this exact history item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retained_source: Option<RetainedSource>,
+
+    /// The harness rendered client-supplied untrusted additional context as a standalone tool output.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub additional_context_tool_output: bool,
 
     /// Whether a developer message was supplied by a client or a client requested tool-output retention.
     #[serde(default)]
@@ -107,6 +120,10 @@ pub struct CodexHarnessMetadata {
     /// Whether a response configuration update was created by the Codex harness itself.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub harness_authored_configuration: bool,
+
+    /// The exact input to this opaque checkpoint contained no audio or file-backed images.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compaction_without_file_error_sources: bool,
 
     /// Producer compatibility for an opaque compaction item, never the currently selected model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -133,6 +150,10 @@ pub struct CodexHarnessMetadata {
         deserialize_with = "deserialize_mcp_attribution_checkpoint"
     )]
     pub mcp_attribution: Option<McpAttribution>,
+
+    /// Native search ran during automatic fallback, so its browsing references stay on native.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_search_fallback_used: bool,
 
     /// Sender context captured by the host when this task message was accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -269,6 +290,9 @@ impl JsonSchema for RolloutItem {
 }
 
 mod guardian_history;
+mod model_id_ordinals;
+pub use model_id_ordinals::next_model_id_ordinals;
+pub use model_id_ordinals::stamp_item_ordinals;
 mod reconciled_retained_context;
 mod retained_context;
 mod sender_user_messages;
@@ -276,6 +300,7 @@ mod sender_user_messages;
 pub use sender_user_messages::SenderUserMessages;
 
 pub use reconciled_retained_context::ReconciledRetainedContext;
+pub use retained_context::AcceptedFileAudio;
 pub use retained_context::RetainedContext;
 pub use retained_context::RetainedContextEntry;
 pub use retained_context::RetainedContextEvent;
@@ -300,9 +325,9 @@ pub struct CompactedItem {
     pub retained_context: Option<RetainedContext>,
     pub mcp_resource_origins: Option<McpResourceOriginCheckpoint>,
     pub window_number: Option<u64>,
-    pub first_window_id: Option<String>,
-    pub previous_window_id: Option<String>,
-    pub window_id: Option<String>,
+    pub first_window_id: Option<codex_protocol::ContextWindowId>,
+    pub previous_window_id: Option<codex_protocol::ContextWindowId>,
+    pub window_id: Option<codex_protocol::ContextWindowId>,
     /// Responses API ID for the model-backed compaction request, when one exists.
     pub compaction_response_id: Option<String>,
     /// Snapshot of the latest reachable token usage record when this compaction was written.
