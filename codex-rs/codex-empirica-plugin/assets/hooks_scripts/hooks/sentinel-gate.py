@@ -1695,8 +1695,8 @@ def _find_transaction_file(
     # whole CC session, so many files (one per past transaction, each
     # POSTFLIGHT-closed) share it; returning the first would resolve a STALE
     # CLOSED transaction and make this firewall block praxic after a valid CHECK.
-    # Rank by (cc_match, is_open, updated_at) descending. Kept in sync with
-    # empirica/utils/session_resolver.py:_find_transaction_file.
+    # Rank by (cc_match, updated_at, is_open) descending: the most recent wins, open breaks a tie (5fb3398cf). Kept in
+    # sync with empirica/utils/session_resolver.py:_find_transaction_file; tests/test_copy_parity.py holds the pair.
     if not claude_session_id and not session_id:
         return None
     best_rank = None
@@ -1712,7 +1712,11 @@ def _find_transaction_file(
             sess_match = bool(session_id and tx_data.get("session_id") == session_id)
             if not (cc_match or sess_match):
                 continue
-            rank = (cc_match, tx_data.get("status") == "open", tx_data.get("updated_at") or 0.0)
+            # Most recent first, then open: one Claude Code session runs one transaction at a time, so a newer closed file
+            # means an older open one was abandoned (left open across a compaction); open-first returned a 45-day-old
+            # transaction whenever the current one was closed (2026-11-13). Open still breaks a tie, as for files with
+            # no updated_at.
+            rank = (cc_match, tx_data.get("updated_at") or 0.0, tx_data.get("status") == "open")
             if best_rank is None or rank > best_rank:
                 best_rank, best_file = rank, tx_file
     except Exception:
@@ -1967,6 +1971,7 @@ def _try_increment_tool_count(
             "transaction_id": tx.get("transaction_id"),
             "preflight_timestamp": tx.get("preflight_timestamp"),
             "db_path": tx_path.parent / "sessions" / "sessions.db",
+            "goal_ids": tx.get("goal_ids"),
         }
         avg = tx.get("avg_turns", 0)
 
@@ -5751,12 +5756,14 @@ def _goalless_from_counted_tx() -> str:
             f"goalless check could not run ({type(e).__name__}: {e}) - whether this transaction has a goal is UNKNOWN"
         )
     try:
-        return _check_goalless_work(conn.cursor(), "", tx["transaction_id"], tx.get("preflight_timestamp"))
+        return _check_goalless_work(
+            conn.cursor(), "", tx["transaction_id"], tx.get("preflight_timestamp"), goal_ids=tx.get("goal_ids")
+        )
     finally:
         conn.close()
 
 
-def _check_goalless_work(cursor, session_id: str, transaction_id, preflight_timestamp) -> str:
+def _check_goalless_work(cursor, session_id: str, transaction_id, preflight_timestamp, goal_ids=None) -> str:
     """Nudge when THIS transaction has done >=5 gated tool calls with no goal in play.
 
     "Gated" means the calls Sentinel sees: Bash and Edit|Write. Read, Grep and
@@ -5764,10 +5771,11 @@ def _check_goalless_work(cursor, session_id: str, transaction_id, preflight_time
     threshold is later for a practice that reads with those tools than for one
     that reads through Bash - the same number means different volumes of work.
 
-    "A goal in play" means any of: a goal created in this transaction
-    (goals.transaction_id), a task created or completed since PREFLIGHT (the
-    usual way work proceeds on an older goal), or a finding logged in this
-    transaction against a goal.
+    "A goal in play" means any of: a goal PREFLIGHT named in ``goal_ids`` (a goal
+    carried across transactions; checked open when PREFLIGHT accepted it), a goal
+    created in this transaction (goals.transaction_id), a task created or
+    completed since PREFLIGHT, or a finding logged in this transaction against a
+    goal.
 
     It used to ask whether the whole PROJECT had zero in_progress goals. Any
     practice with live multi-week work always has one, so the nudge was off
@@ -5777,7 +5785,7 @@ def _check_goalless_work(cursor, session_id: str, transaction_id, preflight_time
     """
     try:
         count = _tool_call_count or 0
-        if count < 5 or not transaction_id:
+        if count < 5 or not transaction_id or goal_ids:
             return ""
 
         cursor.execute("SELECT 1 FROM goals WHERE transaction_id = ? LIMIT 1", (transaction_id,))
@@ -5813,7 +5821,8 @@ def _check_goalless_work(cursor, session_id: str, transaction_id, preflight_time
             )
         return (
             f"DISCIPLINE: {count} gated tool calls in this transaction and no goal in play. "
-            f"Consider: empirica goals-create --objective '...' or goals-add-task on the goal you are working."
+            f"Consider: empirica goals-create --objective '...' or goals-add-task on the goal you are working "
+            f"(next time, name a carried goal in PREFLIGHT's goal_ids)."
         )
     except Exception as e:
         # Advisory only, so never fatal - but a failing check must not read as
@@ -5882,6 +5891,10 @@ def _discipline_answer(tool_name: str, tool_input) -> tuple | None:
         )
         if answer is not None:
             _decision_rule = "discipline-budget"
+            # This branch runs only when the gate found no open transaction. The record's transaction fields came from
+            # _peek_work_type's lookup, which can fall back to another pane's stale file: on this practice every such row
+            # named a transaction left open 45 days earlier, tx_status "open" (2026-11-13, unknown 63877174).
+            _tx_meta.update(transaction_id=None, tx_status="none")
         return answer
     except Exception:
         return None

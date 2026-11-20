@@ -162,6 +162,9 @@ def _run_bootstrap(session_id: str, env: dict) -> tuple:
             "findings": (source.get("findings") or [])[:5],
             "unknowns": (source.get("unknowns") or [])[:5],
             "due": source.get("due") or [],
+            # The whole contract, rendered under a token budget by lib/context_render (goal 2e686e79): the three lists
+            # above are kept for the context budget and older callers.
+            "breadcrumbs": source,
         }
         return bootstrap_data, project_context
     except json.JSONDecodeError:
@@ -675,6 +678,9 @@ def _heal_mesh_metadata_at_init(project_root: str | None) -> None:
         cfg = yaml.safe_load(project_yaml.read_text()) or {}
         if not isinstance(cfg, dict):
             return
+        from empirica.utils.yaml_cache import with_person_overlay
+
+        cfg = with_person_overlay(cfg, project_yaml.parent)  # a seat in project.local.yaml (shared repo) counts
         # Idempotent fast-path: already seated → no import, no network.
         if cfg.get("canonical_seat"):
             return
@@ -807,7 +813,7 @@ def format_context(ctx: dict) -> str:
         return "  (No context available)"
 
     parts = []
-
+    due_head: list[str] = []
     if ctx.get("due"):
         try:  # the hook's interpreter can carry an older core than the `empirica` on PATH that produced ctx
             from empirica.data.due import ANSWERS, due_lines
@@ -823,6 +829,15 @@ def format_context(ctx: dict) -> str:
                 if isinstance(i, dict)
             ]
         parts.append("")
+        due_head = list(parts)
+
+    if isinstance(ctx.get("breadcrumbs"), dict):
+        try:  # one renderer for the whole bootstrap contract, under a token budget (goal 2e686e79)
+            from context_render import render
+
+            return render(ctx["breadcrumbs"], head=due_head)
+        except Exception:
+            pass  # an older lib beside a newer hook: the short form below still reads
 
     if ctx.get("goals"):
         parts.append("**Active Goals:**")
@@ -1732,6 +1747,38 @@ EOF
 """
 
 
+def _write_codex_pane_record(project_root, session_id: str | None) -> bool:
+    """For a codex session in a tmux pane, record which session this pane runs, so the cockpit resumes this pane's own
+    session (``ecodex resume <id>``) rather than the newest in the directory (``resume --last``), which is wrong when two
+    panes share a practice. The reader is ``resume_ids.codex_session_id``; ecodex vendors this hook, so the write lives
+    here (ecodex prop_bwg6k4wwprgc3jwtnq4fvw443a). Best effort: never fails the hook. Returns True when written."""
+    try:
+        if _harness() != "codex" or not session_id:
+            return False
+        pane = os.environ.get("TMUX_PANE") or ""
+        if not re.fullmatch(r"%\d{1,6}", pane):
+            return False
+        started = subprocess.run(
+            ["tmux", "display", "-p", "#{start_time}"], capture_output=True, text=True, timeout=2
+        ).stdout.strip()
+        if not started:
+            return False
+        record = {
+            "harness": "codex",
+            "session_id": session_id,
+            "project_path": str(project_root),
+            "tmux_server_start": started,  # pane numbers restart with each tmux server: this ties the record to one
+        }
+        target = Path.home() / ".empirica" / "pane_sessions" / f"{pane[1:]}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(record), encoding="utf-8")
+        tmp.replace(target)  # atomic: the launcher may read it while a pane starts
+        return True
+    except Exception:
+        return False
+
+
 def _harness() -> str:
     """Which harness is hosting this hook.
 
@@ -1920,6 +1967,7 @@ def main():
             )
 
     os.chdir(project_root)
+    _write_codex_pane_record(project_root, claude_session_id)  # codex panes only; resumes the pane's own session
     ai_id = _resolve_ai_id_for_session(project_root)
 
     # Housekeeping
