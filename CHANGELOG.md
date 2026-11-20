@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Highlights
+- Folded ecodex up to upstream codex **rust-v0.170.0** and re-vendored empirica core hooks to **1.17.15**.
+- Resolved twelve shipped-dependency advisories: five fixed by in-range bumps (quinn, zip, libz-sys), six non-reachable `hickory-proto` DNSSEC advisories accepted, four stale accepts pruned.
+
+### Changed
+- **Folded upstream codex `rust-v0.170.0`.** The fork is re-based on the latest stable upstream tag. ecodex's divergences are preserved where upstream has no equivalent — the `ArcSwap` provider hot-swap, the `writable_git` sandbox knob, the monitor tool, plugin writable roots, and the `emit_display` turn-item path — while per-tool MCP session approval, which upstream now does itself, follows upstream. `codex-rs/UPSTREAM_SYNC_TAG` moves to `rust-v0.170.0` so release CI fetches the matching prebuilt code-mode host.
+- **Empirica hooks re-vendored from core 1.17.15** (`5190f7f231c1`; CI's empirica-core pin moves to it; five vendored files change). Beyond the 1.16.0 → 1.17.x work this carries the sentinel gate's reader fix — display-only sqlite meta commands (`.timer`, `.header`, `.stats`, …) before a `SELECT` no longer gate as writes — and a null-safe local-visibility query in session-init.
+
+### Security
+- **Five shipped advisories fixed by in-range dependency bumps** (no manifest change, same locked major): `quinn-proto` 0.11.18 → 0.11.19 (RUSTSEC-2026-0523, -0524), `quinn-udp` 0.5.14 → 0.5.16 and 0.6.1 → 0.6.3 (RUSTSEC-2026-0538), `zip` 9.0.0 → 9.0.5 (RUSTSEC-2026-0548), and `libz-sys` 1.1.29 → 1.1.33 (RUSTSEC-2026-0544, a zlib heap overflow in the `gz*write` path ecodex does not use).
+- **Six `hickory-proto` 0.25.2 DNSSEC advisories accepted** (RUSTSEC-2026-0530, -0531, -0532, -0549, -0550, -0551: NSEC/NSEC3 records and off-class records accepted in a nonexistence proof without validation), all fixed only in 0.26.0-beta.1. The crate reaches the binary through `hickory-resolver` 0.25 and upstream's `rama-dns` stack, which no manifest pins, so `cargo update` cannot move it without a 0.26 major bump that is upstream's call. ecodex performs no DNSSEC validation — it is not a validating resolver, and transport security rests on TLS certificate validation, not a DNSSEC nonexistence proof. The four prior hickory accepts (RUSTSEC-2026-0487, -0489, -0490, -0491) are pruned; the advisory database no longer reports them.
+
 ## [0.167.2] - 2026-11-12
 
 ### Fixed
