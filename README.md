@@ -30,21 +30,17 @@ Alpha. **`main` tracks a stable upstream codex tag**, the one recorded in `codex
 
 `main` is the canonical branch and carries all active work. Upstream `openai/codex` is tracked through the `upstream` remote; stable upstream tags are merged in periodically. The CLI is daily-driven by the ecodex team.
 
-## What's New in 0.167.2
+## What's New in 0.170.0
 
-- Plugin writable roots survive a permission-profile change
-- Four `hickory-proto` 0.25.2 advisories accepted
-- Empirica hooks re-vendored from core 1.16.0
-- The installer sets up `empirica[api]`
-- The forecast is re-made at 0.167.1
-- CI runs the owned-crate clippy gate
+- Folded ecodex up to upstream codex **rust-v0.170.0** and re-vendored empirica core hooks to **1.17.15**.
+- Resolved twelve shipped-dependency advisories: five fixed by in-range bumps (quinn, zip, libz-sys), six non-reachable `hickory-proto` DNSSEC advisories accepted, four stale accepts pruned.
 
-Plus 1 more entries in the [CHANGELOG](CHANGELOG.md).
+All 4 entries for this release are in the [CHANGELOG](CHANGELOG.md).
 
 **Earlier releases**
 
+- **0.167.2** — Plugin writable roots survive a permission-profile change
 - **0.167.1** — The release binary compiles again
-- **0.167.0** — The plugin records when codex asks a person to approve a call
 
 ## What's Coming
 

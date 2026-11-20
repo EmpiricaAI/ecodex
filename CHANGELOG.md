@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.170.0] - 2026-11-20
+
 ### Highlights
 - Folded ecodex up to upstream codex **rust-v0.170.0** and re-vendored empirica core hooks to **1.17.15**.
 - Resolved twelve shipped-dependency advisories: five fixed by in-range bumps (quinn, zip, libz-sys), six non-reachable `hickory-proto` DNSSEC advisories accepted, four stale accepts pruned.
@@ -1183,7 +1185,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.2...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.0...HEAD
+[0.170.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.0...v0.170.0
 [0.167.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.1...v0.167.2
 [0.167.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...v0.167.1
 [0.167.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...v0.167.0
