@@ -1,0 +1,93 @@
+# Diagnostic, dispatch-only: runs UPSTREAM openai/codex's core::all integration
+# suite at a chosen tag in the SAME runner environment ecodex's nightly uses, so
+# the two failure sets can be diffed. ecodex's nightly core::all is informational
+# because codex-core has no green baseline here; this job supplies the baseline.
+# A failing test in BOTH sets is upstream/environmental (the runner cannot host
+# sandbox/approval/network scenarios); a failure only in ecodex's set is
+# ecodex-introduced (expected: the curated-catalog scenario-snapshot drift).
+# Never runs automatically. See goals d74aaf59 / 6be656eb.
+name: upstream-core-baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: openai/codex tag or ref to baseline (default = ecodex's UPSTREAM_SYNC_TAG)
+        required: false
+        default: rust-v0.170.0
+
+permissions:
+  contents: read
+
+jobs:
+  upstream-core-all:
+    name: upstream openai/codex core::all baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      RUST_MIN_STACK: "8388608"
+    steps:
+      - name: Checkout upstream openai/codex at the baseline ref
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: openai/codex
+          ref: ${{ inputs.upstream_ref }}
+          persist-credentials: false
+
+      - name: Free runner disk
+        working-directory: .
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codex-rs
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest
+
+      - name: Build the binaries the tests look up
+        run: |
+          set -euo pipefail
+          cargo build -p codex-exec -p codex-linux-sandbox -p codex-rmcp-client -p codex-cli --bins
+          # Upstream's binary is `codex`; the tests also look up codex-code-mode-host.
+          curl -fsSL "https://github.com/openai/codex/releases/download/${{ inputs.upstream_ref }}/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C target/debug
+          mv target/debug/codex-code-mode-host-x86_64-unknown-linux-musl target/debug/codex-code-mode-host
+          test -x target/debug/codex-code-mode-host
+          df -h /
+
+      - name: upstream core::all (--no-fail-fast)
+        run: |
+          set +e
+          cargo nextest run -p codex-core --test all --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/upstream-core-all.log"
+          status=${PIPESTATUS[0]}
+          summary="$(grep -E '^ +Summary \[' "$RUNNER_TEMP/upstream-core-all.log" | tail -1 | sed 's/^ *//')"
+          echo "upstream ${{ inputs.upstream_ref }} core::all: ${summary:-no summary line}" >> "$GITHUB_STEP_SUMMARY"
+          # Distinct failing test names (nextest prints retried failures as 'TRY N FAIL'):
+          grep -aE "FAIL \[|TRY [0-9]+ FAIL" "$RUNNER_TEMP/upstream-core-all.log" \
+            | grep -aoE "codex-core::all +[a-z0-9_:]+" | awk '{print $2}' | sort -u \
+            > "$RUNNER_TEMP/upstream-core-fails.txt"
+          echo "distinct failing: $(wc -l < "$RUNNER_TEMP/upstream-core-fails.txt")" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload upstream failure list
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-core-fails
+          path: ${{ runner.temp }}/upstream-core-fails.txt
+          if-no-files-found: warn
