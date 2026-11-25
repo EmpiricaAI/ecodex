@@ -118,9 +118,14 @@ items:
     evidence: measured
     basis: Measured on 0.167.1. The Linux builds take about an hour, the macOS builds about three (2 h 55 on the Intel runner, 3 h 05 on Apple Silicon), under the six-hour job limit the workflow now sets. The risk is GitHub's macOS arm64 pool, which refused the job twice in one day before a third attempt was picked up; the Intel pool was never short.
     falsifier: A release tag whose GitHub release still lacks one of the four tarballs six hours after the tag was pushed.
-    horizon: "0.168.0"
+    horizon: "0.171.0"
     steered: false
     status: predicted
+    revisions:
+      - "on": "2026-11-25"
+        from: 0.7
+        to: 0.7
+        reason: There was no 0.168.0 release, so the horizon as written was never tested. The one release since the forecast, 0.170.0, had its two Linux tarballs 1 h 15 after the tag and its two macOS tarballs 2 h 45 and 3 h 15 after it, inside six hours. One release is a thin record for a claim about every release, so the horizon moves to 0.171.0 and the confidence stays where the measurement put it.
 
   - id: upstream-within-a-week
     title: Upstream stables folded in within a week
@@ -131,7 +136,9 @@ items:
     falsifier: An upstream rust-v stable tag published after this forecast with no matching ecodex release seven days later.
     horizon: "0.168.0"
     steered: false
-    status: predicted
+    status: dropped
+    resolved_in: "0.170.0"
+    reason: Graded at 0.170.0. The falsifier tripped. Upstream tagged rust-v0.168.0 on 12 November and ecodex never released 0.168.0, nor 0.169.0 or 0.169.1; it folded straight to rust-v0.170.0 (tagged 18 November) and released 0.170.0 on 20 November, two and a half days later. The latest stable was matched within the week, but the intermediate ones were skipped, which is what the prediction ruled out. The basis was true when written, so this is a bet that missed, not a wrong premise. Skipping intermediate stables is now the working practice, so a successor should predict lag behind the latest stable rather than a release for every tag.
 
   - id: decision-model-eval
     title: A local decision model is scored against the Sentinel
@@ -142,4 +149,6 @@ items:
     falsifier: At the 0.169.0 tag, no script or page in the repository runs a decision model over recorded gate decisions and reports agreement per class.
     horizon: "0.169.0"
     steered: true
-    status: predicted
+    status: dropped
+    resolved_in: "0.170.0"
+    reason: Graded at 0.170.0. There was no 0.169.0 tag, and at the 0.170.0 tag no script or page in the repository runs a decision model over recorded gate decisions. The release cycle went to the upstream fold-in, its security triage and its test debt, and the evaluation was not started. The basis still holds (the recorded gate decisions exist), so the work stays planned, but without a horizon until it is started.
