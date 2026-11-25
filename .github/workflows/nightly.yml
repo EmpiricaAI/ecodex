@@ -121,13 +121,21 @@ jobs:
       #   slash_daybreak_offers_an_application_when_unavailable  ecodex reports
       #     availability as undeterminable although the test sets a catalog; not
       #     yet debugged.
+      # Two more are upstream's own at rust-v0.172.0, not ecodex's: on a clean
+      # upstream checkout with the same 8 MiB RUST_MIN_STACK they fail the same
+      # way (opens_agent_transcript_beside_parent_and_returns_to_chooser overflows
+      # its stack; reconnect_daemon_command_center_after_socket_replacement_
+      # without_a_conversation overflows here and fails a snapshot locally).
+      # Drop them at the next fold where upstream's copy passes.
       - name: codex-tui suite
         if: ${{ !cancelled() }}
         run: >-
           cargo nextest run -p codex-tui --no-fail-fast -E
           'not (test(=chatwidget::tests::bedrock_catalog_tests::bedrock_astra_model_and_reasoning_pickers)
           | test(=chatwidget::tests::slash_commands::slash_daybreak_offers_an_application_when_unavailable)
-          | test(=chatwidget::tests::slash_commands::slash_daybreak_custom_provider_requires_capability))'
+          | test(=chatwidget::tests::slash_commands::slash_daybreak_custom_provider_requires_capability)
+          | test(=app::sidebar_subagents::status::tests::opens_agent_transcript_beside_parent_and_returns_to_chooser)
+          | test(=app::tests::navigation_reconnect::reconnect_daemon_command_center_after_socket_replacement_without_a_conversation))'
 
       - name: Disk after the suites
         if: ${{ always() }}
