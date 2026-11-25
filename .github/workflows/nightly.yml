@@ -79,6 +79,19 @@ jobs:
           test -x target/debug/codex-code-mode-host
           df -h /
 
+      # ecodex's own behaviour inside upstream crates, gating. Each filter names
+      # tests for one gap ecodex keeps on top of upstream; an upstream fold can
+      # silently drop a gap while every compile and clippy gate stays green, and
+      # 0.170.0 shipped two such regressions (plugin writable roots on a
+      # mid-session profile change, writable_git in linked worktrees) whose
+      # tests failed with no job running them. Add a filter when a gap gets
+      # tests; a filter matching nothing fails the step.
+      - name: ecodex gap tests in upstream crates (gating)
+        run: |
+          set -euo pipefail
+          cargo nextest run -p codex-core --lib --no-tests=fail -E 'test(plugin_writable_roots) | test(ntfy_listener)'
+          cargo nextest run -p codex-protocol --no-tests=fail -E 'test(writable_git)'
+
       # Informational until triaged (David, 2026-10-29): it runs and its
       # failures show in the run, but it does not fail the workflow. On
       # 2026-10-27 it failed 154 of 2558 here (78 locally): drifted scenario
