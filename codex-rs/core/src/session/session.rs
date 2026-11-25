@@ -522,6 +522,26 @@ impl SessionConfiguration {
         }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
+            // ecodex: a profile chosen mid-session is projected from config,
+            // which knows nothing of the writable roots the enabled plugins
+            // declared at startup. Re-apply them, or a plugin's cross-cwd state
+            // (empirica's `~/.empirica`) is unwritable for the rest of the
+            // session. Startup does the same in `Session::new`.
+            let permission_profile = if next_configuration.plugin_writable_roots.is_empty() {
+                permission_profile
+            } else {
+                let file_system = permission_profile
+                    .file_system_sandbox_policy()
+                    .with_additional_writable_roots(
+                        next_configuration.legacy_fallback_cwd.as_path(),
+                        &next_configuration.plugin_writable_roots,
+                    );
+                PermissionProfile::from_runtime_permissions_with_enforcement(
+                    permission_profile.enforcement(),
+                    &file_system,
+                    permission_profile.network_sandbox_policy(),
+                )
+            };
             let snapshot = match updates.active_permission_profile.clone() {
                 Some(active) => PermissionProfileSnapshot::active_with_profile_workspace_roots(
                     permission_profile,
