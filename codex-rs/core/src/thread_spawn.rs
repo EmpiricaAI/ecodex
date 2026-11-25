@@ -198,11 +198,13 @@ pub(crate) async fn prepare(
             config,
             source: spawn_source,
             options: SpawnAgentOptions {
+                request_country: step_context.settings.request_country().clone(),
                 fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.to_string()),
                 fork_mode,
                 parent_thread_id: Some(session.thread_id),
                 parent_turn_id: Some(turn.sub_id.clone()),
                 root_turn_id: turn.turn_metadata_state.root_turn_id(),
+                inherited_client_metadata: turn.turn_metadata_state.client_metadata_for_child(),
                 turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
                 environments: Some(step_context.inherited_environments.clone()),
                 disabled_plugin_ids: Some(turn.disabled_plugin_ids.clone()),

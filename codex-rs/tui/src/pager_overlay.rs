@@ -48,6 +48,14 @@ pub(crate) enum Overlay {
 }
 
 impl Overlay {
+    /// Use for input routing. Only the coding transcript should receive live thread history.
+    pub(crate) fn input_transcript(&self) -> Option<&TranscriptOverlay> {
+        match self {
+            Self::Transcript(view) => Some(view),
+            _ => None,
+        }
+    }
+
     pub(crate) fn new_transcript(
         cells: Vec<Arc<dyn HistoryCell>>,
         keymap: PagerKeymap,
@@ -149,8 +157,10 @@ fn render_navigation_hints(area: Rect, buf: &mut Buffer, keymap: &PagerKeymap) {
         ("jump_top", &keymap.jump_top),
         ("jump_bottom", &keymap.jump_bottom),
     ];
-    let hints = actions
-        .chunks_exact(2)
+    const ACTIONS_PER_HINT: usize = 2;
+    let (action_groups, _) = actions.as_chunks::<ACTIONS_PER_HINT>();
+    let hints = action_groups
+        .iter()
         .zip(["to scroll", "to page", "to jump"])
         .map(|(actions, description)| {
             (

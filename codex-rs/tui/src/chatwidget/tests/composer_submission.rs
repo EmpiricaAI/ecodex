@@ -629,6 +629,9 @@ async fn submission_preserves_text_elements_and_local_images() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -642,7 +645,7 @@ async fn submission_preserves_text_elements_and_local_images() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -739,6 +742,9 @@ async fn submission_includes_configured_active_permission_profile() {
     };
     let expected_active_permission_profile = ActivePermissionProfile::new("custom");
     let configured = crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -752,7 +758,7 @@ async fn submission_includes_configured_active_permission_profile() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: expected_permission_profile,
         active_permission_profile: Some(expected_active_permission_profile.clone()),
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -795,6 +801,9 @@ async fn submission_omits_active_permission_profile_for_legacy_snapshot() {
         file_system: ManagedFileSystemPermissions::Unrestricted,
     };
     let configured = crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -808,7 +817,7 @@ async fn submission_omits_active_permission_profile_for_legacy_snapshot() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: expected_permission_profile,
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -841,6 +850,9 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -854,7 +866,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -942,6 +954,9 @@ async fn enter_with_only_remote_images_submits_user_turn() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -955,7 +970,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -1012,6 +1027,9 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -1025,7 +1043,7 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -1054,6 +1072,9 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -1067,7 +1088,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -1096,6 +1117,9 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -1109,7 +1133,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -1141,6 +1165,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -1154,7 +1181,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -1382,7 +1409,7 @@ async fn blocked_image_restore_with_remote_images_keeps_local_placeholder_mappin
 }
 
 #[tokio::test]
-async fn startup_draft_handoff_preserves_literal_and_shell_bang() {
+async fn draft_handoffs_preserve_literal_and_shell_bang() {
     for text in [
         "!echo literal",
         "!echo literal\nsecond line",
@@ -1400,6 +1427,13 @@ async fn startup_draft_handoff_preserves_literal_and_shell_bang() {
         chat.thread_id = Some(ThreadId::new());
         chat.restore_startup_draft(draft.clone());
         assert_eq!(chat.bottom_pane.composer_draft_snapshot(), draft);
+        let input = chat.capture_thread_input_state();
+        chat.restore_thread_input_state(
+            input,
+            ThreadInputStateRestoreMode {
+                preserve_in_flight_turn: false,
+            },
+        );
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert_hidden_shell_payload_is_literal(ops.try_recv(), text.trim().to_string());
     }
@@ -1413,6 +1447,13 @@ async fn startup_draft_handoff_preserves_literal_and_shell_bang() {
     let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.restore_startup_draft(draft);
+    let input = chat.capture_thread_input_state();
+    chat.restore_thread_input_state(
+        input,
+        ThreadInputStateRestoreMode {
+            preserve_in_flight_turn: false,
+        },
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     assert_matches!(ops.try_recv(), Ok(Op::RunUserShellCommand { command }) if command == "pwd");
 }
@@ -1431,6 +1472,12 @@ async fn startup_draft_handoff_preserves_cursor_and_large_paste() {
     chat.restore_startup_draft(startup_draft.clone());
 
     assert_eq!(chat.bottom_pane.composer_draft_snapshot(), startup_draft);
+    chat.handle_key_event(KeyEvent::from(KeyCode::F(7)));
+    assert!(chat.bottom_pane.composer_is_empty());
+    chat.handle_key_event(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+    let mut restored = chat.bottom_pane.composer_draft_snapshot();
+    restored.last_composer_activity_at = startup_draft.last_composer_activity_at;
+    assert_eq!(restored, startup_draft);
 }
 
 #[tokio::test]
@@ -1456,6 +1503,8 @@ async fn startup_draft_handoff_merges_existing_prompt_images_and_large_pastes() 
     );
     let initial_paste = "y".repeat(/*n*/ 1_001);
     chat.bottom_pane.handle_paste(initial_paste.clone());
+    chat.bottom_pane
+        .set_composer_cursor(image_placeholder.len() + 1);
     let existing_draft = chat.bottom_pane.composer_draft_snapshot();
     let existing_placeholder = existing_draft.pending_pastes[0].0.clone();
 
@@ -1485,6 +1534,15 @@ async fn startup_draft_handoff_merges_existing_prompt_images_and_large_pastes() 
             }],
         )
     );
+    let merged = chat.bottom_pane.composer_draft_snapshot();
+    chat.handle_key_event(KeyEvent::from(KeyCode::F(7)));
+    let mut undone = chat.bottom_pane.composer_draft_snapshot();
+    undone.last_composer_activity_at = existing_draft.last_composer_activity_at;
+    assert_eq!(undone, existing_draft);
+    chat.handle_key_event(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+    let mut redone = chat.bottom_pane.composer_draft_snapshot();
+    redone.last_composer_activity_at = merged.last_composer_activity_at;
+    assert_eq!(redone, merged);
 }
 
 #[tokio::test]
@@ -2744,7 +2802,26 @@ async fn reconnect_resumes_unsent_input_and_reconciles_confirmed_submissions() {
         let mut input = chat.capture_thread_input_state();
         let saved_source = input.as_ref().unwrap().safety_buffering_source;
         assert_eq!(saved_source, UserMessageSource::Prompt);
+        if !pending_start {
+            let mut running_input = input.clone().unwrap();
+            running_input.reconcile_confirmed_messages(std::slice::from_ref(&client_id));
+            let (mut restored, _rx, mut ops) =
+                make_chatwidget_manual(/*model_override*/ None).await;
+            restored.restore_thread_input_state(
+                Some(running_input),
+                ThreadInputStateRestoreMode {
+                    preserve_in_flight_turn: true,
+                },
+            );
+            assert!(restored.turn_lifecycle.agent_turn_running);
+            assert!(restored.input_queue.pending_steers.is_empty());
+            assert!(!restored.input_queue.submit_pending_steers_after_interrupt);
+            restored.on_interrupted_turn(TurnAbortReason::Interrupted);
+            assert_no_submit_op(&mut ops);
+        }
         // Missing history and unrelated receipts never authorize resubmitting uncertain input.
+        // Each pass restores state captured from the prior pass, so an exact receipt discovered
+        // on a later resume still releases the ordinary follow-up exactly once.
         for ids in [
             vec![],
             vec!["different-submission".into()],
@@ -3206,6 +3283,46 @@ fn image_preparation_keeps_input_responsive_and_preserves_pending_input() {
                 assert_no_submit_op(&mut ops);
                 assert!(chat.pending_image_submission.is_none());
             });
+    }
+}
+
+#[tokio::test]
+async fn archived_view_preserves_pending_steer_when_interrupt_arrives() {
+    let (mut chat, _events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+    let mut steer = pending_steer("pending steer");
+    steer.admitted_turn_id = Some("turn-1".into());
+    chat.input_queue.pending_steers.push_back(steer.clone());
+    chat.input_queue.submit_pending_steers_after_interrupt = true;
+    chat.restore_user_message_to_composer("retained draft".into());
+
+    chat.show_read_only_thread(ReadOnlyThread::Archived);
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    let saved = chat.capture_thread_input_state().unwrap();
+    assert_eq!(saved.pending_steers, VecDeque::from([steer]));
+    assert_eq!(chat.bottom_pane.composer_text(), "retained draft");
+    assert_no_submit_op(&mut ops);
+}
+
+#[tokio::test]
+async fn archived_view_preserves_initial_prompt_and_dismisses_search() {
+    for vim in [false, true] {
+        let (mut chat, _events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.initial_user_message = Some("CLI prompt".into());
+        chat.restore_user_message_to_composer("typed draft".into());
+        chat.bottom_pane.set_vim_enabled(vim);
+        chat.handle_key_event(if vim {
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)
+        } else {
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)
+        });
+        assert!(!chat.no_modal_or_popup_active());
+        chat.show_read_only_thread(ReadOnlyThread::Archived);
+        chat.submit_initial_user_message_if_pending();
+        assert!(chat.no_modal_or_popup_active());
+        assert_eq!(chat.composer_text_with_pending(), "CLI prompt\ntyped draft");
+        assert_no_submit_op(&mut ops);
     }
 }
 

@@ -30,6 +30,8 @@ pub use feature_configs::GuardianV2ReviewScopeConfigToml;
 pub use feature_configs::GuardianV2TranscriptConfigToml;
 pub use feature_configs::GuardianV2TranscriptSource;
 pub use feature_configs::GuardianV3ConfigToml;
+pub use feature_configs::GuardianV3HousekeeperConfigToml;
+pub use feature_configs::GuardianV3ReviewerConfigToml;
 pub use feature_configs::MultiAgentV2ConfigToml;
 pub use feature_configs::NetworkProxyConfigToml;
 pub use feature_configs::NetworkProxyDomainPermissionToml;
@@ -147,6 +149,8 @@ pub enum Feature {
     UntrustedAsToolOutput,
     /// Record model-attempted tool calls in internal Responses metadata.
     ExecutedToolCallMetadata,
+    /// Record executed tool calls and attach eligible connector results to their metadata.
+    ConnectorToolResultPassthrough,
     /// Enable JavaScript code mode backed by the standalone host process.
     CodeMode,
     /// Expose ranked tool discovery inside JavaScript code mode.
@@ -155,12 +159,14 @@ pub enum Feature {
     CodeModeBufferedExec,
     /// Run JavaScript code mode in the standalone host process.
     CodeModeHost,
-    /// Use gRPC over stdio for the process-owned code-mode host.
+    /// Removed compatibility flag. The local code-mode host always uses gRPC over stdio.
     CodeModeHostGrpc,
     /// Truncate output in the process-owned code-mode host before sending it to Core.
     CodeModeHostOutputTruncation,
     /// Establish the code-mode host connection during session startup.
     CodeModePrewarm,
+    /// Warm persisted thread history before the first generation on cold resume.
+    RestoredHistoryPrewarm,
     /// Terminate active code mode cells when their turn is interrupted.
     CodeModeInterrupt,
     /// Removed compatibility flag for Code Mode tool description ordering.
@@ -201,8 +207,7 @@ pub enum Feature {
     StandaloneWebSearch,
     /// Let the host authorize MCP search independently of native search through per-turn policy.
     HostedSearchPolicy,
-    /// Use the legacy Landlock Linux sandbox fallback instead of the default
-    /// bubblewrap pipeline.
+    /// Request the legacy Landlock mode of the Linux sandbox.
     UseLegacyLandlock,
     /// Experimental shell snapshotting.
     ShellSnapshot,
@@ -214,6 +219,8 @@ pub enum Feature {
     ShellSnapshotV2,
     /// Allow turns to start while selected executors are still starting.
     DeferredExecutor,
+    /// Describe each selected environment's filesystem and permissions separately.
+    PerEnvironmentContext,
     /// Use the current working directory for turn diff display paths.
     CwdRelativeTurnDiffs,
     /// Enable runtime metrics snapshots via a manual reader.
@@ -231,6 +238,8 @@ pub enum Feature {
     LocalThreadStoreSharedCompression,
     /// Migrate legacy local rollout files to paginated history in the background.
     BackgroundPaginatedRolloutMigration,
+    /// Enroll paginated local threads in canonical realtime frame history.
+    RealtimeFramesLocal,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
@@ -278,6 +287,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Use Apps usage instructions from the selected model's catalog entry.
+    CatalogAppsInstructions,
     /// Route first-party ChatGPT requests through PSP.
     Psp,
     /// Enable MCP apps.
@@ -288,6 +299,8 @@ pub enum Feature {
     McpToolListChanged,
     /// Discover and share eligible local stdio connections across chats.
     McpConnectionSharing,
+    /// Use the app server's fixed launch directories for shared REPL servers.
+    McpSharedReplCwd,
     /// Defer optional stdio server startup in regular chats with a warm tool catalog.
     McpLazyStdioStartup,
     /// Keep same-named HTTP servers discovered on different executors separate.
@@ -400,8 +413,12 @@ pub enum Feature {
     ImageGenerationAnimation,
     /// Omit inline image and audio content from app-server item notifications.
     OmitAppServerNotificationMedia,
+    /// Allow this host's attachment store to prepare fresh tool audio before persistence.
+    FileBackedToolAudio,
     /// Tell the model when a prompt image was resized and include its dimensions.
     ImageResizeNotice,
+    /// Normalize prompt images with the reviewed image sanitizer.
+    SafeImageDecoder,
     /// Apply one shared pixel and token budget to every image, regardless of legacy detail hints.
     UnifiedImageBudget,
     /// Removed compatibility flag for always-on centralized image preparation.
@@ -445,6 +462,8 @@ pub enum Feature {
     GuardianRootHandoffContext,
     /// Review state-changing MAv2 calls and preserve native calls in Guardian history.
     GuardianNativeMultiAgentHistory,
+    /// Include the verified enclosing invocation in nested Guardian approvals.
+    GuardianNestedApprovalContext,
     /// Include completed node_repl or cua_repl Code Mode responses in Guardian reviews.
     GuardianEnhancedNodeReplTranscripts,
     /// Include completed node_repl or cua_repl Code Mode response images in Guardian reviews.
@@ -475,6 +494,8 @@ pub enum Feature {
     ReasoningEffortOverride,
     /// Add current-time reminders to model-visible context.
     CurrentTimeReminder,
+    /// Use UTC for the date in model-visible environment context.
+    UtcEnvironmentDate,
     /// Report failed clock reads to the model without failing the turn.
     NonfatalClockReadErrors,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
@@ -753,6 +774,13 @@ impl Features {
                     );
                     continue;
                 }
+                "code_mode_host_grpc" => {
+                    self.record_legacy_usage_force(
+                        "features.code_mode_host_grpc",
+                        Feature::CodeModeHostGrpc,
+                    );
+                    continue;
+                }
                 "transcript_v2" => {
                     self.record_legacy_usage_force("features.transcript_v2", Feature::TranscriptV2);
                     continue;
@@ -875,6 +903,10 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
         Feature::GuardianThreadContext => (
             "`[features.guardianv2].thread_context` is deprecated and ignored.".to_string(),
             Some("Thread-owned Guardian context is always enabled. Remove `thread_context` from [features.guardianv2] in config.toml, including profile overrides.".to_string()),
+        ),
+        Feature::CodeModeHostGrpc => (
+            "`[features].code_mode_host_grpc` is deprecated and ignored.".to_string(),
+            Some("The local code-mode host always uses gRPC over stdio. Remove this setting from your configuration.".to_string()),
         ),
         Feature::TranscriptV2 => (
             "`[features].transcript_v2` is deprecated and ignored.".to_string(),
@@ -1150,8 +1182,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TuiWorkspace,
         key: "tui_workspace",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::TuiMultiBackend,
@@ -1162,7 +1194,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TuiExtensionsStatusLine,
         key: "tui_extensions_statusline",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Custom status line",
+            menu_description: "Restart the TUI, then use /statusline.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -1273,6 +1309,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::PerEnvironmentContext,
+        key: "per_environment_context",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::CwdRelativeTurnDiffs,
         key: "cwd_relative_turn_diffs",
         stage: Stage::UnderDevelopment,
@@ -1299,6 +1341,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ExecutedToolCallMetadata,
         key: "executed_tool_call_metadata",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ConnectorToolResultPassthrough,
+        key: "connector_tool_result_passthrough",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -1335,8 +1383,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodeModeHostGrpc,
         key: "code_mode_host_grpc",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::CodeModeHostOutputTruncation,
@@ -1347,6 +1395,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodeModePrewarm,
         key: "code_mode_prewarm",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RestoredHistoryPrewarm,
+        key: "restored_history_prewarm",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -1479,6 +1533,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::BackgroundPaginatedRolloutMigration,
         key: "background_paginated_rollout_migration",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RealtimeFramesLocal,
+        key: "realtime_frames_local",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -1731,6 +1791,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::CatalogAppsInstructions,
+        key: "catalog_apps_instructions",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Psp,
         key: "psp",
         stage: Stage::UnderDevelopment,
@@ -1761,10 +1827,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::McpLazyStdioStartup,
-        key: "mcp_lazy_stdio_startup",
+        id: Feature::McpSharedReplCwd,
+        key: "mcp_shared_repl_cwd",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::McpLazyStdioStartup,
+        key: "mcp_lazy_stdio_startup",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::MultiEnvironmentMcp,
@@ -2031,6 +2103,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::FileBackedToolAudio,
+        key: "file_backed_tool_audio",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ImageResizeNotice,
         key: "image_resize_notice",
         stage: Stage::UnderDevelopment,
@@ -2041,6 +2119,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "unified_image_budget",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SafeImageDecoder,
+        key: "safe_image_decoder",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ResizeAllImages,
@@ -2175,6 +2259,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::GuardianNestedApprovalContext,
+        key: "guardian_nested_approval_context",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::GuardianEnhancedNodeReplTranscripts,
         key: "guardian_enhanced_node_repl_transcripts",
         stage: Stage::UnderDevelopment,
@@ -2261,6 +2351,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CurrentTimeReminder,
         key: "current_time_reminder",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UtcEnvironmentDate,
+        key: "utc_environment_date",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

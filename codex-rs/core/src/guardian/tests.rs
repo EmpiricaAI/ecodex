@@ -10,6 +10,7 @@ use crate::context::ContextualUserFragment;
 use crate::environment_selection::EnvironmentAttachment;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::guardian::review::guardian_review_session_config;
+use crate::guardian_review::ReviewRetrieval;
 use crate::session::session::Session;
 use crate::session::tests::update_turn_settings_for_test;
 use crate::session::turn_context::TurnContext;
@@ -19,8 +20,6 @@ use codex_config::ConfigLayerStack;
 use codex_config::NetworkConstraints;
 use codex_config::NetworkDomainPermissionToml;
 use codex_config::NetworkDomainPermissionsToml;
-use codex_config::RequirementSource;
-use codex_config::Sourced;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_exec_server::LOCAL_FS;
@@ -2951,25 +2950,22 @@ async fn guardian_review_routes_required_actions(
         | RequiredGuardianReview::LiveManagedModelWithGuardianV2 => {
             Arc::make_mut(&mut context.model_info).slug = "required-action-model".to_string();
             // The admitted turn has neither this model nor the new requirement.
-            let current_config = session.get_config().await;
-            let mut config = current_config.as_ref().clone();
-            let requirements = codex_config::ConfigRequirements {
-                auto_review_required_models: Some(Sourced::new(
-                    std::collections::BTreeSet::from([context.model_info.slug.clone()]),
-                    RequirementSource::Unknown,
-                )),
-                ..Default::default()
-            };
-            config.config_layer_stack = ConfigLayerStack::new(
-                config
-                    .config_layer_stack
-                    .all_layers_low_to_high()
-                    .cloned()
-                    .collect(),
-                requirements,
-                config.config_layer_stack.requirements_toml().clone(),
-            )?;
-            let _ = session.refresh_mcp_config(current_config, config).await;
+            let model = &context.model_info.slug;
+            let loader = codex_config::test_support::CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                format!("auto_review.required_on_models = [{model:?}]"),
+            );
+            let snapshot = codex_config::loader::load_guardian_policy_snapshot(
+                LOCAL_FS.as_ref(),
+                turn.config.codex_home.as_path(),
+                &codex_config::LoaderOverrides::without_managed_config_for_tests(),
+                &loader,
+                /*revision*/ 1,
+            )
+            .await?;
+            assert_eq!(
+                session.refresh_guardian_policy(&snapshot).await,
+                crate::ConfigRefreshOutcome::Published
+            );
             (
                 guardian_exec_command_request("shell-live-managed-model"),
                 ApprovalRequestReasons::default(),
@@ -3375,6 +3371,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
         ReasoningSummary::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -3419,11 +3416,14 @@ async fn guardian_review_session_config_clears_context_overrides_for_distinct_ef
         .expect("turn should be unique")
         .config = Arc::new(config);
 
-    let guardian_config =
-        guardian_review_session_config(session.as_ref(), &GuardianReviewContext::from(&turn))
-            .await
-            .expect("guardian config")
-            .spawn_config;
+    let guardian_config = guardian_review_session_config(
+        session.as_ref(),
+        &GuardianReviewContext::from(&turn),
+        ReviewRetrieval::ConversationHistory,
+    )
+    .await
+    .expect("guardian config")
+    .spawn_config;
 
     assert_eq!(
         (
@@ -3458,11 +3458,14 @@ async fn guardian_review_session_config_preserves_context_overrides_for_same_eff
         .expect("turn should be unique")
         .config = Arc::new(config);
 
-    let guardian_config =
-        guardian_review_session_config(session.as_ref(), &GuardianReviewContext::from(&turn))
-            .await
-            .expect("guardian config")
-            .spawn_config;
+    let guardian_config = guardian_review_session_config(
+        session.as_ref(),
+        &GuardianReviewContext::from(&turn),
+        ReviewRetrieval::ConversationHistory,
+    )
+    .await
+    .expect("guardian config")
+    .spawn_config;
 
     assert_eq!(
         (
@@ -3504,6 +3507,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
         ReasoningSummary::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -3561,6 +3565,7 @@ async fn guardian_review_session_config_isolates_parent_customizations() {
         ReasoningSummary::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -3608,6 +3613,7 @@ async fn guardian_review_session_config_keeps_bedrock_provider_for_bedrock_gpt_5
         ReasoningSummary::default(),
         /*personality*/ None,
         ResolvedModelMessages::bundled(),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 
@@ -3685,6 +3691,7 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
         ReasoningSummary::default(),
         /*personality*/ None,
         ResolvedModelMessages::from_model(&model),
+        ReviewRetrieval::ConversationHistory,
     )
     .expect("guardian config");
 

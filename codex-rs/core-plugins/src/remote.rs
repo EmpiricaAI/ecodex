@@ -117,6 +117,7 @@ const REMOTE_INSTALLED_PLUGINS_FETCH_TIMEOUT: Duration = Duration::from_secs(60)
 // Allow 20,000 installed plugins without unbounded cursor history.
 const MAX_REMOTE_INSTALLED_PLUGIN_PAGES: usize = 100;
 const RECOMMENDED_PLUGINS_TIMEOUT: Duration = Duration::from_secs(5);
+const TOOLING_STATE_TIMEOUT: Duration = Duration::from_millis(250);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_RECOMMENDED_PLUGINS: usize = 50;
 const MAX_RECOMMENDED_PLUGIN_NAME_LEN: usize = 64;
@@ -352,11 +353,18 @@ pub struct RemoteMarketplaceFetchOutcome {
     pub catalog_cache_used: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActiveRemotePluginBundle {
+    pub(crate) directory_version: String,
+    pub(crate) remote_plugin_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteInstalledPlugin {
     pub marketplace_name: String,
     pub id: String,
     pub version: Option<String>,
+    pub(crate) active_bundle: Option<ActiveRemotePluginBundle>,
     pub name: String,
     pub canonical_app_id: Option<String>,
     pub installed_at: Option<DateTime<Utc>>,
@@ -897,6 +905,11 @@ struct RemotePluginListResponse {
     pagination: RemotePluginPagination,
 }
 
+#[derive(Deserialize)]
+struct PluginToolingStateResponse {
+    tooling_changed_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RecommendedPluginsResponse {
     enabled: bool,
@@ -1147,7 +1160,36 @@ pub fn invalidate_cached_remote_plugin_catalog_scopes(
     }
 }
 
-#[instrument(level = "trace", skip_all)]
+#[instrument(
+    name = "plugins.recommendations.read_tooling_marker",
+    level = "info",
+    skip_all
+)]
+pub(crate) async fn fetch_tooling_changed_at(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+) -> Result<Option<String>, RemotePluginCatalogError> {
+    let auth = ensure_chatgpt_auth(auth)?;
+    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let url = format!("{base_url}/ps/plugins/tooling-state/turtle");
+    let poll = async {
+        let request = authenticated_request(config, Method::GET, &url, auth).await?;
+        let response: PluginToolingStateResponse = send_and_decode(request, &url).await?;
+        Ok(response.tooling_changed_at)
+    };
+    tokio::time::timeout(TOOLING_STATE_TIMEOUT, poll)
+        .await
+        .unwrap_or_else(|_| {
+            tracing::debug!("timed out reading recommendation tooling state");
+            Ok(None)
+        })
+}
+
+#[instrument(
+    name = "plugins.recommendations.fetch_catalog",
+    level = "info",
+    skip_all
+)]
 pub async fn fetch_recommended_plugins(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
@@ -1156,7 +1198,9 @@ pub async fn fetch_recommended_plugins(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let mut url = Url::parse(&format!("{base_url}/ps/plugins/suggested/codex"))
         .map_err(RemotePluginCatalogError::InvalidBaseUrl)?;
-    url.query_pairs_mut().append_pair("scope", "GLOBAL");
+    url.query_pairs_mut()
+        .append_pair("scope", "GLOBAL")
+        .append_pair("includeInstalled", "false");
     let url = url.to_string();
     let request = authenticated_request(config, Method::GET, &url, auth)
         .await?
@@ -2020,6 +2064,7 @@ fn remote_installed_plugin_to_cache_entry(
         marketplace_name,
         id: plugin.id.clone(),
         version: plugin.release.version.clone(),
+        active_bundle: None,
         name: plugin.name.clone(),
         canonical_app_id: plugin.canonical_app_id.clone(),
         installed_at: installed_plugin.installed_at,

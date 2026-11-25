@@ -5,6 +5,7 @@
 //! Checkpoints are captured before final authorization validation and published without yielding.
 //! Recorded reviewer items and interruptions are forwarded to the parent's raw-event subscription.
 
+use crate::guardian_review::ReviewRetrieval;
 use codex_guardian_reviewer::ReviewDeadline;
 use std::sync::atomic::AtomicBool;
 
@@ -29,7 +30,7 @@ pub struct PreparedGuardianContext {
 }
 
 impl PreparedGuardianContext {
-    async fn prepare(
+    pub(in crate::guardian) async fn prepare(
         parent: Arc<Session>,
         mut context: GuardianReviewContext,
         config: Config,
@@ -75,6 +76,16 @@ impl PreparedGuardianContext {
 }
 
 impl PreparedGuardianContext {
+    /// Compares reviewer settings and the parent's history-reset version.
+    /// Callers separately decide whether changes to parent history or the root's
+    /// authorization and review-context revisions allow reuse.
+    pub fn matches_session_configuration(&self, previous: &GuardianReviewSession) -> bool {
+        let mut key = self.key.clone();
+        key.root_review_version = previous.reuse_key.root_review_version;
+        key.parent_history_version = previous.reuse_key.parent_history_version;
+        key == previous.reuse_key
+    }
+
     pub fn reuse_key(
         &self,
         previous: Option<&GuardianReviewSession>,
@@ -112,6 +123,7 @@ impl PreparedGuardianContext {
             .load()
             .responses_websocket_enabled();
         let options = crate::StartThreadOptions {
+            request_country: self.context.request_country.clone(),
             prompt_cache_key: self
                 .parent
                 .services
@@ -323,7 +335,19 @@ impl ReviewerRequest for PreparedReview {
         if self.context.reviewer_selection == ReviewerSelection::FreshParentCheckpoint
             || !recovery_requested
         {
-            record_failed_review(&session.session, &self.params, &result.outcome).await;
+            session
+                .record_failed_review(
+                    &self.params.parent_session,
+                    &self.params.parent_context,
+                    &self.params.request,
+                    &self.params.review_model.model,
+                    codex_guardian_reviewer::ReviewFeedbackSettings {
+                        enabled: self.params.spawn_config.feedback_enabled,
+                        ephemeral: self.params.spawn_config.ephemeral,
+                    },
+                    &result.outcome,
+                )
+                .await;
         }
         result
     }
@@ -387,21 +411,23 @@ pub(in crate::guardian) async fn prepare_review(
 /// The caller owns scheduling, cancellation, and the reviewer pool.
 pub async fn prepare_review_prewarm(
     parent: &crate::CodexThread,
+    retrieval: ReviewRetrieval,
 ) -> anyhow::Result<PreparedGuardianContext> {
     let turn = parent
         .session
         .new_startup_prewarm_turn_with_sub_id(crate::session::INITIAL_SUBMIT_ID.to_owned())
         .await;
-    prepare_prewarm(Arc::clone(&parent.session), turn).await
+    prepare_prewarm(Arc::clone(&parent.session), turn, retrieval).await
 }
 
 pub(super) fn prepare_prewarm(
     parent: Arc<Session>,
     turn: Arc<TurnContext>,
+    retrieval: ReviewRetrieval,
 ) -> BoxFuture<'static, anyhow::Result<PreparedGuardianContext>> {
     Box::pin(async move {
         let context = GuardianReviewContext::from(turn);
-        let config = guardian_review_session_config(&parent, &context).await?;
+        let config = guardian_review_session_config(&parent, &context, retrieval).await?;
         let history = parent.clone_history().await;
         PreparedGuardianContext::prepare(
             Arc::clone(&parent),

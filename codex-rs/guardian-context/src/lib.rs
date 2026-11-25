@@ -26,6 +26,7 @@ use transcript::ConversationTranscriptSection;
 mod native_tool_call;
 
 pub use action::ActionPresentation;
+pub use action::EnclosingCall;
 pub use action::PlannedAction;
 pub use action::PlannedActionKind;
 pub use action::action_for_review;
@@ -71,6 +72,7 @@ pub use retained_instructions::retained_assistant_message;
 mod action;
 mod allocation;
 pub use allocation::PreparedElasticContext;
+pub use allocation::ReservedElasticItemIds;
 mod enforcement;
 pub(crate) use enforcement::BudgetPriority;
 pub use enforcement::Budgeted;
@@ -108,6 +110,7 @@ pub use preparation::ContextBudgeting;
 pub use preparation::ContextProfile;
 pub use preparation::SyncImagePreparer;
 pub use preparation::SyncPreparation;
+pub use preparation::prepare_async_context;
 pub use preparation::prepare_context;
 pub use preparation::prepare_sync_context_with_facts;
 pub use preparation::prepare_sync_delivery;
@@ -196,9 +199,9 @@ pub struct SectionInput<'a> {
     pub is_selected_exec_output: Option<&'a SelectedExecOutputPredicate<'a>>,
     /// Bounded root evidence resolved by the host; empty when not applicable.
     pub root_conversation: &'a [GuardianRootMessage],
-    /// Sync originals retained until request preparation; preferred over the bounded view.
+    /// Originals retained until request preparation; preferred over the bounded view.
     pub root_conversation_candidates: Option<&'a RootConversationInput>,
-    /// Role-labeled sync answer candidates or already-bounded answers from other consumers.
+    /// Role-labeled original answer candidates or already-bounded answers from other consumers.
     pub trusted_user_answers: &'a [TrustedUserAnswer],
     /// Exact action JSON; sync composition bounds the reason and descriptions.
     pub planned_action: Option<&'a PlannedAction>,
@@ -240,7 +243,7 @@ pub trait SectionHistory: Send + Sync {
     }
 
     /// Renders an original complete assistant message without request-size selection.
-    /// Sync preparation applies admission after collection; hosts preserve their fragment boundary.
+    /// Request preparation applies admission after collection; hosts preserve their fragment boundary.
     fn render_original_assistant(
         &self,
         message: &codex_history::RetainedUserMessage,

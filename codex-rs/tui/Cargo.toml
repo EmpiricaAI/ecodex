@@ -68,6 +68,7 @@ codex-terminal-detection = { workspace = true }
 codex-worktree = { workspace = true }
 codex-utils-approval-presets = { workspace = true }
 codex-uds = { workspace = true }
+codex-user-input = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-elapsed = { workspace = true }
@@ -130,6 +131,7 @@ tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 syntect = { version = "5", default-features = false, features = ["parsing", "plist-load", "regex-onig"] }
 two-face = { version = "0.5", default-features = false, features = ["syntect-onig"] }
+unicode-bidi = { workspace = true }
 unicode-linebreak = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
@@ -183,6 +185,7 @@ arboard = { workspace = true }
 app_test_support = { workspace = true }
 codex-mcp = { workspace = true }
 codex-protocol-test-support = { workspace = true }
+codex-skills = { workspace = true }
 core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 assert_matches = { workspace = true }
@@ -194,6 +197,7 @@ pretty_assertions = { workspace = true }
 rand = { workspace = true }
 serial_test = { workspace = true }
 tokio-tungstenite = { workspace = true }
+ts-rs = { workspace = true }
 vt100 = { workspace = true }
 uuid = { workspace = true }
 wiremock = { workspace = true }

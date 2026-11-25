@@ -1,3 +1,4 @@
+use super::responses_error::parse_error_event;
 use super::responses_error::parse_failed_response;
 use crate::common::ReasoningRemovalReason;
 use crate::common::ResponseEvent;
@@ -5,7 +6,6 @@ use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
 use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
-use crate::error::parse_terminal_provider_error;
 use crate::guardian_assessment::parse_guardian_assessment;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::safety_buffering::treatment_from_headers;
@@ -402,9 +402,7 @@ pub fn process_responses_event(
 ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
     match event.kind.as_str() {
         "error" => {
-            if let Some(error) =
-                parse_terminal_provider_error(event.error.as_ref(), /*status*/ None)
-            {
+            if let Some(error) = parse_error_event(event.error.as_ref(), event.headers.as_ref()) {
                 return Err(ResponsesEventError::Api(error));
             }
         }
@@ -614,7 +612,6 @@ async fn process_sse_with_treatment(
     safety_buffering_treatment: SafetyBufferingTreatment,
 ) {
     let mut stream = stream.eventsource();
-    let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
 
     loop {
@@ -641,9 +638,7 @@ async fn process_sse_with_treatment(
                 return;
             }
             Ok(None) => {
-                let error = response_error.unwrap_or(ApiError::Stream(
-                    "stream closed before response.completed".into(),
-                ));
+                let error = ApiError::Stream("stream closed before response.completed".into());
                 let _ = tx_event.send(Err(error)).await;
                 return;
             }
@@ -703,22 +698,8 @@ async fn process_sse_with_treatment(
             }
             Ok(None) => {}
             Err(error) => {
-                let error = error.into_api_error();
-                if matches!(
-                    error,
-                    ApiError::FlexUnavailable
-                        | ApiError::ContextWindowExceeded
-                        | ApiError::InvalidRequest { .. }
-                        | ApiError::SessionBudgetExceeded
-                        | ApiError::InferenceHookDenied { .. }
-                        | ApiError::AccessProgramNotEnabled { .. }
-                        | ApiError::ContentPolicyViolation { .. }
-                        | ApiError::ResponseIncomplete(_)
-                ) {
-                    let _ = tx_event.send(Err(error)).await;
-                    return;
-                }
-                response_error = Some(error);
+                let _ = tx_event.send(Err(error.into_api_error())).await;
+                return;
             }
         };
     }
@@ -1248,6 +1229,60 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         assert_matches!(events[0], Err(ApiError::QuotaExceeded));
+    }
+
+    #[tokio::test]
+    async fn statusless_policy_error_events_are_terminal() {
+        for code in ["bio_policy", "cyber_policy"] {
+            let event = json!({
+                "type": "error",
+                "sequence_number": 0,
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": code,
+                    "message": "policy rejection",
+                },
+            });
+            let sse = format!("event: error\ndata: {event}\n\n");
+            let events = collect_events(&[sse.as_bytes()]).await;
+            match (code, events.as_slice()) {
+                ("bio_policy", [Err(ApiError::BioPolicy { message })])
+                | ("cyber_policy", [Err(ApiError::CyberPolicy { message })]) => {
+                    assert_eq!(message, "policy rejection");
+                }
+                other => panic!("unexpected policy error event: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn statusless_policy_errors_exit_before_sse_idle_timeout() {
+        for code in ["bio_policy", "cyber_policy"] {
+            let event = json!({
+                "type": "error",
+                "error": { "code": code, "message": "policy rejection" },
+            });
+            let sse = format!("event: error\ndata: {event}\n\n");
+            let stream = stream::iter([Ok(Bytes::from(sse))]).chain(stream::pending());
+            let (tx, mut rx) = mpsc::channel(1);
+            let started = tokio::time::Instant::now();
+            tokio::spawn(process_sse(
+                Box::pin(stream),
+                tx,
+                idle_timeout(),
+                /*telemetry*/ None,
+            ));
+
+            let result = rx.recv().await.expect("expected a policy error");
+            match (code, result) {
+                ("bio_policy", Err(ApiError::BioPolicy { message }))
+                | ("cyber_policy", Err(ApiError::CyberPolicy { message })) => {
+                    assert_eq!(message, "policy rejection");
+                }
+                other => panic!("unexpected policy error: {other:?}"),
+            }
+            assert_eq!(started.elapsed(), Duration::ZERO);
+        }
     }
 
     #[tokio::test]

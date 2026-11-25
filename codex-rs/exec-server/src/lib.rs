@@ -110,6 +110,7 @@ pub use codex_file_system::WalkOptions;
 pub use codex_file_system::WalkOutcome;
 pub use codex_file_system::WindowsSandboxSelection;
 pub use codex_file_system::WriteFileOptions;
+pub use codex_network_proxy::TcpUpstreamProxy;
 pub use codex_protocol::shell_environment::CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR;
 pub use environment::CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR;
 pub use environment::CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR;
@@ -259,4 +260,4 @@ pub use telemetry::ExecServerTelemetry;
 pub use sandbox_integrity::run_integrity_checks;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub async fn run_integrity_checks(_request: &codex_sandboxing::SandboxExecRequest) {}
+pub async fn run_integrity_checks(_request: codex_sandboxing::SandboxIntegrityRequest<'_>) {}

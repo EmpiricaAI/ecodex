@@ -171,6 +171,60 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
+async fn independent_cold_resumes_overlap() -> Result<()> {
+    let responses = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    mock_responses_config(&responses.uri()).write(codex_home.path())?;
+    let make_rollout = |preview| {
+        create_fake_rollout(
+            codex_home.path(),
+            "2025-01-05T12-00-00",
+            "2025-01-05T12:00:00Z",
+            preview,
+            Some("mock_provider"),
+            /*git_info*/ None,
+        )
+    };
+    let slow = make_rollout("slow")?;
+    let quick = make_rollout("quick")?;
+    let mut client = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/mcp", listener.local_addr()?);
+    let slow_id = client
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: slow,
+            config: Some(std::collections::HashMap::from([(
+                "mcp_servers.blocked".to_string(),
+                json!({"url": url, "required": true, "startup_timeout_sec": 30}),
+            )])),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let (blocked, _) = timeout(DEFAULT_READ_TIMEOUT, listener.accept()).await??;
+    let quick_id = client
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: quick.clone(),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let response: ThreadResumeResponse =
+        timeout(DEFAULT_READ_TIMEOUT, client.read_response(quick_id)).await??;
+    assert_eq!(response.thread.id, quick);
+    drop((blocked, listener));
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        client.read_stream_until_error_message(RequestId::Integer(slow_id)),
+    )
+    .await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_paginated_model_context_preserves_original_metadata() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -730,7 +784,7 @@ async fn thread_resume_restores_startup_and_updated_runtime_workspace_roots() ->
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
             cwd: Some(initial_cwd.to_string_lossy().into_owned()),
-            runtime_workspace_roots: Some(initial_roots.clone()),
+            runtime_workspace_roots: Some(LegacyAppPathString::from_abs_paths(&initial_roots)),
             environments: Some(explicit_environments.clone()),
             ..Default::default()
         })
@@ -774,7 +828,7 @@ async fn thread_resume_restores_startup_and_updated_runtime_workspace_roots() ->
         runtime_workspace_roots,
         ..
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
-    assert_eq!(runtime_workspace_roots, vec![explicit_cwd.clone()]);
+    assert_eq!(runtime_workspace_roots, vec![explicit_cwd.clone().into()]);
 
     // A cwd-only update must retain the fallback's additional folder, not the live roots.
     mcp.clear_message_buffer();
@@ -847,7 +901,10 @@ async fn thread_resume_restores_startup_and_updated_runtime_workspace_roots() ->
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
     assert_eq!(
         (cwd, runtime_workspace_roots),
-        (initial_cwd.clone(), expected_roots)
+        (
+            initial_cwd.clone().into(),
+            LegacyAppPathString::from_abs_paths(&expected_roots)
+        )
     );
 
     Ok(())
@@ -949,7 +1006,9 @@ sandbox = "unelevated"
             .send_thread_resume_request(ThreadResumeParams {
                 thread_id: thread_id.clone(),
                 cwd: cwd_override.map(|cwd| cwd.to_string_lossy().into_owned()),
-                runtime_workspace_roots: roots_override,
+                runtime_workspace_roots: roots_override
+                    .as_deref()
+                    .map(LegacyAppPathString::from_abs_paths),
                 service_tier: (index == 2).then_some(Some("priority".to_string())),
                 personality: (index == 2).then_some(Personality::None),
                 config: (index == 1).then(|| {
@@ -965,7 +1024,10 @@ sandbox = "unelevated"
             timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
         assert_eq!(
             (resumed.cwd, resumed.runtime_workspace_roots),
-            (expected_cwd.clone(), expected_roots.clone())
+            (
+                expected_cwd.clone().into(),
+                LegacyAppPathString::from_abs_paths(&expected_roots)
+            )
         );
         if index < 3 {
             mcp.start_turn_and_wait_for_completion(TurnStartParams {
@@ -1182,7 +1244,11 @@ async fn cold_resume_workspace_roots_validate_foreign_startup_paths() -> Result<
             } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
             assert_eq!(
                 (thread.id, cwd, runtime_workspace_roots),
-                (thread_id, local_cwd.clone(), expected_roots)
+                (
+                    thread_id,
+                    local_cwd.clone().into(),
+                    LegacyAppPathString::from_abs_paths(&expected_roots)
+                )
             );
         } else {
             let error = timeout(
@@ -1929,14 +1995,14 @@ async fn cold_resume_reresolves_persisted_active_permission_profile() -> Result<
         );
         assert_eq!(
             runtime_workspace_roots,
-            vec![previous_workspace_root.path().abs()]
+            vec![previous_workspace_root.path().abs().into()]
         );
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn cold_resume_with_removed_permission_profile_uses_configured_default() -> Result<()> {
+async fn cold_resume_with_removed_permission_profile_requires_explicit_selection() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
         let codex_home = TempDir::new()?;
@@ -1962,22 +2028,35 @@ async fn cold_resume_with_removed_permission_profile_uses_configured_default() -
             .await?;
         let resume_id = mcp
             .send_thread_resume_request(ThreadResumeParams {
-                thread_id,
+                thread_id: thread_id.clone(),
                 ..Default::default()
             })
             .await?;
-        let ThreadResumeResponse {
-            sandbox,
-            active_permission_profile,
-            ..
-        } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+        let error = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+        )
+        .await??;
+        assert_eq!(error.error.code, -32600);
+        assert!(
+            error
+                .error
+                .message
+                .contains("saved permission profile `dev`")
+        );
 
-        assert!(matches!(sandbox, AppSandboxPolicy::DangerFullAccess));
+        let resume_id = mcp
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id,
+                permissions: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let response: ThreadResumeResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
         assert_eq!(
-            active_permission_profile,
-            Some(ActivePermissionProfile::new(
-                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
-            ))
+            response.active_permission_profile,
+            Some(ActivePermissionProfile::read_only())
         );
     }
     Ok(())
@@ -2863,7 +2942,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     assert_eq!(thread.model_provider, "mock_provider");
     assert!(thread.path.as_ref().expect("thread path").is_absolute());
     assert_eq!(thread.cwd.as_path(), cwd.as_path());
-    assert_eq!(cwd, test_absolute_path("/"));
+    assert_eq!(cwd, test_absolute_path("/").into());
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
@@ -3095,6 +3174,7 @@ fn append_resume_redaction_history(
             call_id: "mcp-1".to_string(),
             invocation: McpInvocation {
                 server: "docs".to_string(),
+                environment_id: None,
                 tool: "lookup".to_string(),
                 arguments: Some(json!({"secret":"argument"})),
             },
@@ -5143,7 +5223,10 @@ async fn thread_resume_checkpoints_settings_without_advancing_recency() -> Resul
         .await?;
     let ThreadResumeResponse { cwd, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
-    assert_eq!(cwd, AbsolutePathBuf::from_absolute_path(codex_home.path())?);
+    assert_eq!(
+        cwd,
+        AbsolutePathBuf::from_absolute_path(codex_home.path())?.into()
+    );
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {

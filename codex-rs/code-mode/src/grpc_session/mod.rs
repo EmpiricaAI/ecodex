@@ -43,8 +43,6 @@ use self::state::ClosedCell;
 use self::state::SessionState;
 use self::transport::GrpcTransport;
 use self::transport::SharedTransport;
-use crate::remote_session::ShutdownResultReceiver;
-use crate::remote_session::wait_for_watch;
 
 mod callbacks;
 mod completion;
@@ -58,6 +56,24 @@ mod state;
 mod transport;
 
 type GrpcClient = CodeModeHostClient<GrpcTransport>;
+type ShutdownResultReceiver = watch::Receiver<Option<Result<(), String>>>;
+
+async fn wait_for_watch<T>(
+    mut result_rx: watch::Receiver<Option<Result<T, String>>>,
+) -> Result<T, String>
+where
+    T: Clone,
+{
+    loop {
+        if let Some(result) = result_rx.borrow().clone() {
+            return result;
+        }
+        result_rx
+            .changed()
+            .await
+            .map_err(|_| "code-mode session transition stopped".to_string())?;
+    }
+}
 
 #[derive(Clone)]
 struct SessionAdmission;
@@ -176,6 +192,7 @@ impl GrpcCodeModeSessionProvider {
             let mut retries = 0;
             loop {
                 let mut request = tonic::Request::new(grpc::OpenSessionRequest {
+                    heartbeat_interval_s: options.heartbeat_interval_s,
                     max_pending_delegate_calls: Some(
                         codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS as u32,
                     ),
@@ -266,6 +283,7 @@ impl GrpcCodeModeSessionProvider {
         }
 
         let inner = Arc::new(SessionInner {
+            catalog: opened.supports_catalog_revision.then(Default::default),
             id: opened.session_id,
             output_truncation,
             route,
@@ -289,6 +307,7 @@ impl GrpcCodeModeSessionProvider {
             session.id = %inner.id,
         );
         let mut request = inner.request(grpc::SubscribeToToolCallsRequest {
+            heartbeat_interval_s: options.heartbeat_interval_s,
             session_id: inner.id.clone(),
             tool_names: Vec::new(),
         });
@@ -407,6 +426,7 @@ impl Drop for GrpcCodeModeSession {
 }
 
 pub(super) struct SessionInner {
+    catalog: Option<Arc<tokio::sync::Mutex<crate::tool_catalog::Catalog>>>,
     pub(super) id: String,
     output_truncation: CodeModeOutputTruncation,
     // Affinity belongs to the session: parents and children may share a transport

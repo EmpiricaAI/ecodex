@@ -49,7 +49,7 @@ fn enable_test_ambient_pet(chat: &mut ChatWidget) {
 
 fn take_workspace_headline_request_id(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-) -> u64 {
+) -> uuid::Uuid {
     match rx.try_recv() {
         Ok(AppEvent::RefreshStatusLineWorkspaceHeadline { request_id }) => request_id,
         event => panic!("expected workspace headline refresh, got {event:?}"),
@@ -154,6 +154,7 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
     let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
     model.model = "gpt-5.6-sol".into();
     model.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue],
     });
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model]));
@@ -258,6 +259,7 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
     let mut daybreak = crate::test_support::TEST_MODEL_PRESETS[0].clone();
     daybreak.model = "gpt-5.6-sol".into();
     daybreak.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue],
     });
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![daybreak.clone()]));
@@ -305,6 +307,7 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
     let mut astra = crate::test_support::TEST_MODEL_PRESETS[0].clone();
     astra.model = "gpt-6-astra".into();
     astra.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        daybreak_availability: Default::default(),
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
     });
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![astra]));
@@ -388,6 +391,7 @@ async fn app_server_model_verification_renders_warning() {
 async fn context_indicator_shows_used_tokens_when_window_unknown() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("unknown-model")).await;
 
+    chat.thread_id = Some(ThreadId::new());
     chat.config.model_context_window = None;
     let auto_compact_limit = 200_000;
     chat.config.model_auto_compact_token_limit = Some(auto_compact_limit);
@@ -399,17 +403,38 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
         ..TokenUsage::default()
     };
     let token_info = TokenUsageInfo {
-        total_token_usage: token_usage.clone(),
-        last_token_usage: token_usage,
+        total_token_usage: token_usage,
+        last_token_usage: TokenUsage {
+            total_tokens: 40_000,
+            ..TokenUsage::default()
+        },
         model_context_window: None,
     };
 
-    handle_token_count(&mut chat, Some(token_info));
+    handle_token_count(&mut chat, Some(token_info.clone()));
 
     assert_eq!(chat.bottom_pane.context_window_percent(), None);
     assert_eq!(
         chat.bottom_pane.context_window_used_tokens(),
         Some(total_tokens)
+    );
+    let state = serde_json::to_value(chat.statusline_state()).unwrap();
+    assert_eq!(
+        state["thread"]["usage"]["context"],
+        json!({"used_tokens": 40_000})
+    );
+
+    handle_token_count(
+        &mut chat,
+        Some(TokenUsageInfo {
+            model_context_window: Some(68_000),
+            ..token_info
+        }),
+    );
+    let state = serde_json::to_value(chat.statusline_state()).unwrap();
+    assert_eq!(
+        state["thread"]["usage"]["context"],
+        json!({"context_window_size": 68_000, "used_tokens": 40_000, "used_percentage": 50})
     );
 }
 
@@ -1311,11 +1336,17 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         rate_limit_reached_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
+
+    let unknown = serde_json::from_value(serde_json::json!({"planType": "unknown"})).unwrap();
+    chat.on_rate_limit_snapshot(Some(unknown));
+    assert_eq!(chat.plan_type, Some(PlanType::Pro));
 }
 
 #[tokio::test]
 async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.thread_id = Some(ThreadId::new());
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
         limit_id: Some("codex".to_string()),
@@ -1326,7 +1357,11 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
             window_duration_mins: Some(300),
             resets_at: Some(100),
         }),
-        secondary: None,
+        secondary: Some(RateLimitWindow {
+            used_percent: 8,
+            window_duration_mins: Some(10_080),
+            resets_at: None,
+        }),
         credits: Some(CreditsSnapshot {
             has_credits: true,
             unlimited: false,
@@ -1355,6 +1390,15 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
         rate_limit_reached_type: None,
     }));
 
+    let state = serde_json::to_value(chat.statusline_state()).unwrap();
+    assert_eq!(
+        state["account"]["rate_limits"],
+        serde_json::json!([{
+            "limit_id": "codex", "limit_name": "codex",
+            "primary_limit": {"used_percent": 20.0, "window_minutes": 300, "resets_at": 100},
+            "secondary_limit": {"used_percent": 8.0, "window_minutes": 10_080, "resets_at": null}
+        }])
+    );
     let codex = chat
         .rate_limit_snapshots_by_limit_id
         .get("codex")
@@ -3959,6 +4003,11 @@ async fn status_line_workspace_headline_renders_cached_value() {
         status_line_text(&chat),
         Some("Workspace maintenance starts at 5pm".to_string())
     );
+    let state = serde_json::to_value(chat.statusline_state()).unwrap();
+    assert_eq!(
+        state["account"]["workspace"],
+        serde_json::json!({"headline": "Workspace maintenance starts at 5pm"})
+    );
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "workspace-headline should be a valid status line item"
@@ -3988,7 +4037,7 @@ async fn workspace_headline_update_applies_feature_disabled_result() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.tui.status_line = Some(vec!["workspace-headline".to_string()]);
     chat.status_line_workspace_headline = Some("Old headline".to_string());
-    let request_id = 3;
+    let request_id = uuid::Uuid::new_v4();
     chat.status_line_workspace_headline_pending_request_id = Some(request_id);
 
     assert!(chat.set_status_line_workspace_headline(
@@ -4004,7 +4053,7 @@ async fn workspace_headline_update_applies_feature_disabled_result() {
 async fn workspace_headline_update_applies_available_headline() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.tui.status_line = Some(vec!["workspace-headline".to_string()]);
-    let request_id = 4;
+    let request_id = uuid::Uuid::new_v4();
     chat.status_line_workspace_headline_pending_request_id = Some(request_id);
 
     assert!(chat.set_status_line_workspace_headline(
@@ -4028,7 +4077,7 @@ async fn account_update_clears_workspace_headline_state() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.tui.status_line = Some(vec!["workspace-headline".to_string()]);
     chat.status_line_workspace_headline = Some("Old workspace headline".to_string());
-    chat.status_line_workspace_headline_pending_request_id = Some(5);
+    chat.status_line_workspace_headline_pending_request_id = Some(uuid::Uuid::new_v4());
     chat.status_line_workspace_headline_last_requested_at = Some(Instant::now());
     chat.status_line_workspace_messages_disabled = true;
 
@@ -4063,6 +4112,25 @@ async fn workspace_headline_fetch_allows_backend_auth_without_chatgpt_account() 
         chat.status_line_workspace_headline_pending_request_id,
         Some(request_id)
     );
+}
+
+#[tokio::test]
+async fn replacement_widget_rejects_the_previous_widgets_workspace_headline() {
+    let request_headline = async || {
+        let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.local_settings.tui.status_line = Some(vec!["workspace-headline".into()]);
+        chat.has_codex_backend_auth = true;
+        chat.refresh_status_line();
+        (chat, take_workspace_headline_request_id(&mut rx))
+    };
+    let (_, stale) = request_headline().await;
+    let (mut replacement, current) = request_headline().await;
+
+    assert!(!replacement.set_status_line_workspace_headline(
+        stale,
+        Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled),
+    ));
+    assert!(replacement.is_pending_workspace_headline(current));
 }
 
 #[tokio::test]
@@ -4719,6 +4787,9 @@ async fn session_configured_clears_goal_status_footer() {
 
     let rollout_file = NamedTempFile::new().unwrap();
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
@@ -4732,7 +4803,7 @@ async fn session_configured_clears_goal_status_footer() {
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/home/user/project").abs(),
+        cwd: test_path_buf("/home/user/project").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),

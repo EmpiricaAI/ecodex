@@ -24,8 +24,8 @@ struct Flight {
 
 pub(super) struct Openings {
     active: HashMap<(BackendId, ThreadId), Flight>,
-    // The app event channel rotates on reconnect. This pair has the lifetime of the flights.
-    tx: AppEventSender,
+    // Background completions survive app event channel rotation on reconnect.
+    pub(super) tx: AppEventSender,
     completions: mpsc::UnboundedReceiver<AppEvent>,
 }
 
@@ -129,6 +129,9 @@ impl App {
         if !self.can_select_thread() {
             return Ok(());
         }
+        let pane = self.sidebar_mut();
+        pane.agents.pending_link = None;
+        pane.focus_document_request = None;
         let child = target.child;
         let flight = self.saved_openings.active.get(&target.key());
         let state = if let Some(flight) = flight
@@ -144,9 +147,9 @@ impl App {
                 ..side::SideThreadState::new(target.parent)
             };
             self.abandoned_side_threads.remove(&child);
-            if !self.should_attach_live_thread_for_selection(child)
-                && let Some(channel) = self.thread_event_channels.get(&child)
+            if let Some(channel) = self.thread_event_channels.get(&child)
                 && channel.backend_id.is_none_or(|id| id == target.backend_id)
+                && (channel.archived || !self.should_attach_live_thread_for_selection(child))
                 && channel.store.lock().await.session.is_some()
             {
                 self.side_threads.insert(child, side);

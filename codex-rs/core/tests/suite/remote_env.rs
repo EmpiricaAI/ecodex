@@ -409,6 +409,13 @@ async fn remote_test_env_exposes_target_shell_and_exec_guidance_to_model() -> Re
             .map(str::trim),
         Some(expected_shell),
     );
+    let login_description = exec_command["parameters"]["properties"]["login"]["description"]
+        .as_str()
+        .context("login should have a description")?;
+    assert_eq!(
+        login_description.contains("In PowerShell, false skips profiles."),
+        expected_shell == "<shell>powershell</shell>",
+    );
 
     Ok(())
 }
@@ -918,6 +925,15 @@ async fn settings_update_does_not_retarget_active_turn_environment() -> Result<(
     )
     .await;
     let mut builder = test_codex().with_config(|config| {
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::workspace_write_with(
+                &[],
+                NetworkSandboxPolicy::Restricted,
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            ))
+            .expect("workspace permissions");
         assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
         assert!(
             config
@@ -983,6 +999,16 @@ async fn settings_update_does_not_retarget_active_turn_environment() -> Result<(
     );
     assert_eq!(snapshot.cwd(), &next_cwd);
     assert_eq!(snapshot.workspace_roots, vec![next_cwd.clone()]);
+    let policy = snapshot.permission_profile.file_system_sandbox_policy();
+    assert_eq!(
+        [
+            next_cwd.join("ordinary.txt"),
+            next_cwd.join(".git/config"),
+            initial_cwd.join("ordinary.txt"),
+        ]
+        .map(|path| policy.can_write_local_path_with_cwd(path.as_path(), next_cwd.as_path())),
+        [true, false, false],
+    );
     test.codex
         .submit(Op::UserInputAnswer {
             id: request.turn_id,
@@ -1616,6 +1642,7 @@ impl NoiseRendezvousConnectProvider for OfflineThenReadyNoiseConnectProvider {
             });
         }
         let bundle = NoiseRendezvousConnectBundle {
+            http_headers: Default::default(),
             websocket_url: self.websocket_url.clone(),
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             executor_registration_id: "ready-first-registration".to_string(),
@@ -2349,7 +2376,8 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
     let exec_command_parameters = response_mock
         .requests()
         .iter()
-        .map(|request| {
+        .enumerate()
+        .map(|(index, request)| {
             let body = request.body_json();
             let exec_command = body["tools"]
                 .as_array()
@@ -2357,14 +2385,22 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
                 .iter()
                 .find(|tool| tool["name"] == "exec_command")
                 .context("exec_command should stay available")?;
-            let parameters = &exec_command["parameters"];
-            parameters["properties"]
+            let mut parameters = exec_command["parameters"].clone();
+            let login = parameters["properties"]
                 .get("login")
                 .context("login should be advertised regardless of environment state or policy")?;
+            let description = login["description"].as_str().context("login description")?;
+            let ready = matches!(index, 4 | 5 | 8);
+            assert_eq!(
+                description.contains("In PowerShell, false skips profiles."),
+                ready && matches!(test_target_os(), TestTargetOs::Windows),
+            );
             parameters["properties"].get("shell").context(
                 "shell should be advertised regardless of environment state or shell mode",
             )?;
-            Ok(parameters.clone())
+            // Only shell-specific wording may change when the executor becomes ready.
+            parameters["properties"]["login"]["description"] = Value::Null;
+            Ok(parameters)
         })
         .collect::<Result<Vec<_>>>()?;
     assert_eq!(

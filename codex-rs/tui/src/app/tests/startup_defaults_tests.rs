@@ -3,7 +3,9 @@
 use super::*;
 use crate::app::backend_sessions::InitialBackendSessions;
 use crate::app::startup::prepare_fresh_startup_config;
+use crate::app::startup::startup_config_cwd;
 use crate::app::startup::startup_model;
+use crate::app::startup::statusline_enabled;
 use crate::app::startup_bootstrap::bootstrap_server_owned_start;
 use pretty_assertions::assert_eq;
 
@@ -28,6 +30,7 @@ pub(super) async fn run_startup_for_test(
         tui,
         initial_backends,
         config.clone(),
+        Default::default(),
         config.cwd.to_path_buf(),
         backend_selection::BackendPreferenceContext::new(
             &config,
@@ -460,15 +463,21 @@ requires_openai_auth = false
         if !server_owned {
             server.bootstrap(&config).await?;
         }
+        let defaults = crate::config_update::read_effective_config_with_layers(
+            &server.request_handle(),
+            startup_config_cwd(&config, &server, &target)
+                .display()
+                .to_string(),
+        )
+        .await?;
         prepare_fresh_startup_config(
             &mut config,
             &server,
-            &target,
+            &defaults,
             &cli_kv_overrides,
             &harness_overrides,
             &EnvironmentManager::default_for_tests(),
-        )
-        .await?;
+        );
         if server_owned {
             bootstrap_server_owned_start(
                 &mut server,
@@ -676,15 +685,22 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
             bootstrap.default_model.as_deref(),
             Some("stale-client-model")
         );
+        let defaults = crate::config_update::read_effective_config_with_layers(
+            &server.request_handle(),
+            startup_config_cwd(&config, &server, &target)
+                .display()
+                .to_string(),
+        )
+        .await?;
+        assert!(!statusline_enabled(&defaults.config));
         let defaults_read = prepare_fresh_startup_config(
             &mut config,
             &server,
-            &target,
+            &defaults,
             &[],
             &ConfigOverrides::default(),
             &EnvironmentManager::default_for_tests(),
-        )
-        .await?;
+        );
         assert!(!defaults_read.prompt_windows_sandbox);
         assert_eq!(config.model, None);
         let selected_model =
@@ -701,15 +717,13 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
         )
         .await?;
         assert_eq!(started.session.model, selected_model);
+        let cwd = started.session.cwd.to_path_buf();
         assert!(
             !started
                 .session
                 .permission_profile
                 .file_system_sandbox_policy()
-                .can_write_local_path_with_cwd(
-                    started.session.cwd.as_path(),
-                    started.session.cwd.as_path()
-                )
+                .can_write_local_path_with_cwd(&cwd, &cwd)
         );
         let starts = recorded_params(&requests, "thread/start");
         assert_eq!(starts.len(), if remote { 1 } else { 2 });
@@ -758,8 +772,12 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
     Ok(())
 }
 
-#[tokio::test]
-async fn fresh_startup_observes_config_edits_after_directory_trust() -> Result<()> {
+#[test]
+fn fresh_startup_observes_config_edits_after_directory_trust() -> Result<()> {
+    run_embedded_tui_scenario("tui-startup-after-trust", startup_after_directory_trust)
+}
+
+async fn startup_after_directory_trust() -> Result<()> {
     let home = tempdir()?;
     let destination = tempdir()?;
     std::fs::create_dir(destination.path().join(".git"))?;
@@ -818,8 +836,12 @@ async fn fresh_startup_observes_config_edits_after_directory_trust() -> Result<(
     Ok(())
 }
 
-#[tokio::test]
-async fn startup_reads_server_defaults_before_starting_thread() -> Result<()> {
+#[test]
+fn startup_reads_server_defaults_before_starting_thread() -> Result<()> {
+    run_embedded_tui_scenario("tui-startup-defaults", startup_with_server_defaults)
+}
+
+async fn startup_with_server_defaults() -> Result<()> {
     let client_home = tempdir()?;
     let server_home = tempdir()?;
     let projectless_cwd = tempdir()?;

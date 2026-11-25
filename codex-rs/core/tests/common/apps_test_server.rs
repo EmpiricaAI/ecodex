@@ -370,8 +370,10 @@ pub async fn recorded_apps_tool_calls(server: &MockServer) -> Vec<Value> {
         .into_iter()
         .filter_map(|request| {
             let body: Value = serde_json::from_slice(&request.body).ok()?;
-            (request.url.path() == "/api/codex/ps/mcp"
-                && body.get("method").and_then(Value::as_str) == Some("tools/call"))
+            (matches!(
+                request.url.path(),
+                "/api/codex/ps/mcp" | "/backend-api/ps/mcp"
+            ) && body.get("method").and_then(Value::as_str) == Some("tools/call"))
             .then_some(body)
         })
         .collect()
@@ -565,7 +567,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                     .as_ref()
                     .is_some_and(|remaining| {
                         remaining
-                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                                 remaining.checked_sub(1)
                             })
                             .is_ok()

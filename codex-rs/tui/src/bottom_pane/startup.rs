@@ -104,6 +104,14 @@ impl BottomPane {
         self.composer.sync_popups();
     }
 
+    pub(crate) fn startup_undo_draft(&mut self) -> Option<super::chat_composer::ComposerDraft> {
+        self.composer.capture_startup_undo()
+    }
+
+    pub(crate) fn record_startup_undo(&mut self, destination: super::chat_composer::ComposerDraft) {
+        self.composer.record_startup_undo(destination);
+    }
+
     /// Preserve startup-local history and the newest protected-prompt activity timestamp.
     pub(crate) fn restore_startup_composer_state(
         &mut self,
@@ -129,6 +137,10 @@ impl BottomPane {
 
     pub(crate) fn composer_paste_deadline(&self) -> Option<Instant> {
         self.composer.paste_handoff_deadline()
+    }
+
+    pub(crate) fn has_startup_paste_window(&self, now: Instant) -> bool {
+        self.composer.has_paste_window(now)
     }
 
     pub(crate) fn flush_handoff_paste_if_due(&mut self) -> bool {

@@ -450,15 +450,23 @@ pub(crate) struct EffectiveConfig {
 }
 
 pub(crate) async fn read_effective_config_with_layers(
-    request_handle: AppServerRequestHandle,
-    cwd: &Path,
+    request_handle: &AppServerRequestHandle,
+    cwd: String,
+) -> Result<EffectiveConfig> {
+    read_effective_config_with_optional_layers(request_handle, cwd, /*include_layers*/ true).await
+}
+
+pub(crate) async fn read_effective_config_with_optional_layers(
+    request_handle: &AppServerRequestHandle,
+    cwd: String,
+    include_layers: bool,
 ) -> Result<EffectiveConfig> {
     request_handle
         .request_typed(ClientRequest::ConfigRead {
             request_id: RequestId::String(format!("tui-config-read-{}", Uuid::new_v4())),
             params: ConfigReadParams {
-                include_layers: true,
-                cwd: Some(cwd.display().to_string()),
+                include_layers,
+                cwd: Some(cwd),
             },
         })
         .await
@@ -470,7 +478,7 @@ pub(crate) async fn read_effective_config_if_supported(
     request_handle: AppServerRequestHandle,
     cwd: &Path,
 ) -> Result<Option<EffectiveConfig>> {
-    match read_effective_config_with_layers(request_handle, cwd).await {
+    match read_effective_config_with_layers(&request_handle, cwd.display().to_string()).await {
         Ok(response) => Ok(Some(response)),
         Err(err)
             if matches!(

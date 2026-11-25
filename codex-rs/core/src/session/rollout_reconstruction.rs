@@ -1,6 +1,6 @@
 use super::*;
 use crate::context::world_state::WorldStateSnapshot;
-use crate::context_manager::is_user_turn_boundary;
+use crate::context_manager::is_instruction_turn_boundary;
 use codex_history::ResponseItemEnvelope;
 use codex_history::TurnAttribution;
 use codex_protocol::ContextWindowId;
@@ -284,9 +284,13 @@ impl ContextManager {
                 | RolloutItem::EventMsg(_) => None,
             })
             .peekable();
-        let last_started_turn_id = started_turn_ids
-            .peek()
-            .map(|id| (*id).to_owned())
+        let last_started_turn_id = replay_items
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(event.turn_id.clone()),
+                _ => None,
+            })
             .or_else(|| resume_metadata.and_then(|metadata| metadata.last_started_turn_id.clone()));
         // Saved attribution still identifies the turn when continuation eligibility was cleared.
         let checkpoint_turn_id = resume_metadata.and_then(|metadata| {
@@ -459,7 +463,7 @@ impl ContextManager {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn |=
-                        is_user_turn_boundary(&response_item.item);
+                        is_instruction_turn_boundary(response_item);
                 }
                 RolloutItem::InterAgentCommunication(_) => {
                     let active_segment =
@@ -534,8 +538,37 @@ impl ContextManager {
         }
         let rollout_suffix =
             history_checkpoint.map_or(rollout_items, |checkpoint| checkpoint.suffix);
+        // A compacted replacement may already contain a reconstructed hangup input.
+        let tail_ids = rollout_suffix
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::RealtimeItem(item) => match &item.content {
+                    codex_protocol::realtime::RealtimeItemContent::SessionInputSaved {
+                        reason: codex_protocol::realtime::SessionInputReason::SessionEnd,
+                        input_item_id,
+                        ..
+                    } => Some(input_item_id.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let mut saved_tails = history
+            .raw_items()
+            .filter_map(|item| item.id())
+            .filter(|id| tail_ids.contains(id.as_str()))
+            .map(ToString::to_string)
+            .collect::<std::collections::HashSet<_>>();
         for item in rollout_suffix {
             match item {
+                RolloutItem::RealtimeItem(item) => {
+                    if let Some(input) = Session::realtime_carryover_input(item)
+                        && let Some(id) = input.item.id()
+                        && saved_tails.insert(id.to_string())
+                    {
+                        history.replay_annotated_item(&input, truncation_policy);
+                    }
+                }
                 RolloutItem::RetainedContext(event) => {
                     history.record_retained_context(event);
                 }
@@ -561,13 +594,8 @@ impl ContextManager {
                         // prompt shape.
                         // TODO(ccunningham): if we drop support for None replacement_history compaction items,
                         // we can get rid of this second loop entirely and just build `history` directly in the first loop.
-                        let user_messages =
-                            compact::collect_annotated_user_messages(history.annotated_items());
-                        let rebuilt = compact::build_compacted_history(
-                            Vec::new(),
-                            &user_messages,
-                            &compacted.message,
-                        );
+                        let rebuilt =
+                            compact::build_compacted_history(&history, &compacted.message);
                         let retained_context = history.retained_context().clone();
                         history.replace_annotated(rebuilt);
                         history.restore_retained_context(Some(&retained_context));
@@ -578,7 +606,6 @@ impl ContextManager {
                 }
                 RolloutItem::EventMsg(_)
                 | RolloutItem::TurnContext(_)
-                | RolloutItem::RealtimeItem(_)
                 | RolloutItem::WorldState(_)
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::TokenUsageRecord(_)

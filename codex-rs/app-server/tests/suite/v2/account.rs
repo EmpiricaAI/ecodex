@@ -234,6 +234,7 @@ async fn assert_account_updated(
     assert_eq!(
         payload,
         AccountUpdatedNotification {
+            reason: None,
             auth_mode,
             plan_type: None,
         }
@@ -1304,11 +1305,14 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     Ok(())
 }
 
-#[test_case("amazonBedrock"; "api_key")]
-#[test_case("amazonBedrockAccessKeys"; "access_keys")]
+#[test_case("amazonBedrock", "amazon-bedrock"; "legacy_api_key")]
+#[test_case("amazonBedrockAccessKeys", "amazon-bedrock"; "legacy_access_keys")]
+#[test_case("amazonBedrock", "amazon-bedrock-runtime"; "runtime_api_key")]
+#[test_case("amazonBedrockAccessKeys", "amazon-bedrock-runtime"; "runtime_access_keys")]
 #[tokio::test]
 async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider(
     credential_type: &str,
+    provider_id: &str,
 ) -> Result<()> {
     let managed_access_keys = credential_type == "amazonBedrockAccessKeys";
     let codex_home = TempDir::new()?;
@@ -1318,9 +1322,9 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider(
     std::fs::write(
         &config_path,
         format!(
-            "{original_config}\n[model_providers.amazon-bedrock]\n\
+            "{original_config}\n[model_providers.{provider_id}]\n\
              http_headers = {{ X-Existing = \"preserved\" }}\n\
-             [model_providers.amazon-bedrock.aws]\n\
+             [model_providers.{provider_id}.aws]\n\
              profile = \"stale-profile\"\n\
              region = \"us-east-1\"\n\
              auth_refresh = {{ command = \"aws\" }}\n"
@@ -1335,7 +1339,11 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider(
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .with_env_overrides(&[
+            ("OPENAI_API_KEY", None),
+            ("OPENAI_FEDERATION_RULE_ID", None),
+            ("OPENAI_IDENTITY_TOKEN_FILE", None),
+        ])
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
     let mut expected_config = read_config_toml(codex_home.path())?;
@@ -1344,17 +1352,17 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider(
         .expect("config should be a table")
         .insert(
             "model_provider".to_string(),
-            toml::Value::String("amazon-bedrock".to_string()),
+            toml::Value::String(provider_id.to_string()),
         );
-    expected_config["model_providers"]["amazon-bedrock"]["aws"]
+    expected_config["model_providers"][provider_id]["aws"]
         .as_table_mut()
         .expect("AWS configuration should be a table")
         .remove("profile");
     if managed_access_keys {
-        expected_config["model_providers"]["amazon-bedrock"]["aws"]["region"] =
+        expected_config["model_providers"][provider_id]["aws"]["region"] =
             toml::Value::String("us-west-2".to_string());
     }
-    let params = if managed_access_keys {
+    let mut params = if managed_access_keys {
         json!({
             "type": credential_type,
             "accessKeyId": " test-id ",
@@ -1369,6 +1377,9 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider(
             "region": " us-west-2 ",
         })
     };
+    if provider_id == "amazon-bedrock-runtime" {
+        params["providerId"] = json!(provider_id);
+    }
     let request_id = mcp.send_login_account_request(params).await?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -1449,7 +1460,7 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider(
             .expect("config should be a table");
         expected_logout_config_root.remove("model_provider");
         expected_logout_config_root.remove("model");
-        expected_logout_config["model_providers"]["amazon-bedrock"]
+        expected_logout_config["model_providers"][provider_id]
             .as_table_mut()
             .expect("Bedrock provider config should be a table")
             .remove("aws");
@@ -2278,6 +2289,20 @@ async fn login_account_chatgpt_device_code_returns_error_when_disabled() -> Resu
 
 #[tokio::test]
 async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()> {
+    assert_device_login(DeviceLoginStorage::Writable).await
+}
+
+#[tokio::test]
+async fn device_code_login_reports_failed_save_with_client_originator() -> Result<()> {
+    assert_device_login(DeviceLoginStorage::BlockSave).await
+}
+
+enum DeviceLoginStorage {
+    Writable,
+    BlockSave,
+}
+
+async fn assert_device_login(storage: DeviceLoginStorage) -> Result<()> {
     let codex_home = TempDir::new()?;
     let mock_server = MockServer::start().await;
     create_config_toml(
@@ -2289,7 +2314,12 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         },
     )?;
     write_models_cache(codex_home.path()).await?;
-    let collector = super::auth_storage_originator::configure_collector(codex_home.path()).await?;
+    let collector = match storage {
+        DeviceLoginStorage::Writable => None,
+        DeviceLoginStorage::BlockSave => {
+            Some(super::auth_storage_originator::configure_collector(codex_home.path()).await?)
+        }
+    };
 
     mock_device_code_usercode(&mock_server, /*interval_seconds*/ 0).await;
     mock_device_code_token_success(&mock_server).await;
@@ -2320,6 +2350,11 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
     })
     .await?;
 
+    if collector.is_some() {
+        // A successful account switch revokes in-flight exports for the old account.
+        // Exercise attribution on the same async device-login save path without switching.
+        std::fs::create_dir(codex_home.path().join("auth.json"))?;
+    }
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
     let login: LoginAccountResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
@@ -2344,6 +2379,15 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         bail!("unexpected notification: {parsed:?}");
     };
     assert_eq!(payload.login_id, Some(login_id));
+    if let Some(collector) = collector {
+        assert!(!payload.success);
+        assert!(payload.error.is_some());
+        return super::auth_storage_originator::assert_saved_originators(
+            &collector,
+            &["codex_vscode"],
+        )
+        .await;
+    }
     assert_eq!(payload.success, true);
     assert_eq!(payload.error, None);
 
@@ -2362,7 +2406,6 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         codex_home.path().join("auth.json").exists(),
         "auth.json should be created when device code login succeeds"
     );
-    super::auth_storage_originator::assert_saved_originators(&collector, &["codex_vscode"]).await?;
     Ok(())
 }
 
@@ -2588,6 +2631,7 @@ async fn login_survives_same_owner_token_refresh(
     assert_eq!(
         updated,
         AccountUpdatedNotification {
+            reason: None,
             auth_mode: Some(AuthMode::Chatgpt),
             plan_type: Some(AccountPlanType::Enterprise),
         }

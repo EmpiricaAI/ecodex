@@ -2,12 +2,15 @@
 #![allow(clippy::unwrap_used)]
 
 use anyhow::Result;
+use codex_config::LoaderOverrides;
+use codex_config::loader::load_guardian_policy_snapshot;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::AppToolApproval;
 use codex_core::ConfigRefreshOutcome;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_core::config::Config;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_models_manager::bundled_models_response;
@@ -534,14 +537,32 @@ async fn wait_for_mcp_tool_call_item(
     .await
 }
 
+const DEFAULT_USER_REVIEWER_CONFIG: &str = r#"
+[apps._default]
+default_tools_approval_mode = "prompt"
+approvals_reviewer = "user"
+"#;
+
+const CALENDAR_TOOL_USER_REVIEWER_CONFIG: &str = r#"
+[apps.calendar]
+default_tools_approval_mode = "prompt"
+approvals_reviewer = "auto_review"
+
+[apps.calendar.tools.calendar_create_event]
+approvals_reviewer = "user"
+"#;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(false; "without strict auto review")]
-#[test_case(true; "with strict auto review")]
+#[test_case(false, DEFAULT_USER_REVIEWER_CONFIG; "without strict auto review")]
+#[test_case(true, DEFAULT_USER_REVIEWER_CONFIG; "with strict auto review")]
+#[test_case(false, CALENDAR_TOOL_USER_REVIEWER_CONFIG; "tool reviewer overrides app reviewer")]
 async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
     strict_auto_review: bool,
+    apps_config_toml: &str,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let apps_config = toml::from_str(apps_config_toml)?;
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     let call_id = "calendar-call-approval";
@@ -625,11 +646,10 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
                     .enable(Feature::RequestPermissionsTool)
                     .expect("test config should allow feature update");
             }
-            set_default_app_approval_mode_and_reviewer(
-                config,
-                AppToolApproval::Prompt,
-                ApprovalsReviewer::User,
-            );
+            config.config_layer_stack = config
+                .config_layer_stack
+                .with_user_config(&config.codex_home.join("config.toml").abs(), apps_config)
+                .expect("apps user config should be valid");
         });
     let test = builder.build(&server).await?;
     let root_turn_id = "originating-calendar-turn";
@@ -708,7 +728,7 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
         })
         .await
         else {
-            panic!("expected apps._default user to route the app approval to the user");
+            panic!("expected the configured reviewer to route the app approval to the user");
         };
 
         test.codex
@@ -988,6 +1008,74 @@ approvals_reviewer = "auto_review"
         apps_tool_call.pointer("/params/arguments/title"),
         Some(&json!("Lunch"))
     );
+
+    if !protected_model && !work_link_reviewer {
+        let after_policy_refresh = "calendar-after-policy-refresh";
+        mount_sse_sequence(
+            &server,
+            vec![
+                sse(vec![
+                    ev_response_created(after_policy_refresh),
+                    ev_function_call_with_namespace(
+                        after_policy_refresh,
+                        SEARCH_CALENDAR_NAMESPACE,
+                        SEARCH_CALENDAR_CREATE_TOOL,
+                        &calendar_args,
+                    ),
+                    ev_completed(after_policy_refresh),
+                ]),
+                sse(vec![ev_response_created("done"), ev_completed("done")]),
+            ],
+        )
+        .await;
+        let snapshot = load_guardian_policy_snapshot(
+            LOCAL_FS.as_ref(),
+            test.config.codex_home.as_path(),
+            &LoaderOverrides::without_managed_config_for_tests(),
+            &CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "allowed_approvals_reviewers = ['user']",
+            ),
+            /*revision*/ 1,
+        )
+        .await?;
+        assert_eq!(
+            test.codex.refresh_guardian_policy(&snapshot).await,
+            ConfigRefreshOutcome::Published
+        );
+        submit_user_turn(
+            &test,
+            "Use [$calendar](app://calendar) to create another event.",
+            AskForApproval::OnRequest,
+            PermissionProfile::Disabled,
+            /*collaboration_mode*/ None,
+        )
+        .await?;
+        let EventMsg::ElicitationRequest(request) = wait_for_event(&test.codex, |event| {
+            matches!(
+                event,
+                EventMsg::ElicitationRequest(_) | EventMsg::TurnComplete(_)
+            )
+        })
+        .await
+        else {
+            anyhow::bail!("the existing MCP runtime skipped user approval");
+        };
+        assert_eq!(recorded_apps_tool_calls(&server).await.len(), 1);
+        test.codex
+            .submit(Op::ResolveElicitation {
+                server_name: request.server_name,
+                request_id: request.id,
+                decision: ElicitationAction::Accept,
+                content: None,
+                meta: None,
+            })
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        recorded_apps_tool_call_by_call_id(&server, after_policy_refresh).await;
+    }
 
     Ok(())
 }

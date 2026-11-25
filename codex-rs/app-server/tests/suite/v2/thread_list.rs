@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
@@ -14,6 +15,7 @@ use chrono::Utc;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::ProjectImportResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
@@ -50,6 +52,7 @@ use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -90,6 +93,17 @@ async fn list_threads(
     .await
 }
 
+async fn list_ids_and_cursor(
+    server: &mut TestAppServer,
+    params: Value,
+) -> Result<(Vec<String>, Option<String>)> {
+    let request = server.send_raw_request("thread/list", Some(params)).await?;
+    let page: ThreadListResponse =
+        timeout(DEFAULT_READ_TIMEOUT, server.read_response(request)).await??;
+    let ids = page.data.into_iter().map(|thread| thread.id).collect();
+    Ok((ids, page.next_cursor))
+}
+
 async fn list_threads_with_sort(
     mcp: &mut TestAppServer,
     cursor: Option<String>,
@@ -104,6 +118,7 @@ async fn list_threads_with_sort(
         params: codex_app_server_protocol::ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -148,6 +163,7 @@ async fn list_threads_for_relation(
         params: codex_app_server_protocol::ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -262,6 +278,89 @@ async fn thread_list_basic_empty() -> Result<()> {
     assert!(data.is_empty());
     assert_eq!(next_cursor, None);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_inclusions_reconcile_old_moved_and_archived_ids() -> Result<()> {
+    let home = TempDir::new()?;
+    create_minimal_config(home.path())?;
+    let ids = create_fake_rollouts(
+        home.path(),
+        /*count*/ 5,
+        |_| "mock_provider",
+        |i| {
+            timestamp_at(
+                /*year*/ 2025,
+                /*month*/ 4,
+                1 + i as u32,
+                /*hour*/ 12,
+                /*minute*/ 0,
+                /*second*/ 0,
+            )
+        },
+        "Saved thread",
+    )?;
+    let (old, moved, archived, newest) = (&ids[0], &ids[1], &ids[2], &ids[4]);
+    let mut server = init_mcp(home.path()).await?;
+    // Index the fixture rollouts before the project imports and filtered queries.
+    list_ids_and_cursor(&mut server, json!({"modelProviders": []})).await?;
+
+    let request = server
+        .send_raw_request(
+            "project/import",
+            Some(json!({
+                "name": "Saved", "roots": [], "threads": ids, "idempotencyKey": "saved"
+            })),
+        )
+        .await?;
+    let saved: ProjectImportResponse = server.read_response(request).await?;
+    let request = server
+        .send_raw_request(
+            "project/import",
+            Some(json!({
+                "name": "Other", "roots": [], "threads": [moved], "idempotencyKey": "other"
+            })),
+        )
+        .await?;
+    let _: ProjectImportResponse = server.read_response(request).await?;
+    let request = server
+        .send_raw_request("thread/archive", Some(json!({"threadId": archived})))
+        .await?;
+    let _: codex_app_server_protocol::ThreadArchiveResponse = server.read_response(request).await?;
+
+    let candidates = json!([old, moved, archived, old, Uuid::new_v4()]);
+    for (mut query, expected, has_next) in [
+        (json!({"includedThreadIds": null}), Some(newest), true),
+        (json!({"includedThreadIds": candidates}), Some(old), false),
+        (
+            json!({"includedThreadIds": candidates, "archived": true}),
+            Some(archived),
+            false,
+        ),
+        (
+            json!({"includedThreadIds": candidates, "excludedThreadIds": [old]}),
+            None,
+            false,
+        ),
+        (json!({"includedThreadIds": []}), None, false),
+    ] {
+        query["projectId"] = json!(saved.project.id);
+        query["modelProviders"] = json!([]);
+        query["limit"] = json!(1);
+        let (listed, next_cursor) = list_ids_and_cursor(&mut server, query.clone()).await?;
+        assert_eq!(listed, expected.cloned().as_slice(), "{query}");
+        assert_eq!(next_cursor.is_some(), has_next, "{query}");
+    }
+    let mut query = json!({
+        "projectId": saved.project.id, "includedThreadIds": [old, newest],
+        "modelProviders": [], "limit": 1,
+    });
+    let (listed, cursor) = list_ids_and_cursor(&mut server, query.clone()).await?;
+    assert_eq!(listed, [newest.as_str()]);
+    query["cursor"] = json!(cursor.context("another included thread should remain")?);
+    let page = list_ids_and_cursor(&mut server, query).await?;
+    assert_eq!(page, (vec![old.clone()], None));
     Ok(())
 }
 
@@ -399,8 +498,7 @@ async fn thread_list_exclusions_refill_across_storage_paths_and_scopes() -> Resu
 }
 
 #[tokio::test]
-async fn thread_list_exclusions_validate_bound_without_truncating_and_keep_section_order()
--> Result<()> {
+async fn thread_list_validates_id_filter_bounds_and_preserves_section_order() -> Result<()> {
     let home = TempDir::new()?;
     create_minimal_config(home.path())?;
     let ids = create_fake_rollouts(
@@ -464,16 +562,37 @@ async fn thread_list_exclusions_validate_bound_without_truncating_and_keep_secti
     }
     assert_eq!(actual, ids[1..]);
     assert!(query["cursor"].is_null());
+    let mut included = vec![Uuid::new_v4().to_string(); 99];
+    included.push(ids[4].clone());
+    query["includedThreadIds"] = json!(included);
+    query["limit"] = json!(1);
+    let page = list_ids_and_cursor(&mut server, query).await?;
+    assert_eq!(page, (vec![ids[4].clone()], None));
     excluded.push(ids[1].clone());
-    for (input, expected_message) in [
+    for (field, input, expected_message) in [
         (
+            "excludedThreadIds",
             json!(excluded),
             "excludedThreadIds accepts at most 100 entries",
         ),
-        (json!(["not-a-thread"]), "invalid excluded thread id"),
+        (
+            "excludedThreadIds",
+            json!(["not-a-thread"]),
+            "invalid excluded thread id",
+        ),
+        (
+            "includedThreadIds",
+            json!(vec![&ids[0]; 101]),
+            "includedThreadIds accepts at most 100 entries",
+        ),
+        (
+            "includedThreadIds",
+            json!(["not-a-thread"]),
+            "invalid included thread id",
+        ),
     ] {
         let req = server
-            .send_raw_request("thread/list", Some(json!({"excludedThreadIds": input})))
+            .send_raw_request("thread/list", Some(json!({field: input})))
             .await?;
         let err = timeout(
             DEFAULT_READ_TIMEOUT,
@@ -638,7 +757,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
         assert_eq!(thread.updated_at, thread.created_at);
-        assert_eq!(thread.cwd, test_absolute_path("/"));
+        assert_eq!(thread.cwd, test_absolute_path("/").into());
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
@@ -666,7 +785,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
         assert_eq!(thread.updated_at, thread.created_at);
-        assert_eq!(thread.cwd, test_absolute_path("/"));
+        assert_eq!(thread.cwd, test_absolute_path("/").into());
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
@@ -722,7 +841,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     let expected_ts = chrono::DateTime::parse_from_rfc3339("2025-01-02T11:00:00Z")?.timestamp();
     assert_eq!(thread.created_at, expected_ts);
     assert_eq!(thread.updated_at, expected_ts);
-    assert_eq!(thread.cwd, test_absolute_path("/"));
+    assert_eq!(thread.cwd, test_absolute_path("/").into());
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
@@ -783,6 +902,7 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -838,7 +958,7 @@ async fn thread_list_respects_search_term_filter() -> Result<()> {
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
-    let _non_match = create_fake_rollout(
+    let non_match = create_fake_rollout(
         codex_home.path(),
         "2025-01-02T11-00-00",
         "2025-01-02T11:00:00Z",
@@ -914,6 +1034,10 @@ async fn thread_list_respects_search_term_filter() -> Result<()> {
         (
             json!({"includeAttachedThreads": true}),
             vec![&newer_match, &older_match],
+        ),
+        (
+            json!({"includeAttachedThreads": true, "includedThreadIds": [&older_match, &non_match]}),
+            vec![&older_match],
         ),
         (
             json!({"includeAttachedThreads": true, "sourceKinds": ["exec"]}),
@@ -1167,6 +1291,22 @@ async fn thread_search_filters_by_source_kind() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_search_preserves_large_query_compatibility_on_empty_history() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+    let mut server = init_mcp(codex_home.path()).await?;
+    for term in ["s".repeat(65_536), "x".repeat(65_537)] {
+        let request_id = server
+            .send_raw_request("thread/search", Some(json!({"searchTerm": term})))
+            .await?;
+        let response: ThreadSearchResponse =
+            timeout(DEFAULT_READ_TIMEOUT, server.read_response(request_id)).await??;
+        assert!(response.data.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_db_only_errors_distinguish_unavailable_database_from_empty_history()
 -> Result<()> {
     use codex_app_server::in_process;
@@ -1323,6 +1463,7 @@ sqlite = true
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1364,6 +1505,7 @@ sqlite = true
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1394,10 +1536,18 @@ sqlite = true
         .collect();
     assert_eq!(ids, vec![thread_id.as_str()]);
 
+    let included = list_ids_and_cursor(
+        &mut mcp,
+        json!({"includedThreadIds": [thread_id], "cwd": stale_cwd, "modelProviders": ["mock_provider"]}),
+    )
+    .await?;
+    assert_eq!(included, (vec![thread_id.clone()], None));
+
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1432,6 +1582,7 @@ async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result
     create_minimal_config(codex_home.path())?;
     let mut mcp = init_mcp(codex_home.path()).await?;
     let parent_id = ThreadId::new();
+    let unrelated_id = ThreadId::new();
     let older_child_id = ThreadId::new();
     let newer_child_id = ThreadId::new();
     let grandchild_id = ThreadId::new();
@@ -1441,6 +1592,12 @@ async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result
     )
     .await?;
     for (thread_id, created_at, source, model_provider) in [
+        (
+            unrelated_id,
+            "2025-02-01T09:00:00Z",
+            CoreSessionSource::Cli,
+            "mock_provider",
+        ),
         (
             older_child_id,
             "2025-02-01T10:00:00Z",
@@ -1476,6 +1633,7 @@ async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result
         state_db.upsert_thread(&metadata).await?;
     }
     for (parent_thread_id, child_thread_id) in [
+        (ThreadId::new(), unrelated_id),
         (parent_id, older_child_id),
         (parent_id, newer_child_id),
         (newer_child_id, grandchild_id),
@@ -1576,6 +1734,17 @@ async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result
         ]
     );
     assert_eq!(descendants.next_cursor, None);
+    let request = mcp
+        .send_raw_request(
+            "thread/list",
+            Some(json!({
+                "ancestorThreadId": parent_id, "includedThreadIds": [grandchild_id, unrelated_id]
+            })),
+        )
+        .await?;
+    let selected: ThreadListResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request)).await??;
+    assert_eq!(selected.data, descendants.data[..1]);
     Ok(())
 }
 
@@ -1588,6 +1757,7 @@ async fn thread_list_relation_filters_reject_invalid_requests() -> Result<()> {
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1619,6 +1789,7 @@ async fn thread_list_relation_filters_reject_invalid_requests() -> Result<()> {
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1665,6 +1836,15 @@ async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
+    let desktop_id = create_fake_rollout_with_source(
+        codex_home.path(),
+        "2025-02-01T10-30-00",
+        "2025-02-01T10:30:00Z",
+        "Desktop",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::Custom("chatgpt".to_string()),
+    )?;
     let exec_id = create_fake_rollout_with_source(
         codex_home.path(),
         "2025-02-01T11-00-00",
@@ -1691,9 +1871,9 @@ async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result
 
     assert_eq!(next_cursor, None);
     let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
-    assert_eq!(ids, vec![cli_id.as_str()]);
+    assert_eq!(ids, vec![desktop_id.as_str(), cli_id.as_str()]);
     assert_ne!(cli_id, exec_id);
-    assert_eq!(data[0].source, SessionSource::Cli);
+    assert_eq!(data[1].source, SessionSource::Cli);
 
     Ok(())
 }
@@ -1916,6 +2096,7 @@ async fn thread_list_reports_loaded_subagent_direct_input_capability() -> Result
             params: codex_app_server_protocol::ThreadListParams {
                 include_attached_threads: false,
                 current_account_only: false,
+                included_thread_ids: None,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -2355,7 +2536,7 @@ async fn thread_list_includes_git_info() -> Result<()> {
     };
     assert_eq!(thread.git_info, Some(expected_git));
     assert_eq!(thread.source, SessionSource::Cli);
-    assert_eq!(thread.cwd, test_absolute_path("/"));
+    assert_eq!(thread.cwd, test_absolute_path("/").into());
     assert_eq!(thread.cli_version, "0.0.0");
 
     Ok(())
@@ -2618,6 +2799,52 @@ async fn thread_list_sort_recency_at_uses_state_db_order_with_provider_filter() 
 }
 
 #[tokio::test]
+async fn thread_list_cold_ascending_recency_returns_next_cursor() -> Result<()> {
+    let home = TempDir::new()?;
+    create_minimal_config(home.path())?;
+    let mut server = init_mcp(home.path()).await?;
+    // Finish startup backfill before adding the two unindexed rollouts.
+    list_threads(
+        &mut server,
+        /*cursor*/ None,
+        Some(1),
+        /*providers*/ None,
+        /*source_kinds*/ None,
+        /*archived*/ None,
+    )
+    .await?;
+    let ids = create_fake_rollouts(
+        home.path(),
+        /*count*/ 2,
+        |_| "mock_provider",
+        |i| {
+            timestamp_at(
+                /*year*/ 2025, /*month*/ 1, /*day*/ 1, /*hour*/ 10, i as u32,
+                /*second*/ 0,
+            )
+        },
+        "Cold thread",
+    )?;
+
+    let mut params: codex_app_server_protocol::ThreadListParams = serde_json::from_value(json!({
+        "limit": 1, "sortKey": "recency_at", "sortDirection": "asc", "modelProviders": ["mock_provider"]
+    }))?;
+    for (index, id) in ids.into_iter().enumerate() {
+        let page: ThreadListResponse = server
+            .request(|request_id| ClientRequest::ThreadList {
+                request_id,
+                params: params.clone(),
+            })
+            .await?;
+        let page_ids: Vec<_> = page.data.into_iter().map(|thread| thread.id).collect();
+        assert_eq!(page_ids, [id]);
+        assert_eq!(page.next_cursor.is_some(), index == 0);
+        params.cursor = page.next_cursor;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
@@ -2743,6 +2970,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
             .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
                 include_attached_threads: false,
                 current_account_only: false,
+                included_thread_ids: None,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -2789,6 +3017,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
             .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
                 include_attached_threads: false,
                 current_account_only: false,
+                included_thread_ids: None,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -3225,6 +3454,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -3321,6 +3551,16 @@ async fn current_account_history_refills_list_and_search() -> Result<()> {
             ids[1..=limit]
         );
     }
+
+    let page = list_ids_and_cursor(
+        &mut server,
+        json!({
+            "currentAccountOnly": true, "includedThreadIds": [ids[0], ids[4]],
+            "sortKey": "created_at", "limit": 1,
+        }),
+    )
+    .await?;
+    assert_eq!(page, (vec![ids[4].clone()], None));
 
     // The foreign header matches the raw search, but reading its snippet would hit invalid UTF-8.
     let foreign = rollout_path(home.path(), &stamp, &ids[0]);

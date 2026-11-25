@@ -63,6 +63,7 @@ pub use tool_lifecycle::ToolTimingInput;
 pub use turn_input::TurnInputContext;
 pub use turn_input::TurnInputEnvironment;
 pub use turn_lifecycle::CatalogRefreshInput;
+pub use turn_lifecycle::CloudCatalogRefreshInput;
 pub use turn_lifecycle::TurnAbortInput;
 pub use turn_lifecycle::TurnErrorInput;
 pub use turn_lifecycle::TurnStartInput;
@@ -215,17 +216,17 @@ pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
 /// Implementations should use these callbacks to seed, observe, or clear
 /// extension-private turn state. The host exposes stable identifiers and
 /// extension stores instead of core runtime objects.
+///
+/// Core serializes explicit catalog refresh and step preparation per thread.
+/// Within a refresh, contributors run concurrently and must not depend on each
+/// other's publication order.
+/// Cloud discovery runs through those refresh callbacks; hosts requesting discovery
+/// should use Core's refresh API rather than invoke hooks directly.
 pub trait TurnLifecycleContributor: Send + Sync {
     /// Selects the start phase using the current thread policy. Disabled callbacks
     /// may retain the default phase and return without doing any work.
     fn turn_start_phase(&self, _thread_store: &ExtensionData) -> TurnStartPhase {
         TurnStartPhase::BeforeTaskRegistration
-    }
-
-    /// Whether regular-task startup must reconcile MCP before this callback runs.
-    /// Ignored before task registration; contributors unrelated to MCP keep the default.
-    fn requires_mcp_runtime(&self, _thread_store: &ExtensionData) -> bool {
-        false
     }
 
     /// Called once in the selected phase, before task-specific work begins.
@@ -239,11 +240,25 @@ pub trait TurnLifecycleContributor: Send + Sync {
     }
 
     /// Refreshes catalogs before a step; returns true when MCP needs rebuilding.
+    /// Called under the same per-thread catalog lock as explicit refresh and step preparation.
     fn refresh_catalog_for_step<'a>(
         &'a self,
         _input: CatalogRefreshInput<'a>,
     ) -> ExtensionFuture<'a, bool> {
         Box::pin(async { false })
+    }
+
+    /// Publishes cloud catalogs after explicit invalidation, without requiring a turn.
+    /// Core marks MCP dirty after publication. Accepted complete or partial catalogs
+    /// replace the previous result; failed or superseded discovery returns an error.
+    /// Core invalidates resource keys before calling. MCP-backed catalogs record
+    /// the new key only on acceptance, keeping failed or cancelled refreshes stale.
+    /// Called under the same per-thread catalog lock as step preparation.
+    fn refresh_cloud_catalog<'a>(
+        &'a self,
+        _input: CloudCatalogRefreshInput<'a>,
+    ) -> ExtensionFuture<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
     }
 
     /// Observes a completed item without changing it or delaying streamed deltas.
@@ -451,6 +466,17 @@ pub trait ToolLifecycleContributor: Send + Sync {
     /// subsequent approval or process creation will succeed.
     fn on_command_start<'a>(&'a self, _input: CommandStartInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(std::future::ready(()))
+    }
+
+    /// Provides one private request metadata entry for an MCP call. Use the captured
+    /// registration to scope data to its intended recipient. Keys must be unique.
+    fn mcp_tool_request_meta(
+        &self,
+        _thread_store: &ExtensionData,
+        _turn_store: &ExtensionData,
+        _mcp_tool: &McpToolContext,
+    ) -> Option<(&'static str, serde_json::Value)> {
+        None
     }
 
     /// Runs before the MCP result is sent to the client and model.

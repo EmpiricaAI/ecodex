@@ -237,6 +237,14 @@
           ],
           "description": "Approval mode for this tool."
         },
+        "approvals_reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            }
+          ],
+          "description": "Reviewer for this tool's approval prompts, overriding link-level and app-level settings."
+        },
         "enabled": {
           "description": "Whether this tool is enabled. `Some(true)` explicitly allows this tool.",
           "type": "boolean"
@@ -609,6 +617,12 @@
       },
       "type": "object"
     },
+    "BuiltinStatusLine": {
+      "enum": [
+        "default"
+      ],
+      "type": "string"
+    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -700,6 +714,18 @@
         },
         "enabled": {
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "CodeModeToml": {
+      "additionalProperties": false,
+      "properties": {
+        "heartbeat_interval_s": {
+          "description": "Idle seconds between gRPC stream heartbeats. Zero (the default) disables them.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -878,6 +904,9 @@
             "browser_use_full_cdp_access": {
               "type": "boolean"
             },
+            "catalog_apps_instructions": {
+              "type": "boolean"
+            },
             "chronicle": {
               "type": "boolean"
             },
@@ -945,6 +974,9 @@
               "type": "boolean"
             },
             "concurrent_reasoning_summaries": {
+              "type": "boolean"
+            },
+            "connector_tool_result_passthrough": {
               "type": "boolean"
             },
             "connectors": {
@@ -1028,6 +1060,9 @@
             "fast_mode": {
               "type": "boolean"
             },
+            "file_backed_tool_audio": {
+              "type": "boolean"
+            },
             "gateway_setup_wizard": {
               "type": "boolean"
             },
@@ -1056,6 +1091,9 @@
               "type": "boolean"
             },
             "guardian_native_multi_agent_history": {
+              "type": "boolean"
+            },
+            "guardian_nested_approval_context": {
               "type": "boolean"
             },
             "guardian_node_repl_transcript_images": {
@@ -1169,6 +1207,9 @@
             "mcp_oauth_refresh_coordination": {
               "type": "boolean"
             },
+            "mcp_shared_repl_cwd": {
+              "type": "boolean"
+            },
             "mcp_tool_list_changed": {
               "type": "boolean"
             },
@@ -1220,6 +1261,9 @@
             "output_token_replay": {
               "type": "boolean"
             },
+            "per_environment_context": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
@@ -1251,6 +1295,9 @@
               "type": "boolean"
             },
             "realtime_conversation": {
+              "type": "boolean"
+            },
+            "realtime_frames_local": {
               "type": "boolean"
             },
             "reasoning_effort_override": {
@@ -1292,6 +1339,9 @@
             "responses_websockets_v2": {
               "type": "boolean"
             },
+            "restored_history_prewarm": {
+              "type": "boolean"
+            },
             "retain_client_developer_messages": {
               "type": "boolean"
             },
@@ -1305,6 +1355,9 @@
               "$ref": "#/definitions/FeatureToml_for_RuntimeAgentInstancesConfigToml"
             },
             "runtime_metrics": {
+              "type": "boolean"
+            },
+            "safe_image_decoder": {
               "type": "boolean"
             },
             "search_tool": {
@@ -1458,6 +1511,9 @@
               "type": "boolean"
             },
             "use_xaa": {
+              "type": "boolean"
+            },
+            "utc_environment_date": {
               "type": "boolean"
             },
             "view_image": {
@@ -1660,6 +1716,11 @@
       "required": [
         "command"
       ],
+      "type": "object"
+    },
+    "CredentialPermissionsToml": {
+      "additionalProperties": false,
+      "description": "In `requirements.toml`, `[permissions.credentials]` sets shared credential policy and `[permissions.<profile>.credentials]` sets policy for a named profile. Omit the shared table until it contains a supported policy setting. In `config.toml`, credentials use the named-profile form alongside filesystem and network.",
       "type": "object"
     },
     "CredentialProviderConfig": {
@@ -2282,6 +2343,17 @@
           ],
           "description": "Deprecated and ignored; asynchronous classification always uses conversations."
         },
+        "async_elastic_budgeting": {
+          "description": "Enable elastic allocation for asynchronous Guardian requests. Defaults to false.",
+          "type": "boolean"
+        },
+        "async_elastic_sections": {
+          "additionalProperties": {
+            "$ref": "#/definitions/GuardianElasticSectionConfigToml"
+          },
+          "description": "Section limits validated when asynchronous elastic budgeting is enabled.",
+          "type": "object"
+        },
         "classifier_instructions": {
           "type": "string"
         },
@@ -2439,6 +2511,48 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "housekeeper": {
+          "$ref": "#/definitions/GuardianV3HousekeeperConfigToml"
+        },
+        "max_instruction_tokens": {
+          "description": "Maximum estimated tokens per custom routing or retrieval prompt. Unset means uncapped. Ignored in project config.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "message_board_in_memory": {
+          "description": "Keep each fresh root's Guardian board in memory until the runtime closes. Defaults to false.",
+          "type": "boolean"
+        },
+        "reviewer": {
+          "$ref": "#/definitions/GuardianV3ReviewerConfigToml"
+        }
+      },
+      "type": "object"
+    },
+    "GuardianV3HousekeeperConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "batch_timeout_ms": {
+          "description": "Time budget for routing one batch, in milliseconds. Defaults to 90,000.",
+          "format": "uint32",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "routing_instructions": {
+          "description": "Guidance for grouping originals into channels and describing their topics. Ignored in project config.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GuardianV3ReviewerConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "retrieval_instructions": {
+          "description": "Guidance for searching the Guardian board and managing channel subscriptions. Ignored in project config.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -2739,6 +2853,11 @@
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
+        "auto_update": {
+          "default": false,
+          "description": "Check for updates to installed Git plugins from this marketplace when plugins are listed.",
+          "type": "boolean"
+        },
         "last_revision": {
           "default": null,
           "description": "Git revision Codex last successfully activated for this marketplace.",
@@ -2845,7 +2964,7 @@
           "type": "string"
         },
         {
-          "description": "Exchange an enterprise IdP refresh token for resource-specific authorization. Alternate credentials and ordinary OAuth fallback are not permitted.",
+          "description": "Exchange an enterprise IdP refresh token or, if none was issued, a current ID token for resource-specific authorization. Alternate credentials and ordinary OAuth fallback are not permitted.",
           "enum": [
             "ema_auth"
           ],
@@ -3373,6 +3492,10 @@
         "hide_spawn_agent_metadata": {
           "type": "boolean"
         },
+        "interrupt_at_item_boundary": {
+          "description": "Let a subagent finish its current output item while cancelling tools immediately.",
+          "type": "boolean"
+        },
         "max_concurrent_threads_per_session": {
           "format": "uint",
           "minimum": 1.0,
@@ -3665,6 +3788,10 @@
         "socks_url": {
           "type": "string"
         },
+        "transparent_tcp": {
+          "description": "Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.",
+          "type": "boolean"
+        },
         "unix_sockets": {
           "additionalProperties": {
             "$ref": "#/definitions/NetworkProxyUnixSocketPermissionToml"
@@ -3734,6 +3861,10 @@
         },
         "socks_url": {
           "type": "string"
+        },
+        "transparent_tcp": {
+          "description": "Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.",
+          "type": "boolean"
         },
         "unix_sockets": {
           "$ref": "#/definitions/NetworkUnixSocketPermissionsToml"
@@ -4135,6 +4266,9 @@
     "PermissionProfileToml": {
       "additionalProperties": false,
       "properties": {
+        "credentials": {
+          "$ref": "#/definitions/CredentialPermissionsToml"
+        },
         "description": {
           "type": "string"
         },
@@ -4665,7 +4799,7 @@
     },
     "RemoteMessageBoardConfigToml": {
       "additionalProperties": false,
-      "description": "Connection to a board provisioned by the research host.",
+      "description": "Connection settings for a remote message board.",
       "properties": {
         "bearer_token": {
           "description": "Board credential supplied directly by a runtime config override.",
@@ -4682,6 +4816,38 @@
       "required": [
         "url"
       ],
+      "type": "object"
+    },
+    "ResponseProcessMode": {
+      "oneOf": [
+        {
+          "description": "Process items as they arrive. A tool can start before its response is complete.",
+          "enum": [
+            "streaming"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Process buffered items in order after the response completes, synchronous post-hooks finish, and any budget charges are posted.",
+          "enum": [
+            "after_complete_response"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ResponsesToml": {
+      "additionalProperties": false,
+      "properties": {
+        "process_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResponseProcessMode"
+            }
+          ],
+          "description": "When to process response items, including text and tool calls. Defaults to `streaming`."
+        }
+      },
       "type": "object"
     },
     "ResumeCwdMode": {
@@ -4739,7 +4905,14 @@
           "description": "Stop when the shared budget is exhausted. Defaults to true.",
           "type": "boolean"
         },
+        "limit_budget": {
+          "description": "Positive, finite allowance in budget units. Set either limit_tokens or limit_budget. Spending exactly this amount is allowed.",
+          "exclusiveMinimum": 0.0,
+          "format": "double",
+          "type": "number"
+        },
         "limit_tokens": {
+          "description": "Positive whole-token allowance. Set either limit_tokens or limit_budget.",
           "format": "int64",
           "minimum": 1.0,
           "type": "integer"
@@ -4748,6 +4921,10 @@
           "format": "double",
           "minimum": 0.0,
           "type": "number"
+        },
+        "reminder_at_context_start": {
+          "description": "Restate the balance when a thread starts or its context is compacted. Defaults to true. Set false with an empty threshold list for no budget reminders.",
+          "type": "boolean"
         },
         "reminder_at_remaining_tokens": {
           "description": "Remaining weighted-token values that trigger reminders when crossed.",
@@ -4761,6 +4938,25 @@
           "format": "double",
           "minimum": 0.0,
           "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "RolloutTraceToml": {
+      "additionalProperties": false,
+      "description": "Storage budgets for one native rollout trace, shared by the root and its children.",
+      "properties": {
+        "max_bytes": {
+          "description": "Maximum bytes for the manifest, event log, and compressed payload shards. Defaults to 256 MiB.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_payload_bytes": {
+          "description": "Maximum uncompressed bytes retained per new body or separated value. Defaults to 64 MiB.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -5015,6 +5211,34 @@
         }
       ]
     },
+    "StatusLineProviderId": {
+      "additionalProperties": false,
+      "description": "The configured MCP server and advertised tool name identify a status line provider.",
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "StatusLineSelection": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BuiltinStatusLine"
+        },
+        {
+          "$ref": "#/definitions/StatusLineProviderId"
+        }
+      ],
+      "description": "An explicit default overrides an MCP provider from a lower configuration layer."
+    },
     "ThreadStoreToml": {
       "oneOf": [
         {
@@ -5046,6 +5270,10 @@
           "description": "Developer message sampled before an automatic context-window rollover.",
           "maxLength": 2000,
           "type": "string"
+        },
+        "context_window_as_tool_output": {
+          "description": "Render the context window and its hints as an agent.thread_hint tool output.",
+          "type": "boolean"
         },
         "enabled": {
           "type": "boolean"
@@ -5342,6 +5570,8 @@
               "hide": null,
               "new_task": null,
               "new_worktree": null,
+              "next_group": null,
+              "previous_group": null,
               "rename": null,
               "resume": null,
               "search": null,
@@ -5376,8 +5606,10 @@
               "history_search_next": null,
               "history_search_previous": null,
               "queue": null,
+              "redo": null,
               "submit": null,
-              "toggle_shortcuts": null
+              "toggle_shortcuts": null,
+              "undo": null
             },
             "editor": {
               "delete_backward": null,
@@ -5400,6 +5632,7 @@
             },
             "global": {
               "change_host": null,
+              "choose_cloud_environment": null,
               "clear_terminal": null,
               "close_sidebar_tab": null,
               "copy": null,
@@ -5453,6 +5686,7 @@
               "half_page_up": null,
               "jump_bottom": null,
               "jump_top": null,
+              "mark_markdown": null,
               "page_down": null,
               "page_up": null,
               "scroll_down": null,
@@ -5684,6 +5918,14 @@
           },
           "type": "array"
         },
+        "status_line_provider": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/StatusLineSelection"
+            }
+          ],
+          "description": "Local status line selection. Set to \"default\" for built-in items or specify an MCP server and tool."
+        },
         "status_line_use_colors": {
           "default": true,
           "description": "Color status line items with colors derived from the active syntax theme. Defaults to `true`.",
@@ -5768,6 +6010,22 @@
             }
           ],
           "description": "Open a new session in a worktree from the project default branch."
+        },
+        "next_group": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Select the first task in the next group."
+        },
+        "previous_group": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Select the first task in the previous group."
         },
         "rename": {
           "allOf": [
@@ -6014,6 +6272,14 @@
           ],
           "description": "Queue the current composer draft while a task is running."
         },
+        "redo": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Redo an undone composer edit."
+        },
         "submit": {
           "allOf": [
             {
@@ -6029,6 +6295,14 @@
             }
           ],
           "description": "Toggle the composer shortcut overlay."
+        },
+        "undo": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Undo the last edit to the composer draft."
         }
       },
       "type": "object"
@@ -6224,6 +6498,14 @@
             }
           ],
           "description": "Change where a new conversation runs."
+        },
+        "choose_cloud_environment": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Choose a saved environment for a new Cloud conversation."
         },
         "clear_terminal": {
           "allOf": [
@@ -6501,6 +6783,8 @@
             "hide": null,
             "new_task": null,
             "new_worktree": null,
+            "next_group": null,
+            "previous_group": null,
             "rename": null,
             "resume": null,
             "search": null,
@@ -6556,8 +6840,10 @@
             "history_search_next": null,
             "history_search_previous": null,
             "queue": null,
+            "redo": null,
             "submit": null,
-            "toggle_shortcuts": null
+            "toggle_shortcuts": null,
+            "undo": null
           }
         },
         "editor": {
@@ -6594,6 +6880,7 @@
           ],
           "default": {
             "change_host": null,
+            "choose_cloud_environment": null,
             "clear_terminal": null,
             "close_sidebar_tab": null,
             "copy": null,
@@ -6661,6 +6948,7 @@
             "half_page_up": null,
             "jump_bottom": null,
             "jump_top": null,
+            "mark_markdown": null,
             "page_down": null,
             "page_up": null,
             "scroll_down": null,
@@ -6921,6 +7209,14 @@
             }
           ],
           "description": "Jump to the beginning."
+        },
+        "mark_markdown": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Mark Markdown structure under the caret in transcript selection mode."
         },
         "page_down": {
           "allOf": [
@@ -7826,6 +8122,14 @@
       ],
       "description": "Cloud-owned feature settings."
     },
+    "code_mode": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CodeModeToml"
+        }
+      ],
+      "description": "Code Mode session settings."
+    },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
@@ -7978,6 +8282,9 @@
         "browser_use_full_cdp_access": {
           "type": "boolean"
         },
+        "catalog_apps_instructions": {
+          "type": "boolean"
+        },
         "chronicle": {
           "type": "boolean"
         },
@@ -8045,6 +8352,9 @@
           "type": "boolean"
         },
         "concurrent_reasoning_summaries": {
+          "type": "boolean"
+        },
+        "connector_tool_result_passthrough": {
           "type": "boolean"
         },
         "connectors": {
@@ -8128,6 +8438,9 @@
         "fast_mode": {
           "type": "boolean"
         },
+        "file_backed_tool_audio": {
+          "type": "boolean"
+        },
         "gateway_setup_wizard": {
           "type": "boolean"
         },
@@ -8156,6 +8469,9 @@
           "type": "boolean"
         },
         "guardian_native_multi_agent_history": {
+          "type": "boolean"
+        },
+        "guardian_nested_approval_context": {
           "type": "boolean"
         },
         "guardian_node_repl_transcript_images": {
@@ -8269,6 +8585,9 @@
         "mcp_oauth_refresh_coordination": {
           "type": "boolean"
         },
+        "mcp_shared_repl_cwd": {
+          "type": "boolean"
+        },
         "mcp_tool_list_changed": {
           "type": "boolean"
         },
@@ -8320,6 +8639,9 @@
         "output_token_replay": {
           "type": "boolean"
         },
+        "per_environment_context": {
+          "type": "boolean"
+        },
         "personality": {
           "type": "boolean"
         },
@@ -8351,6 +8673,9 @@
           "type": "boolean"
         },
         "realtime_conversation": {
+          "type": "boolean"
+        },
+        "realtime_frames_local": {
           "type": "boolean"
         },
         "reasoning_effort_override": {
@@ -8392,6 +8717,9 @@
         "responses_websockets_v2": {
           "type": "boolean"
         },
+        "restored_history_prewarm": {
+          "type": "boolean"
+        },
         "retain_client_developer_messages": {
           "type": "boolean"
         },
@@ -8405,6 +8733,9 @@
           "$ref": "#/definitions/FeatureToml_for_RuntimeAgentInstancesConfigToml"
         },
         "runtime_metrics": {
+          "type": "boolean"
+        },
+        "safe_image_decoder": {
           "type": "boolean"
         },
         "search_tool": {
@@ -8558,6 +8889,9 @@
           "type": "boolean"
         },
         "use_xaa": {
+          "type": "boolean"
+        },
+        "utc_environment_date": {
           "type": "boolean"
         },
         "view_image": {
@@ -8949,6 +9283,14 @@
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
     },
+    "responses": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ResponsesToml"
+        }
+      ],
+      "description": "Controls how Codex processes model responses."
+    },
     "responses_api_metadata": {
       "additionalProperties": {
         "type": "string"
@@ -8959,6 +9301,14 @@
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"
+    },
+    "rollout_trace": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RolloutTraceToml"
+        }
+      ],
+      "description": "Capture limits for local rollout traces when recording is enabled."
     },
     "sandbox_mode": {
       "allOf": [

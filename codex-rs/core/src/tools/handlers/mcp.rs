@@ -6,9 +6,12 @@ use crate::context::NodeReplReviewEvidence;
 use crate::context::NodeReplReviewEvidenceMode;
 use crate::context::node_repl_review_evidence_mode;
 use crate::function_tool::FunctionCallError;
+use crate::image_preparation::prompt_image_decoder;
+use crate::mcp_tool_call::CompletedMcpToolCall;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::session::session::Session;
+use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolEnvironments;
@@ -297,6 +300,17 @@ impl McpHandler {
             .map(TruncationPolicy::Tokens)
             .unwrap_or(step_context.settings.model_info.truncation_policy.into());
         let started = Instant::now();
+        let capture = prepared
+            .filter(|_| result_metadata_capture_allowed)
+            .and_then(|call| {
+                let child_id =
+                    matches!(source, ToolCallSource::CodeMode { .. }).then_some(call_id.as_str());
+                session
+                    .services
+                    .executed_tool_calls
+                    .start_mcp_result_capture(&step_context.turn, call, child_id)
+            });
+        let mut result_capture = None;
         // Bound the compiler's async-layout query depth for approval and dispatch.
         let result = Box::pin(handle_mcp_tool_call(
             Arc::clone(&session),
@@ -310,13 +324,27 @@ impl McpHandler {
             tool_name,
             &source,
             payload,
+            |call, raw| {
+                // Recovery may have selected an independent credential after dispatch.
+                result_capture = capture.and_then(|capture| {
+                    capture.record(raw, |session_auth| call.permits_result_body(session_auth))
+                });
+            },
         ))
         .await;
 
+        let (result, tool_input) = match result {
+            Ok(CompletedMcpToolCall { result, tool_input }) => (result, tool_input),
+            Err(FunctionCallError::RespondToModel(message)) => {
+                return Ok(boxed_tool_output(AbortedToolOutput { message }));
+            }
+            Err(error) => return Err(error),
+        };
         Ok(boxed_tool_output(McpToolOutput {
-            result: result.result,
-            tool_input: result.tool_input,
+            result,
+            tool_input,
             result_metadata_capture_allowed,
+            result_capture,
             wall_time: started.elapsed(),
             original_image_detail_supported: can_request_original_image_detail(
                 &step_context.settings.model_info,
@@ -415,6 +443,7 @@ impl CoreToolRuntime for McpHandler {
                 .and_then(Value::as_bool)
                 == Some(true)
         };
+        let decoder = prompt_image_decoder(&invocation.turn.config.features);
         let mut captured_image_bytes = 0_usize;
         let mut items = content
             .iter()
@@ -458,8 +487,12 @@ impl CoreToolRuntime for McpHandler {
                             .and_then(|detail| serde_json::from_value(detail.clone()).ok());
                         let image_url =
                             format!("data:{};base64,{payload}", mime_type.to_ascii_lowercase());
-                        load_data_url_for_prompt_uncached(&image_url, PromptImageMode::Original)
-                            .ok()?;
+                        load_data_url_for_prompt_uncached(
+                            &image_url,
+                            PromptImageMode::Original,
+                            decoder,
+                        )
+                        .ok()?;
                         captured_image_bytes = next_image_bytes;
                         Some(UserInput::Image {
                             image: codex_protocol::models::ImageReference::Inline { image_url },
@@ -818,6 +851,7 @@ mod tests {
                 }
             }),
             result_metadata_capture_allowed: false,
+            result_capture: Default::default(),
             wall_time: Duration::from_millis(42),
             original_image_detail_supported: true,
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),

@@ -7,6 +7,7 @@
 mod activation;
 mod activation_wire;
 mod discovery;
+mod environments;
 mod history;
 mod history_wire;
 mod item_wire;
@@ -41,6 +42,7 @@ pub use discovery::ThreadReadState;
 pub use discovery::ThreadSortDirection;
 pub use discovery::ThreadSortKey;
 pub use discovery::ThreadUnreadPosition;
+pub use environments::SavedEnvironment;
 pub use history::HistoryAccess;
 pub use history::HistoryItem;
 pub use history::HistoryOrder;
@@ -49,6 +51,7 @@ pub use history::HistoryQuery;
 pub use history::HistoryTurn;
 pub use history::ListItemsRequest;
 pub use history::ListTurnsRequest;
+pub use items::AgentMessagePhase;
 pub use items::AgentQuestion;
 pub use items::CommandAction;
 pub use items::CommandExecutionSource;
@@ -56,6 +59,7 @@ pub use items::CommandSummary;
 pub use items::ItemLifecycle;
 pub use items::ItemStatus;
 pub use items::ItemSummary;
+pub use prewarm::EnvironmentSelection;
 pub use prewarm::ProjectEnvironment;
 pub use transcript::FileUpdate;
 pub use transcript::ItemDelta;
@@ -295,6 +299,43 @@ impl Client {
         .await
         .map_err(|_| Error::Timeout)?
         .map_err(Error::from)?;
+        Ok(())
+    }
+
+    /// Reads the saved name without opening or replacing an attachment.
+    pub async fn read_thread_name(&self, thread_id: &str) -> Result<Option<String>, Error> {
+        let payload = self
+            .raw_unary(
+                wire::ThreadIdRequest {
+                    thread_id: thread_id.to_owned(),
+                },
+                "/oaiproto.codex_app_server_backend.ThreadService/ReadThread",
+            )
+            .await?;
+        let thread = wire::ReadThreadResponse::decode(payload)
+            .map_err(|_| Error::InvalidResponse)?
+            .thread
+            .filter(|thread| thread.id.as_deref() == Some(thread_id))
+            .ok_or(Error::InvalidResponse)?;
+        Ok(thread.name)
+    }
+
+    /// Saves a conversation name without opening an attachment.
+    pub async fn set_thread_name(&self, thread_id: &str, name: &str) -> Result<(), MutationError> {
+        if thread_id.trim().is_empty() || name.trim().is_empty() {
+            return Err(MutationError::InvalidRequest);
+        }
+        let payload = self
+            .mutate(
+                wire::SetThreadNameRequest {
+                    thread_id: thread_id.to_owned(),
+                    name: name.to_owned(),
+                },
+                "/oaiproto.codex_app_server_backend.ThreadService/SetThreadName",
+            )
+            .await?;
+        wire::EmptyResponse::decode(payload)
+            .map_err(|_| MutationError::OutcomeUnknown(Error::InvalidResponse))?;
         Ok(())
     }
 

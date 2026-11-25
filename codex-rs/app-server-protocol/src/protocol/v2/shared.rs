@@ -77,6 +77,9 @@ pub enum CodexErrorInfo {
     ContextWindowExceeded,
     SessionBudgetExceeded,
     UsageLimitExceeded,
+    ApiKeySpendLimitExceeded,
+    ProjectSpendLimitExceeded,
+    OrganizationSpendLimitExceeded,
     RateLimitExceeded,
     FlexUnavailable,
     ServerOverloaded,
@@ -86,6 +89,7 @@ pub enum CodexErrorInfo {
     /// The workspace's inference hook explicitly denied this request.
     InferenceHookDenied,
     CyberPolicy,
+    BioPolicy,
     MisalignmentPolicyViolation,
     TooManyDenials,
     HttpConnectionFailed {
@@ -156,6 +160,15 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
         match value {
             CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
             CoreCodexErrorInfo::SessionBudgetExceeded => CodexErrorInfo::SessionBudgetExceeded,
+            CoreCodexErrorInfo::ApiKeySpendLimitExceeded => {
+                CodexErrorInfo::ApiKeySpendLimitExceeded
+            }
+            CoreCodexErrorInfo::ProjectSpendLimitExceeded => {
+                CodexErrorInfo::ProjectSpendLimitExceeded
+            }
+            CoreCodexErrorInfo::OrganizationSpendLimitExceeded => {
+                CodexErrorInfo::OrganizationSpendLimitExceeded
+            }
             CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
             CoreCodexErrorInfo::RateLimitExceeded => CodexErrorInfo::RateLimitExceeded,
             CoreCodexErrorInfo::FlexUnavailable => CodexErrorInfo::FlexUnavailable,
@@ -166,7 +179,7 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
             }
             CoreCodexErrorInfo::CyberPolicy => CodexErrorInfo::CyberPolicy,
             CoreCodexErrorInfo::InferenceHookDenied => CodexErrorInfo::InferenceHookDenied,
-            CoreCodexErrorInfo::BioPolicy => CodexErrorInfo::Other,
+            CoreCodexErrorInfo::BioPolicy => CodexErrorInfo::BioPolicy,
             CoreCodexErrorInfo::MisalignmentPolicyViolation => {
                 CodexErrorInfo::MisalignmentPolicyViolation
             }

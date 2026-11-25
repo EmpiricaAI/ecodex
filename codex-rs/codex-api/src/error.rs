@@ -2,6 +2,7 @@ use crate::rate_limits::RateLimitError;
 use codex_client::TransportError;
 use codex_http_client::RetryAfter;
 use codex_protocol::error::ResponseIncompleteError;
+use codex_protocol::error::SpendLimitScope;
 use codex_protocol::protocol::MisalignmentErrorDetails;
 use http::StatusCode;
 use serde_json::Value;
@@ -25,6 +26,8 @@ pub enum ApiError {
     ContextWindowExceeded,
     #[error("quota exceeded")]
     QuotaExceeded,
+    #[error("spend limit exceeded")]
+    SpendLimitExceeded(SpendLimitScope),
     #[error("usage not included")]
     UsageNotIncluded,
     #[error("session budget exceeded")]
@@ -100,6 +103,33 @@ pub(crate) fn parse_terminal_provider_error(
         .and_then(Value::as_str)
         .filter(|message| !message.trim().is_empty());
     match (code, status) {
+        ("insufficient_quota" | "credit_balance_exhausted", None) => Some(ApiError::QuotaExceeded),
+        ("usage_not_included", None) => Some(ApiError::UsageNotIncluded),
+        ("invalid_prompt", None) => Some(ApiError::InvalidPrompt {
+            message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Invalid request.")
+                .to_owned(),
+        }),
+        ("misalignment_policy_violation", None) => Some(ApiError::MisalignmentPolicyViolation {
+            message: message
+                .unwrap_or("This request was blocked due to a misalignment policy violation.")
+                .to_owned(),
+            misalignment: error.get("misalignment").cloned().and_then(|details| {
+                serde_json::from_value::<MisalignmentErrorDetails>(details).ok()
+            }),
+        }),
+        ("api_key_spend_limit_exceeded", None | Some(StatusCode::TOO_MANY_REQUESTS)) => {
+            Some(ApiError::SpendLimitExceeded(SpendLimitScope::ApiKey))
+        }
+        ("project_spend_limit_exceeded", None | Some(StatusCode::TOO_MANY_REQUESTS)) => {
+            Some(ApiError::SpendLimitExceeded(SpendLimitScope::Project))
+        }
+        ("organization_spend_limit_exceeded", None | Some(StatusCode::TOO_MANY_REQUESTS)) => {
+            Some(ApiError::SpendLimitExceeded(SpendLimitScope::Organization))
+        }
+
         ("inference_hook_denied", None | Some(StatusCode::FORBIDDEN)) => {
             Some(ApiError::InferenceHookDenied {
                 message: message
@@ -126,6 +156,16 @@ pub(crate) fn parse_terminal_provider_error(
                 status,
             })
         }
+        ("cyber_policy", None) => Some(ApiError::CyberPolicy {
+            message: message
+                .unwrap_or("This request has been flagged for possible cybersecurity risk.")
+                .to_owned(),
+        }),
+        ("bio_policy", None) => Some(ApiError::BioPolicy {
+            message: message
+                .unwrap_or("This content was flagged for possible biological risk.")
+                .to_owned(),
+        }),
         // HTTP 403s retain their request ID and headers in the API bridge.
         ("access_program_not_enabled", None) => Some(ApiError::AccessProgramNotEnabled {
             message: message

@@ -199,16 +199,18 @@ impl McpManager {
     }
 
     /// Returns the MCP config after applying compatibility built-ins and
-    /// runtime-only extension overlays.
-    pub async fn runtime_config(&self, config: &Config) -> McpConfig {
+    /// runtime-only extension overlays and restrictions from the supplied contribution context.
+    pub async fn runtime_config(
+        &self,
+        context: McpServerContributionContext<'_, Config>,
+    ) -> McpConfig {
         self.runtime_config_with_context(
-            McpServerContributionContext::global(config),
-            // Threadless discovery and control-plane paths have no effective thread
-            // originator; active-thread tool calls use runtime_config_for_step below.
-            /*originator*/
-            None,
-            McpEnvironmentScope::HostOnly,
-            &[],
+            context,
+            context.originator(),
+            context
+                .selected_environments()
+                .map_or(McpEnvironmentScope::HostOnly, McpEnvironmentScope::Selected),
+            context.disabled_plugin_ids(),
         )
         .await
         .config
@@ -510,7 +512,7 @@ impl McpManager {
                 CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 LEGACY_CODEX_APPS_REGISTRATION_ID,
                 codex_apps_mcp_server_config(
-                    &mcp_config.chatgpt_base_url,
+                    &mcp_config.client.chatgpt_base_url,
                     mcp_config.apps_mcp_product_sku.as_deref(),
                     originator,
                 ),
@@ -565,7 +567,9 @@ impl McpManager {
 
     /// Returns configured and host-contributed servers before auth gating.
     pub async fn runtime_servers(&self, config: &Config) -> HashMap<String, McpServerConfig> {
-        let mcp_config = self.runtime_config(config).await;
+        let mcp_config = self
+            .runtime_config(McpServerContributionContext::global(config))
+            .await;
         configured_mcp_servers(&mcp_config)
     }
 
@@ -575,7 +579,9 @@ impl McpManager {
         config: &Config,
         auth: Option<&CodexAuth>,
     ) -> HashMap<codex_mcp::McpServerKey, EffectiveMcpServer> {
-        let mcp_config = self.runtime_config(config).await;
+        let mcp_config = self
+            .runtime_config(McpServerContributionContext::global(config))
+            .await;
         effective_mcp_servers(&mcp_config, auth)
     }
 }

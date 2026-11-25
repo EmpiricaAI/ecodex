@@ -226,7 +226,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
             root,
             SubscriptionRequest {
                 target: SubscriptionTarget::Thread(metadata.message_id),
-                target_agent: Some(child_path),
+                target_agent: Some(child_path.clone()),
                 change: SubscriptionChange::Subscribe,
             },
         )
@@ -239,7 +239,8 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
                 request_id: "reply".into(),
                 destination: PostDestination::Thread(metadata.message_id),
                 text: "done".into(),
-                agents_to_notify: Vec::new(),
+                // Mentioning this subscriber must still deliver only one notification.
+                agents_to_notify: vec![child_path],
             },
         )
         .await
@@ -1940,89 +1941,6 @@ async fn silent_appends_preserve_evidence_and_explicit_subscriptions()
 }
 
 #[tokio::test]
-async fn bulk_subscriptions_are_atomic_and_scoped_to_the_caller_and_supplied_channels() -> Result<()>
-{
-    use SubscriptionChange::Subscribe;
-    use SubscriptionChange::Unsubscribe;
-    use std::collections::BTreeMap;
-
-    let dir = tempfile::tempdir()?;
-    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
-    let owner = ThreadId::new();
-    let reviewer = ThreadId::new();
-    let host = Arc::new(Host {
-        clock: AtomicI64::default(),
-        fail_clock: AtomicBool::default(),
-        agent_path_calls: AtomicUsize::default(),
-        members: [
-            (owner, AgentPath::root()),
-            (reviewer, AgentPath::root().join("reviewer").unwrap()),
-        ]
-        .into(),
-        active: AtomicBool::new(true),
-        fail_notifications: AtomicBool::default(),
-        notifications: Mutex::default(),
-    });
-    let board = LocalBoard::new(sqlite, owner.into());
-    let writer = board.read_write().open(host.clone()).await?;
-    let reader = board.read_only().open(host.clone()).await?;
-    for name in ["build", "release"] {
-        writer
-            .create_channel(
-                owner,
-                CreateChannelRequest {
-                    channel_name: name.into(),
-                    description: None,
-                    subscription: Subscribe,
-                },
-            )
-            .await?;
-    }
-    reader
-        .set_subscriptions(
-            reviewer,
-            &BTreeMap::from([("build", Subscribe), ("release", Subscribe)]),
-        )
-        .await?;
-    let both = vec!["build".to_owned(), "release".to_owned()];
-    assert!(
-        reader
-            .set_subscriptions(
-                reviewer,
-                &BTreeMap::from([("build", Unsubscribe), ("missing", Subscribe)])
-            )
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        reader
-            .subscribed_channels(reviewer, PageRequest::default())
-            .await?
-            .results,
-        both
-    );
-    reader
-        .set_subscriptions(reviewer, &BTreeMap::from([("build", Unsubscribe)]))
-        .await?;
-    assert_eq!(
-        reader
-            .subscribed_channels(reviewer, PageRequest::default())
-            .await?
-            .results,
-        vec!["release".to_owned()]
-    );
-    assert_eq!(
-        reader
-            .subscribed_channels(owner, PageRequest::default())
-            .await?
-            .results,
-        both
-    );
-    assert!(host.notifications.lock().unwrap().is_empty());
-    Ok(())
-}
-
-#[tokio::test]
 async fn local_board_setup_survives_reopen() -> Result<()> {
     use serde_json::json;
     let dir = tempfile::tempdir()?;
@@ -2269,6 +2187,3 @@ async fn storage_namespaces_preserve_isolation_reopen_and_deletion() -> Result<(
 
 #[path = "local_board/mcp_tests.rs"]
 mod mcp;
-
-#[path = "local_board/read_view_tests.rs"]
-mod read_view;

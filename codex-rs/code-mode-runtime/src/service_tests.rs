@@ -547,6 +547,63 @@ fn echo_tool() -> ToolDefinition {
     }
 }
 
+#[test]
+fn catalog_revisions_freeze_each_cells_tools_and_isolate_sessions() {
+    let service = InProcessCodeModeSession::new();
+    let register = |service: &InProcessCodeModeSession, revision, description: &str| {
+        let mut request = execute_request("");
+        request.enabled_tools = vec![ToolDefinition {
+            description: description.to_string(),
+            ..echo_tool()
+        }];
+        service.runtime_request(request, Some(revision))
+    };
+    let first = register(&service, 1, "first").unwrap();
+    let hit = service
+        .runtime_request(execute_request(""), Some(1))
+        .unwrap();
+    assert!(Arc::ptr_eq(&first.enabled_tools, &hit.enabled_tools));
+    let second = register(&service, 2, "second").unwrap();
+    let late = register(&service, 1, "late").unwrap();
+    assert_eq!(late.enabled_tools[0].description, "late");
+    assert_eq!(first.enabled_tools[0].description, "first");
+    assert!(register(&service, 2, "conflict").is_err());
+    assert!(
+        service
+            .runtime_request(execute_request(""), Some(1))
+            .is_err()
+    );
+    let hit = service
+        .runtime_request(execute_request(""), Some(2))
+        .unwrap();
+    assert!(Arc::ptr_eq(&second.enabled_tools, &hit.enabled_tools));
+    let other = InProcessCodeModeSession::new();
+    assert!(other.runtime_request(execute_request(""), Some(2)).is_err());
+    let shared = register(&other, 1, "second").unwrap();
+    assert!(Arc::ptr_eq(
+        &second.enabled_tools[0],
+        &shared.enabled_tools[0]
+    ));
+    assert!(other.runtime_request(execute_request(""), Some(2)).is_err());
+    let distinct = register(&other, 2, "distinct").unwrap();
+    assert!(!Arc::ptr_eq(
+        &second.enabled_tools[0],
+        &distinct.enabled_tools[0]
+    ));
+    let weak = Arc::downgrade(&distinct.enabled_tools[0]);
+    drop(other);
+    assert!(weak.upgrade().is_some());
+    drop(distinct);
+    assert!(weak.upgrade().is_none());
+    assert!(
+        service
+            .runtime_request(execute_request(""), /*revision*/ None)
+            .unwrap()
+            .enabled_tools
+            .is_empty()
+    );
+}
+
 async fn execute(service: &InProcessCodeModeSession, request: ExecuteRequest) -> RuntimeResponse {
     service
         .execute(
@@ -1360,6 +1417,96 @@ text("done");
                 error_text: None,
             }
         ))
+    );
+}
+
+#[tokio::test]
+async fn catalog_globals_preserve_mutations_within_each_cell() {
+    let service = InProcessCodeModeSession::new();
+    let source = r#"
+const entry = ALL_TOOLS[0];
+const name = entry.name;
+entry.name = "local";
+const callback = tools[name];
+tools[name] = null;
+text(JSON.stringify([name, typeof callback, ALL_TOOLS[0].name, tools[name]]));
+"#;
+    for _ in 0..2 {
+        let response = execute(
+            &service,
+            ExecuteRequest {
+                enabled_tools: vec![echo_tool()],
+                yield_time_ms: None,
+                ..execute_request(source)
+            },
+        )
+        .await;
+        let RuntimeResponse::Result {
+            content_items,
+            error_text: None,
+            ..
+        } = response
+        else {
+            panic!("catalog lookup failed: {response:?}");
+        };
+        assert_eq!(
+            content_items,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: r#"["echo","function","local",null]"#.into(),
+            }]
+        );
+    }
+}
+
+#[tokio::test]
+async fn catalog_globals_ignore_inherited_setters() {
+    let service = InProcessCodeModeSession::new();
+    let source = r#"
+let setterCalls = 0;
+Object.defineProperty(Object.prototype, "name", {
+  configurable: true,
+  set(value) { setterCalls++; globalThis.ALL_TOOLS = []; }
+});
+for (const key of ["description", "echo"]) {
+  Object.defineProperty(Object.prototype, key, {
+    configurable: true,
+    set(value) { setterCalls++; }
+  });
+}
+Object.defineProperty(Array.prototype, "0", {
+  configurable: true,
+  set(value) { setterCalls++; }
+});
+const entry = ALL_TOOLS[0];
+const callback = tools.echo;
+delete Object.prototype.name;
+delete Object.prototype.description;
+delete Object.prototype.echo;
+delete Array.prototype[0];
+text(JSON.stringify([entry.name, entry.description, typeof callback, setterCalls]));
+"#;
+    let response = execute(
+        &service,
+        ExecuteRequest {
+            enabled_tools: vec![echo_tool()],
+            yield_time_ms: None,
+            ..execute_request(source)
+        },
+    )
+    .await;
+    let RuntimeResponse::Result {
+        content_items,
+        error_text: None,
+        ..
+    } = response
+    else {
+        panic!("catalog lookup failed: {response:?}");
+    };
+    assert_eq!(
+        content_items,
+        vec![FunctionCallOutputContentItem::InputText {
+            text: r#"["echo","","function",0]"#.into(),
+        }]
     );
 }
 

@@ -52,11 +52,11 @@ use crate::render::line_utils::line_to_static;
 use crate::style::accent_color;
 use crate::style::table_separator_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::TerminalHyperlink;
+use crate::terminal_hyperlinks::markdown_destination;
 use crate::terminal_hyperlinks::remap_wrapped_line;
 use crate::terminal_hyperlinks::source_span_width;
 use crate::terminal_hyperlinks::visible_lines;
-use crate::terminal_hyperlinks::web_destination;
-use crate::width::char_width;
 use crate::width::display_width;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -76,10 +76,15 @@ use ratatui::text::Text;
 use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
+use unicode_segmentation::UnicodeSegmentation;
 
 mod inline_directives;
 mod list_spacing;
 mod local_links;
+pub(crate) use local_links::FileLink;
+pub(crate) use local_links::SourceLocation;
+pub(crate) use local_links::is_markdown_file;
+pub(crate) use local_links::sidebar_file_link;
 mod math;
 mod mermaid;
 pub(crate) mod preferences;
@@ -105,6 +110,28 @@ mod list_spacing_tests;
 #[path = "markdown_render/task_list_tests.rs"]
 mod task_list_tests;
 pub(crate) use web_links::hide_web_link_destination;
+
+/// Find file destinations in source order, including Codex file citations.
+pub(crate) fn file_links(input: &str, cwd: Option<&Path>) -> Vec<FileLink> {
+    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
+    let directives = InlineDirectives::new(input, options);
+    directives
+        .events(
+            Parser::new_ext(&directives.markdown, options).into_offset_iter(),
+            cwd,
+        )
+        .filter_map(|(event, _)| match event {
+            Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
+                sidebar_file_link(&dest_url)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+pub(crate) fn hide_reader_link_destination(destination: &str) -> bool {
+    hide_web_link_destination(destination) || local_links::sidebar_file_link(destination).is_some()
+}
 use web_links::style_bare_web_urls;
 
 const TABLE_COLUMN_GAP: usize = 2;
@@ -481,6 +508,7 @@ pub(crate) fn render_markdown_lines_with_list_spacing(
 #[derive(Clone, Debug)]
 struct LinkState {
     destination: String,
+    source: usize,
     show_destination: bool,
     style_label: bool,
     has_visible_label: bool,
@@ -764,7 +792,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             Tag::Emphasis => self.push_inline_style(self.styles.emphasis),
             Tag::Strong => self.push_inline_style(self.styles.strong),
             Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
-            Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
+            Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string(), range.start),
             Tag::Table(alignments) => self.start_table(alignments),
             Tag::TableHead => self.start_table_head(),
             Tag::TableRow => self.start_table_row(range),
@@ -1403,11 +1431,19 @@ impl<'a, 'policy> Writer<'a, 'policy> {
 
     fn push_span_to_table_cell(&mut self, span: Span<'static>) {
         let span = self.style_link_label(span);
-        let mut annotated = HyperlinkLine::new(Line::default());
-        annotated.push_span(
-            span,
-            self.link.as_ref().map(|link| link.destination.as_str()),
-        );
+        let annotated = if let Some(path) = self.label_document_path() {
+            self.document_label_span(span, path)
+        } else {
+            let mut annotated = HyperlinkLine::default();
+            annotated.push_span(
+                span,
+                self.link.as_ref().map(|link| link.destination.as_str()),
+            );
+            if let Some(link) = annotated.hyperlinks.last_mut() {
+                link.markdown_source = self.link.as_ref().map(|link| link.source);
+            }
+            annotated
+        };
         if let Some(table_state) = self.table_state.as_mut()
             && let Some(cell) = table_state.current_cell.as_mut()
         {
@@ -1429,29 +1465,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             if i > 0 {
                 self.push_table_cell_hard_break();
             }
-            self.push_text_spans_to_table_cell(line, style);
-        }
-    }
-
-    fn push_text_spans_to_table_cell(&mut self, text: &str, style: Style) {
-        let span = self.style_link_label(Span::styled(text.to_string(), style));
-        let destination = self
-            .link
-            .as_ref()
-            .and_then(|link| web_destination(&link.destination));
-        let mut annotated = if let Some(destination) = destination {
-            let mut annotated = HyperlinkLine::new(Line::default());
-            annotated.push_span(span, Some(&destination));
-            annotated
-        } else if self.link.is_some() || self.in_code_block {
-            HyperlinkLine::new(Line::from(span))
-        } else {
-            style_bare_web_urls(span, self.styles.link)
-        };
-        if let Some(table_state) = self.table_state.as_mut()
-            && let Some(cell) = table_state.current_cell.as_mut()
-        {
-            cell.push_annotated(std::mem::take(&mut annotated), &self.copy_inline);
+            let annotated = self.annotate_text_span(line, style);
+            if let Some(table_state) = self.table_state.as_mut()
+                && let Some(cell) = table_state.current_cell.as_mut()
+            {
+                cell.push_annotated(annotated, &self.copy_inline);
+            }
         }
     }
 
@@ -1599,6 +1618,25 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                     TABLE_BODY_SEPARATOR_CHAR,
                     separator_style,
                 ));
+            }
+        }
+        // Include columns whose text ends before a neighbor wraps or whose value is empty.
+        let mut end = 0;
+        let edges: std::sync::Arc<[usize]> = column_widths
+            .iter()
+            .map(|width| {
+                end += width + 2 * TABLE_CELL_PADDING + TABLE_COLUMN_GAP;
+                end - TABLE_COLUMN_GAP / 2
+            })
+            .collect();
+        for line in &mut out {
+            if let Some(table) = line
+                .source
+                .as_mut()
+                .and_then(|source| source.copy.as_mut())
+                .and_then(|copy| std::sync::Arc::make_mut(copy).table.as_mut())
+            {
+                table.grid_columns = Some(std::sync::Arc::clone(&edges));
             }
         }
         RenderedTableLines {
@@ -1997,14 +2035,17 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         let mut out = HyperlinkLine::new(Line::default());
         let mut copy = None;
         let mut byte_offset = 1;
+        let mut output_column = 1;
         out.push_span("|".into(), /*destination*/ None);
         for cell in row {
             out.push_span(" ".into(), /*destination*/ None);
             byte_offset += 1;
+            output_column += 1;
             for (index, line) in cell.lines.iter().enumerate() {
                 if index > 0 {
                     out.push_span(" ".into(), /*destination*/ None);
                     byte_offset += 1;
+                    output_column += 1;
                 }
                 let text = line
                     .line
@@ -2012,43 +2053,78 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                     .iter()
                     .map(|span| span.content.as_ref())
                     .collect::<String>();
-                let mut column = 0usize;
-                let mut current_destination = None;
+                // Link ranges count graphemes within each original span. Flattening
+                // the line can join graphemes across style boundaries.
+                let mut source_graphemes = line
+                    .line
+                    .spans
+                    .iter()
+                    .flat_map(|span| span.content.graphemes(/*is_extended*/ true))
+                    .peekable();
+                let mut source_byte = 0;
+                let mut source_column = 0;
+                let mut current_link = None;
+                let mut run_start = output_column;
                 let mut current_text = String::new();
                 let flush = |out: &mut HyperlinkLine,
                              current_text: &mut String,
-                             destination: Option<&str>| {
-                    if !current_text.is_empty() {
-                        out.push_span(Span::raw(std::mem::take(current_text)), destination);
+                             link: Option<&TerminalHyperlink>,
+                             columns: std::ops::Range<usize>| {
+                    if current_text.is_empty() {
+                        return;
+                    }
+                    let span = Span::raw(std::mem::take(current_text));
+                    out.push_span(span, /*destination*/ None);
+                    if let Some(link) = link
+                        && !columns.is_empty()
+                    {
+                        out.hyperlinks.push(link.with_columns(columns));
                     }
                 };
-                for (byte, ch) in text.char_indices() {
-                    let destination = line
+                for (byte, grapheme) in text.grapheme_indices(/*is_extended*/ true) {
+                    while let Some(source) =
+                        source_graphemes.next_if(|source| source_byte + source.len() <= byte)
+                    {
+                        source_byte += source.len();
+                        source_column += display_width(source);
+                    }
+                    let link = line
                         .hyperlinks
                         .iter()
-                        .find(|link| link.columns.contains(&column))
-                        .map(|link| link.destination.as_str());
-                    if destination != current_destination {
-                        flush(&mut out, &mut current_text, current_destination);
-                        current_destination = destination;
+                        .find(|link| link.columns.contains(&source_column));
+                    if link != current_link {
+                        flush(
+                            &mut out,
+                            &mut current_text,
+                            current_link,
+                            run_start..output_column,
+                        );
+                        current_link = link;
+                        run_start = output_column;
                     }
-                    if ch == '|' {
-                        current_text.push_str("\\|");
+                    if grapheme.starts_with('|') {
+                        current_text.push('\\');
                         byte_offset += 1;
-                    } else {
-                        current_text.push(ch);
+                        output_column += 1;
                     }
+                    current_text.push_str(grapheme);
                     if let Some(mut source) = line.source.clone() {
-                        source.range = byte..byte + ch.len_utf8();
+                        source.range = byte..byte + grapheme.len();
                         crate::markdown_copy::table::append(&mut copy, &source, byte_offset);
                     }
-                    byte_offset += ch.len_utf8();
-                    column += char_width(ch);
+                    byte_offset += grapheme.len();
+                    output_column += display_width(grapheme);
                 }
-                flush(&mut out, &mut current_text, current_destination);
+                flush(
+                    &mut out,
+                    &mut current_text,
+                    current_link,
+                    run_start..output_column,
+                );
             }
             out.push_span(" |".into(), /*destination*/ None);
             byte_offset += 2;
+            output_column += 2;
         }
         crate::markdown_copy::table::attach(&mut out, copy);
         out
@@ -2234,7 +2310,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
 
     fn style_link_label(&mut self, mut span: Span<'static>) -> Span<'static> {
         if let Some(link) = self.link.as_mut()
-            && web_destination(&link.destination).is_some()
+            && (link.style_label || markdown_destination(&link.destination).is_some())
         {
             link.has_visible_label |=
                 !span.content.trim().is_empty() && display_width(&span.content) > 0;
@@ -2243,17 +2319,18 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         span
     }
 
-    fn push_link(&mut self, dest_url: String) {
+    fn push_link(&mut self, dest_url: String, source: usize) {
         let style_label = (self.is_hidden_link_destination)(&dest_url);
         if style_label {
             self.push_inline_style(self.styles.link);
         }
         let show_destination = !style_label && should_render_link_destination(&dest_url);
         self.link = Some(LinkState {
+            source,
             show_destination,
             style_label,
             has_visible_label: false,
-            local_target_display: if is_local_path_like_link(&dest_url) {
+            local_target_display: if !style_label && is_local_path_like_link(&dest_url) {
                 Some(
                     render_local_link_target(&dest_url, self.cwd.as_deref())
                         .unwrap_or_else(|| dest_url.clone()),
@@ -2268,37 +2345,33 @@ impl<'a, 'policy> Writer<'a, 'policy> {
     }
 
     fn pop_link(&mut self) {
-        if let Some(link) = self.link.take() {
+        if let Some(mut link) = self.link.take() {
+            if link.style_label
+                && !link.has_visible_label
+                && local_links::sidebar_file_link(&link.destination).is_some()
+            {
+                link.local_target_display = Some(
+                    render_local_link_target(&link.destination, self.cwd.as_deref())
+                        .unwrap_or_else(|| link.destination.clone()),
+                );
+            }
             if link.style_label {
                 self.pop_inline_style();
             }
             if link.show_destination
-                || (!link.has_visible_label && web_destination(&link.destination).is_some())
+                || (!link.has_visible_label && markdown_destination(&link.destination).is_some())
             {
                 // Link destinations are rendered as " (url)" suffixes. When parsing table cells,
                 // append the suffix into the active cell buffer rather than the outer paragraph
                 // line to avoid detached url lines.
+                let span = Span::styled(link.destination.clone(), self.styles.link);
                 if self.in_table_cell() {
                     self.push_span_to_table_cell(" (".into());
-                    let mut destination = HyperlinkLine::new(Line::default());
-                    destination.push_span(
-                        Span::styled(link.destination.clone(), self.styles.link),
-                        web_destination(&link.destination).as_deref(),
-                    );
-                    if let Some(table_state) = self.table_state.as_mut()
-                        && let Some(cell) = table_state.current_cell.as_mut()
-                    {
-                        cell.push_annotated(destination, &self.copy_inline);
-                    }
+                    self.push_link_target(span, &link.destination, link.source);
                     self.push_span_to_table_cell(")".into());
                 } else {
                     self.push_span(" (".into());
-                    let mut destination = HyperlinkLine::new(Line::default());
-                    destination.push_span(
-                        Span::styled(link.destination.clone(), self.styles.link),
-                        web_destination(&link.destination).as_deref(),
-                    );
-                    self.push_annotated(destination);
+                    self.push_link_target(span, &link.destination, link.source);
                     self.push_span(")".into());
                 }
             } else if let Some(local_target_display) = link.local_target_display {
@@ -2327,7 +2400,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                         self.push_span_to_table_cell(" (".into());
                     }
                     self.copy_inline.push(crate::markdown_copy::Inline::Literal);
-                    self.push_span_to_table_cell(span);
+                    self.push_link_target(span, &link.destination, link.source);
                     self.copy_inline.pop();
                     if show_label {
                         self.push_span_to_table_cell(")".into());
@@ -2349,7 +2422,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                         self.push_span(" (".into());
                     }
                     self.copy_inline.push(crate::markdown_copy::Inline::Literal);
-                    self.push_span(span);
+                    self.push_link_target(span, &link.destination, link.source);
                     self.copy_inline.pop();
                     if show_label {
                         self.push_span(")".into());
@@ -2357,6 +2430,45 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                     self.line_ends_with_local_link_target = true;
                 }
             }
+        }
+    }
+
+    fn label_document_path(&self) -> Option<FileLink> {
+        let link = self.link.as_ref().filter(|link| link.style_label)?;
+        local_links::sidebar_file_link(&link.destination)
+    }
+
+    fn document_label_span(&self, span: Span<'static>, path: FileLink) -> HyperlinkLine {
+        let width = span_width(&span);
+        let mut line = HyperlinkLine::new(Line::from(span));
+        let mut link = TerminalHyperlink::document(0..width, path);
+        link.markdown_source = self.link.as_ref().map(|link| link.source);
+        line.hyperlinks.push(link);
+        line
+    }
+
+    fn push_link_target(&mut self, span: Span<'static>, destination: &str, source: usize) {
+        let mut target = HyperlinkLine::default();
+        if let Some(link) = sidebar_file_link(destination) {
+            let width = span_width(&span);
+            target.line.push_span(span);
+            target
+                .hyperlinks
+                .push(TerminalHyperlink::document(0..width, link));
+        } else {
+            target.push_span(span, Some(destination));
+        }
+        if let Some(link) = target.hyperlinks.last_mut() {
+            link.markdown_source = Some(source);
+        }
+        if let Some(cell) = self
+            .table_state
+            .as_mut()
+            .and_then(|table| table.current_cell.as_mut())
+        {
+            cell.push_annotated(target, &self.copy_inline);
+        } else {
+            self.push_annotated(target);
         }
     }
 
@@ -2530,16 +2642,24 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         if self.current_line_content.is_none() {
             self.push_line(Line::default());
         }
+        if let Some(path) = self.label_document_path() {
+            self.push_annotated(self.document_label_span(span, path));
+            return;
+        }
         if let Some(line) = self.current_line_content.as_mut() {
             self.copy_line.push(span.content.len(), &self.copy_inline);
             if let Some(destination) = self
                 .link
                 .as_ref()
-                .and_then(|link| web_destination(&link.destination))
+                .and_then(|link| markdown_destination(&link.destination))
             {
                 // Inline code and HTML retain source columns until the transcript expands tabs.
                 let start = self.source_columns.measure(line, source_span_width);
+                let previous = line.hyperlinks.len();
                 line.push_linked_span(span, start, destination);
+                if let Some(link) = line.hyperlinks.get_mut(previous) {
+                    link.markdown_source = self.link.as_ref().map(|link| link.source);
+                }
             } else {
                 line.line.push_span(span);
             }
@@ -2565,21 +2685,30 @@ impl<'a, 'policy> Writer<'a, 'policy> {
     }
 
     fn push_text_spans(&mut self, text: &str, style: Style) {
+        let annotated = self.annotate_text_span(text, style);
+        self.push_annotated(annotated);
+    }
+
+    fn annotate_text_span(&mut self, text: &str, style: Style) -> HyperlinkLine {
         let span = self.style_link_label(Span::styled(text.to_string(), style));
         let destination = self
             .link
             .as_ref()
-            .and_then(|link| web_destination(&link.destination));
-        let annotated = if let Some(destination) = destination {
+            .and_then(|link| markdown_destination(&link.destination));
+        if let Some(path) = self.label_document_path() {
+            self.document_label_span(span, path)
+        } else if let Some(destination) = destination {
             let mut annotated = HyperlinkLine::new(Line::default());
             annotated.push_span(span, Some(&destination));
+            if let Some(link) = annotated.hyperlinks.last_mut() {
+                link.markdown_source = self.link.as_ref().map(|link| link.source);
+            }
             annotated
         } else if self.link.is_some() || self.in_code_block {
             HyperlinkLine::new(Line::from(span))
         } else {
             style_bare_web_urls(span, self.styles.link)
-        };
-        self.push_annotated(annotated);
+        }
     }
 
     fn push_blank_line(&mut self) {

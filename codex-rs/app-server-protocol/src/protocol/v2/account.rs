@@ -1,3 +1,4 @@
+use super::BedrockProviderId;
 use super::ThreadUsage;
 use crate::JsonSchema;
 use crate::TS;
@@ -117,7 +118,13 @@ pub enum LoginAccountParams {
     #[experimental("account/login/start.amazonBedrock")]
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
-    AmazonBedrock { api_key: String, region: String },
+    AmazonBedrock {
+        api_key: String,
+        region: String,
+        /// Defaults to Amazon Bedrock Mantle when omitted.
+        #[ts(optional = nullable)]
+        provider_id: Option<BedrockProviderId>,
+    },
     /// [UNSTABLE] Managed Amazon Bedrock AWS access key login is experimental.
     #[experimental("account/login/start.amazonBedrockAccessKeys")]
     #[serde(rename = "amazonBedrockAccessKeys", rename_all = "camelCase")]
@@ -128,6 +135,9 @@ pub enum LoginAccountParams {
         #[ts(optional = nullable)]
         session_token: Option<String>,
         region: String,
+        /// Defaults to Amazon Bedrock Mantle when omitted.
+        #[ts(optional = nullable)]
+        provider_id: Option<BedrockProviderId>,
     },
 }
 
@@ -621,6 +631,17 @@ pub enum AccountRoutingOverride {
 pub struct AccountUpdatedNotification {
     pub auth_mode: Option<AuthMode>,
     pub plan_type: Option<PlanType>,
+    /// Set when initial routing discovery completes for the same authenticated owner.
+    pub reason: Option<AccountUpdateReason>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/", rename_all = "camelCase")]
+pub enum AccountUpdateReason {
+    WorkspaceRoutingReady,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

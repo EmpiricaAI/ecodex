@@ -10,6 +10,7 @@ use crate::protocol::W3cTraceContext;
 use crate::user_input::UserInput;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -26,9 +27,9 @@ pub enum SuspendTurnOutcome {
 
 /// Input consumed by a regular turn.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum TurnInput {
+pub enum TurnInput<I = UserInput> {
     UserInput {
-        content: Vec<UserInput>,
+        content: Vec<I>,
         client_id: Option<String>,
     },
     ResponseItem(ResponseItem),
@@ -52,13 +53,62 @@ pub struct ResponseItemAnnotations {
     pub retain: bool,
 }
 
+/// A Responses item for history injection. Wrapped items must specify a policy.
+#[derive(Clone, Debug)]
+pub struct InjectedResponseItem {
+    pub item: ResponseItem,
+    pub retention: ItemRetention,
+}
+
+impl<'de> Deserialize<'de> for InjectedResponseItem {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct WrappedItem {
+            item: ResponseItem,
+            retention: ItemRetention,
+        }
+
+        let value = Value::deserialize(deserializer)?;
+        if value.get("type").is_some() {
+            return ResponseItem::deserialize(value)
+                .map(Self::from)
+                .map_err(serde::de::Error::custom);
+        }
+
+        let WrappedItem { item, retention } =
+            WrappedItem::deserialize(value).map_err(serde::de::Error::custom)?;
+        Ok(Self { item, retention })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ItemRetention {
+    /// Raw items use the thread's configured retention rules.
+    #[serde(skip)]
+    Unspecified,
+    /// Apply ordinary history rules even when the thread retains client developer messages.
+    Default,
+    /// Carry the item into later context windows and newly spawned children.
+    Always,
+}
+
+impl From<ResponseItem> for InjectedResponseItem {
+    fn from(item: ResponseItem) -> Self {
+        Self {
+            item,
+            retention: ItemRetention::Unspecified,
+        }
+    }
+}
+
 /// One turn input and the context that follows it through submission.
 ///
 /// Callers choose start-or-steer, idle-start, or steer-only behavior through
 /// the corresponding `CodexThread` method.
 #[derive(Clone, Debug)]
-pub struct TurnInputRequest {
-    pub input: TurnInput,
+pub struct TurnInputRequest<I = UserInput> {
+    pub input: TurnInput<I>,
     /// Optional host-assigned UUID for the Responses message created from [`TurnInput::UserInput`].
     /// Ignored for all other inputs, including raw user-role Responses items.
     pub user_item_uuid: Option<uuid::Uuid>,
@@ -119,9 +169,9 @@ pub struct RecoverTurnRequest {
     pub cyber_access_program: Option<CyberAccessProgram>,
 }
 
-impl TurnInputRequest {
+impl<I> TurnInputRequest<I> {
     /// Creates turn input that can be passed to one of the submission methods.
-    pub fn new(input: TurnInput) -> Self {
+    pub fn new(input: TurnInput<I>) -> Self {
         Self {
             input,
             user_item_uuid: None,
@@ -135,7 +185,7 @@ impl TurnInputRequest {
     }
 
     /// Creates ordinary user input without a client-provided message id.
-    pub fn user_input(content: Vec<UserInput>) -> Self {
+    pub fn user_input(content: Vec<I>) -> Self {
         Self::new(TurnInput::UserInput {
             content,
             client_id: None,
@@ -257,6 +307,9 @@ pub struct TurnStartOptions {
     /// Explicit cyber treatment for this turn. Omission preserves the backend's
     /// automatic behavior.
     pub cyber_access_program: Option<CyberAccessProgram>,
+    /// Client attribution copied when spawning a child. Applied only to its initial
+    /// turn; later parent updates do not change this snapshot.
+    pub inherited_client_metadata: HashMap<String, String>,
 }
 
 /// What Core did with input submitted through `start_or_steer_turn`.

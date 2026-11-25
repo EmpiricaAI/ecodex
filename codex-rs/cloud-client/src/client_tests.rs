@@ -133,6 +133,52 @@ async fn archive_addresses_the_requested_thread_and_requires_acknowledgment() {
 }
 
 #[tokio::test]
+async fn rename_sends_the_thread_and_title_and_requires_acknowledgment() {
+    let mut fixture = fixture_responses(vec![
+        response(vec![frame(&[])], tonic::Status::ok("")),
+        response(
+            vec![frame(&[])],
+            tonic::Status::permission_denied("synthetic denial"),
+        ),
+    ])
+    .await;
+
+    fixture.client.set_thread_name("t", "New").await.unwrap();
+    assert_request(&mut fixture, "SetThreadName", b"\x0a\x01t\x12\x03New").await;
+
+    let error = fixture
+        .client
+        .set_thread_name("u", "Other")
+        .await
+        .unwrap_err();
+    let MutationError::OutcomeUnknown(Error::Rpc(status)) = error else {
+        panic!("expected a remote rename failure");
+    };
+    assert_eq!(status.code, tonic::Code::PermissionDenied as i32);
+    assert_request(&mut fixture, "SetThreadName", b"\x0a\x01u\x12\x05Other").await;
+    assert!(fixture.requests.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn reads_a_saved_name_without_attaching_to_the_thread() {
+    let mut fixture = fixture_responses(vec![
+        response(
+            vec![frame(b"\x0a\x09\x72\x01t\x8a\x01\x03New")],
+            tonic::Status::ok(""),
+        ),
+        response(vec![frame(b"\x0a\x03\x72\x01u")], tonic::Status::ok("")),
+    ])
+    .await;
+    assert_eq!(
+        fixture.client.read_thread_name("t").await.unwrap(),
+        Some("New".to_string())
+    );
+    assert_request(&mut fixture, "ReadThread", b"\x0a\x01t").await;
+    assert_eq!(fixture.client.read_thread_name("u").await.unwrap(), None);
+    assert_request(&mut fixture, "ReadThread", b"\x0a\x01u").await;
+}
+
+#[tokio::test]
 async fn activation_preserves_native_settings_and_thread_metadata() {
     // Native Thread fields encoded independently of the client's wire types.
     let thread_base: &[u8] = &[
@@ -266,8 +312,9 @@ async fn activation_preserves_native_settings_and_thread_metadata() {
 const PREWARM_CODEX_PLUGINS: &[u8] = b"\xe2\x01\x07\x0a\x05codex";
 
 #[tokio::test]
-async fn prewarm_defers_readiness_only_for_selected_projects() {
+async fn prewarm_defers_readiness_for_explicit_environments() {
     let mut fixture = fixture_responses(vec![
+        response(vec![frame(&[])], tonic::Status::ok("")),
         response(vec![frame(&[])], tonic::Status::ok("")),
         response(vec![frame(&[])], tonic::Status::ok("")),
     ])
@@ -293,14 +340,14 @@ async fn prewarm_defers_readiness_only_for_selected_projects() {
             .prewarm_thread(
                 /*model*/ None,
                 /*model_provider*/ None,
-                Some(ProjectEnvironment {
+                Some(EnvironmentSelection::Project(ProjectEnvironment {
                     name: "App".to_owned(),
                     cwd: Some("/workspace/acme/app".to_owned()),
                     origin_urls: vec![
                         "git@github.com:acme/app.git".to_owned(),
                         "https://github.com/acme/lib.git".to_owned(),
                     ],
-                }),
+                })),
             )
             .await,
         Err(Error::InvalidResponse)
@@ -319,6 +366,73 @@ async fn prewarm_defers_readiness_only_for_selected_projects() {
     ]
     .concat();
     assert_request(&mut fixture, "Prewarm", &expected).await;
+
+    assert!(matches!(
+        fixture
+            .client
+            .prewarm_thread(
+                /*model*/ None,
+                /*model_provider*/ None,
+                Some(EnvironmentSelection::Saved("ws~asenvcfg_saved".to_owned())),
+            )
+            .await,
+        Err(Error::InvalidResponse)
+    ));
+    let expected = [
+        b"\x52\x17\x0a\x15\x0a\x13\x0a\x11ws~asenvcfg_saved".as_slice(),
+        PREWARM_CODEX_PLUGINS,
+        b"\xe8\x01\x01",
+    ]
+    .concat();
+    assert_request(&mut fixture, "Prewarm", &expected).await;
+}
+
+#[tokio::test]
+async fn saved_environment_catalog_follows_each_scope_cursor() {
+    let mut fixture = fixture_responses(
+        [
+            br#"{"data":[{"id":"asenvcfg_base","name":"Default"}],"next_cursor":"a+b"}"#.as_slice(),
+            br#"{"data":[{"id":"asenvcfg_personal","name":"Personal Rust"}],"next_cursor":null}"#,
+            br#"{"data":[{"id":"ws~asenvcfg_saved","name":"Team Rust"}],"next_cursor":null}"#,
+        ]
+        .into_iter()
+        .map(|body| {
+            http::Response::new(Body::new(http_body_util::Full::new(Bytes::from_static(
+                body,
+            ))))
+        })
+        .collect(),
+    )
+    .await;
+    assert_eq!(
+        fixture.client.list_saved_environments().await.unwrap(),
+        vec![
+            SavedEnvironment {
+                id: "asenvcfg_personal".into(),
+                name: "Personal Rust".into(),
+                workspace_shared: false,
+            },
+            SavedEnvironment {
+                id: "ws~asenvcfg_saved".into(),
+                name: "Team Rust".into(),
+                workspace_shared: true,
+            },
+        ]
+    );
+
+    for query in [
+        "scope=user&limit=100&omitDraft=true&view=picker",
+        "scope=user&limit=100&omitDraft=true&view=picker&cursor=a%2Bb",
+        "scope=workspace&limit=100&omitDraft=true&view=picker",
+    ] {
+        let (parts, body) = fixture.requests.recv().await.unwrap();
+        assert_eq!(parts.method, http::Method::GET);
+        assert_eq!(parts.uri.path(), "/v1/environment-configs");
+        assert_eq!(parts.uri.query(), Some(query));
+        assert_eq!(parts.headers["chatgpt-account-id"], "synthetic-account");
+        assert_eq!(parts.headers["x-openai-product-sku"], "codex");
+        assert!(body.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -451,10 +565,21 @@ async fn attach_preserves_opaque_events_and_native_error_details() {
         secret.clone(),
     );
     let data = [frame(&[10, 3, 10, 1, b'n']), frame(&[18, 3, 10, 1, b'r'])].concat();
-    let mut fixture = fixture(response(
-        data.iter().map(|b| Bytes::from(vec![*b])).collect(),
-        status,
-    ))
+    let large = vec![b'x'; 256 * 1024];
+    let burst = frame(
+        &wire::AttachResponse {
+            event: Some(wire::Payload::ServerRequest(large.clone().into())),
+        }
+        .encode_to_vec(),
+    );
+    let fragmented = data.iter().map(|b| Bytes::from(vec![*b]));
+    let mut fixture = fixture_responses(vec![
+        response(
+            fragmented.chain(std::iter::repeat_n(burst, 16)).collect(),
+            status,
+        ),
+        response(vec![frame(&[0x0a, 0x00])], tonic::Status::ok("")),
+    ])
     .await;
     let mut events = fixture.client.attach("t").await.unwrap();
     assert_request(&mut fixture, "Attach", &[10, 1, b't']).await;
@@ -468,6 +593,27 @@ async fn attach_preserves_opaque_events_and_native_error_details() {
         panic!("server request expected")
     };
     assert_eq!(bytes.as_ref(), &[10, 1, b'r']);
+    // History completes with several megabytes still unread on the Attach body.
+    let request = ListItemsRequest {
+        thread_id: "t".into(),
+        turn_id: None,
+        page: HistoryQuery::default(),
+    };
+    let history = fixture.client.list_items(&request);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), history)
+            .await
+            .unwrap()
+            .unwrap()
+            .data
+            .is_empty()
+    );
+    for _ in 0..16 {
+        let Event::ServerRequest(bytes) = events.next().await.unwrap().unwrap() else {
+            panic!("burst event expected")
+        };
+        assert_eq!(bytes.as_ref(), large.as_slice());
+    }
     let error = events.next().await.unwrap().unwrap_err();
     assert!(!format!("{error:?} {error}").contains("private"));
     let Error::Rpc(status) = error else {

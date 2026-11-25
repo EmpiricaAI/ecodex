@@ -221,15 +221,19 @@ async fn record_stage1_output_usage_for_memory_citation(
     true
 }
 
-/// Handle a completed output item from the model stream, recording it and
-/// queuing any tool execution futures. This records items immediately so
-/// history and rollout stay in sync even if the turn is later cancelled.
 pub(crate) type InFlightFuture<'f> =
     Pin<Box<dyn Future<Output = Result<ResponseItemEnvelope>> + Send + 'f>>;
 
+/// Text the harness actually accepted, together with the phase of that message.
+#[derive(Clone, Debug)]
+pub(crate) struct AssistantText {
+    pub(crate) text: String,
+    pub(crate) is_final_answer: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct OutputItemResult {
-    pub last_agent_message: Option<String>,
+    pub last_agent_message: Option<AssistantText>,
     pub needs_follow_up: bool,
     pub tool_future: Option<InFlightFuture<'static>>,
 }
@@ -239,7 +243,6 @@ pub(crate) struct HandleOutputCtx {
     pub step_context: Arc<StepContext>,
     pub turn_store: Arc<ExtensionData>,
     pub tool_runtime: ToolCallRuntime,
-    pub defer_tool_dispatch: bool,
     pub cancellation_token: CancellationToken,
 }
 
@@ -273,7 +276,7 @@ pub(crate) struct FinalizedTurnItem {
 #[derive(Clone, Default)]
 pub(crate) struct FinalizedTurnItemFacts {
     pub(crate) memory_citation: Option<MemoryCitation>,
-    pub(crate) last_agent_message: Option<String>,
+    pub(crate) last_agent_message: Option<AssistantText>,
     pub(crate) defers_mailbox_delivery_to_next_turn: bool,
 }
 
@@ -295,19 +298,16 @@ pub(crate) async fn finalize_non_tool_response_item(
                         codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
                     })
                     .collect::<String>();
-                let last_agent_message = if combined.trim().is_empty() {
-                    None
-                } else {
-                    Some(combined)
-                };
-                let defers_mailbox_delivery_to_next_turn =
-                    assistant_message_defers_mailbox_delivery(agent_message.phase.as_ref(), || {
-                        last_agent_message.is_some()
-                    });
+                let has_text = !combined.trim().is_empty();
+                let is_final_answer =
+                    assistant_message_is_final(agent_message.phase.as_ref(), || has_text);
                 (
                     agent_message.memory_citation.clone(),
-                    last_agent_message,
-                    defers_mailbox_delivery_to_next_turn,
+                    has_text.then_some(AssistantText {
+                        text: combined,
+                        is_final_answer,
+                    }),
+                    is_final_answer,
                 )
             }
             _ => (None, None, false),
@@ -385,24 +385,40 @@ pub(crate) async fn handle_output_item_done(
 
             let cancellation_token = ctx.cancellation_token.child_token();
             let runtime = ctx.tool_runtime.clone();
-            // handle_tool_call dispatches immediately, not when its future is polled.
-            // Defer for post-model hooks or to cancel buffered calls during mailbox drains.
-            let tool_future: InFlightFuture<'static> = if ctx.defer_tool_dispatch {
-                Box::pin(async move {
-                    if cancellation_token.is_cancelled() {
-                        // The call is already in history; resume needs its output even if we never dispatch.
-                        let output =
-                            ToolCallRuntime::aborted_response(&call, /*elapsed_secs*/ None);
-                        return Ok(output.into_response());
-                    }
-                    runtime.handle_tool_call(call, cancellation_token).await
-                })
-            } else {
-                Box::pin(runtime.handle_tool_call(call, cancellation_token))
+            let dispatch = |allowed: bool| -> InFlightFuture<'static> {
+                if allowed && !cancellation_token.is_cancelled() {
+                    Box::pin(runtime.handle_tool_call(call, cancellation_token))
+                } else {
+                    let output = ToolCallRuntime::aborted_before_dispatch(&call);
+                    Box::pin(std::future::ready(Ok(
+                        output.into_response(/*file_backed_tool_audio*/ false)
+                    )))
+                }
             };
+            // Steer acceptance appends input under this lock. A buffered request
+            // loses admission if the user steered while its response was settling.
+            output.tool_future = Some(
+                if ctx.step_context.turn.config.response_process_mode
+                    == codex_config::config_toml::ResponseProcessMode::AfterCompleteResponse
+                    && let Some(preempt) = &ctx.step_context.preempt
+                {
+                    if let Some(state) = ctx
+                        .sess
+                        .input_queue
+                        .turn_state_for_sub_id(&ctx.sess.active_turn, &ctx.step_context.turn.sub_id)
+                        .await
+                    {
+                        let state = state.lock().await;
+                        dispatch(!state.pending_input.has_user_input() && !preempt.is_cancelled())
+                    } else {
+                        dispatch(false)
+                    }
+                } else {
+                    dispatch(true)
+                },
+            );
 
             output.needs_follow_up = true;
-            output.tool_future = Some(tool_future);
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
@@ -566,7 +582,7 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
 ) -> bool {
     match item {
         ResponseItem::Message { role, phase, .. } if role == "assistant" => {
-            assistant_message_defers_mailbox_delivery(phase.as_ref(), || {
+            assistant_message_is_final(phase.as_ref(), || {
                 last_assistant_message_from_item(item, plan_mode).is_some()
             })
         }
@@ -574,7 +590,7 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
     }
 }
 
-fn assistant_message_defers_mailbox_delivery(
+fn assistant_message_is_final(
     phase: Option<&MessagePhase>,
     has_visible_text: impl FnOnce() -> bool,
 ) -> bool {

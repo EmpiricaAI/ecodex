@@ -41,6 +41,14 @@ pub struct ExecServerCommand {
     #[arg(long, value_name = "MODE", default_value = "isolate", global = true)]
     linux_sandbox_pid_namespace: codex_sandboxing::LinuxSandboxPidNamespace,
 
+    /// Route managed Linux sandbox TCP through the SOCKS proxy.
+    #[arg(long, global = true)]
+    linux_sandbox_transparent_tcp: bool,
+
+    /// Require this HTTP CONNECT proxy for raw TCP from the managed SOCKS listener.
+    #[arg(long, value_name = "HOST:PORT", global = true)]
+    tcp_upstream_proxy: Option<codex_exec_server::TcpUpstreamProxy>,
+
     /// Allow permitted private IP destinations to use the configured upstream proxy.
     /// If no valid upstream proxy applies to the request protocol, connect directly.
     /// Loopback stays local. This flag does not require upstream routing.
@@ -60,11 +68,7 @@ pub struct ExecServerCommand {
     request_dispatch_mode: codex_exec_server::RequestDispatchMode,
 
     /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`.
-    #[arg(
-        long = "listen",
-        value_name = "URL",
-        conflicts_with = "exec_server_remote"
-    )]
+    #[arg(long = "listen", value_name = "URL")]
     listen: Option<String>,
 
     #[command(flatten)]
@@ -203,7 +207,9 @@ impl ExecServerCommand {
             arg0_paths.codex_linux_sandbox_exe.clone(),
         )?
         .with_linux_sandbox_pid_namespace(self.linux_sandbox_pid_namespace)
+        .with_linux_sandbox_transparent_tcp(self.linux_sandbox_transparent_tcp)
         .with_proxy_private_ips_via_upstream(self.proxy_private_ips_via_upstream);
+        runtime_paths.tcp_upstream_proxy = self.tcp_upstream_proxy.take();
         // Config loading below owns error handling (non-strict stdio can proceed
         // without config). Never retain other startup flags in the executor.
         if let Ok(overrides) = root_config_overrides.parse_overrides() {
@@ -293,7 +299,13 @@ impl ExecServerCommand {
             let mut remote_config = codex_exec_server::RemoteEnvironmentConfig::new_with_transport(
                 base_url,
                 environment_id,
-                if direct_transport {
+                if let Some(listen) = self.listen.as_deref() {
+                    let address = listen
+                        .strip_prefix("ws://")
+                        .and_then(|s| s.parse().ok())
+                        .ok_or_else(|| anyhow::anyhow!("remote --listen requires ws://IP:PORT"))?;
+                    codex_exec_server::RemoteEnvironmentTransport::NoiseInbound(address)
+                } else if direct_transport {
                     codex_exec_server::RemoteEnvironmentTransport::Direct
                 } else {
                     codex_exec_server::RemoteEnvironmentTransport::Noise
@@ -417,6 +429,16 @@ impl ExecServerCommand {
         anyhow::ensure!(
             !self.chatgpt_token_stdin || self.command.is_none(),
             "--chatgpt-token-stdin cannot be used with forward"
+        );
+        anyhow::ensure!(
+            self.remote.is_none()
+                || self.listen.is_none()
+                || (self.remote_transport == ExecServerRemoteTransport::Noise
+                    && self.command.is_none()
+                    && self.listen.as_deref().is_some_and(|s| s
+                        .strip_prefix("ws://")
+                        .is_some_and(|v| v.parse::<std::net::SocketAddr>().is_ok()))),
+            "remote --listen requires ws://IP:PORT, Noise transport, and no forward"
         );
         match (self.remote_transport, self.aws_sigv4) {
             (ExecServerRemoteTransport::Noise, true) => {

@@ -393,7 +393,6 @@ use codex_core_plugins::remote::RemotePluginCatalogError;
 use codex_core_plugins::remote::RemotePluginDetail as RemoteCatalogPluginDetail;
 use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_core_plugins::remote::RemotePluginShareContext as RemoteCatalogPluginShareContext;
-use codex_core_plugins::remote::RemotePluginShareSummary as RemoteCatalogPluginShareSummary;
 use codex_core_plugins::remote::RemotePluginSummary as RemoteCatalogPluginSummary;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentObservedStatus;
@@ -520,7 +519,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
-use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
@@ -529,6 +527,8 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
 use tokio_util::task::TaskTracker;
 use toml::Value as TomlValue;
+
+use self::thread_list_state::ThreadListState;
 use tracing::Instrument;
 use tracing::error;
 use tracing::info;
@@ -571,6 +571,7 @@ mod thread_attachments;
 mod thread_enrichment;
 mod thread_fork_goal;
 mod thread_input;
+pub(crate) mod thread_list_state;
 mod thread_memory;
 mod thread_processor;
 mod thread_queue_processor;
@@ -603,6 +604,7 @@ pub(crate) use search::SearchRequestProcessor;
 pub(crate) use thread_goal_processor::ThreadGoalRequestProcessor;
 pub(crate) use thread_processor::ThreadRequestProcessor;
 pub(crate) use thread_processor::ThreadResumeTarget;
+pub(crate) use thread_processor::ThreadSearchDelivery;
 pub(crate) use thread_queue_processor::ThreadQueueRequestProcessor;
 pub(crate) use turn_processor::TurnRequestProcessor;
 pub(crate) use windows_sandbox_processor::WindowsSandboxRequestProcessor;
@@ -621,8 +623,11 @@ use token_usage_replay::send_thread_token_usage_update_to_connection;
 
 pub(crate) fn apply_live_thread_settings(
     thread: &mut Thread,
+    loaded_thread: &CodexThread,
     config_snapshot: &ThreadConfigSnapshot,
 ) {
+    thread.daybreak_program_propagation_enrolled =
+        Some(loaded_thread.daybreak_program_propagation_enrolled());
     thread.model = Some(config_snapshot.model.clone());
     thread.reasoning_effort = config_snapshot.reasoning_effort.clone();
     thread.environments = Some(

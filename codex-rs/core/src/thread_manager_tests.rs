@@ -57,14 +57,15 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
-use codex_protocol::user_input::UserInput;
 use codex_thread_store::InMemoryThreadStore;
+use codex_user_input::ResolvedUserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use std::time::Duration;
 use tempfile::tempdir;
 use wiremock::MockServer;
@@ -794,7 +795,7 @@ async fn thread_id_generator_applies_to_roots_children_and_forks() {
         .control(root.thread.session.session_id())
         .spawn_agent_with_metadata(
             config.clone(),
-            vec![UserInput::Text {
+            vec![ResolvedUserInput::Text {
                 text: "child task".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -1141,12 +1142,15 @@ fn assistant_msg(text: &str) -> ResponseItem {
 }
 
 fn contextual_user_interrupted_marker() -> ResponseItem {
-    interrupted_turn_history_marker(InterruptedTurnHistoryMarker::ContextualUser)
-        .expect("contextual-user interrupted marker should be enabled")
+    interrupted_turn_history_marker(
+        InterruptedTurnHistoryMarker::ContextualUser,
+        /*cause*/ None,
+    )
+    .expect("contextual-user interrupted marker should be enabled")
 }
 
 fn developer_interrupted_marker() -> ResponseItem {
-    interrupted_turn_history_marker(InterruptedTurnHistoryMarker::Developer)
+    interrupted_turn_history_marker(InterruptedTurnHistoryMarker::Developer, /*cause*/ None)
         .expect("developer interrupted marker should be enabled")
 }
 
@@ -1826,7 +1830,8 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
     let mut config = test_config().await;
     config.rollout_budget = Some(RolloutBudgetConfig {
         enforce_limit: true,
-        limit_tokens: 100,
+        limit_budget: 100.0,
+        reminder_at_context_start: true,
         reminder_at_remaining_tokens: vec![75, 50, 25],
         sampling_token_weight: 1.0,
         prefill_token_weight: 1.0,
@@ -1975,10 +1980,13 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         .session
         .services
         .agent_control
-        .record_usage(TokenUsage {
-            output_tokens: 25,
-            ..Default::default()
-        })
+        .record_usage(
+            Some(TokenUsage {
+                output_tokens: 25,
+                ..Default::default()
+            }),
+            codex_hooks::HookCharge::default(),
+        )
         .await
         .expect("record reviewer usage");
     let reminder = parent
@@ -1989,7 +1997,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         .pending_budget_reminder(parent.thread_id, "window")
         .await
         .expect("parent budget reminder");
-    assert_eq!(reminder.remaining_tokens, 75);
+    assert_eq!(reminder.remaining_units, 75.0);
     assert_eq!(reviewer_config.parent_thread_id, Some(parent.thread_id));
     assert_eq!(reviewer_config.forked_from_thread_id, None);
     assert_eq!(reviewer_config.originator, "codex_work_desktop");
@@ -2131,7 +2139,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
 async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() {
     struct InitialDataRecorder {
         lifecycle_observed: Arc<std::sync::Mutex<Vec<(String, String)>>>,
-        mcp_observed: Arc<std::sync::Mutex<Vec<(String, SessionSource)>>>,
+        mcp_observed: Arc<std::sync::Mutex<Vec<(String, SessionSource, bool)>>>,
         mcp_loaded: Arc<std::sync::atomic::AtomicUsize>,
     }
 
@@ -2177,11 +2185,13 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::SelectedPlugin<'a>>>
         {
             Box::pin(async move {
-                assert_eq!(
-                    context.selected_environments(),
-                    Some([].as_slice()),
-                    "thread MCP projection must preserve explicitly empty selections"
-                );
+                if context.thread_store().is_some() {
+                    assert_eq!(
+                        context.selected_environments(),
+                        Some([].as_slice()),
+                        "thread MCP projection must preserve explicitly empty selections"
+                    );
+                }
                 let thread_init = context
                     .thread_init()
                     .expect("initial MCP resolution should be thread-scoped");
@@ -2198,6 +2208,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                             .session_source()
                             .expect("thread-scoped MCP resolution should identify its source")
                             .clone(),
+                        context.thread_store().is_some(),
                     ));
                 let mut server = codex_mcp::codex_apps_mcp_server_config(
                     "https://selected.invalid",
@@ -2208,7 +2219,8 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                     &selected_root.location;
                 let source_environment_id = environment_id.clone();
                 server.environment_id = source_environment_id.clone();
-                server.enabled = false;
+                // Keep thread startup offline; host-only checks below never open connections.
+                server.enabled = context.thread_store().is_none();
                 let selected_root_id = selected_root.id;
                 let plugin_id = format!("plugin-{selected_root_id}");
                 let mcp_loaded = Arc::clone(&self.mcp_loaded);
@@ -2315,26 +2327,16 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         .expect("start second thread");
     let first_session = &first_thread.thread.session;
     let first_originator = first_session.originator().await;
+    let host_context = codex_extension_api::McpServerContributionContext::for_host(
+        &config,
+        Some(&first_session.services.mcp_thread_init),
+        Some(&first_originator),
+        Some(&SessionSource::Exec),
+    );
     let first_resolved = first_session
         .services
         .mcp_manager
-        .runtime_config_for_step(
-            &config,
-            &first_session.services.mcp_thread_init,
-            &first_session.services.thread_extension_data,
-            McpThreadIdentity {
-                auth_changed: false,
-                session_source: &SessionSource::Exec,
-                originator: &first_originator,
-                disabled_plugin_ids: &[],
-                environments: McpEnvironmentScope::Selected(
-                    &first_session.services.turn_environments.selections(),
-                ),
-            },
-            /*ready_selected_capability_roots*/ &[],
-            /*executor_capability_discovery*/ None,
-            /*executor_capability_discovery_v2*/ None,
-        )
+        .runtime_config(host_context)
         .await;
     let second_session = &second_thread.thread.session;
     let second_originator = second_session.originator().await;
@@ -2377,10 +2379,14 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
         vec![
-            ("selected-a".to_string(), SessionSource::Exec),
-            ("selected-b".to_string(), second_session_source.clone()),
-            ("selected-a".to_string(), SessionSource::Exec),
-            ("selected-b".to_string(), second_session_source),
+            ("selected-a".to_string(), SessionSource::Exec, true),
+            (
+                "selected-b".to_string(),
+                second_session_source.clone(),
+                true
+            ),
+            ("selected-a".to_string(), SessionSource::Exec, false),
+            ("selected-b".to_string(), second_session_source, true),
         ]
     );
     let selected_servers = |config: &codex_mcp::McpConfig| {
@@ -2391,7 +2397,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .collect::<std::collections::BTreeMap<_, _>>()
     };
     assert_eq!(
-        selected_servers(&first_resolved.config),
+        selected_servers(&first_resolved),
         std::collections::BTreeMap::from([("selected-a".to_string(), "env-a".to_string())])
     );
     assert_eq!(
@@ -2399,7 +2405,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         std::collections::BTreeMap::from([("selected-b".to_string(), "env-b".to_string())])
     );
     for (config, name, source_environment_id) in [
-        (&first_resolved.config, "selected-a", "env-a"),
+        (&first_resolved, "selected-a", "env-a"),
         (&second_resolved.config, "selected-b", "env-b"),
     ] {
         let key = codex_mcp::McpServerKey::in_environment(source_environment_id, name);
@@ -2418,7 +2424,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         ));
         assert_eq!(Some(server), expected.build().server(&key));
     }
-    let codex_apps_server = codex_mcp::configured_mcp_servers(&first_resolved.config)
+    let codex_apps_server = codex_mcp::configured_mcp_servers(&first_resolved)
         .remove(codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
         .expect("Codex Apps server should be configured");
     let codex_apps_headers = match codex_apps_server.transport {
@@ -2433,6 +2439,38 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .get("originator"),
         Some(&"codex_work_desktop".to_string())
     );
+    // A supplied plugin denial or unavailable environment must also restrict host projections.
+    let disabled_plugins = ["plugin-selected-a".to_string()];
+    let pending_environments = [codex_protocol::protocol::TurnEnvironmentSelection {
+        environment_id: "env-a".to_string(),
+        cwd: PathUri::parse("file:///plugins").expect("environment cwd"),
+        workspace_roots: vec![],
+        config: EnvironmentConfigState::Pending,
+        selected_capability_roots: Default::default(),
+    }];
+    for (context, enabled) in [
+        (host_context, true),
+        (
+            host_context.with_disabled_plugin_ids(&disabled_plugins),
+            false,
+        ),
+        (
+            host_context.with_selected_environments(&pending_environments),
+            false,
+        ),
+    ] {
+        let resolved = first_session
+            .services
+            .mcp_manager
+            .runtime_config(context)
+            .await;
+        assert_eq!(
+            codex_mcp::configured_mcp_servers(&resolved)
+                .get("selected-a")
+                .is_some_and(|server| server.enabled),
+            enabled,
+        );
+    }
     for (policy, disabled_plugin_ids, selected_enabled, expected_mcp_loads) in [
         ("", vec!["plugin-selected-a".to_string()], false, 1),
         ("", vec![], true, 1),
@@ -3812,7 +3850,7 @@ fn multi_agent_v2_interrupted_marker_uses_developer_input_message() {
             content: vec![ContentItem::InputText {
                 text: format!(
                     "<turn_aborted>\n{}\n</turn_aborted>",
-                    crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE
+                    crate::context::TurnAborted::INTERRUPTED_NEUTRAL_GUIDANCE
                 ),
             }],
             phase: None,

@@ -656,6 +656,7 @@ pub(super) struct ThreadEventChannel {
     /// Live Attach restored delivery without reading the history from the gap.
     pub(super) history_may_be_incomplete: bool,
     attachment: ThreadEventAttachment,
+    pub(super) archived: bool,
 }
 
 impl ThreadEventChannel {
@@ -668,6 +669,7 @@ impl ThreadEventChannel {
             backend_id: None,
             history_may_be_incomplete: false,
             attachment: ThreadEventAttachment::Live,
+            archived: false,
         }
     }
 
@@ -703,6 +705,7 @@ impl ThreadEventChannel {
             backend_id: None,
             history_may_be_incomplete: false,
             attachment: ThreadEventAttachment::Live,
+            archived: false,
         }
     }
 }
@@ -744,6 +747,9 @@ mod tests {
 
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
         ThreadSessionState {
+            read_only_history: false,
+            thread_settings_confirmed: true,
+            primary_environment_cwd: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,
@@ -757,7 +763,7 @@ mod tests {
             approvals_reviewer: ApprovalsReviewer::User,
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
-            cwd: cwd.abs(),
+            cwd: cwd.abs().into(),
             runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
@@ -1111,6 +1117,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let notification = ServerNotification::McpServerStatusUpdated(
             codex_app_server_protocol::McpServerStatusUpdatedNotification {
+                environment_id: None,
                 thread_id: Some(thread_id.to_string()),
                 name: "sentry".to_string(),
                 status: codex_app_server_protocol::McpServerStartupState::Failed,

@@ -1,7 +1,6 @@
 //! Operations on one board. Requests describe intent independently of tool schemas.
 //! Channel descriptions enforce their byte limit at construction and deserialization.
 
-use crate::BoardReadView;
 use crate::ChannelPage;
 use crate::ChannelSummary;
 use crate::Page;
@@ -19,7 +18,6 @@ use codex_protocol::error::Result;
 use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -47,9 +45,12 @@ pub trait AgentMessageBoard: Send + Sync {
         None
     }
 
-    /// Capture a live board's channel summaries and post boundary together for read-only access.
-    fn read_view(&self, _caller: ThreadId) -> BoxFuture<'_, Result<Arc<dyn BoardReadView>>> {
-        unsupported("capturing a board read view")
+    /// Return a live handle with literal search inside JSON encoded at this JSON pointer.
+    /// Other handles retain their existing search behavior.
+    fn with_json_search(&self, _pointer: &'static str) -> Result<Arc<dyn AgentMessageBoard>> {
+        Err(CodexErr::UnsupportedOperation(
+            "searching nested JSON on a live message board".into(),
+        ))
     }
 
     fn create_channel(
@@ -88,6 +89,16 @@ pub trait AgentMessageBoard: Send + Sync {
         request: AppendRequest,
     ) -> BoxFuture<'_, Result<PostMetadata>>;
 
+    /// Like a silent append, also returns the subscribers at the moment of insertion.
+    /// An idempotent retry returns the existing post and no new deliveries.
+    fn append_with_subscribers(
+        &self,
+        _caller: ThreadId,
+        _request: AppendRequest,
+    ) -> BoxFuture<'_, Result<(PostMetadata, Vec<ThreadId>)>> {
+        unsupported("appending with subscribers")
+    }
+
     fn list_threads(
         &self,
         caller: ThreadId,
@@ -112,6 +123,16 @@ pub trait AgentMessageBoard: Send + Sync {
         request: ReadPostRequest,
     ) -> BoxFuture<'_, Result<PostContent>>;
 
+    /// Load original post bodies in caller-supplied ID order, bounded to one board page.
+    /// Trusted host consumers can batch evidence reads without reconstructing paged previews.
+    fn read_post_texts_by_id<'a>(
+        &'a self,
+        _caller: ThreadId,
+        _ids: &'a [Uuid],
+    ) -> BoxFuture<'a, Result<Vec<String>>> {
+        unsupported("reading a page of post bodies")
+    }
+
     /// Channel subscriptions concern new roots; thread subscriptions concern
     /// replies. Changing one does not change the other. Any member may change
     /// another member's subscription. Posting subscribes its author to the thread
@@ -129,16 +150,6 @@ pub trait AgentMessageBoard: Send + Sync {
         _page: PageRequest,
     ) -> BoxFuture<'_, Result<Page<String>>> {
         unsupported("listing channel subscriptions")
-    }
-
-    /// Set the caller's membership in the supplied channels as one atomic change.
-    /// Other channels and thread subscriptions retain their current membership.
-    fn set_subscriptions<'a>(
-        &'a self,
-        _caller: ThreadId,
-        _channels: &'a BTreeMap<&str, SubscriptionChange>,
-    ) -> BoxFuture<'a, Result<()>> {
-        unsupported("setting channel subscriptions in bulk")
     }
 }
 
@@ -249,6 +260,7 @@ pub struct PostRequest {
 pub(crate) enum PostBehavior {
     Discussion,
     SilentAppend,
+    SilentAppendWithSubscribers,
 }
 
 /// Request to append evidence without subscribing its author or notifying anyone.

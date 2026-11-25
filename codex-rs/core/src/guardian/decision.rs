@@ -1,7 +1,11 @@
 //! Calls the decision extension for each approval and enforces host constraints.
 //! The synchronous service captures one action; no outcome is stored by tool-call ID.
 
+use codex_analytics::IncompleteReason;
 use codex_async_utils::THREAD_STACK_SIZE_BYTES;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::openai_models::GuardianScope;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -52,6 +56,20 @@ pub(crate) fn decide_approval(
 ) -> futures::future::BoxFuture<'static, Option<ReviewDecision>> {
     let mut context: GuardianReviewContext = context.into();
     let request: ReviewAction = request.into();
+    let bind_reviewer = |session: &Session| {
+        session
+            .services
+            .thread_extension_data
+            .get::<Arc<dyn crate::guardian_review::AttachedReviewer>>()
+            .map(|reviewer| Arc::clone(reviewer.as_ref()).bind())
+    };
+    // Only Never can grant full access. Bind other requests before scheduling as usual.
+    let may_have_full_access = context.approval_policy == AskForApproval::Never;
+    let attached_reviewer = if may_have_full_access {
+        None
+    } else {
+        bind_reviewer(&session)
+    };
     // Bind the invocation before scheduling. Async review cleanup can outlive
     // the decision, but must not extend the time blocking this tool.
     let review_timing = if context
@@ -84,7 +102,10 @@ pub(crate) fn decide_approval(
                 .start_review_for_turn(call_id, &context.turn().sub_id)
         });
         if timing.is_none() {
-            context.turn().turn_timing_state.invalidate_critical_path();
+            context
+                .turn()
+                .turn_timing_state
+                .invalidate_critical_path(&[IncompleteReason::UnattributedReview]);
         }
         timing
     } else {
@@ -104,20 +125,43 @@ pub(crate) fn decide_approval(
         let turn = context.turn();
         turn.extension_data.insert_arc(Arc::clone(&turn.config));
         let live_config = session.get_config().await;
-        let requirements = live_config.config_layer_stack.requirements();
-        let model_requires_review =
-            requirements.auto_review_required_for_model(&context.model_info.slug);
+        let mcp_requirements = (matches!(
+            request.request,
+            Ok(GuardianApprovalRequest::McpToolCall { .. })
+        ) || (request.request.is_err()
+            && matches!(
+                request.category,
+                GuardianScope::Mcp | GuardianScope::ComputerUse
+            )))
+        .then(|| turn.config.config_layer_stack.requirements());
+        // Live requirements can harden review. MCP also keeps any mandatory
+        // restrictions from the policy captured for its issuing turn.
+        let requirements = [
+            Some(live_config.config_layer_stack.requirements()),
+            mcp_requirements,
+        ];
+        let model_requires_review = requirements.iter().flatten().any(|requirements| {
+            requirements.auto_review_required_for_model(&context.model_info.slug)
+        });
         let require_guardian = options.require_guardian
             || model_requires_review
-            || requirements
-                .approvals_reviewer
-                .can_set(&codex_protocol::config_types::ApprovalsReviewer::User)
-                .is_err();
+            || requirements.iter().flatten().any(|requirements| {
+                requirements
+                    .approvals_reviewer
+                    .can_set(&ApprovalsReviewer::User)
+                    .is_err()
+            });
         let full_access = context.environments().has_full_access(
             context.approval_policy,
             &turn.config.permissions.effective_permission_profile(),
         );
-        let mut require_synchronous_review = options.require_synchronous_review;
+        let attached_reviewer = if may_have_full_access && !full_access {
+            bind_reviewer(&session)
+        } else {
+            attached_reviewer
+        };
+        let mut require_synchronous_review =
+            options.require_synchronous_review || attached_reviewer.is_some();
         if let Some(assessment) = &context.serving_assessment {
             let permissions = request.request.as_ref().ok().and_then(|request| {
                 super::permissions::for_environment(&context, request.target_environment_id()).ok()
@@ -148,6 +192,7 @@ pub(crate) fn decide_approval(
         let decision = codex_guardian_reviewer::ReviewRequest {
             serving_assessment: context.serving_assessment.as_ref().map(|value| value.requires_review),
             host: ReviewRuntime {
+                attached_reviewer,
                 session: Arc::clone(&session),
                 history_reset: history_reset.clone(),
                 context: context.clone(),

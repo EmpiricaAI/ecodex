@@ -23,11 +23,12 @@ use crate::model::ConversationRole;
 use crate::model::InferenceCallId;
 use crate::model::ProducerRef;
 use crate::payload::RawPayloadRef;
+use crate::shard::ObservedJson;
 
 mod normalize;
 
 impl TraceReducer {
-    pub(super) fn record_agent_receipt(
+    pub(super) fn record_accepted_item(
         &mut self,
         thread_id: &str,
         turn_id: Option<String>,
@@ -35,29 +36,33 @@ impl TraceReducer {
         wire_id: &str,
         payload: &RawPayloadRef,
     ) -> Result<()> {
-        // A request can be recorded before its history notification. Its item already owns the edge.
-        if self.rollout.threads[thread_id]
-            .conversation_item_ids
-            .iter()
-            .rev()
-            .any(|id| {
-                self.rollout.conversation_items[id]
-                    .responses_item_id
-                    .as_deref()
-                    == Some(wire_id)
-            })
-        {
+        // A snapshot can arrive first, or the recorder can repeat a notification.
+        let key = (thread_id.to_owned(), wire_id.to_owned());
+        if self.receivable_ids.contains_key(&key) {
             return Ok(());
         }
-        let item = normalize::normalize_model_item(&self.read_payload_json(payload)?, payload)?;
-        if item.agent_message.is_none() || item.responses_item_id.as_deref() != Some(wire_id) {
-            bail!("accepted agent message does not match receipt {wire_id}");
+        let ObservedJson { mut value, missing } = self.payload_reader.observed_json(payload)?;
+        let item = normalize::normalize_model_item(&mut value, payload, &missing)?;
+        if !item.is_delivery_or_tool_output() || item.responses_item_id.as_deref() != Some(wire_id)
+        {
+            bail!("accepted item payload does not match {wire_id}");
         }
-        let id = self.create_conversation_item(thread_id, turn_id, at_unix_ms, item, Vec::new());
-        self.append_thread_conversation_items(thread_id, std::slice::from_ref(&id))?;
-        self.resolve_pending_agent_edges_for_item(&id)?;
-        self.receipt_only_items
-            .insert((thread_id.to_owned(), wire_id.to_owned()), id);
+        let is_delivery = item.agent_message.is_some();
+        let produced_by = if let Some(call_id) = &item.call_id
+            && let Some(tool_call_id) = self.single_tool_for_model_visible_call(call_id)?
+        {
+            vec![ProducerRef::Tool { tool_call_id }]
+        } else {
+            Vec::new()
+        };
+        let id = self.create_conversation_item(thread_id, turn_id, at_unix_ms, item, produced_by);
+        self.thread_mut(thread_id)?
+            .conversation_item_ids
+            .push(id.clone());
+        if is_delivery {
+            self.resolve_pending_agent_edges_for_item(&id)?;
+        }
+        self.receivable_ids.insert(key, Some(id));
         Ok(())
     }
 
@@ -72,22 +77,51 @@ impl TraceReducer {
         thread_id: &str,
         codex_turn_id: &str,
         request_payload: &RawPayloadRef,
+        stripped_tool_output_ids: Vec<(usize, String)>,
     ) -> Result<Vec<String>> {
-        let payload = self.read_payload_json(request_payload)?;
-        let Some(input) = payload.get("input") else {
+        if !request_payload.capture.is_complete() {
+            return Ok(Vec::new());
+        }
+        let ObservedJson {
+            value: mut payload,
+            missing,
+        } = self.payload_reader.observed_json(request_payload)?;
+        let Some(input) = payload.get_mut("input") else {
             bail!(
                 "inference request payload {} did not contain input",
                 request_payload.raw_payload_id
             );
         };
-        let Some(request_items) = input.as_array() else {
+        let Some(request_items) = input.as_array_mut() else {
             bail!(
                 "inference request payload {} had non-array input",
                 request_payload.raw_payload_id
             );
         };
 
-        let items = normalize::normalize_model_items(request_items, request_payload)?;
+        // The wire payload stays intact on disk. Resolve accepted history by its native ID,
+        // even for two identical named outputs or a trimmed result in a websocket delta.
+        for (index, history_id) in stripped_tool_output_ids {
+            let item = request_items
+                .get_mut(index)
+                .context("stripped tool output index outside request")?;
+            if missing["input"][index].is_string() {
+                continue; // The captured request has no item to attach the history ID to.
+            }
+            if item.get("id").is_some()
+                || !matches!(
+                    item["type"].as_str(),
+                    Some("function_call_output" | "custom_tool_call_output")
+                )
+            {
+                bail!(
+                    "stripped tool output ID does not refer to an ID-less output at input {index}"
+                );
+            }
+            item["id"] = Value::String(history_id);
+        }
+        let items =
+            normalize::normalize_model_items(request_items, request_payload, &missing["input"])?;
 
         let previous_response_id = payload.get("previous_response_id").and_then(Value::as_str);
         // After compaction, the next full request is compared against the installed replacement
@@ -116,9 +150,12 @@ impl TraceReducer {
                 .map(|inference| {
                     let mut ids = inference.request_item_ids.clone();
                     ids.extend(inference.response_item_ids.clone());
-                    ids
+                    let incomplete = std::iter::once(&inference.raw_request_payload_id)
+                        .chain(inference.raw_response_payload_id.as_ref())
+                        .any(|id| !self.rollout.raw_payloads[id].is_complete());
+                    (ids, incomplete)
                 });
-            let Some(mut item_ids) = previous_items else {
+            let Some((mut item_ids, incomplete)) = previous_items else {
                 bail!(
                     "incremental inference request {inference_call_id} referenced unknown previous_response_id {previous_response_id}"
                 );
@@ -132,7 +169,9 @@ impl TraceReducer {
                     produced_by: Vec::new(),
                     start_index: item_ids.len(),
                     mode: ReconcileMode::AppendOnly,
-                    snapshot_override: None,
+                    // After a capture gap, the number of known prefix items is not
+                    // a position in the thread's last fully observed snapshot.
+                    snapshot_override: incomplete.then_some(item_ids.as_slice()),
                 },
             )?;
             item_ids.extend(delta_item_ids);
@@ -169,7 +208,13 @@ impl TraceReducer {
         inference_call_id: &InferenceCallId,
         response_payload: &RawPayloadRef,
     ) -> Result<Vec<String>> {
-        let payload = self.read_payload_json(response_payload)?;
+        if !response_payload.capture.is_complete() {
+            return Ok(Vec::new());
+        }
+        let ObservedJson {
+            value: payload,
+            missing,
+        } = self.payload_reader.observed_json(response_payload)?;
         let Some(output_items) = payload.get("output_items").and_then(Value::as_array) else {
             bail!(
                 "inference response payload {} did not contain output_items",
@@ -186,7 +231,11 @@ impl TraceReducer {
             bail!("inference response referenced unknown call {inference_call_id}");
         };
 
-        let items = normalize::normalize_model_items(output_items, response_payload)?;
+        let items = normalize::normalize_model_items(
+            output_items,
+            response_payload,
+            &missing["output_items"],
+        )?;
         // A later request or compaction can be recorded before this response.
         // Only match items with source IDs, so retries with identical text stay distinct.
         let candidates = self.rollout.threads[&thread_id]
@@ -345,14 +394,29 @@ impl TraceReducer {
         compaction_id: &CompactionId,
         checkpoint_payload: &RawPayloadRef,
     ) -> Result<ReducedCompactionCheckpoint> {
-        let payload = self.read_payload_json(checkpoint_payload)?;
-        let input_history = required_array(&payload, "input_history", checkpoint_payload)?;
-        let replacement_history =
-            required_array(&payload, "replacement_history", checkpoint_payload)?;
-
-        let input_items = normalize::normalize_model_items(input_history, checkpoint_payload)?;
-        let replacement_items =
-            normalize::normalize_model_items(replacement_history, checkpoint_payload)?;
+        let (input_items, replacement_items) = if checkpoint_payload.capture.is_complete() {
+            let ObservedJson {
+                value: payload,
+                missing,
+            } = self.payload_reader.observed_json(checkpoint_payload)?;
+            let input = required_array(&payload, "input_history", checkpoint_payload)?;
+            let replacement = required_array(&payload, "replacement_history", checkpoint_payload)?;
+            (
+                normalize::normalize_model_items(
+                    input,
+                    checkpoint_payload,
+                    &missing["input_history"],
+                )?,
+                normalize::normalize_model_items(
+                    replacement,
+                    checkpoint_payload,
+                    &missing["replacement_history"],
+                )?,
+            )
+        } else {
+            // The install event still establishes a compaction boundary.
+            (Vec::new(), Vec::new())
+        };
         let input_candidates = self
             .thread_conversation_snapshots
             .get(thread_id)
@@ -376,6 +440,7 @@ impl TraceReducer {
             Some(codex_turn_id.to_string()),
             wall_time_unix_ms,
             NormalizedConversationItem {
+                structured_output_hash: None,
                 responses_item_id: None,
                 role: ConversationRole::Assistant,
                 channel: None,
@@ -468,17 +533,20 @@ impl TraceReducer {
         item: NormalizedConversationItem,
         produced_by: Vec<ProducerRef>,
     ) -> String {
-        // The first request or checkpoint that sees a receipt supplies the model-visible
-        // representation (which can be trimmed). Keep the ID already used by the delivery edge.
-        if item.agent_message.is_some()
+        // A request or checkpoint can contain a trimmed version of an accepted item.
+        // Reuse its graph ID and retain the representation actually seen by the model.
+        if item.is_delivery_or_tool_output()
             && let Some(wire_id) = &item.responses_item_id
-            && let Some(id) = self
-                .receipt_only_items
-                .remove(&(thread_id.to_owned(), wire_id.clone()))
         {
-            return id;
+            let key = (thread_id.to_owned(), wire_id.clone());
+            if let Some(Some(id)) = self.receivable_ids.get(&key) {
+                return id.clone();
+            }
         }
         let item_id = self.next_conversation_item_id();
+        if let Some(hash) = item.structured_output_hash {
+            self.structured_output_hashes.insert(item_id.clone(), hash);
+        }
         self.rollout.conversation_items.insert(
             item_id.clone(),
             ConversationItem {
@@ -518,9 +586,26 @@ impl TraceReducer {
         if item.kind == ConversationItemKind::Reasoning {
             merge_reasoning_body(&mut item.body, &normalized.body)?;
         }
-        // A request or checkpoint may contain a trimmed version of an accepted delivery.
-        if normalized.agent_message.is_some() && item.body != normalized.body {
-            item.body.clone_from(&normalized.body);
+        // Replace the accepted body on its first snapshot only. Later snapshots may reference
+        // the same content through a different raw payload.
+        if normalized.is_delivery_or_tool_output()
+            && let Some(wire_id) = &normalized.responses_item_id
+        {
+            let key = (item.thread_id.clone(), wire_id.clone());
+            let accepted_id = self.receivable_ids.entry(key).or_default();
+            if accepted_id.as_deref() == Some(item_id) {
+                *accepted_id = None;
+                item.body.clone_from(&normalized.body);
+                if let Some(hash) = normalized.structured_output_hash {
+                    self.structured_output_hashes
+                        .insert(item_id.to_owned(), hash);
+                } else {
+                    self.structured_output_hashes.remove(item_id);
+                }
+                if normalized.agent_message.is_none() {
+                    self.snapshot_output_anchors.insert(item_id.to_owned());
+                }
+            }
         }
         for producer in produced_by {
             if !item.produced_by.contains(producer) {
@@ -535,10 +620,28 @@ impl TraceReducer {
         thread_id: &str,
         item_ids: &[String],
     ) -> Result<()> {
-        let thread = self.thread_mut(thread_id)?;
-        for item_id in item_ids {
-            if !thread.conversation_item_ids.contains(item_id) {
-                thread.conversation_item_ids.push(item_id.clone());
+        let history = &mut self
+            .rollout
+            .threads
+            .get_mut(thread_id)
+            .context("unknown thread")?
+            .conversation_item_ids;
+        let mut new_prefix = history.len();
+        for id in item_ids {
+            if self.snapshot_output_anchors.remove(id) {
+                // This output already has its acceptance position. Insert any newly exposed
+                // context immediately before it, preserving deliveries recorded in between.
+                if new_prefix < history.len() {
+                    let prefix = history.split_off(new_prefix);
+                    let anchor = history
+                        .iter()
+                        .position(|known| known == id)
+                        .context("missing accepted output")?;
+                    history.splice(anchor..anchor, prefix);
+                }
+                new_prefix = history.len();
+            } else if !history.contains(id) {
+                history.push(id.clone());
             }
         }
         Ok(())
@@ -596,6 +699,10 @@ impl TraceReducer {
             && existing != incoming
         {
             return false;
+        }
+        let existing_hash = self.structured_output_hashes.get(item_id);
+        if existing_hash.is_some() || normalized.structured_output_hash.is_some() {
+            return existing_hash == normalized.structured_output_hash.as_ref();
         }
         conversation_item_matches(item, normalized)
     }

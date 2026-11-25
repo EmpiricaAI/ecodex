@@ -1,19 +1,23 @@
-# Managed human command checkpoints (experimental)
+# Managed human command checkpoints
 
-A matching managed `requirements.toml` prefix rule with `decision = "prompt-user"`
-requires a fresh human decision, including when the thread uses automatic review.
-Prefix matching, exact-path precedence, and executable mappings stay unchanged. Clients
-supporting this workflow must initialize with `experimentalApi: true` and
-`requiredHumanApproval: true`.
+Managed `requirements.toml` prefix rules with `decision = "prompt-user"` are stable
+in the interactive Codex CLI. A matching command requires a fresh human decision
+before it can run, including when automatic review is enabled. Session and persistent
+approvals cannot satisfy the checkpoint. Rules follow the usual command prefix matching
+semantics, including exact-path precedence and executable mappings.
+
+## App-server integration (experimental)
+
+App-server clients supporting this workflow must initialize with `experimentalApi: true`
+and `requiredHumanApproval: true`.
 
 The server sends `item/commandExecution/requestApproval` with `kind: "humanCommand"`,
 a unique `approvalId`, and the command to display. Only `accept`, `decline`, and
-`cancel` are valid responses. Session and persistent approvals cannot satisfy the
-checkpoint. Only capable clients receive or answer these requests. Pending prompts
-use the normal approval replay flow when a capable client reconnects. With no capable
-connection when approval is requested, the command is rejected. The prompt itself
-does not start an execution item; normal command execution events report execution
-after approval.
+`cancel` are valid responses. Only capable clients receive or answer these requests.
+Pending prompts use the normal approval replay flow when a capable client reconnects.
+With no capable connection when approval is requested, the command is rejected.
+Once an approved command starts, normal command execution events report its
+execution item.
 
 # Thread memory summary (experimental)
 
@@ -33,19 +37,40 @@ across account switches. Resume and revert preserve that distinction; forks are 
 Scoped requests skip candidates whose rollout header cannot be read. API-key
 logins see all local history. Direct access by thread ID remains available.
 
-# Thread list exclusions
+# Streaming thread search (experimental)
 
-`thread/list` accepts `excludedThreadIds`, an optional array of up to 100
-thread ID strings. Omitted, null, or empty lists do not exclude anything.
-Invalid IDs or more than 100 entries return JSON-RPC error `-32602`;
-duplicates count toward that bound and no entries are silently truncated.
+`thread/search` continues to return a single paginated response. Clients that initialize
+with `experimentalApi: true` can instead call `thread/search/stream` with the same params
+(a maximum of 65,536 UTF-8 bytes for the trimmed search term).
+It emits best-effort `thread/search/partial` notifications containing the original
+`requestId` and a small subset of verified results. Partials may be dropped, may fall
+outside the final page, and use stored thread metadata; replace them with the final
+response, which is authoritative for results, ordering, and cursors.
 
-Exclusions apply before the returned result limit, along with the existing
-source, provider, archive, project, section and cwd filters. Pages refill to
-the requested limit (at most 100) unless history is exhausted. Send the same
-exclusions and filters with each returned cursor. Clients that display a saved
-manual order can load those summaries separately, then exclude the entire saved
-ID set when listing the remainder. This field does not save or sort that order.
+Send `thread/search/stream/cancel` with `{requestId}` on the same connection to cancel
+the original streaming request. A client can use a UUID string as the search request ID. The cancel RPC has its own ID and returns `{}`; the
+search completes independently with an error if cancellation wins, or may succeed if
+completion races cancellation. Unknown or finished IDs are no-ops. `thread/search/cancel`
+targets only the existing nonstreaming method. A JavaScript client can connect an
+`AbortSignal` listener to the corresponding cancel RPC.
+
+# Thread list ID filters
+
+`thread/list` accepts `includedThreadIds` to list specific saved threads and
+`excludedThreadIds` to omit them. Each accepts up to 100 thread ID strings.
+Omitting an array or sending null leaves that filter unrestricted. An empty
+inclusion matches nothing. An empty exclusion removes nothing. Invalid IDs
+or more than 100 entries in either array return JSON-RPC error `-32602`.
+Duplicates count toward each bound.
+
+Both ID filters apply alongside the other list filters, including `currentAccountOnly`,
+before pagination. Pages fill to the requested limit (up to 100) or exhaust the matches.
+Exclusions win when an ID appears in both arrays. Send the same filters with
+each cursor. The regular list sort determines the order of matches.
+The local store uses indexed metadata when an inclusion array is present, even
+when `useStateDbOnly` is false. IDs absent from its index produce no match.
+Older App Servers ignore `includedThreadIds`. Clients that reconcile saved IDs
+must establish server support before treating missing matches as removals.
 
 DB-only requests (`useStateDbOnly: true`) return JSON-RPC error `-32603`
 when the local state DB cannot serve the query, even for an empty cwd filter.
@@ -103,12 +128,12 @@ exact revision match, and both conflicts return `-32600` with
 Do not blindly retry: the original action may precede an unseen result or
 another window's mark. Unavailable threads fail; writes never change recency.
 
-Started, resumed or forked threads send `thread/readState/changed` alongside
-ordinary thread events; thread/unsubscribe or disconnect stops delivery.
-Clients can filter this method with the existing notification opt-out setting.
+The server broadcasts `thread/readState/changed` to initialized experimental clients
+whenever a durable receipt changes, including for chats they have not opened. Clients can
+ignore irrelevant thread IDs or suppress the method with `optOutNotificationMethods`.
 Revisions are equality tokens, not clocks: never compare or merge them across
 threads or hosts. When concurrent responses disagree, refresh with `thread/read`.
-Offscreen threads converge on page refresh.
+Refresh the list after reconnecting to recover changes missed while disconnected.
 
 # Guardian circuit-breaker errors
 
@@ -121,15 +146,17 @@ denial limit, and interrupted status; neither emits a separate `Error` event.
 
 # Model catalog provider requirements
 
-`model/list` accepts an optional `modelProvider` to list models for a configured provider
-other than the startup default. For example, `{"modelProvider": "my_gateway"}` returns that
-provider's models after the user's default changes. Omit it to retain the startup provider
-and caching behavior. Explicit selections use the provider definitions loaded at startup. Restart the server
-to pick up edits to those definitions. An unknown selector returns JSON-RPC error
+`modelProvider/default/set` selects a configured provider for new threads and unscoped model lists.
+Send `{"providerId": "my_gateway"}`. The response uses the same `ConfigWriteResponse` as other config writes.
+An effective selection refreshes the catalog on its next read. Editing the active provider through
+`modelProvider/config/write` also refreshes that snapshot.
+
+`model/list` uses the current default when `modelProvider` is omitted. Pass a provider ID to list
+models for a chat that retained its provider after a default change. An unknown selector returns JSON-RPC error
 `-32600` with `data.type = "modelProviderNotConfigured"` and the requested `modelProvider`.
 
 `model/list` checks its selected provider, and periodic model catalog refreshes check the
-startup provider, against current managed provider requirements. If that provider no longer
+current default provider, against current managed provider requirements. If that provider no longer
 complies, `model/list` returns JSON-RPC error `-32600` asking the client to restart Codex,
 and background refreshes skip the old endpoint. Requirement load failures also block these
 operations. Checks apply even when the catalog is cached.
@@ -165,6 +192,15 @@ An unused thread is not guaranteed to survive restart. Omitted or null leaves
 the choice unset. Ephemeral threads cannot save it.
 Use `thread/metadata/update` for later changes. This preference does not select
 `turn/start.cyberAccessProgram` or grant access to an access program.
+
+With `experimentalApi`, a client preparing a thread for later use can pass
+`daybreakProgramPropagationEnrolled: false` to `thread/start` to opt that root
+out of Daybreak propagation. A managed requirement to enable propagation takes
+precedence. Omitted, null, or true uses the configured enrollment rule.
+`thread.daybreakProgramPropagationEnrolled` reports actual enrollment for the
+live thread, including in the start response and `thread/started` notification.
+Stored metadata alone yields null. Reusing the same live session preserves its
+enrollment. Starting a new session from storage yields false.
 
 # Application network policy
 
@@ -379,10 +415,11 @@ alongside `[permissions.filesystem]`:
 enabled = true
 ```
 
-`[network_proxy]` and its compatibility alias `[experimental_network]` still work.
-Do not mix either with `[permissions.network]`, even across requirements layers. A single
-layer cannot use both top-level names; across layers the top-level names merge with normal
-precedence. `configRequirements/read` returns the result in `requirements.network`.
+Codex reads `[network_proxy]` and its alias `[experimental_network]` as
+`[permissions.network]` within each source before merging managed requirements.
+Across sources, use the same surface (legacy or nested). Use at most one top-level spelling per layer.
+If a layer also sets `[permissions.network]`, both tables must describe the same policy.
+`configRequirements/read` returns the result in `requirements.network`.
 
 In `config.toml`, `[features.network_proxy]` configures the proxy, while
 `[permissions.<profile>.network]` configures a profile's network settings. Managed requirements
@@ -402,9 +439,11 @@ version-gate published policy bundles.
 
 # Amazon Bedrock authentication
 
-If `model_providers.amazon-bedrock.aws.credential_export` is configured, Bedrock setup and
-Bedrock login return an error without changing configuration or saved credentials. Remove the
-exporter configuration before selecting another credential source. `aws.credential_export` and
+Bedrock setup and login accept an optional `providerId`: `amazon-bedrock` (Mantle) or
+`amazon-bedrock-runtime`. Omission or `null` selects Mantle for compatibility. If the selected
+provider has `aws.credential_export` configured, setup and login return an error without changing
+configuration or saved credentials. Remove the exporter configuration before selecting another
+credential source. `aws.credential_export` and
 `aws.profile` cannot be configured together.
 
 Application network restrictions apply to each AWS credential and region HTTP request and to
@@ -601,7 +640,7 @@ PAT sessions continue to return no bearer token from `getAuthStatus`.
 
 The experimental `account/read.workspaceRouting` response field returns the selected ChatGPT workspace's `chatgptAccountId`, resolved HTTPS `backendOrigin`, and backend-provided `accountRoutingOverride`. The routing value is `us`, `us_cr`, or the explicit `NO_CONSTRAINT` value. API-only and signed-out accounts return `null` and do not need `accounts/check`.
 
-App-server discovers routing for saved ChatGPT logins at startup and for new logins or workspace switches. After requirements and routing are ready, it sends the existing `account/updated` notification. Newly initialized connections also receive this notification once saved-workspace routing is ready, including when discovery finished before the connection initialized. Clients then reread `configRequirements/read` and `account/read`. Saved ChatGPT credentials without a selected workspace ID retain their account information and return `workspaceRouting: null`; app-server does not guess a workspace from the backend's default account. Discovery failures for a selected workspace, including missing or null fields from older backends, return an `account/read` error. They never produce a successful unrestricted result. A later read retries failed discovery. Logout clears the cached routing, and results from earlier authentication owners are discarded. Token refreshes for the same known user and workspace invalidate cached routing without cancelling discovery or failing sign-in. Configuration is reloaded after discovery; a changed backend, model provider, or required backend rejects the result so the next read discovers against current configuration. Account notifications recheck the auth owner generation after waiting for outbound queue capacity. Superseded sign-in attempts emit a failed `account/login/completed` event instead of silently dropping completion. Notifications remain snapshots: clients reread current account and requirements state rather than treating a queued notification as authorization.
+App-server discovers routing for saved ChatGPT logins at startup and for new logins or workspace switches. After requirements and routing are ready, it sends the existing `account/updated` notification. Newly initialized connections also receive this notification once saved-workspace routing is ready, including when discovery finished before the connection initialized. This initial notification carries `reason: "workspaceRoutingReady"` when the authenticated owner generation is unchanged. Login, logout, and workspace-switch notifications include `reason: null`. Clients then reread `configRequirements/read` and `account/read`. Saved ChatGPT credentials without a selected workspace ID retain their account information and return `workspaceRouting: null`; app-server does not guess a workspace from the backend's default account. Discovery failures for a selected workspace, including missing or null fields from older backends, return an `account/read` error. They never produce a successful unrestricted result. A later read retries failed discovery. Logout clears the cached routing, and results from earlier authentication owners are discarded. Token refreshes for the same known user and workspace invalidate cached routing without cancelling discovery or failing sign-in. Configuration is reloaded after discovery; a changed backend, model provider, or required backend rejects the result so the next read discovers against current configuration. Account notifications recheck the auth owner generation after waiting for outbound queue capacity. Superseded sign-in attempts emit a failed `account/login/completed` event instead of silently dropping completion. Notifications remain snapshots: clients reread current account and requirements state rather than treating a queued notification as authorization.
 
 Routing compares origins by scheme, host, and effective port, ignoring API paths. A required
 `chatgpt_base_url` must match discovery; if neither provides an origin, `NO_CONSTRAINT` uses the
@@ -846,8 +885,8 @@ writes still require validation. Lower-precedence definitions can be overridden;
 required definitions are read-only. Both capabilities are false when user
 configuration is ignored. The flag does not establish credential validity or
 whether a setup flow that also selects a default provider will succeed.
-`account/bedrock/setup` targets `amazon-bedrock`; edits to `amazon-bedrock-runtime`
-must use that provider's configuration paths instead.
+`account/bedrock/setup` selects Mantle by default; pass `providerId: "amazon-bedrock-runtime"`
+to select Runtime. Direct edits must use the selected provider's configuration paths.
 
 Use `modelProvider/config/write` with a tagged `settings` patch. To create a
 custom gateway, send `type: "customGateway"`, `name`, and `baseUrl`. Omit
@@ -926,9 +965,11 @@ If the active profile inherits `model_providers.gcp.credential_file` from the ba
 Setup returns an error without saving changes. To use ADC, remove the inherited
 setting from the file named in the error and retry.
 
-Setup rejects a GCP `base_url` override or higher-priority settings that conflict
-with the request. It fetches an access token before saving the settings and
-selecting GCP, then returns `{}`. The next `model/list` reloads the catalog.
+Setup uses the requested project and location to determine the Vertex AI endpoint.
+If another configuration layer would still supply `model_providers.gcp.base_url`
+or otherwise conflict with the request, setup fails. Once it obtains an access
+token, setup clears the active user configuration’s `base_url` override, saves
+the settings, and selects GCP. It returns `{}`. The next `model/list` reloads the catalog.
 `account/read` reports `{ "account": { "type": "gcp" }, "requiresOpenaiAuth": false }`.
 Use a model request to verify Vertex model access.
 
@@ -951,6 +992,28 @@ managed fields. Configuration writes that overlap managed settings are rejected.
 
 Exporter header values are redacted in effective config, source layers, managed
 requirements, and write-override metadata. Runtime exporters retain the original values.
+
+A system `requirements.toml` file or MDM requirements payload can set
+`otel.headers_helper` and its optional `otel.headers_helper_refresh_interval_ms`.
+Put the helper and each OTLP HTTP exporter that should receive its headers in
+the same requirements layer. If another layer replaces an exporter, that
+exporter uses its own configured headers.
+
+Set the managed helper to the absolute path of an executable, for example
+`/opt/company/bin/otel-auth`. Install it in a directory controlled by the
+administrator and grant Codex users permission to execute it. Codex launches
+the executable directly with its parent as the working directory. A relative
+path makes the managed requirements invalid. If the executable is missing or
+cannot run, Codex warns and pauses exports that depend on its headers until a
+refresh succeeds.
+
+**Rollout.** Install the helper and upgrade targeted clients to a release that
+supports both keys in managed requirements before enabling either key in policy.
+Older clients can reject the requirements at startup even if they support the
+helper in ordinary config. For a mixed fleet, target only upgraded devices.
+
+**Rollback.** Remove both managed keys and confirm each device has received the
+updated policy before downgrading its client or uninstalling the helper.
 
 Managed span attributes and tracestate metadata are included in effective config
 and requirements reads. Unmanaged metadata remains writable.

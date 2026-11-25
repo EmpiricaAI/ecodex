@@ -104,18 +104,13 @@ fn spawn_runtime_payload_targets_delivered_child_message() -> anyhow::Result<()>
         "019d0000-0000-7000-8000-000000000002",
         "turn-child-1",
     )?;
-    let delivered = inter_agent_message(
-        "/root",
-        "/root/repo_file_counter",
-        "count",
-        /*trigger_turn*/ true,
-    );
+    let delivered = inter_agent_message("/root", "/root/repo_file_counter", "count");
     append_inference_request(
         &writer,
         "019d0000-0000-7000-8000-000000000002",
         "turn-child-1",
         "inference-child-1",
-        vec![message("assistant", &delivered)],
+        vec![delivered],
     )?;
 
     let replayed = replay_bundle(temp.path())?;
@@ -261,6 +256,7 @@ fn sub_agent_started_activity_creates_spawn_edge() -> anyhow::Result<()> {
     });
     let receipt = RawTraceEventPayload::HistoryItemAccepted {
         item_id: "amsg-delivery".into(),
+        tool_output_payload: None,
         agent_message_payload: Some(
             writer.write_json_payload(RawPayloadKind::ProtocolEvent, &delivery)?,
         ),
@@ -403,14 +399,13 @@ fn send_message_runtime_payload_targets_delivered_child_message() -> anyhow::Res
         "019d0000-0000-7000-8000-000000000002",
         "turn-child-1",
     )?;
-    let delivered =
-        inter_agent_message("/root", "/root/child", "hello", /*trigger_turn*/ false);
+    let delivered = inter_agent_message("/root", "/root/child", "hello");
     append_inference_request(
         &writer,
         "019d0000-0000-7000-8000-000000000002",
         "turn-child-1",
         "inference-child-1",
-        vec![message("assistant", &delivered)],
+        vec![delivered],
     )?;
 
     let replayed = replay_bundle(temp.path())?;
@@ -485,18 +480,13 @@ fn send_message_activity_targets_delivered_child_message() -> anyhow::Result<()>
     )?;
     start_thread(&writer, child_thread_id, "/root/child")?;
     start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
-    let delivered = inter_agent_message(
-        "/root",
-        "/root/child",
-        "hello again",
-        /*trigger_turn*/ false,
-    );
+    let delivered = inter_agent_message("/root", "/root/child", "hello again");
     append_inference_request(
         &writer,
         child_thread_id,
         "turn-child-1",
         "inference-child-1",
-        vec![message("assistant", &delivered)],
+        vec![delivered],
     )?;
 
     let replayed = replay_bundle(temp.path())?;
@@ -571,18 +561,13 @@ fn followup_activity_targets_delivered_child_message() -> anyhow::Result<()> {
     )?;
     start_thread(&writer, child_thread_id, "/root/child")?;
     start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
-    let delivered = inter_agent_message(
-        "/root",
-        "/root/child",
-        "continue",
-        /*trigger_turn*/ true,
-    );
+    let delivered = inter_agent_message("/root", "/root/child", "continue");
     append_inference_request(
         &writer,
         child_thread_id,
         "turn-child-1",
         "inference-child-1",
-        vec![message("assistant", &delivered)],
+        vec![delivered],
     )?;
 
     let replayed = replay_bundle(temp.path())?;
@@ -774,18 +759,13 @@ fn agent_result_edge_links_child_result_to_parent_notification() -> anyhow::Resu
     )?;
 
     start_agent_turn(&writer, "turn-root-1")?;
-    let delivered = inter_agent_message(
-        "/root/child",
-        "/root",
-        notification,
-        /*trigger_turn*/ false,
-    );
+    let delivered = inter_agent_message("/root/child", "/root", notification);
     append_inference_request(
         &writer,
         "019d0000-0000-7000-8000-000000000001",
         "turn-root-1",
         "inference-root-1",
-        vec![message("assistant", &delivered)],
+        vec![delivered],
     )?;
 
     let replayed = replay_bundle(temp.path())?;
@@ -872,18 +852,13 @@ fn agent_result_edge_falls_back_to_child_thread_without_result_message() -> anyh
     // mailbox item. The target should remain that precise parent-side
     // ConversationItem even though the source falls back to the child thread.
     start_agent_turn(&writer, "turn-root-1")?;
-    let delivered = inter_agent_message(
-        "/root/child",
-        "/root",
-        notification,
-        /*trigger_turn*/ false,
-    );
+    let delivered = inter_agent_message("/root/child", "/root", notification);
     append_inference_request(
         &writer,
         "019d0000-0000-7000-8000-000000000001",
         "turn-root-1",
         "inference-root-1",
-        vec![message("assistant", &delivered)],
+        vec![delivered],
     )?;
 
     let replayed = replay_bundle(temp.path())?;
@@ -1009,15 +984,13 @@ fn append_spawn_agent_tool_lifecycle(
     })
 }
 
-fn inter_agent_message(author: &str, recipient: &str, content: &str, trigger_turn: bool) -> String {
+fn inter_agent_message(author: &str, recipient: &str, content: &str) -> serde_json::Value {
     json!({
+        "type": "agent_message",
         "author": author,
         "recipient": recipient,
-        "other_recipients": [],
-        "content": content,
-        "trigger_turn": trigger_turn,
+        "content": [{"type": "input_text", "text": content}]
     })
-    .to_string()
 }
 
 fn target_conversation_item_id(anchor: &TraceAnchor) -> &String {

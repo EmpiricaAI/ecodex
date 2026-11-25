@@ -21,6 +21,7 @@ use codex_core::GuardianRootSnapshot;
 use codex_core::InheritedSessionId;
 use codex_core::LiveAgent;
 use codex_core::PendingAgentMessage;
+use codex_core::RestrictRootCapabilities;
 use codex_core::RolloutBudgetReminder;
 use codex_core::SendRequest;
 use codex_core::SpawnRequest;
@@ -30,6 +31,7 @@ use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
 use codex_core::TurnStartOptions;
+use codex_core::compact::content_items_to_text;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -39,9 +41,17 @@ use codex_extension_api::ThreadStopInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStopInput;
 use codex_features::Feature;
+use codex_history::CodexHarnessMetadata;
 use codex_history::InitialHistory;
+use codex_history::ResponseItemEnvelope;
 use codex_history::ResumedHistory;
+use codex_history::RetainedContextEntry;
+use codex_history::RetainedContextEvent;
+use codex_history::RetainedContextOrder;
 use codex_history::RolloutItem;
+use codex_history::SenderUserMessages;
+use codex_history::VerifiedAnswer;
+use codex_history::VerifiedQuestionAnswer;
 use codex_message_board::PostMetadata;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
@@ -49,6 +59,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -56,14 +67,18 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::ThreadTraceContext;
+use codex_thread_store::ForkBoundary;
 use codex_thread_store::LoadThreadHistoryParams;
+use codex_thread_store::PrepareForkParams;
 use core_test_support::ThreadIdle;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -258,7 +273,11 @@ impl AgentControl for TestAgentControl {
         None
     }
 
-    fn record_usage(&self, _usage: TokenUsage) -> BoxFuture<'_, CodexResult<()>> {
+    fn record_usage(
+        &self,
+        _usage: Option<TokenUsage>,
+        _hook_charge: codex_core::HookCharge,
+    ) -> BoxFuture<'_, CodexResult<()>> {
         Box::pin(async { Ok(()) })
     }
 
@@ -549,6 +568,20 @@ async fn host_factory_follows_thread_lifecycle() -> anyhow::Result<()> {
         history: Arc::new(saved.items),
         rollout_path: test.codex.rollout_path(),
     });
+    let mut copied_child_options = options();
+    copied_child_options
+        .thread_extension_init
+        .insert(InheritedSessionId(test.session_configured.session_id));
+    assert!(matches!(
+        manager
+            .fork_thread_from_history(
+                ForkSnapshot::Interrupted,
+                copied_child_options,
+                history.clone(),
+            )
+            .await,
+        Err(error) if matches!(error.details(), CodexErrorDetails::InvalidRequest(_))
+    ));
     let fork = manager
         .fork_thread_from_history(ForkSnapshot::Interrupted, options(), history.clone())
         .await?;
@@ -589,15 +622,25 @@ async fn host_factory_follows_thread_lifecycle() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_case(ThreadHistoryMode::Legacy; "legacy")]
-#[test_case(ThreadHistoryMode::Paginated; "paginated")]
+enum HostedChildHistory {
+    Fresh,
+    PreparedFork,
+}
+
+#[test_case(ThreadHistoryMode::Legacy, HostedChildHistory::Fresh; "fresh_legacy")]
+#[test_case(ThreadHistoryMode::Paginated, HostedChildHistory::Fresh; "fresh_paginated")]
+#[test_case(ThreadHistoryMode::Paginated, HostedChildHistory::PreparedFork; "prepared_fork")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fresh_hosted_child_persists_inherited_session_id(
+async fn hosted_child_persists_inherited_session_id(
     history_mode: ThreadHistoryMode,
+    child_history: HostedChildHistory,
 ) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
-    let root = test_codex().build_with_auto_env(&server).await?;
+    let root = test_codex()
+        .with_history_mode(history_mode)
+        .build_with_auto_env(&server)
+        .await?;
     let root_session_id = root.session_configured.session_id;
     let manager = &root.thread_manager;
     let options = || StartThreadOptions {
@@ -606,11 +649,84 @@ async fn fresh_hosted_child_persists_inherited_session_id(
         environments: Some(vec![root.executor_environment().request()]),
         ..StartThreadOptions::new(root.config.clone())
     };
+    let mut native_options = options();
+    native_options.session_source = Some(SessionSource::SubAgent(SubAgentSource::Review));
+    native_options
+        .thread_extension_init
+        .insert(InheritedSessionId(root_session_id));
+    let Err(error) = manager.start_thread(native_options).await else {
+        anyhow::bail!("native children must use their controller's session ID");
+    };
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(_)
+    ));
     let mut child_options = options();
+    let prepared_fork = matches!(child_history, HostedChildHistory::PreparedFork);
+    let selected_plugins = vec!["slack@openai".to_string()];
     child_options
         .thread_extension_init
         .insert(InheritedSessionId(root_session_id));
-    let child = manager.start_thread(child_options).await?;
+    if prepared_fork {
+        child_options
+            .thread_extension_init
+            .insert(RestrictRootCapabilities);
+    }
+    let child = match child_history {
+        HostedChildHistory::Fresh => manager.start_thread(child_options).await?,
+        HostedChildHistory::PreparedFork => {
+            responses::mount_sse_once(&server, responses::sse_completed("done")).await;
+            root.submit_text_turn("record the current plugin selection")
+                .await?;
+            submit_thread_settings(
+                &root.codex,
+                ThreadSettingsOverrides {
+                    disabled_plugin_ids: Some(selected_plugins.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            root.codex.ensure_rollout_materialized().await;
+            root.codex
+                .append_rollout_items(&[
+                    RolloutItem::ResponseItem(ResponseItemEnvelope {
+                        item: responses::user_message_item("ancestor instructions"),
+                        metadata: Some(CodexHarnessMetadata {
+                            user_input_order: Some(42),
+                            sender_user_messages: Some(Box::new(SenderUserMessages {
+                                receiver_turn_id: "ancestor-turn".into(),
+                                receiver_message_id: "ancestor-message".into(),
+                                text: "ancestor sender evidence".into(),
+                            })),
+                            ..Default::default()
+                        }),
+                    }),
+                    RolloutItem::RetainedContext(RetainedContextEvent::VerifiedAnswer {
+                        answer: VerifiedAnswer {
+                            turn_id: "ancestor-turn".into(),
+                            call_id: "ancestor-question".into(),
+                            questions: vec![VerifiedQuestionAnswer {
+                                question: "Publish?".into(),
+                                answer: "Yes".into(),
+                            }],
+                        },
+                        acceptance_order: Some(43),
+                    }),
+                ])
+                .await?;
+            root.codex.flush_rollout().await?;
+            let prepared = root
+                .thread_store
+                .prepare_fork(PrepareForkParams {
+                    thread_id: root.session_configured.thread_id,
+                    boundary: ForkBoundary::Latest,
+                })
+                .await?;
+            manager
+                .fork_prepared_thread(child_options, prepared)
+                .await?
+        }
+    };
     assert_ne!(SessionId::from(child.thread_id), root_session_id);
     assert_eq!(
         (
@@ -619,6 +735,39 @@ async fn fresh_hosted_child_persists_inherited_session_id(
         ),
         (root_session_id, None)
     );
+    let mut expected_retained = None;
+    if prepared_fork {
+        assert_eq!(
+            child
+                .thread
+                .thread_settings_snapshot()
+                .await
+                .disabled_plugin_ids,
+            selected_plugins
+        );
+        let snapshot = child.thread.conversation_history_snapshot().await;
+        assert!(snapshot.items().any(|item| matches!(
+            item, ResponseItem::Message { role, content, .. }
+                if role == "user" && content_items_to_text(content).as_deref() == Some("ancestor instructions")
+        )));
+        let retained = snapshot.retained_context().expect("child authorization");
+        assert_eq!(retained.ordered_entries().count(), 0);
+        assert!(retained.sender_user_messages().is_none());
+        child
+            .thread
+            .inject_response_items(vec![responses::user_message_item(
+                "child-local instructions",
+            )])
+            .await?;
+        let snapshot = child.thread.conversation_history_snapshot().await;
+        let retained = snapshot.retained_context().expect("local authorization");
+        assert!(matches!(
+            retained.ordered_entries().next(),
+            Some((RetainedContextOrder::Local(0), RetainedContextEntry::UserMessage(message)))
+                if message.text == "child-local instructions"
+        ));
+        expected_retained = Some(retained.clone());
+    }
     child.thread.ensure_rollout_materialized().await;
     child.thread.flush_rollout().await?;
     let history = root
@@ -636,17 +785,36 @@ async fn fresh_hosted_child_persists_inherited_session_id(
         (child.thread_id, root_session_id, history_mode)
     );
     child.thread.shutdown_and_wait().await?;
-    let resumed = manager
-        .start_thread(StartThreadOptions {
-            initial_history: InitialHistory::Resumed(ResumedHistory {
-                history_revision: history.revision,
-                conversation_id: child.thread_id,
-                history: Arc::new(history.items),
-                rollout_path: child.thread.rollout_path(),
-            }),
-            ..options()
-        })
-        .await?;
+    let resumed_history = InitialHistory::Resumed(ResumedHistory {
+        history_revision: history.revision,
+        conversation_id: child.thread_id,
+        history: Arc::new(history.items),
+        rollout_path: child.thread.rollout_path(),
+    });
+    let mut invalid_resume = StartThreadOptions {
+        initial_history: resumed_history.clone(),
+        ..options()
+    };
+    invalid_resume
+        .thread_extension_init
+        .insert(InheritedSessionId(root_session_id));
+    let Err(error) = manager.start_thread(invalid_resume).await else {
+        anyhow::bail!("resuming must use the persisted session ID");
+    };
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(_)
+    ));
+    let mut resume_options = StartThreadOptions {
+        initial_history: resumed_history,
+        ..options()
+    };
+    if prepared_fork {
+        resume_options
+            .thread_extension_init
+            .insert(RestrictRootCapabilities);
+    }
+    let resumed = manager.start_thread(resume_options).await?;
     assert!(!Arc::ptr_eq(&resumed.thread, &child.thread));
     assert_eq!(
         (
@@ -656,6 +824,22 @@ async fn fresh_hosted_child_persists_inherited_session_id(
         ),
         (child.thread_id, root_session_id, None)
     );
+    if let Some(expected_retained) = expected_retained {
+        assert_eq!(
+            resumed
+                .thread
+                .thread_settings_snapshot()
+                .await
+                .disabled_plugin_ids,
+            selected_plugins
+        );
+        let snapshot = resumed.thread.conversation_history_snapshot().await;
+        assert!(snapshot.items().any(|item| matches!(
+            item, ResponseItem::Message { role, content, .. }
+                if role == "user" && content_items_to_text(content).as_deref() == Some("ancestor instructions")
+        )));
+        assert_eq!(snapshot.retained_context(), Some(&expected_retained));
+    }
     resumed.thread.shutdown_and_wait().await?;
     root.codex.shutdown_and_wait().await?;
     Ok(())

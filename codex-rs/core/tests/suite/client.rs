@@ -38,6 +38,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::error::CodexErr;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -56,6 +57,7 @@ use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
@@ -89,6 +91,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -658,26 +661,63 @@ async fn sends_local_audio_to_responses() -> anyhow::Result<()> {
         sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
     )
     .await;
-    let codex = test_codex()
+    let test = test_codex()
         .with_model_info_override("gpt-5.5", |model_info| {
             model_info.input_modalities.push(InputModality::Audio);
         })
-        .build(&server)
-        .await?
-        .codex;
+        .build_with_auto_env(&server)
+        .await?;
+    // Client-selected attachments live on the app-server host, even with a remote executor.
     let temp_dir = tempfile::tempdir()?;
     let audio_path = temp_dir.path().join("recording.wav");
     std::fs::write(&audio_path, b"audio")?;
 
-    codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::LocalAudio {
+    let unsupported = temp_dir.path().join("clip.flac");
+    std::fs::write(&unsupported, b"audio")?;
+    let missing = temp_dir.path().join("missing.wav");
+    let inline = "data:audio/wav;base64,YXVkaW8=";
+    let input = vec![
+        UserInput::Audio {
+            audio: AudioReference::Inline {
+                audio_url: inline.into(),
+            },
+        },
+        UserInput::LocalAudio {
+            path: unsupported.clone(),
+        },
+        UserInput::LocalAudio {
             path: audio_path.clone(),
-        }]))
+        },
+        UserInput::LocalAudio {
+            path: missing.clone(),
+        },
+    ];
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(input.clone()))
         .await?;
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    let displayed_input = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::UserMessage(message),
+            ..
+        }) => Some(message.content.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(displayed_input, input);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     let request = response_mock.single_request();
-    assert!(request.has_content_kinds(&["user.text", "user.audio", "user.text"]));
+    assert!(request.has_content_kinds(&[
+        "user.audio",
+        "user.text",
+        "user.text",
+        "user.audio",
+        "user.text",
+        "user.text"
+    ]));
     let user_message = request
         .input()
         .into_iter()
@@ -685,12 +725,20 @@ async fn sends_local_audio_to_responses() -> anyhow::Result<()> {
         .find(|item| item.get("role").and_then(serde_json::Value::as_str) == Some("user"))
         .expect("request should include a user message");
     let audio_path = audio_path.display();
+    let unsupported = unsupported.display();
+    let missing_error = std::fs::File::open(&missing).unwrap_err();
+    let missing = missing.display();
     assert_eq!(
         user_message["content"],
         json!([
+            {"type": "input_audio", "audio_url": inline},
             {
                 "type": "input_text",
-                "text": format!(r#"<audio name=[Audio #1] path="{audio_path}">"#),
+                "text": format!("Codex cannot attach audio at `{unsupported}`: unsupported audio format; use wav, mp3, m4a, webm, or ogg."),
+            },
+            {
+                "type": "input_text",
+                "text": format!(r#"<audio name=[Audio #3] path="{audio_path}">"#),
             },
             {
                 "type": "input_audio",
@@ -699,6 +747,10 @@ async fn sends_local_audio_to_responses() -> anyhow::Result<()> {
             {
                 "type": "input_text",
                 "text": "</audio>",
+            },
+            {
+                "type": "input_text",
+                "text": format!("Codex could not read the local audio at `{missing}`: {missing_error}"),
             },
         ])
     );
@@ -1973,7 +2025,7 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
 
     let mut stream = client_session
         .stream(
-            &prompt,
+            &Arc::new(prompt),
             &model_info,
             &session_telemetry,
             effort,
@@ -2282,8 +2334,33 @@ async fn includes_user_instructions_message_in_request() {
     );
 }
 
+const CATALOG_APPS_GUIDANCE: &str = "Distinctive catalog Apps guidance.";
+
+fn assert_no_apps_guidance(request: &ResponsesRequest) {
+    for text in [
+        "<apps_instructions>",
+        "<catalog_apps_instructions>",
+        CATALOG_APPS_GUIDANCE,
+    ] {
+        assert!(
+            !request.body_contains_text(text),
+            "unexpected Apps guidance: {text:?}"
+        );
+    }
+}
+
+#[test_case::test_case(false, true, true, true; "catalog_missing")]
+#[test_case::test_case(true, false, true, true; "catalog_feature_off_by_default")]
+#[test_case::test_case(true, true, true, true; "catalog_override")]
+#[test_case::test_case(true, true, false, true; "model_excludes")]
+#[test_case::test_case(true, true, true, false; "apps_feature_off")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
+async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth(
+    catalog_override: bool,
+    enable_catalog: bool,
+    model_includes: bool,
+    apps_enabled: bool,
+) {
     skip_if_no_network!();
     let server = MockServer::start().await;
     let apps_server = AppsTestServer::mount(&server)
@@ -2302,12 +2379,27 @@ async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
         .with_config(move |config| {
             config
                 .features
-                .enable(Feature::Apps)
+                .set_enabled(Feature::Apps, apps_enabled)
                 .expect("test config should allow feature update");
+            if enable_catalog {
+                config
+                    .features
+                    .enable(Feature::CatalogAppsInstructions)
+                    .expect("enable catalog Apps instructions");
+            }
             config.chatgpt_base_url = apps_base_url;
+        })
+        .with_model_info_override("gpt-5.5", move |model| {
+            model.include_apps_usage_instructions = model_includes;
+            model.model_messages = catalog_override.then(|| {
+                serde_json::from_value(
+                    json!({"apps": {"usage_instructions": CATALOG_APPS_GUIDANCE}}),
+                )
+                .expect("catalog Apps messages")
+            });
         });
     let codex = builder
-        .build(&server)
+        .build_with_auto_env(&server)
         .await
         .expect("create new conversation")
         .codex;
@@ -2318,25 +2410,153 @@ async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
             text_elements: Vec::new(),
         }]))
         .await
-        .unwrap();
+        .expect("start Apps guidance turn");
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let apps_snippet =
-        "Apps (Connectors) can be explicitly triggered in user messages in the format";
-
-    assert!(
-        message_input_text_contains(&request, "developer", apps_snippet),
-        "expected apps guidance in a developer message, got {:?}",
-        request.body_json()["input"]
+    let use_catalog = catalog_override && enable_catalog;
+    assert_eq!(
+        request.body_contains_text(CATALOG_APPS_GUIDANCE),
+        use_catalog && model_includes && apps_enabled
     );
+    let apps_snippet = if use_catalog {
+        CATALOG_APPS_GUIDANCE
+    } else {
+        "Apps (Connectors) can be explicitly triggered in user messages in the format"
+    };
+
+    assert_eq!(
+        message_input_text_contains(&request, "developer", apps_snippet),
+        model_includes && apps_enabled
+    );
+    if !model_includes || !apps_enabled {
+        assert_no_apps_guidance(&request);
+    }
+    if !apps_enabled {
+        assert!(!request.body_contains_text("mcp__codex_apps"));
+    }
 
     assert!(
         !message_input_text_contains(&request, "user", apps_snippet),
         "did not expect apps guidance in user messages, got {:?}",
         request.body_json()["input"]
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_without_apps_checkpoint_restores_bundled_guidance_once() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let apps = AppsTestServer::mount(&server).await?;
+    let builder = || {
+        let base_url = apps.chatgpt_base_url.clone();
+        let mut builder = test_codex()
+            .with_auth(create_dummy_codex_auth())
+            .with_config(move |config| {
+                config.chatgpt_base_url = base_url;
+                config.features.enable(Feature::Apps).unwrap();
+            });
+        for (model, wording) in [
+            ("apps-bundled", None),
+            ("apps-custom", Some(CATALOG_APPS_GUIDANCE)),
+            ("apps-clear", Some("")),
+        ] {
+            builder = builder.with_model_info_override(model, move |info| {
+                info.include_apps_usage_instructions = true;
+                info.model_messages = Some(
+                    serde_json::from_value(json!({"apps": {"usage_instructions": wording}}))
+                        .unwrap(),
+                );
+            });
+        }
+        builder
+    };
+    let writer = builder()
+        .with_model("apps-bundled")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CatalogAppsInstructions)
+                .unwrap();
+        })
+        .build(&server)
+        .await?;
+    let mock = mount_sse_sequence(
+        &server,
+        (0..5)
+            .map(|i| sse(vec![ev_completed(&format!("apps-{i}"))]))
+            .collect(),
+    )
+    .await;
+    writer.submit_text_turn("Use bundled guidance").await?;
+    for model in ["apps-custom", "apps-clear"] {
+        core_test_support::submit_thread_settings(
+            &writer.codex,
+            ThreadSettingsOverrides {
+                model: Some(model.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        writer.submit_text_turn(model).await?;
+    }
+    writer.codex.shutdown_and_wait().await?;
+
+    // Preserve the recorded conversation while simulating loss of the Apps checkpoint.
+    let path = writer.codex.rollout_path().expect("rollout path");
+    let mut rollout = String::new();
+    let mut removed_checkpoint = false;
+    for line in std::fs::read_to_string(&path)?.lines() {
+        let mut record = codex_rollout::parse_rollout_line(line)?;
+        if let RolloutItem::WorldState(state) = &mut record.item
+            && state.state.remove("apps_instructions").is_some()
+        {
+            removed_checkpoint = true;
+            rollout.push_str(&serde_json::to_string(&record)?);
+        } else {
+            rollout.push_str(line);
+        }
+        rollout.push('\n');
+    }
+    assert!(removed_checkpoint);
+    std::fs::write(&path, rollout)?;
+
+    // Resume on the updated reader with catalog wording still off.
+    let reader = builder()
+        .with_model("apps-clear")
+        .resume(&server, Arc::clone(&writer.home), path)
+        .await?;
+    reader
+        .submit_text_turn("Resume with bundled guidance")
+        .await?;
+    reader.submit_text_turn("Continue").await?;
+    let guidance = |request: &ResponsesRequest| {
+        request
+            .message_input_texts("developer")
+            .into_iter()
+            .filter(|text| {
+                text.starts_with("<apps_instructions>")
+                    || text.starts_with("<catalog_apps_instructions>")
+            })
+            .collect::<Vec<_>>()
+    };
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 5);
+    let [bundled, replacement, retirement]: [String; 3] = guidance(&requests[2])
+        .try_into()
+        .expect("bundled, replaced, then retired");
+    assert!(bundled.starts_with("<apps_instructions>"));
+    assert!(replacement.contains(CATALOG_APPS_GUIDANCE));
+    assert!(
+        retirement.contains("The previously provided Apps usage instructions no longer apply.")
+    );
+    let expected = vec![bundled.clone(), replacement, retirement, bundled];
+    assert_eq!(guidance(&requests[0]), expected[..1]);
+    assert_eq!(guidance(&requests[1]), expected[..2]);
+    assert_eq!(guidance(&requests[3]), expected);
+    assert_eq!(guidance(&requests[4]), expected);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2361,10 +2581,22 @@ async fn omits_apps_guidance_for_api_key_auth_even_when_feature_enabled() {
                 .features
                 .enable(Feature::Apps)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::CatalogAppsInstructions)
+                .expect("enable catalog Apps instructions");
             config.chatgpt_base_url = apps_base_url;
+        })
+        .with_model_info_override("gpt-5.5", |model| {
+            model.model_messages = Some(
+                serde_json::from_value(
+                    json!({"apps": {"usage_instructions": CATALOG_APPS_GUIDANCE}}),
+                )
+                .expect("catalog Apps messages"),
+            );
         });
     let codex = builder
-        .build(&server)
+        .build_with_auto_env(&server)
         .await
         .expect("create new conversation")
         .codex;
@@ -2375,19 +2607,16 @@ async fn omits_apps_guidance_for_api_key_auth_even_when_feature_enabled() {
             text_elements: Vec::new(),
         }]))
         .await
-        .unwrap();
+        .expect("start API-key Apps guidance turn");
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let apps_snippet =
-        "Apps (Connectors) can be explicitly triggered in user messages in the format";
-
+    assert_no_apps_guidance(&request);
     assert!(
-        !message_input_text_contains(&request, "developer", apps_snippet)
-            && !message_input_text_contains(&request, "user", apps_snippet),
-        "did not expect apps guidance for API key auth, got {:?}",
-        request.body_json()["input"]
+        !request.body_contains_text("mcp__codex_apps"),
+        "did not expect Apps tools for API key auth, got {:?}",
+        request.body_json()["tools"]
     );
 }
 
@@ -2413,11 +2642,23 @@ async fn omits_apps_guidance_when_configured_off() {
                 .features
                 .enable(Feature::Apps)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::CatalogAppsInstructions)
+                .expect("enable catalog Apps instructions");
             config.chatgpt_base_url = apps_base_url;
             config.include_apps_instructions = false;
+        })
+        .with_model_info_override("gpt-5.5", |model| {
+            model.model_messages = Some(
+                serde_json::from_value(
+                    json!({"apps": {"usage_instructions": CATALOG_APPS_GUIDANCE}}),
+                )
+                .unwrap(),
+            );
         });
     let codex = builder
-        .build(&server)
+        .build_with_auto_env(&server)
         .await
         .expect("create new conversation")
         .codex;
@@ -2433,11 +2674,7 @@ async fn omits_apps_guidance_when_configured_off() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    assert!(
-        !message_input_text_contains(&request, "developer", "<apps_instructions>"),
-        "did not expect apps instructions when include_apps_instructions = false, got {:?}",
-        request.body_json()["input"]
-    );
+    assert_no_apps_guidance(&request);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2484,11 +2721,23 @@ async fn omits_apps_guidance_when_orchestrator_mcp_is_disabled() {
                 .features
                 .enable(Feature::Apps)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::CatalogAppsInstructions)
+                .expect("enable catalog Apps instructions");
             config.chatgpt_base_url = apps_base_url;
             config.orchestrator_mcp_enabled = false;
+        })
+        .with_model_info_override("gpt-5.5", |model| {
+            model.model_messages = Some(
+                serde_json::from_value(
+                    json!({"apps": {"usage_instructions": CATALOG_APPS_GUIDANCE}}),
+                )
+                .expect("catalog Apps messages"),
+            );
         });
     let codex = builder
-        .build(&server)
+        .build_with_auto_env(&server)
         .await
         .expect("create new conversation")
         .codex;
@@ -2499,18 +2748,16 @@ async fn omits_apps_guidance_when_orchestrator_mcp_is_disabled() {
             text_elements: Vec::new(),
         }]))
         .await
-        .unwrap();
+        .expect("start disabled-orchestrator Apps guidance turn");
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let requests = resp_mock.requests();
     assert_eq!(requests.len(), 3);
+    for request in &requests {
+        assert_no_apps_guidance(request);
+    }
     let request = &requests[0];
-    assert!(
-        !message_input_text_contains(request, "developer", "<apps_instructions>"),
-        "did not expect apps instructions when orchestrator MCP is disabled, got {:?}",
-        request.body_json()["input"]
-    );
     assert!(
         !request.body_contains_text("mcp__codex_apps"),
         "did not expect codex_apps MCP tools when orchestrator MCP is disabled, got {:?}",
@@ -2742,7 +2989,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_requests(config.cwd.clone())),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                permission_profile: Some(config.permissions.effective_permission_profile()),
                 summary: Some(
                     config
                         .model_reasoning_summary
@@ -3000,7 +3247,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_requests(config.cwd.clone())),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                permission_profile: Some(config.permissions.effective_permission_profile()),
                 summary: Some(ReasoningSummary::Concise),
                 collaboration_mode: Some(CollaborationMode {
                     mode: ModeKind::Default,
@@ -3560,7 +3807,7 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
 
     let mut stream = client_session
         .stream(
-            &prompt,
+            &Arc::new(prompt),
             &model_info,
             &session_telemetry,
             effort,

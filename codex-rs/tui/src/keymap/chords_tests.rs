@@ -635,3 +635,30 @@ fn warning_context_keeps_local_chords_ahead_of_copy_and_hides_unreachable_hints(
     assert!(runtime.list.jump_bottom.is_pressed(event));
     assert!(!runtime.app.copy.is_pressed(event));
 }
+
+#[test]
+fn cloud_picker_preserves_composer_undo_and_stays_hidden_in_edit_only_popups() {
+    let picker = keymap_action_id("global", "choose_cloud_environment").unwrap();
+    let undo = keymap_action_id("composer", "undo").unwrap();
+    let editor = KeymapContextSet::new(KeymapContext::Editor).with(KeymapContext::Composer);
+
+    assert!(
+        editor
+            .with_cloud_environment_selection()
+            .contains_action(undo)
+    );
+    assert!(!KeymapContextSet::composer_edit_only().contains_action(picker));
+}
+
+#[test]
+fn composer_undo_defaults_yield_without_shadowing_vim_redo() {
+    let mut config = TuiKeymap::default();
+    config.global.leader = Some(binding("f7"));
+    config.composer.history_search_previous = Some(binding("alt-h"));
+    config.composer.redo = Some(binding("ctrl-r f6"));
+    let runtime = RuntimeKeymap::from_config(&config).unwrap();
+    let undo = KeyEvent::new(KeyCode::F(7), KeyModifiers::NONE);
+    let redo = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+    assert!(!runtime.composer.undo.is_pressed(undo));
+    assert!(runtime.vim_normal.redo.is_pressed(redo));
+}

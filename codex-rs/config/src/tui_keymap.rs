@@ -137,6 +137,8 @@ pub struct TuiGlobalKeymap {
     pub leader: Option<KeybindingsSpec>,
     /// Change where a new conversation runs.
     pub change_host: Option<KeybindingsSpec>,
+    /// Choose a saved environment for a new Cloud conversation.
+    pub choose_cloud_environment: Option<KeybindingsSpec>,
     /// Focus the main conversation composer.
     pub focus_main_composer: Option<KeybindingsSpec>,
     /// Focus the side conversation, or hide it when already focused.
@@ -243,6 +245,10 @@ pub struct TuiComposerKeymap {
     pub history_search_previous: Option<KeybindingsSpec>,
     /// Move to the next match in reverse history search.
     pub history_search_next: Option<KeybindingsSpec>,
+    /// Undo the last edit to the composer draft.
+    pub undo: Option<KeybindingsSpec>,
+    /// Redo an undone composer edit.
+    pub redo: Option<KeybindingsSpec>,
 }
 
 /// Editor context keybindings for text editing inside text areas.
@@ -482,6 +488,8 @@ pub struct TuiPagerKeymap {
     pub close_transcript: Option<KeybindingsSpec>,
     /// Find text in a transcript pager.
     pub find: Option<KeybindingsSpec>,
+    /// Mark Markdown structure under the caret in transcript selection mode.
+    pub mark_markdown: Option<KeybindingsSpec>,
 }
 
 /// List selection context keybindings for popup-style selectable lists.
@@ -514,6 +522,10 @@ pub struct TuiListKeymap {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiAgentsKeymap {
+    /// Select the first task in the next group.
+    pub next_group: Option<KeybindingsSpec>,
+    /// Select the first task in the previous group.
+    pub previous_group: Option<KeybindingsSpec>,
     /// Open the session resume picker.
     pub resume: Option<KeybindingsSpec>,
     /// Search the available agent tasks.

@@ -55,6 +55,7 @@ use tokio::time::timeout;
 use wiremock::ResponseTemplate;
 
 const WAIT: Duration = Duration::from_secs(40);
+const SAMPLE_MODEL: &str = "gpt-5.4-mini";
 
 async fn client(
     home: &TempDir,
@@ -89,10 +90,13 @@ async fn client_with_effort_updates(
         name: "Fast".to_string(),
         description: "Priority processing.".to_string(),
     }];
+    let mut sample_model = model.clone();
+    sample_model.slug = SAMPLE_MODEL.to_string();
+    sample_model.supports_reasoning_effort_updates = false;
     let catalog = home.path().join("catalog.json");
     std::fs::write(
         &catalog,
-        serde_json::to_string(&json!({"models": [model]}))?,
+        serde_json::to_string(&json!({"models": [model, sample_model]}))?,
     )?;
     let mut config = MockResponsesConfig::new(&server.uri()).with_model("gpt-5.4").with_provider_name("OpenAI")
         .with_root_config(&format!("model_catalog_json = {}\nmodel_reasoning_effort = \"high\"\nmodel_post_turn_compact_threshold_percent = 0", serde_json::to_string(&catalog)?));
@@ -171,6 +175,92 @@ async fn prediction_fork(client: &mut TestAppServer, parent: &str) -> Result<Str
         .await?;
     let fork: ThreadForkResponse = timeout(WAIT, client.read_response(id)).await??;
     Ok(fork.thread.id)
+}
+
+#[tokio::test]
+async fn sample_model_override_is_local_to_the_sample() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        ["parent", "override", "inherited", "follow-up"]
+            .map(|id| {
+                responses::sse(vec![
+                    responses::ev_assistant_message(id, "Ready."),
+                    responses::ev_completed(id),
+                ])
+            })
+            .to_vec(),
+    )
+    .await;
+    let home = TempDir::new()?;
+    let mut client = client(&home, &server, /*overrides*/ true).await?;
+    let (thread_id, turn_id) = ready_parent(&mut client, ThreadStartParams::default()).await?;
+
+    let result = sample(
+        &mut client,
+        ThreadSampleParams {
+            thread_id: thread_id.clone(),
+            expected_turn_id: turn_id.clone(),
+            prompt: "Predict the next message.".to_string(),
+            model: Some(SAMPLE_MODEL.to_string()),
+            effort: Some(ReasoningEffort::Medium),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(result.text.as_deref(), Some("Ready."));
+
+    let request_id = client
+        .send_raw_request(
+            "thread/sample",
+            Some(json!({
+                "threadId": thread_id,
+                "expectedTurnId": turn_id,
+                "prompt": "Predict with inherited settings.",
+            })),
+        )
+        .await?;
+    let _: ThreadSampleResponse = timeout(WAIT, client.read_response(request_id)).await??;
+    client
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id,
+            input: input("Follow-up"),
+            ..Default::default()
+        })
+        .await?;
+
+    let requests = mock.requests();
+    let models: Vec<_> = requests
+        .iter()
+        .map(|request| request.body_json()["model"].clone())
+        .collect();
+    assert_eq!(
+        models,
+        ["gpt-5.4", SAMPLE_MODEL, "gpt-5.4", "gpt-5.4"].map(|model| json!(model)),
+    );
+    assert_eq!(
+        requests[1].body_json()["reasoning"]["effort"],
+        json!("high")
+    );
+    let announcement = requests[1]
+        .message_input_texts("developer")
+        .into_iter()
+        .find(|text| text.starts_with("<model_instructions>"))
+        .expect("sample model announcement");
+    insta::assert_snapshot!(announcement, @"
+    <model_instructions>
+    The current model is gpt-5.4-mini.
+    </model_instructions>
+    ");
+    assert!(
+        !requests[2].body_contains_text("<model_instructions>")
+            && !requests[2].body_contains_text("<model_switch>"),
+        "sample without a model override should not announce a model switch"
+    );
+    assert!(requests[1].body_contains_text("Initial turn"));
+    assert!(requests[1].body_contains_text("Predict the next message."));
+    assert!(!requests[3].body_contains_text("Predict the next message."));
+    Ok(())
 }
 
 #[test_matrix(
@@ -1319,13 +1409,7 @@ async fn sample_rejects_invalid_sources_and_prompts() -> Result<()> {
             "Predict".to_string(),
             "latest finished turn",
         ),
-        (parent.clone(), turn.clone(), String::new(), "prompt"),
-        (
-            parent.clone(),
-            turn.clone(),
-            "x".repeat(4_001),
-            "at most 4000 bytes",
-        ),
+        (parent, turn, String::new(), "prompt"),
     ] {
         let id = client
             .send_raw_request(
@@ -1345,6 +1429,95 @@ async fn sample_rejects_invalid_sources_and_prompts() -> Result<()> {
         );
     }
     assert_eq!(mock.requests().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sample_uses_the_parent_catalog_after_a_default_provider_switch() -> Result<()> {
+    let alpha = wiremock::MockServer::start().await;
+    let beta = wiremock::MockServer::start().await;
+    let mut model = codex_models_manager::bundled_models_response()?
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("bundled reasoning model");
+    for (provider, supports_updates) in [(&alpha, false), (&beta, true)] {
+        model.supports_reasoning_effort_updates = supports_updates;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models": [&model]})))
+            .mount(provider)
+            .await;
+    }
+    let replies = ["parent", "sample"].map(|id| {
+        responses::sse(vec![
+            responses::ev_assistant_message(id, "Ready."),
+            responses::ev_completed(id),
+        ])
+    });
+    let alpha_requests = responses::mount_sse_sequence(&alpha, replies.to_vec()).await;
+    let beta_requests = responses::mount_sse_sequence(&beta, replies.to_vec()).await;
+    let home = TempDir::new()?;
+    let alpha_url = alpha.uri();
+    let beta_url = beta.uri();
+    MockResponsesConfig::new(&alpha_url)
+        .with_model_provider("alpha")
+        .with_provider_name("OpenAI")
+        .with_model(&model.slug)
+        .with_root_config("model_reasoning_effort = 'medium'")
+        .enable_feature(Feature::ApiKeyModelDiscovery)
+        .enable_feature(Feature::ReasoningEffortOverride)
+        .with_provider_config(&format!(
+            "env_key = 'TEST_CATALOG_KEY'\nmodel_catalog_url = '{alpha_url}/v1/models'"
+        ))
+        .with_extra_config(&format!(
+            r#"[model_providers.beta]
+name = "OpenAI"
+base_url = "{beta_url}/v1"
+model_catalog_url = "{beta_url}/v1/models"
+env_key = "TEST_CATALOG_KEY""#
+        ))
+        .write(home.path())?;
+    let mut client = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .with_env_overrides(&[("TEST_CATALOG_KEY", Some("test-key"))])
+        .build_initialized_with_timeout(WAIT)
+        .await?;
+    let alpha_parent = ready_parent(&mut client, ThreadStartParams::default()).await?;
+    let id = client
+        .send_raw_request(
+            "modelProvider/default/set",
+            Some(json!({"providerId": "beta"})),
+        )
+        .await?;
+    let write: codex_app_server_protocol::ConfigWriteResponse = client.read_response(id).await?;
+    assert_eq!(write.status, codex_app_server_protocol::WriteStatus::Ok);
+    let beta_parent = ready_parent(&mut client, ThreadStartParams::default()).await?;
+    for ((thread_id, expected_turn_id), requests, supports_updates) in [
+        (alpha_parent, alpha_requests, false),
+        (beta_parent, beta_requests, true),
+    ] {
+        sample(
+            &mut client,
+            ThreadSampleParams {
+                thread_id,
+                expected_turn_id,
+                prompt: "Predict".into(),
+                effort: Some(ReasoningEffort::High),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let requests = requests.requests();
+        assert_eq!(requests.len(), 2);
+        let updates = requests[1].inputs_of_type("configuration_update");
+        assert_eq!(
+            updates
+                .iter()
+                .any(|item| item["reasoning"]["effort"] == "high"),
+            supports_updates
+        );
+    }
     Ok(())
 }
 

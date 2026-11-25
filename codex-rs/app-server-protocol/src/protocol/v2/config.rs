@@ -25,6 +25,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -202,6 +203,7 @@ pub struct AppsDefaultConfig {
 pub struct AppToolConfig {
     pub enabled: Option<bool>,
     pub approval_mode: Option<AppToolApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -507,6 +509,8 @@ pub struct FeedbackRequirements {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct OtelRequirements {
+    pub headers_helper: Option<String>,
+    pub headers_helper_refresh_interval_ms: Option<NonZeroU64>,
     pub tool_result: Option<OtelToolResultLogConfig>,
     pub log_sse_deltas: Option<bool>,
     pub log_user_prompt: Option<bool>,

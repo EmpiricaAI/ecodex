@@ -4,6 +4,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ToolResultMetadata;
 use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
 
@@ -19,6 +20,11 @@ pub trait ToolOutput: Send {
 
     fn success_for_logging(&self) -> bool;
 
+    /// Whether the call was refused before its underlying operation started.
+    fn was_aborted(&self) -> bool {
+        false
+    }
+
     /// Finalizes output using the same completed handler duration reported in tool-call logs.
     /// Called before recording model-visible history; implementations must not measure time here.
     fn set_handler_duration_ms(&mut self, _handler_duration_ms: u64) {}
@@ -26,6 +32,11 @@ pub trait ToolOutput: Send {
     /// Whether this output contains external context that should disable memory generation when
     /// `memories.disable_on_external_context` is enabled.
     fn contains_external_context(&self) -> bool {
+        false
+    }
+
+    /// Whether the complete model-visible result was already limited by its producer.
+    fn output_budget_applied(&self) -> bool {
         false
     }
 
@@ -69,9 +80,9 @@ pub trait ToolOutput: Send {
         response_input_to_code_mode_result(self.to_response_item("", payload))
     }
 
-    /// Borrows original host-only metadata for recording, not for model output or logging.
-    fn tool_result_metadata(&self) -> Option<&JsonValue> {
-        None
+    /// Returns the host-observed result fields for executed-tool passthrough.
+    fn tool_result_metadata(&self) -> ToolResultMetadata {
+        ToolResultMetadata::default()
     }
 }
 
@@ -87,12 +98,20 @@ where
         (**self).success_for_logging()
     }
 
+    fn was_aborted(&self) -> bool {
+        (**self).was_aborted()
+    }
+
     fn set_handler_duration_ms(&mut self, handler_duration_ms: u64) {
         (**self).set_handler_duration_ms(handler_duration_ms);
     }
 
     fn contains_external_context(&self) -> bool {
         (**self).contains_external_context()
+    }
+
+    fn output_budget_applied(&self) -> bool {
+        (**self).output_budget_applied()
     }
 
     fn fallback_token_limit_override(&self) -> Option<usize> {
@@ -123,7 +142,7 @@ where
         (**self).code_mode_result(payload)
     }
 
-    fn tool_result_metadata(&self) -> Option<&JsonValue> {
+    fn tool_result_metadata(&self) -> ToolResultMetadata {
         (**self).tool_result_metadata()
     }
 }

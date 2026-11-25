@@ -8,6 +8,7 @@ use crate::external_auth::ExternalAuthBridge;
 use crate::model_catalog::ModelCatalog;
 use crate::outgoing_message::AccountNotification;
 use chrono::DateTime;
+use codex_app_server_protocol::BedrockProviderId;
 use codex_app_server_protocol::DesktopOnboardingEntrypoint;
 use codex_app_server_protocol::GetAccountRateLimitsParams;
 use codex_core::McpRefreshReason;
@@ -258,6 +259,7 @@ impl AccountRequestProcessor {
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {
+            reason: None,
             auth_mode: auth
                 .as_ref()
                 .map(CodexAuth::api_auth_mode)
@@ -407,11 +409,16 @@ impl AccountRequestProcessor {
                 )
                 .await;
             }
-            LoginAccountParams::AmazonBedrock { api_key, region } => {
+            LoginAccountParams::AmazonBedrock {
+                api_key,
+                region,
+                provider_id,
+            } => {
                 self.login_amazon_bedrock_v2(
                     request_id,
                     BedrockLoginCredentials::ApiKey(api_key),
                     region,
+                    provider_id.unwrap_or(BedrockProviderId::AmazonBedrock),
                 )
                 .await;
             }
@@ -420,6 +427,7 @@ impl AccountRequestProcessor {
                 secret_access_key,
                 session_token,
                 region,
+                provider_id,
             } => {
                 self.login_amazon_bedrock_v2(
                     request_id,
@@ -429,6 +437,7 @@ impl AccountRequestProcessor {
                         session_token,
                     },
                     region,
+                    provider_id.unwrap_or(BedrockProviderId::AmazonBedrock),
                 )
                 .await;
             }
@@ -535,6 +544,7 @@ impl AccountRequestProcessor {
         request_id: ConnectionRequestId,
         credentials: BedrockLoginCredentials,
         region: String,
+        provider_id: BedrockProviderId,
     ) {
         let result = async {
             self.ensure_provider_login_allowed(CloudLoginProvider::AmazonBedrock)?;
@@ -568,6 +578,7 @@ impl AccountRequestProcessor {
             let write = prepare_bedrock_provider(
                 &self.config_manager,
                 BedrockProviderConfig {
+                    provider_id,
                     region: matches!(&credentials, BedrockLoginCredentials::AccessKeys { .. })
                         .then_some(region),
                     profile: None,
@@ -952,7 +963,8 @@ impl AccountRequestProcessor {
             .await
             .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.config_manager
-            .update_managed_config_loader(self.auth_manager.clone(), &self.config);
+            .update_managed_config_loader(self.auth_manager.clone(), &self.config)
+            .await;
         self.config_manager
             .sync_default_client_residency_requirement()
             .await;
@@ -1029,7 +1041,8 @@ impl AccountRequestProcessor {
                 .invalidate_mcp_runtimes_for(McpRefreshReason::AccountAuthReloaded)
                 .await;
             self.config_manager
-                .update_managed_config_loader(self.auth_manager.clone(), &self.config);
+                .update_managed_config_loader(self.auth_manager.clone(), &self.config)
+                .await;
             self.config_manager
                 .sync_default_client_residency_requirement()
                 .await;
@@ -1084,6 +1097,7 @@ impl AccountRequestProcessor {
                 .ok()
                 .cloned()
                 .map(|auth_mode| AccountUpdatedNotification {
+                    reason: None,
                     auth_mode,
                     plan_type: None,
                 });
@@ -1571,7 +1585,9 @@ pub(crate) async fn logout_configured_account(
         .reload_with_cached_auth()
         .await
         .map_err(|err| internal_error(format!("logout failed: {err}")))?;
-    config_manager.update_managed_config_loader(Arc::clone(auth_manager), fallback_config);
+    config_manager
+        .update_managed_config_loader(Arc::clone(auth_manager), fallback_config)
+        .await;
     let config = config_manager
         .load_latest_config(/*fallback_cwd*/ None)
         .await;

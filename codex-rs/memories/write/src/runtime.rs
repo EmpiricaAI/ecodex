@@ -81,7 +81,7 @@ pub(crate) struct MemoryStartupContext {
     version: MemoryVersion,
     thread_id: ThreadId,
     thread: Arc<CodexThread>,
-    thread_manager: Arc<ThreadManager>,
+    pub(crate) thread_manager: Arc<ThreadManager>,
     auth_manager: Arc<AuthManager>,
     provider: SharedModelProvider,
     session_telemetry: SessionTelemetry,
@@ -291,9 +291,8 @@ impl MemoryStartupContext {
     ) -> StageOneRequestContext {
         let config_snapshot = self.thread.config_snapshot().await;
         let model_info = self
-            .thread_manager
-            .get_models_manager()
-            .get_model_info(model_name, &config.to_models_manager_config())
+            .thread
+            .model_info(model_name, &config.to_models_manager_config())
             .await;
         let reasoning_summary = config
             .model_reasoning_summary
@@ -319,8 +318,11 @@ impl MemoryStartupContext {
     pub(crate) async fn stream_stage_one_prompt(
         &self,
         config: &Config,
-        prompt: &Prompt,
+        prompt: Prompt,
         context: &StageOneRequestContext,
+        mut git_probe: tokio::task::JoinSet<
+            Option<(std::path::PathBuf, codex_git_utils::GitWorktreeStatus)>,
+        >,
     ) -> anyhow::Result<(String, Option<TokenUsage>)> {
         let installation_id = resolve_installation_id(&config.codex_home).await?;
         let config_snapshot = self.thread.config_snapshot().await;
@@ -350,7 +352,7 @@ impl MemoryStartupContext {
 
         let mut client_session = model_client.new_session();
         let window_id = format!("{}:0", self.thread_id);
-        let responses_metadata = detached_memory_responses_metadata(
+        let mut responses_metadata = detached_memory_responses_metadata(
             &self.thread_manager,
             installation_id,
             session_id_string,
@@ -362,9 +364,13 @@ impl MemoryStartupContext {
             /*sandbox*/ None,
         )
         .await;
+        if let Some(Ok(Some((root, observed)))) = git_probe.try_join_next() {
+            responses_metadata.apply_memory_git_change_observation(&root, observed);
+        }
+        drop(git_probe);
         let mut stream = client_session
             .stream(
-                prompt,
+                &Arc::new(prompt),
                 &context.model_info,
                 &context.session_telemetry,
                 context.reasoning_effort.clone(),

@@ -1261,6 +1261,46 @@ fn record_annotated_items_preserves_metadata_while_processing_item(
     );
 }
 
+#[test]
+fn realtime_input_stages_provenance_without_copying_model_history() {
+    let mut history = create_history_with_items(vec![user_msg("earlier input")]);
+    let original_items = Arc::clone(&history.items);
+    let original_retained = history.retained_context().clone();
+    let mut envelope = ResponseItemEnvelope::new(ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
+        id: Some(ResponseItemId::with_suffix("msg", "realtime")),
+        role: "user".to_owned(),
+        content: vec![ContentItem::InputText {
+            text: "use the smaller logo".to_owned(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
+            turn_id: Some("realtime-turn".to_owned()),
+            content_item_kinds: Some(vec![ContentItemKind("user.text".to_owned())]),
+            ..Default::default()
+        }),
+    });
+    history.prepare_item_sampling(&mut envelope);
+    let staged = history.stage_realtime_input(&mut envelope);
+    assert!(Arc::ptr_eq(&history.items, &original_items));
+    assert_eq!(history.retained_context(), &original_retained);
+    assert!(
+        envelope
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.retained_source.is_some())
+    );
+
+    // A failed seal can retry the exact cached envelope, including its source revision.
+    drop(staged);
+    let cached = envelope.clone();
+    let staged = history.stage_realtime_input(&mut envelope);
+    assert_eq!(envelope, cached);
+    history.record_sealed_realtime_input(&envelope, staged, TruncationPolicy::Tokens(10_000));
+    assert_eq!(history.annotated_items().last(), Some(&cached));
+}
+
 #[tokio::test]
 async fn for_prompt_annotated_preserves_metadata_while_normalizing_item() {
     let envelope = ResponseItemEnvelope {
@@ -2122,6 +2162,46 @@ async fn drop_last_n_user_turns_preserves_prefix() {
 }
 
 #[test]
+fn session_end_input_does_not_consume_a_rollback_turn() {
+    let first = user_input_text_msg("first turn");
+    // Even if its content happens to look like normal pre-turn context, a saved
+    // hangup belongs to the preceding turn and must survive rollback of the next.
+    let tail =
+        user_input_text_msg("<environment_context>speech saved at hangup</environment_context>");
+    let next = user_input_text_msg("next turn");
+    let mut saved_tail = ResponseItemEnvelope::new(tail.clone());
+    saved_tail.metadata = Some(CodexHarnessMetadata {
+        realtime_session_end_input: true,
+        ..Default::default()
+    });
+
+    for (mut items, expected) in [
+        (
+            vec![ResponseItemEnvelope::new(first.clone()), saved_tail.clone()],
+            Vec::new(),
+        ),
+        (
+            vec![
+                ResponseItemEnvelope::new(first.clone()),
+                saved_tail,
+                ResponseItemEnvelope::new(next),
+            ],
+            vec![first, tail],
+        ),
+    ] {
+        let mut live = ContextManager::default();
+        live.record_annotated_items(&mut items, TruncationPolicy::Tokens(10_000));
+        let mut checkpoint = ContextManager::default();
+        checkpoint.replace_annotated(live.annotated_items().to_vec());
+
+        for mut history in [live, checkpoint] {
+            history.drop_last_n_user_turns(/*num_turns*/ 1);
+            assert_eq!(raw_items(&history), expected);
+        }
+    }
+}
+
+#[test]
 fn rollback_removes_assistant_sources_recorded_ahead_of_queued_input() {
     let mut history = root_history();
     let original = user_msg("Staging only.");
@@ -2277,6 +2357,9 @@ async fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
         developer_msg(&format!(
             "{APPS_INSTRUCTIONS_OPEN_TAG}\nROLLED_BACK_APPS_INSTRUCTIONS"
         )),
+        developer_msg(
+            "<catalog_apps_instructions>Retired Apps guidance</catalog_apps_instructions>",
+        ),
         developer_msg(&format!(
             "{PLUGINS_INSTRUCTIONS_OPEN_TAG}\nROLLED_BACK_PLUGIN_INSTRUCTIONS"
         )),

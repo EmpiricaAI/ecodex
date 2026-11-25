@@ -1,7 +1,132 @@
 //! Runtime-refresh regressions; pure authority resolution is tested with Config.
 
 use super::*;
+use crate::StartThreadOptions;
+use crate::ThreadManager;
+use codex_config::loader::load_guardian_policy_snapshot;
+use codex_config::test_support::CloudConfigBundleFixture;
+use codex_exec_server::LOCAL_FS;
 use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn guardian_refresh_updates_idle_thread_while_another_thread_is_busy() -> anyhow::Result<()> {
+    struct TestPolicyLoader(AbsolutePathBuf);
+    impl crate::GuardianPolicyLoader for TestPolicyLoader {
+        fn load_guardian_policy_snapshot(
+            &self,
+            revision: u64,
+        ) -> BoxFuture<'_, std::io::Result<codex_config::GuardianPolicySnapshot>> {
+            Box::pin(async move {
+                load_guardian_policy_snapshot(
+                    LOCAL_FS.as_ref(),
+                    self.0.as_path(),
+                    &LoaderOverrides::without_managed_config_for_tests(),
+                    &codex_config::CloudConfigBundleLoader::default(),
+                    revision,
+                )
+                .await
+            })
+        }
+    }
+
+    const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
+    let home = tempfile::tempdir()?;
+    let mut config = crate::config::test_config().await;
+    config.codex_home = home.path().abs();
+    config.cwd = config.codex_home.clone();
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    )
+    .with_guardian_policy_loader(Arc::new(TestPolicyLoader(config.codex_home.clone())));
+
+    manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await?;
+    manager
+        .start_thread(StartThreadOptions::new(config))
+        .await?;
+    // The manager lists threads in the registry's iteration order. Lock the first one.
+    let threads = manager.list_thread_ids().await;
+    let [busy, idle] = threads.as_slice() else {
+        panic!("expected two live threads");
+    };
+    let busy = manager.get_thread(*busy).await?;
+    let idle = manager.get_thread(*idle).await?;
+    let startup_revision = idle.config().await.guardian_policy_revision;
+    let (locked, state_locked) = tokio::sync::oneshot::channel();
+    let (release_state, release) = tokio::sync::oneshot::channel();
+    let held_state = tokio::task::spawn_blocking(move || {
+        let _state = busy.session.state.blocking_lock();
+        let _ = locked.send(());
+        let _ = release.blocking_recv();
+    });
+    state_locked.await?;
+
+    let (refresh, idle_update) = tokio::join!(manager.refresh_guardian_policy(), async {
+        let result = tokio::time::timeout(UPDATE_TIMEOUT, async {
+            while idle.config().await.guardian_policy_revision <= startup_revision {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        let _ = release_state.send(());
+        result
+    });
+    held_state.await?;
+    idle_update.expect("the idle thread should update while the first thread holds its lock");
+    refresh?;
+    manager.shutdown_all_threads_bounded(UPDATE_TIMEOUT).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_reload_survives_guardian_only_publications() {
+    let (session, _) = make_session_and_context().await;
+    let before = session.get_config().await;
+    let mut incoming = before.as_ref().clone();
+    incoming.config_layer_stack = incoming
+        .config_layer_stack
+        .with_session_plugins(toml::from_str("[_default]\nenabled = false").unwrap())
+        .unwrap();
+    let first_revision = before.guardian_policy_revision + 1;
+    let latest_revision = first_revision + 1;
+    for (revision, policy) in [
+        (first_revision, "first policy"),
+        (latest_revision, "latest policy"),
+    ] {
+        let loader = CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+            "guardian_policy_config = {policy:?}"
+        ));
+        let snapshot = load_guardian_policy_snapshot(
+            LOCAL_FS.as_ref(),
+            before.codex_home.as_path(),
+            &LoaderOverrides::without_managed_config_for_tests(),
+            &loader,
+            revision,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            session.refresh_guardian_policy(&snapshot).await,
+            crate::ConfigRefreshOutcome::Published
+        );
+    }
+
+    assert_eq!(
+        session.refresh_mcp_config(before, incoming).await,
+        crate::ConfigRefreshOutcome::Published
+    );
+    let published = session.get_config().await;
+    assert!(!published.plugins.allows_plugin("browser"));
+    assert_eq!(published.guardian_policy_revision, latest_revision);
+    assert_eq!(
+        published.guardian_policy_config.as_deref(),
+        Some("latest policy")
+    );
+}
 
 async fn runtime_servers(session: &Session) -> HashMap<String, McpServerConfig> {
     let config = session.get_config().await;

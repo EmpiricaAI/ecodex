@@ -91,7 +91,7 @@ async fn ema_auth_statuses_do_not_wait_for_account_refresh() -> anyhow::Result<(
             })
             .map_err(anyhow::Error::msg)?;
         servers.insert(
-            name.to_string(),
+            McpServerKey::unscoped(name),
             EffectiveMcpServer::from_host_config(server),
         );
     }
@@ -119,8 +119,8 @@ async fn ema_auth_statuses_do_not_wait_for_account_refresh() -> anyhow::Result<(
             .map(|(name, entry)| (name, entry.auth_state))
             .collect::<HashMap<_, _>>(),
         HashMap::from([
-            ("first".to_string(), McpAuthState::BearerToken),
-            ("second".to_string(), McpAuthState::BearerToken),
+            (McpServerKey::unscoped("first"), McpAuthState::BearerToken),
+            (McpServerKey::unscoped("second"), McpAuthState::BearerToken),
         ]),
     );
     drop(lease);
@@ -173,7 +173,7 @@ async fn status_snapshot_only_downgrades_oauth_and_ema_authentication_failures()
         }
         manager.insert_test_client(name, client);
         auth_status_entries.insert(
-            name.to_string(),
+            McpServerKey::unscoped(name),
             McpAuthStatusEntry {
                 config: name.starts_with("ema-").then(|| {
                     serde_json::from_value(serde_json::json!({
@@ -186,34 +186,43 @@ async fn status_snapshot_only_downgrades_oauth_and_ema_authentication_failures()
         );
     }
 
-    let server_names = auth_status_entries.keys().cloned().collect();
+    let server_keys = auth_status_entries.keys().cloned().collect();
     let snapshot = collect_mcp_server_status_snapshot_from_manager(
         &manager,
         auth_status_entries,
-        server_names,
+        server_keys,
         McpSnapshotDetail::ToolsAndAuthOnly,
     )
     .await;
 
     assert_eq!(
         snapshot.auth_statuses,
-        HashMap::from([
-            ("oauth-failed".to_string(), McpAuthStatus::NotLoggedIn),
-            ("oauth-ready".to_string(), McpAuthStatus::OAuth),
-            ("oauth-provider-error".to_string(), McpAuthStatus::OAuth),
-            ("ema-failed".to_string(), McpAuthStatus::NotLoggedIn),
-            ("ema-ready".to_string(), McpAuthStatus::BearerToken),
-            ("ema-provider-error".to_string(), McpAuthStatus::BearerToken),
-            ("bearer".to_string(), McpAuthStatus::BearerToken),
-        ]),
+        HashMap::from(
+            [
+                ("oauth-failed", McpAuthStatus::NotLoggedIn),
+                ("oauth-ready", McpAuthStatus::OAuth),
+                ("oauth-provider-error", McpAuthStatus::OAuth),
+                ("ema-failed", McpAuthStatus::NotLoggedIn),
+                ("ema-ready", McpAuthStatus::BearerToken),
+                ("ema-provider-error", McpAuthStatus::BearerToken),
+                ("bearer", McpAuthStatus::BearerToken),
+            ]
+            .map(|(name, status)| (McpServerKey::unscoped(name), status)),
+        ),
     );
 }
 
 pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
-        chatgpt_base_url: "https://chatgpt.com".to_string(),
+        client: super::McpClientConfig {
+            chatgpt_base_url: "https://chatgpt.com".to_string(),
+            requires_read_only_mcp_tools: false,
+            protocol_mode: McpProtocolMode::Legacy,
+            discover_local_stdio: false,
+            mcp_tool_list_changed: true,
+            client_elicitation_capability: ElicitationCapability::default(),
+        },
         apps_mcp_product_sku: None,
-        requires_read_only_mcp_tools: false,
         codex_home,
         mcp_enterprise_managed_auth: None,
         ema_state: Default::default(),
@@ -242,11 +251,7 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         apps_early_resource_discovery: false,
         prefix_mcp_tool_names: true,
         non_prefixed_mcp_tool_servers: Vec::new(),
-        protocol_mode: McpProtocolMode::Legacy,
-        discover_local_stdio: false,
-        mcp_tool_list_changed: true,
         host_owned_apps_protocol_mode: McpProtocolMode::Legacy,
-        client_elicitation_capability: ElicitationCapability::default(),
         mcp_server_catalog: ResolvedMcpCatalog::default(),
         connector_snapshot: codex_connectors::ConnectorSnapshot::default(),
     }
@@ -739,7 +744,7 @@ fn effective_mcp_servers_preserve_chatgpt_auth_for_trusted_origins() {
         ("https://chatgpt.com", "https://GOV.CHATGPT.COM:443"),
     ] {
         let mut config = test_mcp_config(PathBuf::new());
-        config.chatgpt_base_url = base_url.to_string();
+        config.client.chatgpt_base_url = base_url.to_string();
         let server = codex_apps_mcp_server_config(
             server_url, /*apps_mcp_product_sku*/ None, /*originator*/ None,
         );
@@ -772,7 +777,7 @@ fn effective_mcp_servers_reject_untrusted_origins_for_chatgpt_auth() {
         "https://example.com",
     ] {
         let mut config = test_mcp_config(PathBuf::new());
-        config.chatgpt_base_url = url.to_string();
+        config.client.chatgpt_base_url = url.to_string();
         let server = codex_apps_mcp_server_config(
             url, /*apps_mcp_product_sku*/ None, /*originator*/ None,
         );
@@ -866,7 +871,7 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
     catalog.register(McpServerRegistration::from_config(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         codex_apps_mcp_server_config(
-            &config.chatgpt_base_url,
+            &config.client.chatgpt_base_url,
             config.apps_mcp_product_sku.as_deref(),
             /*originator*/ None,
         ),

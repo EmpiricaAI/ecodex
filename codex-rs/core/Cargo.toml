@@ -73,6 +73,7 @@ codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
+codex-user-input = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-audio = { workspace = true }
 codex-utils-cache = { workspace = true }
@@ -192,4 +193,6 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_
 
 [package.metadata.cargo-shear]
 ignored = ["openssl-sys"]
-ignored-paths = ["tests/remote_env_windows/*.rs"]
+ignored-paths = [
+    "tests/remote_env_windows/*.rs",
+]

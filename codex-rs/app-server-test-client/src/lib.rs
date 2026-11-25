@@ -1048,6 +1048,7 @@ async fn test_login(
                         params: codex_app_server_protocol::LoginAccountParams::AmazonBedrock {
                             api_key,
                             region,
+                            provider_id: None,
                         },
                     },
                     request_id,
@@ -1169,6 +1170,7 @@ async fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u3
         let response = client.thread_list(ThreadListParams {
             include_attached_threads: false,
             current_account_only: false,
+            included_thread_ids: None,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,

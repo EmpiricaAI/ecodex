@@ -33,6 +33,7 @@ use codex_models_manager::manager::ModelsManagerFuture;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_models_manager::model_info::with_config_overrides;
+use codex_protocol::RequestCountry;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ReasoningSummary;
@@ -517,7 +518,8 @@ fn settings_submission(
                 turn_id: turn_id.to_string(),
                 update,
                 reply,
-            },
+            }
+            .into(),
             trace: None,
             parent_turn_id: None,
             root_turn_id: None,
@@ -604,7 +606,7 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         },
     );
     submissions
-        .send(submission)
+        .send(Box::new(submission))
         .await
         .expect("submit model update");
     lookup.wait_until_blocked().await;
@@ -643,7 +645,10 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         ),
     ] {
         let (submission, reply) = settings_submission(id, &turn.sub_id, update);
-        submissions.send(submission).await.expect("queue update");
+        submissions
+            .send(Box::new(submission))
+            .await
+            .expect("queue update");
         replies.push(reply);
     }
     lookup.release();
@@ -880,6 +885,62 @@ async fn delayed_activation_does_not_retarget_a_task(change: TaskChangeDuringLoo
 enum ManagedAuthorizationChange {
     ApprovalPolicy,
     ApprovalsReviewer,
+}
+
+#[tokio::test]
+async fn country_updates_preserve_captured_steps_without_model_switching() {
+    let (mut session, turn) = make_session_and_context().await;
+    session
+        .features
+        .disable(Feature::StepModelSwitching)
+        .unwrap();
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    session
+        .spawn_task(
+            Arc::clone(&turn),
+            Vec::new(),
+            HeldStepTask {
+                kind: TaskKind::Compact,
+                finish: Arc::new(Notify::new()),
+            },
+        )
+        .await;
+    let original = turn.next_step_settings.load_full();
+    let defaults = desired_step_settings(&session).await;
+    for request_country in [
+        RequestCountry::from_iso_code("DE").unwrap(),
+        RequestCountry::UNKNOWN,
+    ] {
+        let captured = turn.next_step_settings.load_full();
+        let expected = captured.request_country().clone();
+        assert_eq!(
+            session
+                .apply_turn_settings(
+                    &turn.sub_id,
+                    TurnSettingsUpdate {
+                        request_country: Some(request_country.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await,
+            TurnSettingsUpdateOutcome::Applied,
+        );
+        assert_eq!(
+            turn.next_step_settings.load().request_country(),
+            &request_country
+        );
+        assert_eq!(captured.request_country(), &expected);
+    }
+    let issuing_step = session
+        .capture_step_context(Arc::clone(&turn), &CancellationToken::new())
+        .await
+        .unwrap();
+    let review = crate::guardian::GuardianReviewContext::from(&issuing_step);
+    assert_eq!(review.request_country, RequestCountry::UNKNOWN);
+    assert_eq!(original.request_country(), &RequestCountry::default());
+    assert_eq!(desired_step_settings(&session).await, defaults);
+    session.abort_all_tasks(TurnAbortReason::Replaced).await;
 }
 
 #[test_case(false; "reviewer allow-list")]

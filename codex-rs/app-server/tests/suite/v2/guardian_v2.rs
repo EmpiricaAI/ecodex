@@ -75,6 +75,9 @@ use super::mcp_tool::TEST_TOOL_NAME;
 use super::mcp_tool::start_mcp_server;
 use super::mcp_tool::start_mcp_server_with_tools;
 
+#[path = "guardian_v3_sync_tests.rs"]
+mod v3_sync;
+
 #[path = "guardian_sync_session_tests.rs"]
 mod sync_sessions;
 
@@ -2078,6 +2081,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             let mut denied_results = Vec::new();
             for entry in std::fs::read_dir(traces.path())? {
                 let bundle = entry?.path();
+                let mut reader = codex_rollout_trace::PayloadReader::new(&bundle);
                 for line in std::fs::read_to_string(bundle.join("trace.jsonl"))?.lines() {
                     let event: Value = serde_json::from_str(line)?;
                     let payload = &event["payload"];
@@ -2086,12 +2090,8 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                         && payload["tool_call_id"] == "guardian-action-0"
                     {
                         assert_eq!(payload["status"], "failed");
-                        let path = payload["runtime_payload"]["path"]
-                            .as_str()
-                            .expect("MCP runtime payload path");
-                        let result: Value =
-                            serde_json::from_reader(std::fs::File::open(bundle.join(path))?)?;
-                        denied_results.push(result);
+                        let reference = serde_json::from_value(payload["runtime_payload"].clone())?;
+                        denied_results.push(reader.read_json(&reference)?);
                     }
                 }
             }
@@ -2144,11 +2144,14 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         });
         assert_eq!(classification.is_some(), classifier_in_scope);
         if let Some(event) = classification {
+            let params = &event["event_params"];
+            let requests = responses_state.luna_requests.lock().expect("Luna requests");
+            let request_turn_id = requests[0]["client_metadata"]["turn_id"]
+                .as_str()
+                .expect("classifier request turn ID");
+            assert_eq!(params["classifier_turn_id"], request_turn_id);
             assert_eq!(
-                json!([
-                    event["event_params"]["outcome"],
-                    event["event_params"]["risk_level"]
-                ]),
+                json!([params["outcome"], params["risk_level"]]),
                 match risk {
                     GuardianRisk::Low | GuardianRisk::LowWithStreamFailure =>
                         json!(["success", "low"]),
