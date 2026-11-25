@@ -847,7 +847,10 @@ impl FileSystemSandboxPolicy {
                 FileSystemAccessMode::Write,
             ));
         }
-        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut policy.entries, ".git");
+        append_default_read_only_project_root_subpath_if_no_explicit_rule(
+            &mut policy.entries,
+            ".git",
+        );
         append_default_read_only_project_root_subpath_if_no_explicit_rule(
             &mut policy.entries,
             ".agents",
@@ -856,7 +859,10 @@ impl FileSystemSandboxPolicy {
             &mut policy.entries,
             ".codex",
         );
-        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut policy.entries, ".aws");
+        append_default_read_only_project_root_subpath_if_no_explicit_rule(
+            &mut policy.entries,
+            ".aws",
+        );
         policy
     }
 
@@ -2065,9 +2071,20 @@ impl FileSystemSandboxPolicy {
     }
 
     fn resolved_entries_with_cwd(&self, cwd: &Path) -> Vec<ResolvedFileSystemEntry> {
+        let mut entries = self.unexpanded_resolved_entries_with_cwd(cwd);
+        append_linked_worktree_git_entries(&mut entries);
+        entries
+    }
+
+    /// The linked-worktree git entries a `writable_git` grant expands into for
+    /// this cwd (empty unless the cwd's `.git` is a writable gitdir pointer).
+    fn linked_worktree_git_entries_with_cwd(&self, cwd: &Path) -> Vec<ResolvedFileSystemEntry> {
+        linked_worktree_git_entries(&self.unexpanded_resolved_entries_with_cwd(cwd))
+    }
+
+    fn unexpanded_resolved_entries_with_cwd(&self, cwd: &Path) -> Vec<ResolvedFileSystemEntry> {
         let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
-        let mut entries: Vec<ResolvedFileSystemEntry> = self
-            .entries
+        self.entries
             .iter()
             .filter_map(|entry| {
                 resolve_entry_path(&entry.path, cwd_absolute.as_ref()).map(|path| {
@@ -2077,9 +2094,7 @@ impl FileSystemSandboxPolicy {
                     }
                 })
             })
-            .collect();
-        append_linked_worktree_git_entries(&mut entries);
-        entries
+            .collect()
     }
 
     /// Resolves configured roots using executor paths without inspecting the filesystem.
@@ -2716,8 +2731,18 @@ const LINKED_WORKTREE_READ_ONLY_COMMON_GIT_NAMES: &[&str] =
 /// expands nothing and the existing protection (the resolved gitdir is pushed
 /// as a read-only subpath) is unchanged.
 fn append_linked_worktree_git_entries(entries: &mut Vec<ResolvedFileSystemEntry>) {
+    let mut expanded = linked_worktree_git_entries(entries);
+    entries.append(&mut expanded);
+}
+
+/// The entries [`append_linked_worktree_git_entries`] would add, without the
+/// inputs. The local matcher adds these as explicit path entries so its write
+/// checks agree with the resolved entries writable roots are built from.
+fn linked_worktree_git_entries(
+    entries: &[ResolvedFileSystemEntry],
+) -> Vec<ResolvedFileSystemEntry> {
     let mut expanded: Vec<ResolvedFileSystemEntry> = Vec::new();
-    for entry in entries.iter() {
+    for entry in entries {
         if !entry.access.can_write() || !is_git_pointer_file(&entry.path) {
             continue;
         }
@@ -2747,7 +2772,7 @@ fn append_linked_worktree_git_entries(entries: &mut Vec<ResolvedFileSystemEntry>
             access: FileSystemAccessMode::Write,
         });
     }
-    entries.append(&mut expanded);
+    expanded
 }
 
 /// Resolves the common git dir a linked worktree's gitdir belongs to, via the

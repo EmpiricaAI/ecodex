@@ -2042,17 +2042,29 @@ fn workspace_write_writable_git_flag_toggles_dot_git_protection() {
     }
 
     // Default (off): .git/.agents/.codex all protected read-only.
-    let off = FileSystemSandboxPolicy::workspace_write_git(&[], false, false, /*writable_git*/ false);
+    let off = FileSystemSandboxPolicy::workspace_write_git(
+        &[],
+        false,
+        false,
+        /*writable_git*/ false,
+    );
     assert_eq!(
         access_for_project_subpath(&off, ".git"),
         Some(FileSystemAccessMode::Read),
         "writable_git=false must keep .git protected"
     );
-    assert_eq!(access_for_project_subpath(&off, ".agents"), Some(FileSystemAccessMode::Read));
-    assert_eq!(access_for_project_subpath(&off, ".codex"), Some(FileSystemAccessMode::Read));
+    assert_eq!(
+        access_for_project_subpath(&off, ".agents"),
+        Some(FileSystemAccessMode::Read)
+    );
+    assert_eq!(
+        access_for_project_subpath(&off, ".codex"),
+        Some(FileSystemAccessMode::Read)
+    );
 
     // On: .git becomes writable; .agents/.codex STAY protected.
-    let on = FileSystemSandboxPolicy::workspace_write_git(&[], false, false, /*writable_git*/ true);
+    let on =
+        FileSystemSandboxPolicy::workspace_write_git(&[], false, false, /*writable_git*/ true);
     assert_eq!(
         access_for_project_subpath(&on, ".git"),
         Some(FileSystemAccessMode::Write),
@@ -2095,8 +2107,7 @@ fn linked_worktree_fixture(temp: &TempDir) -> (PathBuf, PathBuf) {
     }
     std::fs::write(main_git.join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
     std::fs::write(main_git.join("config"), "[core]\n").expect("write config");
-    std::fs::write(main_git.join("worktrees/wt/commondir"), "../..\n")
-        .expect("write commondir");
+    std::fs::write(main_git.join("worktrees/wt/commondir"), "../..\n").expect("write commondir");
 
     let worktree = temp.path().join("wt");
     std::fs::create_dir_all(&worktree).expect("create worktree");

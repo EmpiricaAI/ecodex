@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **`writable_git` works in linked git worktrees again.** In 0.170.0 a session started in a linked worktree with `writable_git = true` could not write the worktree's git state, so `git add` and `git commit` were refused by the sandbox. Upstream 0.170.0 moved write checks onto a new local matcher, and the fold left ecodex's worktree expansion (the per-worktree gitdir and the shared common git dir, with `config`, `hooks`, `HEAD`, `info`, `modules` and sibling worktrees kept read-only) outside it. The matcher now carries the expansion. CI runs `codex-protocol`'s `writable_git` tests, which no job ran before.
+
+### Security
+- Bumped `url` to 2.5.9 and `cookie` to 0.18.3 for advisories published after 0.170.0 (RUSTSEC-2026-0592, RUSTSEC-2026-0594), and `serde_with` to 3.21 and `cmov` to 0.5.4 for GitHub advisories the RustSec-based audit does not list. All are in-range bumps.
+
 ## [0.170.0] - 2026-11-20
 
 ### Highlights

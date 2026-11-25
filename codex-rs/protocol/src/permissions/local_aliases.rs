@@ -104,6 +104,35 @@ impl FileSystemSandboxPolicy {
                     .push(FileSystemSandboxEntry::new(normalized.into(), access));
             }
         }
+        // ecodex: a `writable_git` grant in a linked worktree expands into the
+        // worktree's gitdir and common git dir (with escalation-sensitive names
+        // kept read-only). The expansion reads the `.git` pointer file, so it
+        // can only happen here, for local paths; without it this matcher denies
+        // what the resolved entries grant and `git commit` fails in a worktree.
+        if let Ok(cwd) = context.cwd.to_abs_path() {
+            let expansion = self.linked_worktree_git_entries_with_cwd(cwd.as_path());
+            if !expansion.is_empty() {
+                let policy = policy.to_mut();
+                for entry in expansion {
+                    let path = if cfg!(target_os = "macos") {
+                        entry.path.normalize_system_aliases().map_err(|error| {
+                            io::Error::new(
+                                error.kind(),
+                                format!(
+                                    "failed to normalize {}: {error}",
+                                    entry.path.as_path().display()
+                                ),
+                            )
+                        })?
+                    } else {
+                        entry.path
+                    };
+                    policy
+                        .entries
+                        .push(FileSystemSandboxEntry::new(path.into(), entry.access));
+                }
+            }
+        }
         Ok(LocalFileSystemPolicyMatcher {
             policy,
             context: *context,

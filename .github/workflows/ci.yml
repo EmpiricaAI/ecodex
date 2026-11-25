@@ -49,6 +49,14 @@ jobs:
       - name: Build + test owned crates
         run: cargo test -p codex-empirica-plugin -p codex-empirica-translator
 
+      # ecodex's writable_git knob lives in upstream's codex-protocol, which
+      # nothing above tests. The 0.170.0 fold moved write checks onto a new
+      # matcher that never saw the linked-worktree expansion, and git commits
+      # in a worktree were refused in the shipped release; these tests failed
+      # the whole time without any job running them.
+      - name: Test ecodex's writable_git in codex-protocol
+        run: cargo test -p codex-protocol writable_git
+
       # The same clippy gate scripts/broccoli.sh runs locally: the owned crates
       # plus codex-cli, every target, no warnings. codex-cli's test target is
       # not built by anything else here, and at 0.167.1 an upstream test in it
