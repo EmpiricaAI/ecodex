@@ -141,3 +141,7 @@ fn parse_completed(
         data: (),
     }
 }
+
+#[cfg(test)]
+#[path = "task_completed_tests.rs"]
+mod tests;

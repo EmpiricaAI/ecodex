@@ -89,7 +89,8 @@ jobs:
       - name: ecodex gap tests in upstream crates (gating)
         run: |
           set -euo pipefail
-          cargo nextest run -p codex-core --lib --no-tests=fail -E 'test(plugin_writable_roots) | test(ntfy_listener)'
+          cargo nextest run -p codex-core --lib --no-tests=fail -E 'test(plugin_writable_roots) | test(ntfy_listener) | test(monitor::tests)'
+          cargo nextest run -p codex-hooks --no-tests=fail -E 'test(task_completed)'
           cargo nextest run -p codex-protocol --no-tests=fail -E 'test(writable_git)'
 
       # Informational until triaged (David, 2026-10-29): it runs and its
