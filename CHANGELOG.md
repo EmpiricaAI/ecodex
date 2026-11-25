@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Empirica hooks re-vendored from core 1.17.17** (`b519d52084cc`; CI's empirica-core pin moves to it; three vendored files change). In discipline mode the artifact and workflow verbs (`note`, every `*-log`, `goals-*`, the transaction verbs, `mailbox reply`) now run outside a transaction even beside other statements on one line, unless an option makes them do more than record. A prompt now counts as planned work, which gets no out-of-loop budget, only when it asks to plan, specify, implement or break work down; Empirica's own vocabulary no longer triggers it.
+
 ### Fixed
 - **`writable_git` works in linked git worktrees again.** In 0.170.0 a session started in a linked worktree with `writable_git = true` could not write the worktree's git state, so `git add` and `git commit` were refused by the sandbox. Upstream 0.170.0 moved write checks onto a new local matcher, and the fold left ecodex's worktree expansion (the per-worktree gitdir and the shared common git dir, with `config`, `hooks`, `HEAD`, `info`, `modules` and sibling worktrees kept read-only) outside it. The matcher now carries the expansion. CI runs `codex-protocol`'s `writable_git` tests, which no job ran before.
 

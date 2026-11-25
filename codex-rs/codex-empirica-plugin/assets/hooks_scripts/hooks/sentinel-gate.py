@@ -1304,6 +1304,54 @@ def empirica_command_only_reads(cmd: str) -> bool:
     )
 
 
+def empirica_command_free_in_discipline(cmd: str) -> bool:
+    """Is this empirica command free outside a transaction, in discipline mode's judgement of a whole line? Reads, and the
+    artifact and workflow verbs (DISCIPLINE_FREE_VERBS and every *-log verb), unless an option makes the verb do more than
+    record (DISCIPLINE_JUDGED_OPTIONS). Matched on whole verb tokens, so `empirica notebook` is not `empirica note`. Before
+    goal 329c014e a workflow verb beside any other statement went to the judge as a change it could not read, and the line
+    was refused: David, 2026-11-20, "its also gating empirica commands like notes"."""
+    if empirica_command_only_reads(cmd):
+        return True
+    tokens = cmd.split()
+    if len(tokens) < 2 or tokens[0] != "empirica":
+        return False
+    if any(_names_judged_option(t) for t in tokens[2:]):
+        return False
+    return (
+        tokens[1].endswith("-log") or tuple(tokens[1:3]) in DISCIPLINE_FREE_VERBS or tokens[1] in DISCIPLINE_FREE_VERBS
+    )
+
+
+#: What reads only, for a call made on another host: the decision record's ssh branch asks this, since a workflow verb
+#: there changes another machine (1.17.16 sweep).
+empirica_command_free_in_discipline.reads_only = empirica_command_only_reads  # type: ignore[attr-defined]
+
+#: Options that make a free workflow verb do more than record: git merges and branch deletes (goals-complete), and an
+#: upload to Cortex (source-add --media). A call carrying one is judged as a change (1.17.16 sweep).
+DISCIPLINE_JUDGED_OPTIONS = {"--merge-branch", "--delete-branch", "--media"}
+
+
+def _names_judged_option(token: str) -> bool:
+    """Does ``token`` name a judged option? argparse takes any unambiguous prefix (`--m` is `--merge-branch` on
+    goals-complete, `--med` is `--media`), so a prefix counts; it may over-judge an unrelated option, which only counts
+    the call (1.17.16 sweep, round 2)."""
+    if not token.startswith("--") or len(token) < 3:
+        return False
+    name = token[2:].split("=", 1)[0]
+    return any(option[2:].startswith(name) for option in DISCIPLINE_JUDGED_OPTIONS)
+
+
+#: The artifact and workflow verbs discipline mode lets run on any line outside a transaction (goal 329c014e): they record
+#: what the practitioner learned and open or close the measurement. Not every verb the gate allows on its own: setup,
+#: release, project-init and the like change the harness or reach the network, and delete-artifacts --apply deletes for
+#: good: those are judged as changes. Every *-log verb is in too.
+DISCIPLINE_FREE_VERBS = {
+    "note", "log-artifacts", "resolve-artifacts", "update-artifacts", "preflight-submit",
+    "check-submit", "postflight-submit", "goals-create", "goals-add-task", "goals-complete-task", "goals-complete",
+    "unknown-resolve", "finding-resolve", "lesson-create", "source-add", ("mailbox", "reply"), ("mailbox", "archive"),
+}  # fmt: skip
+
+
 def _is_plain_single_command(cmd: str) -> bool:
     """One statement, with nothing riding along: no chain, background, pipe or newline
     outside quotes, no file redirect, and no command substitution anywhere.
@@ -5911,7 +5959,7 @@ def _discipline_answer(tool_name: str, tool_input) -> tuple | None:
             cwd=cwd,
             project_root=project,
             suffix=_instance_suffix(),
-            empirica_is_read=empirica_command_only_reads,
+            empirica_is_read=empirica_command_free_in_discipline,
             transcript_path=hook_input.get("transcript_path"),
         )
         if answer is not None:
