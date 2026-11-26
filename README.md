@@ -30,17 +30,20 @@ Beta. **`main` tracks a stable upstream codex tag**, the one recorded in `codex-
 
 `main` is the canonical branch and carries all active work. Upstream `openai/codex` is tracked through the `upstream` remote; stable upstream tags are merged in periodically. The CLI is daily-driven by the ecodex team.
 
-## What's New in 0.170.0
+## What's New in 0.170.1
 
-- Folded ecodex up to upstream codex **rust-v0.170.0** and re-vendored empirica core hooks to **1.17.15**.
-- Resolved twelve shipped-dependency advisories: five fixed by in-range bumps (quinn, zip, libz-sys), six non-reachable `hickory-proto` DNSSEC advisories accepted, four stale accepts pruned.
+- Empirica hooks re-vendored from core 1.17.17
+- Plugin writable roots survive a mid-session permission change again
+- `writable_git` works in linked git worktrees again
+- `writable_git` follows a `.git` pointer only to this checkout's own git state
+- Bumped `url` to 2.5.9 and `cookie` to 0.18.3 for advisories published after 0.170.0 (RUSTSEC-2026-0592, RUSTSEC-2026-0594), and `serde_with` to 3.21 and `cmov`…
 
-All 4 entries for this release are in the [CHANGELOG](CHANGELOG.md).
+The detail is in the [CHANGELOG](CHANGELOG.md).
 
 **Earlier releases**
 
+- **0.170.0** — Folded ecodex up to upstream codex **rust-v0.170.0** and re-vendored empirica core hooks to **1.17.15**.
 - **0.167.2** — Plugin writable roots survive a permission-profile change
-- **0.167.1** — The release binary compiles again
 
 ## What's Coming
 

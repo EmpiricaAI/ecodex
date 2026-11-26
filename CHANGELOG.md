@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.170.1] - 2026-11-26
+
 ### Changed
 - **Empirica hooks re-vendored from core 1.17.17** (`b519d52084cc`; CI's empirica-core pin moves to it; three vendored files change). In discipline mode the artifact and workflow verbs (`note`, every `*-log`, `goals-create`/`-add-task`/`-complete-task`/`-complete`, the transaction verbs, `resolve-`/`update-artifacts`, `source-add`, `lesson-create`, `mailbox reply`/`archive`) now run outside a transaction even beside other statements on one line, unless an option makes them do more than record. A prompt now counts as planned work, which gets no out-of-loop budget, only when it uses the words plan, spec or implement (or asks to break work down or for a multi-step approach); Empirica's own vocabulary (transaction, preflight, artifact) no longer triggers it. The words count wherever they appear, so a prompt that only mentions a plan still loses the budget.
 
@@ -1196,7 +1198,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.0...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.1...HEAD
+[0.170.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.0...v0.170.1
 [0.170.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.0...v0.170.0
 [0.167.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.1...v0.167.2
 [0.167.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...v0.167.1
