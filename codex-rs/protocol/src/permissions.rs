@@ -2749,23 +2749,32 @@ fn linked_worktree_git_entries(
         let Some(gitdir) = resolve_gitdir_from_file(&entry.path) else {
             continue;
         };
+        let Some(owned) = owned_git_state(&entry.path, &gitdir) else {
+            tracing::warn!(
+                pointer = %entry.path.as_path().display(),
+                gitdir = %gitdir.as_path().display(),
+                "writable_git: the .git pointer does not lead to this checkout's own git state; \
+                 not extending the grant"
+            );
+            continue;
+        };
         expanded.push(ResolvedFileSystemEntry {
-            path: gitdir.clone(),
+            path: gitdir,
             access: FileSystemAccessMode::Write,
         });
         // Submodule gitdirs have no `commondir` file — they are self-contained,
         // so the gitdir write entry above is the whole expansion.
-        let Some(commondir) = resolve_commondir_from_gitdir(&gitdir) else {
+        let OwnedGitState::LinkedWorktree { commondir } = owned else {
             continue;
         };
+        // Added whether or not the name exists yet: a missing shared `hooks/`
+        // is exactly where a planted hook would later run unsandboxed. The
+        // sandboxes mask a missing read-only subpath rather than skip it.
         for name in LINKED_WORKTREE_READ_ONLY_COMMON_GIT_NAMES {
-            let protected = commondir.join(name);
-            if protected.as_path().exists() {
-                expanded.push(ResolvedFileSystemEntry {
-                    path: protected,
-                    access: FileSystemAccessMode::Read,
-                });
-            }
+            expanded.push(ResolvedFileSystemEntry {
+                path: commondir.join(name),
+                access: FileSystemAccessMode::Read,
+            });
         }
         expanded.push(ResolvedFileSystemEntry {
             path: commondir,
@@ -2773,6 +2782,62 @@ fn linked_worktree_git_entries(
         });
     }
     expanded
+}
+
+/// What a `.git` pointer file is allowed to extend a write grant into.
+enum OwnedGitState {
+    /// A submodule gitdir: self-contained, so only the gitdir itself.
+    Submodule,
+    /// A linked worktree: its gitdir plus the shared common dir.
+    LinkedWorktree { commondir: AbsolutePathBuf },
+}
+
+/// The `.git` pointer, the gitdir's `commondir` file and its back-pointers are
+/// all writable under the very grant being expanded, so their contents are
+/// untrusted: the agent could point them at `$HOME` or `/`. The expansion is
+/// followed only when the target has git's own layout AND names this checkout
+/// back, which an agent cannot fake for a directory it cannot already write:
+/// - a linked worktree's gitdir sits at `<commondir>/worktrees/<name>`, its
+///   `commondir` file resolves to exactly that common dir, the common dir
+///   looks like a git dir, and the gitdir's `gitdir` file names this `.git`;
+/// - a submodule's gitdir has no `commondir`, and its config's `worktree`
+///   names this checkout.
+///
+/// Anything else extends nothing (fail closed).
+fn owned_git_state(dot_git: &AbsolutePathBuf, gitdir: &AbsolutePathBuf) -> Option<OwnedGitState> {
+    let canonical_dot_git = std::fs::canonicalize(dot_git.as_path()).ok()?;
+    let canonical_gitdir = std::fs::canonicalize(gitdir.as_path()).ok()?;
+    if !canonical_gitdir.join("HEAD").is_file() {
+        return None;
+    }
+    if !canonical_gitdir.join("commondir").exists() {
+        let checkout = canonical_dot_git.parent()?;
+        let config = std::fs::read_to_string(canonical_gitdir.join("config")).ok()?;
+        let worktree = config.lines().find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            key.trim()
+                .eq_ignore_ascii_case("worktree")
+                .then(|| value.trim().to_string())
+        })?;
+        let named = std::fs::canonicalize(canonical_gitdir.join(worktree)).ok()?;
+        return (named == checkout).then_some(OwnedGitState::Submodule);
+    }
+
+    let worktrees_dir = canonical_gitdir.parent()?;
+    if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
+        return None;
+    }
+    let expected_common = worktrees_dir.parent()?;
+    let commondir = resolve_commondir_from_gitdir(gitdir)?;
+    if std::fs::canonicalize(commondir.as_path()).ok()? != expected_common
+        || !expected_common.join("HEAD").is_file()
+        || !expected_common.join("objects").is_dir()
+    {
+        return None;
+    }
+    let back_pointer = std::fs::read_to_string(canonical_gitdir.join("gitdir")).ok()?;
+    let named = std::fs::canonicalize(canonical_gitdir.join(back_pointer.trim())).ok()?;
+    (named == canonical_dot_git).then_some(OwnedGitState::LinkedWorktree { commondir })
 }
 
 /// Resolves the common git dir a linked worktree's gitdir belongs to, via the
