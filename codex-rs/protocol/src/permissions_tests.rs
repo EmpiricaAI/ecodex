@@ -2174,7 +2174,133 @@ fn linked_worktree_fixture(temp: &TempDir) -> (PathBuf, PathBuf) {
         format!("gitdir: {}\n", main_git.join("worktrees/wt").display()),
     )
     .expect("write .git pointer file");
+    // `git worktree add` also writes the worktree's own HEAD and the gitdir's
+    // back-pointer to the worktree's `.git` file.
+    std::fs::write(
+        main_git.join("worktrees/wt/HEAD"),
+        "ref: refs/heads/topic\n",
+    )
+    .expect("write worktree HEAD");
+    std::fs::write(
+        main_git.join("worktrees/wt/gitdir"),
+        format!("{}\n", worktree.join(".git").display()),
+    )
+    .expect("write gitdir back-pointer");
     (worktree, main_git)
+}
+
+// The `.git` pointer and the gitdir's `commondir` are writable under the very
+// grant being expanded, so the agent controls them. Pointing either at a
+// directory outside the repository must not make that directory writable.
+#[test]
+fn writable_git_ignores_a_pointer_redirected_outside_the_repository() {
+    let temp = TempDir::new().expect("tempdir");
+    let (worktree, _main_git) = linked_worktree_fixture(&temp);
+    let outside = temp.path().join("outside-home");
+    std::fs::create_dir_all(&outside).expect("create outside dir");
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", outside.display()),
+    )
+    .expect("rewrite .git pointer");
+    let on =
+        FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ true);
+
+    assert!(
+        !on.can_write_local_path_with_cwd(&outside.join(".bashrc"), &worktree),
+        "a redirected pointer must not grant writes to its target"
+    );
+    assert!(
+        !on.get_writable_roots_with_cwd(&worktree)
+            .iter()
+            .any(|root| root.root.as_path() == outside.as_path()),
+        "a redirected pointer must not become a sandbox writable root"
+    );
+}
+
+#[test]
+fn writable_git_ignores_a_commondir_redirected_outside_the_repository() {
+    let temp = TempDir::new().expect("tempdir");
+    let (worktree, main_git) = linked_worktree_fixture(&temp);
+    let outside = temp.path().join("outside-home");
+    std::fs::create_dir_all(&outside).expect("create outside dir");
+    std::fs::write(
+        main_git.join("worktrees/wt/commondir"),
+        format!("{}\n", outside.display()),
+    )
+    .expect("rewrite commondir");
+    let on =
+        FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ true);
+
+    assert!(
+        !on.can_write_local_path_with_cwd(&outside.join(".bashrc"), &worktree),
+        "a redirected commondir must not grant writes to its target"
+    );
+}
+
+/// `<temp>/super` with an absorbed submodule at `<temp>/super/sub`: its `.git`
+/// pointer leads to `super/.git/modules/sub`, whose config names it back.
+fn submodule_fixture(temp: &TempDir) -> (PathBuf, PathBuf) {
+    let module_gitdir = temp.path().join("super/.git/modules/sub");
+    std::fs::create_dir_all(module_gitdir.join("objects")).expect("create module gitdir");
+    std::fs::write(module_gitdir.join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+    std::fs::write(
+        module_gitdir.join("config"),
+        "[core]\n\tworktree = ../../../sub\n",
+    )
+    .expect("write module config");
+    let submodule = temp.path().join("super/sub");
+    std::fs::create_dir_all(&submodule).expect("create submodule checkout");
+    std::fs::write(
+        submodule.join(".git"),
+        format!("gitdir: {}\n", module_gitdir.display()),
+    )
+    .expect("write .git pointer file");
+    (submodule, module_gitdir)
+}
+
+#[test]
+fn writable_git_extends_to_a_submodule_gitdir_that_names_its_checkout() {
+    let temp = TempDir::new().expect("tempdir");
+    let (submodule, module_gitdir) = submodule_fixture(&temp);
+    let on =
+        FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ true);
+
+    assert!(on.can_write_local_path_with_cwd(&module_gitdir.join("index.lock"), &submodule));
+}
+
+#[test]
+fn writable_git_ignores_a_submodule_gitdir_that_names_another_checkout() {
+    let temp = TempDir::new().expect("tempdir");
+    let (submodule, module_gitdir) = submodule_fixture(&temp);
+    std::fs::write(
+        module_gitdir.join("config"),
+        "[core]\n\tworktree = ../../../elsewhere\n",
+    )
+    .expect("rewrite module config");
+    std::fs::create_dir_all(temp.path().join("super/elsewhere")).expect("create elsewhere");
+    let on =
+        FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ true);
+
+    assert!(!on.can_write_local_path_with_cwd(&module_gitdir.join("index.lock"), &submodule));
+}
+
+#[test]
+fn writable_git_keeps_missing_shared_hooks_read_only() {
+    let temp = TempDir::new().expect("tempdir");
+    let (worktree, main_git) = linked_worktree_fixture(&temp);
+    std::fs::remove_dir_all(main_git.join("hooks")).expect("remove hooks dir");
+    let on =
+        FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ true);
+
+    assert!(
+        on.can_write_local_path_with_cwd(&main_git.join("objects/ab/tmp_obj_x"), &worktree),
+        "positive control: the common dir is still writable"
+    );
+    assert!(
+        !on.can_write_local_path_with_cwd(&main_git.join("hooks/pre-commit"), &worktree),
+        "a hook planted in a missing shared hooks dir would run unsandboxed"
+    );
 }
 
 #[test]

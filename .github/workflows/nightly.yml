@@ -85,11 +85,15 @@ jobs:
       # 0.170.0 shipped two such regressions (plugin writable roots on a
       # mid-session profile change, writable_git in linked worktrees) whose
       # tests failed with no job running them. Add a filter when a gap gets
-      # tests; a filter matching nothing fails the step.
+      # tests. Each filter runs as its own invocation with --no-tests=fail:
+      # in one OR'd expression a filter that stops matching hides behind the
+      # others, and the step would stay green with that gap untested.
       - name: ecodex gap tests in upstream crates (gating)
         run: |
           set -euo pipefail
-          cargo nextest run -p codex-core --lib --no-tests=fail -E 'test(plugin_writable_roots) | test(ntfy_listener) | test(monitor::tests)'
+          cargo nextest run -p codex-core --lib --no-tests=fail -E 'test(plugin_writable_roots)'
+          cargo nextest run -p codex-core --lib --no-tests=fail -E 'test(ntfy_listener)'
+          cargo nextest run -p codex-core --lib --no-tests=fail -E 'test(monitor::tests)'
           cargo nextest run -p codex-hooks --no-tests=fail -E 'test(task_completed)'
           cargo nextest run -p codex-protocol --no-tests=fail -E 'test(writable_git)'
 

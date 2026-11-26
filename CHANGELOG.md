@@ -8,14 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.170.1] - 2026-11-26
+
 ### Changed
-- **Empirica hooks re-vendored from core 1.17.17** (`b519d52084cc`; CI's empirica-core pin moves to it; three vendored files change). In discipline mode the artifact and workflow verbs (`note`, every `*-log`, `goals-*`, the transaction verbs, `mailbox reply`) now run outside a transaction even beside other statements on one line, unless an option makes them do more than record. A prompt now counts as planned work, which gets no out-of-loop budget, only when it asks to plan, specify, implement or break work down; Empirica's own vocabulary no longer triggers it.
+- **Empirica hooks re-vendored from core 1.17.17** (`b519d52084cc`; CI's empirica-core pin moves to it; three vendored files change). In discipline mode the artifact and workflow verbs (`note`, every `*-log`, `goals-create`/`-add-task`/`-complete-task`/`-complete`, the transaction verbs, `resolve-`/`update-artifacts`, `source-add`, `lesson-create`, `mailbox reply`/`archive`) now run outside a transaction even beside other statements on one line, unless an option makes them do more than record. A prompt now counts as planned work, which gets no out-of-loop budget, only when it uses the words plan, spec or implement (or asks to break work down or for a multi-step approach); Empirica's own vocabulary (transaction, preflight, artifact) no longer triggers it. The words count wherever they appear, so a prompt that only mentions a plan still loses the budget.
 
 ### Fixed
 - **Plugin writable roots survive a mid-session permission change again.** In 0.170.0, choosing a permission profile mid-session (`/permissions`) dropped the writable roots the enabled plugins declared at startup, so the empirica plugin could no longer write `~/.empirica` for the rest of the session. The profile change now re-applies them as startup does. The nightly now gates on ecodex's own tests inside upstream crates (plugin writable roots, the ntfy listener, `writable_git`), which no job ran before.
 - **`writable_git` works in linked git worktrees again.** In 0.170.0 a session started in a linked worktree with `writable_git = true` could not write the worktree's git state, so `git add` and `git commit` were refused by the sandbox. Upstream 0.170.0 moved write checks onto a new local matcher, and the fold left ecodex's worktree expansion (the per-worktree gitdir and the shared common git dir, with `config`, `hooks`, `HEAD`, `info`, `modules` and sibling worktrees kept read-only) outside it. The matcher now carries the expansion. CI runs `codex-protocol`'s `writable_git` tests, which no job ran before.
 
 ### Security
+- **`writable_git` follows a `.git` pointer only to this checkout's own git state.** The pointer file, the worktree gitdir's `commondir` and its back-pointers are all writable under the `writable_git` grant itself, and ecodex followed them without checking: rewriting one to name `$HOME` or `/` made that directory writable for the session (since 0.147.2 for the sandbox's writable roots, and since this release's worktree fix for the write checks too). The expansion now requires git's own layout and a back-reference to this checkout: a linked worktree's gitdir at `<common>/worktrees/<name>` whose `gitdir` file names this `.git`, or a submodule gitdir whose `core.worktree` names this checkout. Otherwise it grants nothing. The read-only carve-outs in the shared common dir (`hooks`, `config`, `HEAD`, `info`, `modules`, sibling worktrees) are now added even when the directory does not exist yet, so a hook cannot be planted in a missing `hooks/`.
 - Bumped `url` to 2.5.9 and `cookie` to 0.18.3 for advisories published after 0.170.0 (RUSTSEC-2026-0592, RUSTSEC-2026-0594), and `serde_with` to 3.21 and `cmov` to 0.5.4 for GitHub advisories the RustSec-based audit does not list. All are in-range bumps.
 
 ## [0.170.0] - 2026-11-20
@@ -1195,7 +1198,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.0...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.1...HEAD
+[0.170.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.0...v0.170.1
 [0.170.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.0...v0.170.0
 [0.167.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.1...v0.167.2
 [0.167.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.0...v0.167.1
