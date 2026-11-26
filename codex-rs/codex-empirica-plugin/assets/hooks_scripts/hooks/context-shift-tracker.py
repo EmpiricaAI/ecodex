@@ -162,8 +162,12 @@ _COMPLEX_WORK = re.compile(
 #: with them 29% of typed prompts lost the budget, 19% for those words alone (14 days on one machine, goal b55139fd: David,
 #: "I still don't see the trivial tasks not requiring a transaction"). "complex" describes work rather than asking for a
 #: plan. _COMPLEX_WORK keeps the wide list for the /epistemic-transaction nudge, which only suggests.
+# The 1.17.18 word-match: it over-fires on mentions, which only removes the discipline budget (the safe side). Two
+# request-shape rewrites in the 1.17.19 sweep each opened new misses and false positives, so it stays until a matcher is
+# measured on real prompts (goal 5d950388). One narrow exclusion: a file name (plan.md, docs/spec.md); bounded, so linear.
 _PLAN_REQUEST = re.compile(
     r"\b(?:plan|plans|planning|implement|implementation|implementing|spec|specs|specification|decompose|multi-step)\b"
+    r"(?![.\w]{0,40}\.(?:md|txt|ya?ml|json)\b)"
     r"|break this down|how should i approach",
     re.IGNORECASE,
 )
@@ -202,7 +206,7 @@ def _build_no_transaction_nudge(hook_input):
         "you are unsure which Empirica skill fits"
     )
 
-    user_prompt = hook_input.get("prompt", "")
+    user_prompt = str(hook_input.get("prompt") or "")  # null prompt crashed the regex (goal befb499f)
     if _COMPLEX_WORK.search(user_prompt):
         skill_nudge += " | complex work detected — consider /epistemic-transaction for structured decomposition"
 
@@ -410,7 +414,12 @@ _NOTIFICATION_STARTS = ("<task-notification>", "[SYSTEM NOTIFICATION")
 
 def main():
     _clear_pane_waiting()
-    hook_input = json.loads(sys.stdin.read() or "{}")
+    try:
+        hook_input = json.loads(sys.stdin.read() or "{}")
+    except ValueError:  # a malformed hook payload must not crash the prompt (ecodex sweep, goal befb499f)
+        hook_input = {}
+    if not isinstance(hook_input, dict):
+        hook_input = {}
     claude_session_id = hook_input.get("session_id")
     prompt = str(hook_input.get("prompt") or "")
     # A task notification wakes the AI (so presence and the context gauge still apply) but nobody wrote it: it is not a

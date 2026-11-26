@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+- **Empirica hooks re-vendored from core 1.17.19** (`4603d2c67177`; CI's empirica-core pin moves to it; six vendored files change). It carries core's fixes for three findings from ecodex's 0.170.1 review. In discipline mode, `source-add --visibility shared` or `public` is now treated as a change, since it registers on Cortex at call time. A prompt counts as planned work only when it asks for a plan, spec or implementation, not when it merely mentions one. A null prompt or invalid input no longer crashes the context tracker.
+
 ## [0.170.1] - 2026-11-26
 
 ### Changed
