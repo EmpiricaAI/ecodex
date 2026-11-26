@@ -107,19 +107,34 @@ Scenario: A parent with no configured environment delegates an API migration, qu
 -- request 8 (turn) --
 07:function_call/client_echo:{"message":"Mira owns the API migration."}
 08:function_call_output:Mira owns the API migration.
-09:message/user:
-    <ENVIRONMENT_CONTEXT>
--- request 9 (turn) --
-10:message/assistant:
-    Mira owns the API migration.
+09:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+10:additional_tools/developer (1; hash=2b1709bd058de006):
+        - namespace/functions; hash=1b7e8050ffe1e6a2
+          - custom/exec
 11:message/user:
     <ENVIRONMENT_CONTEXT>
-12:agent_message
-13:agent_message
+-- request 9 (turn) --
+12:message/assistant:
+    Mira owns the API migration.
+13:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+14:additional_tools/developer (1; hash=483fc7d7db2f32c1):
+        - namespace/functions; hash=d1f9c65c4c9a39e5
+          - custom/exec
+15:message/user:
+    <ENVIRONMENT_CONTEXT>
+16:agent_message
+17:agent_message
 -- request 10 (turn) --
-14:function_call/client_echo:{"message":"I will continue with Mira using the new API."}
-15:function_call_output:I will continue with Mira using the new API.
-16:message/user:
+18:function_call/client_echo:{"message":"I will continue with Mira using the new API."}
+19:function_call_output:I will continue with Mira using the new API.
+20:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+21:additional_tools/developer (1; hash=2b1709bd058de006):
+        - namespace/functions; hash=1b7e8050ffe1e6a2
+          - custom/exec
+22:message/user:
     <ENVIRONMENT_CONTEXT>
 
 Resumed worker mailbox:
