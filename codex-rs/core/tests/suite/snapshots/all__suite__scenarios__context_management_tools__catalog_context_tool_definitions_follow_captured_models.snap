@@ -15,9 +15,10 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (9; hash=eefa420158cfe342):
+  tools (10; hash=d4270bfd8b6dedbd):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=24f4b6739dd5d940
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/monitor: Arm a watch on a background subprocess. On each line matching the regex `pattern`, a <task-notifi...; args=[action, command, cwd, monitor_id, pattern, persistent, stream]; hash=dea435ba6609ae7c
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - function/new_context: Catalog context guidance.; args=[]; hash=8d300f346fb11d84
     - function/get_context_remaining: Catalog context guidance.; args=[]; hash=802b1cf4a796b439
@@ -50,7 +51,7 @@ Settings:
 ## Window 2 (after request 1)
 Settings: relative to window 1
   model: "context-tools-updated"
-  tools (9; hash=1665ab0675121e2c):
+  tools (10; hash=0ff5382b4b024723):
     ~ function/new_context; args=[]; hash=b9263827b0adbb78
     ~ function/get_context_remaining; args=[]; hash=3e96d66806c56bdd
 -- request 2 (turn) --

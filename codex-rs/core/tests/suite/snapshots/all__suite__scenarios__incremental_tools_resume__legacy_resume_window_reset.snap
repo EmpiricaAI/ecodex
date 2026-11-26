@@ -16,12 +16,13 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=36bb11f3e89983b1):
-        - namespace/functions; hash=bd4dc4ec1fe48c4d
+00:additional_tools/developer (2; hash=5967d40f798d7bec):
+        - namespace/functions; hash=abbf4325e35da408
           - custom/exec
           - function/wait
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - function/new_context
           - function/get_context_remaining
@@ -57,12 +58,13 @@ Settings:
 ## Window 2 (after request 2: input diverged at item 03)
 Settings: same as window 1
 -- request 3 (turn) --
-00:additional_tools/developer (2; hash=36bb11f3e89983b1):
-        - namespace/functions; hash=bd4dc4ec1fe48c4d
+00:additional_tools/developer (2; hash=5967d40f798d7bec):
+        - namespace/functions; hash=abbf4325e35da408
           - custom/exec
           - function/wait
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - function/new_context
           - function/get_context_remaining

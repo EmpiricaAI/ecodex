@@ -6,8 +6,8 @@ Scenario: A worker inherits the parent prefix, then receives its own window hint
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=2c5684dede3a1a9c):
-        - namespace/functions; hash=c0e72eb3b93fb0da
+00:additional_tools/developer (2; hash=59906485c8e7c111):
+        - namespace/functions; hash=4282e6002c0ff235
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -60,8 +60,8 @@ Scenario: A worker inherits the parent prefix, then receives its own window hint
 
 ## Window 2 (after request 3: input diverged at item 13)
 -- request 4 (turn) --
-00:additional_tools/developer (2; hash=2c5684dede3a1a9c):
-        - namespace/functions; hash=c0e72eb3b93fb0da
+00:additional_tools/developer (2; hash=59906485c8e7c111):
+        - namespace/functions; hash=4282e6002c0ff235
           - custom/exec
           - function/wait
           - function/request_user_input

@@ -18,13 +18,14 @@ Settings:
   tools (1; hash=f359ca6f02a419d6):
     - web_search; hash=f103e327c6870a46
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=9af04ba87a0a3228):
-        - namespace/functions; hash=8f4955ac0f6263ad
+00:additional_tools/developer (3; hash=aae734981a0be0f7):
+        - namespace/functions; hash=a79cda0363a39772
           - function/exec_command
           - function/write_stdin
           - function/list_mcp_resources
           - function/list_mcp_resource_templates
           - function/read_mcp_resource
+          - function/monitor
           - function/request_user_input
           - custom/apply_patch
           - function/view_image

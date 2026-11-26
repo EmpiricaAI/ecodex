@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_reserved_spawn.rs
-assertion_line: 264
 expression: "context_snapshot::format_request_history_snapshot(\"Host preparation preserves custom base instructions and applies the native subagent developer override when starting a child with a different model.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Host preparation preserves custom base instructions and applies the native subagent developer override when starting a child with a different model.
@@ -17,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=2dea6cdae5007237):
-        - namespace/functions; hash=99cb31e479060441
+00:additional_tools/developer (2; hash=7d39b5c3fb23810a):
+        - namespace/functions; hash=2cba63f043376754
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -89,8 +88,8 @@ Settings: relative to window 1
   prompt_cache_key: "<PROMPT_CACHE_KEY 2>"
   reasoning: {"context":"all_turns","effort":"medium"}
 -- request 3 (turn) --
-00:additional_tools/developer (1; hash=60e22890380a03a6):
-        - namespace/functions; hash=501aefb2ebd05682
+00:additional_tools/developer (1; hash=f757843f25eba15b):
+        - namespace/functions; hash=84c6966807672f37
           - custom/exec
           - function/wait
           - function/request_user_input

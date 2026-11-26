@@ -16,10 +16,11 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=c40c1ebd54ded71a):
-        - namespace/functions; hash=aca887ef399aebba
+00:additional_tools/developer (2; hash=b25d763af30b93ab):
+        - namespace/functions; hash=dcabbe5e995c7e05
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
@@ -56,9 +57,10 @@ Settings:
 ## Window 2 (after request 3: input diverged at item 00)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (2; hash=4f95a0a93c66dfca):
-        - namespace/functions; hash=e61b39bab731172a
+00:additional_tools/developer (2; hash=67e7b611bd94c49b):
+        - namespace/functions; hash=e36d62d497411c35
           - function/update_plan
+          - function/monitor
           - function/request_user_input
           - custom/apply_patch
           - function/view_image

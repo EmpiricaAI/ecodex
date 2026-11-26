@@ -6,8 +6,8 @@ Scenario: Astra sees two environments with different permissions. Only the secon
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=7aafbac510cab352):
-        - namespace/functions; hash=ebc92fe078f78ade
+00:additional_tools/developer (3; hash=566df1dd2974077d):
+        - namespace/functions; hash=d178830839e9fe03
           - custom/exec
           - function/wait
           - function/request_user_input

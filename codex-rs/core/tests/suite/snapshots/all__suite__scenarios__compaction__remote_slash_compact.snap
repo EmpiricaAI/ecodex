@@ -16,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn; Before /compact) --
-00:additional_tools/developer (3; hash=a7c46a0959d54866):
-        - namespace/functions; hash=81846de5bc4e7474
+00:additional_tools/developer (3; hash=a7e42d60f0c002bf):
+        - namespace/functions; hash=9c933a87fb80e05b
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -112,8 +112,8 @@ Settings:
 ## Window 2 (after request 2: input diverged at item 07)
 Settings: same as window 1
 -- request 3 (compaction; Repeated /compact after resume) --
-00:additional_tools/developer (3; hash=a7c46a0959d54866):
-        - namespace/functions; hash=81846de5bc4e7474
+00:additional_tools/developer (3; hash=a7e42d60f0c002bf):
+        - namespace/functions; hash=9c933a87fb80e05b
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -205,8 +205,8 @@ Settings: same as window 1
 ## Window 3 (after request 3: input diverged at item 02)
 Settings: same as window 1
 -- request 4 (turn; First turn after /compact) --
-00:additional_tools/developer (3; hash=a7c46a0959d54866):
-        - namespace/functions; hash=81846de5bc4e7474
+00:additional_tools/developer (3; hash=a7e42d60f0c002bf):
+        - namespace/functions; hash=9c933a87fb80e05b
           - custom/exec
           - function/wait
           - function/request_user_input

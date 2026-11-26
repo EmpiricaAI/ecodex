@@ -16,12 +16,13 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=7be1e89059825020):
-        - namespace/functions; hash=908145bff34ae3d6
+00:additional_tools/developer (2; hash=79e8f89dafb7a891):
+        - namespace/functions; hash=4b089c9ece1d9017
           - custom/exec
           - function/wait
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
@@ -49,12 +50,13 @@ Settings:
 ## Window 2 (after request 2: input diverged at item 06)
 Settings: same as window 1
 -- request 3 (turn) --
-00:additional_tools/developer (2; hash=7be1e89059825020):
-        - namespace/functions; hash=908145bff34ae3d6
+00:additional_tools/developer (2; hash=79e8f89dafb7a891):
+        - namespace/functions; hash=4b089c9ece1d9017
           - custom/exec
           - function/wait
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
@@ -92,12 +94,13 @@ Settings: same as window 1
 ## Window 3 (after request 4: input diverged at item 06)
 Settings: same as window 1
 -- request 5 (turn) --
-00:additional_tools/developer (2; hash=7be1e89059825020):
-        - namespace/functions; hash=908145bff34ae3d6
+00:additional_tools/developer (2; hash=79e8f89dafb7a891):
+        - namespace/functions; hash=4b089c9ece1d9017
           - custom/exec
           - function/wait
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
