@@ -876,6 +876,20 @@ impl FileSystemSandboxPolicy {
             &mut policy.entries,
             ".aws",
         );
+        // Upstream's per-root metadata protection: extra writable roots keep
+        // their own `.git`/`.codex` read-only. `writable_git` above frees only
+        // the project's `.git`, never an extra root's.
+        for writable_root in writable_roots {
+            for protected_path in default_read_only_subpaths_for_writable_root(
+                writable_root,
+                /*protect_missing_dot_codex*/ false,
+            ) {
+                append_default_read_only_path_if_no_explicit_rule(
+                    &mut policy.entries,
+                    protected_path,
+                );
+            }
+        }
         policy
     }
 
