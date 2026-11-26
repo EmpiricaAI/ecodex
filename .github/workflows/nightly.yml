@@ -96,6 +96,9 @@ jobs:
           cargo nextest run -p codex-core --lib --no-tests=fail -E 'test(monitor::tests)'
           cargo nextest run -p codex-hooks --no-tests=fail -E 'test(task_completed)'
           cargo nextest run -p codex-protocol --no-tests=fail -E 'test(writable_git)'
+          # The whole codex-protocol suite (seconds): ecodex wraps upstream's
+          # sandbox policy builders, so upstream's own tests there guard the weave.
+          cargo nextest run -p codex-protocol
 
       # Informational until triaged (David, 2026-10-29): it runs and its
       # failures show in the run, but it does not fail the workflow. On
