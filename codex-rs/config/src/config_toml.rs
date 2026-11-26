@@ -927,6 +927,11 @@ pub fn validate_reserved_model_provider_ids(
                 return provider
                     != &ModelProviderInfo {
                         model_catalog_url: provider.model_catalog_url.clone(),
+                        // ecodex: `supports_openai_builtin_tools` deserializes to `true` when
+                        // omitted but derives `false` in `Default`, so an `openai` entry that
+                        // sets only `model_catalog_url` would never equal this and was
+                        // rejected as an override of the built-in provider.
+                        supports_openai_builtin_tools: true,
                         ..Default::default()
                     };
             }
