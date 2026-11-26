@@ -28,6 +28,9 @@ jobs:
       run:
         working-directory: codex-rs
     env:
+      # The dispatch input reaches scripts through the environment, never by
+      # template expansion inside a run: block.
+      UPSTREAM_REF: ${{ inputs.upstream_ref }}
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_INCREMENTAL: "0"
@@ -65,7 +68,7 @@ jobs:
           set -euo pipefail
           cargo build -p codex-exec -p codex-linux-sandbox -p codex-rmcp-client -p codex-cli --bins
           # Upstream's binary is `codex`; the tests also look up codex-code-mode-host.
-          curl -fsSL "https://github.com/openai/codex/releases/download/${{ inputs.upstream_ref }}/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz" \
+          curl -fsSL "https://github.com/openai/codex/releases/download/${UPSTREAM_REF}/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz -C target/debug
           mv target/debug/codex-code-mode-host-x86_64-unknown-linux-musl target/debug/codex-code-mode-host
           test -x target/debug/codex-code-mode-host
@@ -75,9 +78,8 @@ jobs:
         run: |
           set +e
           cargo nextest run -p codex-core --test all --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/upstream-core-all.log"
-          status=${PIPESTATUS[0]}
           summary="$(grep -E '^ +Summary \[' "$RUNNER_TEMP/upstream-core-all.log" | tail -1 | sed 's/^ *//')"
-          echo "upstream ${{ inputs.upstream_ref }} core::all: ${summary:-no summary line}" >> "$GITHUB_STEP_SUMMARY"
+          echo "upstream ${UPSTREAM_REF} core::all: ${summary:-no summary line}" >> "$GITHUB_STEP_SUMMARY"
           # Distinct failing test names (nextest prints retried failures as 'TRY N FAIL'):
           grep -aE "FAIL \[|TRY [0-9]+ FAIL" "$RUNNER_TEMP/upstream-core-all.log" \
             | grep -aoE "codex-core::all +[a-z0-9_:]+" | awk '{print $2}' | sort -u \
