@@ -11,6 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Changed
 - **Empirica hooks re-vendored from core 1.17.19** (`4603d2c67177`; CI's empirica-core pin moves to it; six vendored files change). It carries core's fixes for three findings from ecodex's 0.170.1 review. In discipline mode, `source-add --visibility shared` or `public` is now treated as a change, since it registers on Cortex at call time. A prompt counts as planned work only when it asks for a plan, spec or implementation, not when it merely mentions one. A null prompt or invalid input no longer crashes the context tracker.
 
+## [0.170.2] - 2026-11-27
+
+### Fixed
+- **An `openai` entry that only sets `model_catalog_url` loads again.** Overriding the built-in OpenAI provider's catalog URL (`[model_providers.openai]` with just `model_catalog_url`), which upstream documents, was rejected at config load with "reserved built-in provider IDs: `openai`" since 0.170.0. ecodex's `supports_openai_builtin_tools` is `true` when omitted but `false` in the struct's default, so the entry never matched the one thing the check allows. Any other change to the `openai` provider, including switching that flag off, is still rejected. Three tests pin both directions, and the nightly runs them.
+
 ## [0.170.1] - 2026-11-26
 
 ### Changed
@@ -1201,7 +1206,8 @@ alpha-only above `0.137`, so ecodex ships a clean `0.146.0` on the pinned
 
 Pre-release development. Not yet versioned. The full pre-versioning history is in the git log and on the [build/v1-plugin branch](https://github.com/EmpiricaAI/ecodex/commits/build/v1-plugin).
 
-[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.1...HEAD
+[Unreleased]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.2...HEAD
+[0.170.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.1...v0.170.2
 [0.170.1]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.0...v0.170.1
 [0.170.0]: https://github.com/EmpiricaAI/ecodex/compare/v0.170.0...v0.170.0
 [0.167.2]: https://github.com/EmpiricaAI/ecodex/compare/v0.167.1...v0.167.2
