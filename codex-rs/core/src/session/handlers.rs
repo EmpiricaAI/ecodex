@@ -330,10 +330,11 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     if let Some(startup_prewarm) = startup_prewarm {
         startup_prewarm.abort().await;
     }
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-    // ecodex addition (goal f0004294-adjacent): abort all armed Monitor
-    // watchers so background curl/ntfy connections + watcher tasks don't
-    // leak past session shutdown.
+    // ecodex addition (goal f0004294-adjacent): stop the sources of new work
+    // first, so a monitor match or an ntfy wake cannot start a turn while the
+    // tasks below are being torn down. Abort all armed Monitor watchers so
+    // background curl/ntfy connections + watcher tasks don't leak past session
+    // shutdown.
     sess.services.monitor_registry.abort_all().await;
     // ecodex addition: stop the native ntfy mesh wake-listener so its held
     // connection + reconnect loop don't leak past session shutdown.

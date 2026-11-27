@@ -2222,13 +2222,19 @@ impl Session {
                 mcp_projection
             };
             // Keep MCP startup's large future out of the surrounding session initialization frame.
-            Box::pin(sess.install_initial_mcp_runtime(
+            if let Err(err) = Box::pin(sess.install_initial_mcp_runtime(
                 &session_configuration,
                 latest_auth,
                 mcp_projection,
                 &resolved_environments,
             ))
-            .await?;
+            .await
+            {
+                // ecodex: the mesh listener started above holds a strong Session
+                // handle; stop it before failing construction.
+                super::handlers::shutdown_session_runtime(&sess).await;
+                return Err(err.into());
+            }
             sess.start_mcp_prewarm_worker(mcp_prewarm_rx, mcp_auth_changes);
             sess.follow_inherited_environment_configurations(
                 &inherited_environments,
@@ -2258,7 +2264,10 @@ impl Session {
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
             Box::pin(sess.record_initial_history(initial_history)).await;
-            Box::pin(sess.record_inherited_items(inherited_items)).await?;
+            if let Err(err) = Box::pin(sess.record_inherited_items(inherited_items)).await {
+                super::handlers::shutdown_session_runtime(&sess).await;
+                return Err(err.into());
+            }
             if restore_child_window {
                 sess.state.lock().await.restore_auto_compact_window(
                     /*window_number*/ 0,
@@ -2267,8 +2276,13 @@ impl Session {
             }
             if matches!(&sess.fork_persistence, ForkPersistence::Referenced { .. }) {
                 // Keep the source reserved until the child's history reference is durable.
-                sess.try_ensure_rollout_materialized(PersistContext::Standard)
-                    .await?;
+                if let Err(err) = sess
+                    .try_ensure_rollout_materialized(PersistContext::Standard)
+                    .await
+                {
+                    super::handlers::shutdown_session_runtime(&sess).await;
+                    return Err(err.into());
+                }
             }
             {
                 let mut state = sess.state.lock().await;
