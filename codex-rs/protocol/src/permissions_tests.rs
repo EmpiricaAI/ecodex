@@ -2285,6 +2285,35 @@ fn writable_git_ignores_a_submodule_gitdir_that_names_another_checkout() {
     assert!(!on.can_write_local_path_with_cwd(&module_gitdir.join("index.lock"), &submodule));
 }
 
+// `.git` is writable under the grant being expanded, so an agent can replace it
+// with a symlink to ANOTHER checkout's pointer file. That file's `gitdir`
+// back-pointer canonicalizes to the very file the symlink resolves to, so a check
+// that only compares canonical paths accepts it and would grant writes to the
+// other repository's git state.
+#[cfg(unix)]
+#[test]
+fn writable_git_ignores_a_dot_git_symlinked_to_another_checkouts_pointer() {
+    let temp = TempDir::new().expect("tempdir");
+    let (victim_worktree, main_git) = linked_worktree_fixture(&temp);
+    let attacker = temp.path().join("attacker");
+    std::fs::create_dir_all(&attacker).expect("create attacker checkout");
+    std::os::unix::fs::symlink(victim_worktree.join(".git"), attacker.join(".git"))
+        .expect("symlink .git to the other checkout's pointer file");
+    let on =
+        FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ true);
+
+    for path in [
+        main_git.join("worktrees/wt/index.lock"),
+        main_git.join("refs/heads/topic.lock"),
+        main_git.join("objects/ab/tmp_obj_x"),
+    ] {
+        assert!(
+            !on.can_write_local_path_with_cwd(&path, &attacker),
+            "a symlinked .git must not extend the grant to {path:?}"
+        );
+    }
+}
+
 #[test]
 fn writable_git_keeps_missing_shared_hooks_read_only() {
     let temp = TempDir::new().expect("tempdir");

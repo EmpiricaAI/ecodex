@@ -2833,6 +2833,17 @@ enum OwnedGitState {
 ///
 /// Anything else extends nothing (fail closed).
 fn owned_git_state(dot_git: &AbsolutePathBuf, gitdir: &AbsolutePathBuf) -> Option<OwnedGitState> {
+    // `.git` is writable under this very grant, so it may have been replaced by a
+    // symlink to ANOTHER checkout's pointer file, whose back-pointer then
+    // canonicalizes to the same file and would satisfy the check below. Only a
+    // regular file written in place counts.
+    if !std::fs::symlink_metadata(dot_git.as_path())
+        .ok()?
+        .file_type()
+        .is_file()
+    {
+        return None;
+    }
     let canonical_dot_git = std::fs::canonicalize(dot_git.as_path()).ok()?;
     let canonical_gitdir = std::fs::canonicalize(gitdir.as_path()).ok()?;
     if !canonical_gitdir.join("HEAD").is_file() {
