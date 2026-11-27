@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+- **An `openai` entry that only sets `model_catalog_url` loads again.** Overriding the built-in OpenAI provider's catalog URL (`[model_providers.openai]` with just `model_catalog_url`), which upstream documents, was rejected at config load with "reserved built-in provider IDs: `openai`" since 0.170.0. ecodex's `supports_openai_builtin_tools` is `true` when omitted but `false` in the struct's default, so the entry never matched the one thing the check allows. Any other change to the `openai` provider, including switching that flag off, is still rejected. Three tests pin both directions, and the nightly runs them.
+
 ## [0.170.1] - 2026-11-26
 
 ### Changed

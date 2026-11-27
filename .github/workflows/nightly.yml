@@ -94,6 +94,7 @@ jobs:
           cargo nextest run -p codex-core --lib --no-tests=fail -E 'test(plugin_writable_roots)'
           cargo nextest run -p codex-core --lib --no-tests=fail -E 'test(ntfy_listener)'
           cargo nextest run -p codex-protocol --no-tests=fail -E 'test(writable_git)'
+          cargo nextest run -p codex-config --no-tests=fail -E 'test(openai_entry)'
 
       # Informational until triaged (David, 2026-10-29): it runs and its
       # failures show in the run, but it does not fail the workflow. On
