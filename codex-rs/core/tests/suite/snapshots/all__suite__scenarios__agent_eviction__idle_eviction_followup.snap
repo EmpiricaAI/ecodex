@@ -6,8 +6,8 @@ Scenario: A parent with no configured environment delegates an API migration, qu
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=1efa2dc9d797cace):
-        - namespace/functions; hash=f33f647fee88e25e
+00:additional_tools/developer (2; hash=550eb3cbbd99e6f5):
+        - namespace/functions; hash=2636fe6e60ea83c3
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -65,8 +65,8 @@ Scenario: A parent with no configured environment delegates an API migration, qu
 
 ## Window 2 (after request 6: input diverged at item 03)
 -- request 7 (turn) --
-00:additional_tools/developer (2; hash=1efa2dc9d797cace):
-        - namespace/functions; hash=f33f647fee88e25e
+00:additional_tools/developer (2; hash=550eb3cbbd99e6f5):
+        - namespace/functions; hash=2636fe6e60ea83c3
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -107,34 +107,19 @@ Scenario: A parent with no configured environment delegates an API migration, qu
 -- request 8 (turn) --
 07:function_call/client_echo:{"message":"Mira owns the API migration."}
 08:function_call_output:Mira owns the API migration.
-09:message/developer:
-    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
-10:additional_tools/developer (1; hash=2b1709bd058de006):
-        - namespace/functions; hash=1b7e8050ffe1e6a2
-          - custom/exec
-11:message/user:
+09:message/user:
     <ENVIRONMENT_CONTEXT>
 -- request 9 (turn) --
-12:message/assistant:
+10:message/assistant:
     Mira owns the API migration.
-13:message/developer:
-    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
-14:additional_tools/developer (1; hash=483fc7d7db2f32c1):
-        - namespace/functions; hash=d1f9c65c4c9a39e5
-          - custom/exec
-15:message/user:
+11:message/user:
     <ENVIRONMENT_CONTEXT>
-16:agent_message
-17:agent_message
+12:agent_message
+13:agent_message
 -- request 10 (turn) --
-18:function_call/client_echo:{"message":"I will continue with Mira using the new API."}
-19:function_call_output:I will continue with Mira using the new API.
-20:message/developer:
-    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
-21:additional_tools/developer (1; hash=2b1709bd058de006):
-        - namespace/functions; hash=1b7e8050ffe1e6a2
-          - custom/exec
-22:message/user:
+14:function_call/client_echo:{"message":"I will continue with Mira using the new API."}
+15:function_call_output:I will continue with Mira using the new API.
+16:message/user:
     <ENVIRONMENT_CONTEXT>
 
 Resumed worker mailbox:

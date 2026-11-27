@@ -1358,13 +1358,13 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     if turn_context.config.update_plan_enabled {
         registry.add(PlanHandler);
     }
-    // ecodex addition: the Monitor tool spawns a local subprocess, so it is
-    // registered wherever the turn has an execution environment — and kept out
-    // of environment-less requests (e.g. structured recap generation), which
-    // must carry no tools.
-    if environment_mode.has_environment() {
-        registry.add(MonitorHandler);
-    }
+    // ecodex addition: the Monitor tool arms a watch on a subprocess that the
+    // session spawns itself (never through the turn's environment), so it works
+    // the same with or without one. It is registered unconditionally: upstream
+    // keeps the tool set stable while environments attach or become ready, and
+    // a tool that appeared and disappeared with the environment changed code
+    // mode's `exec` description and re-declared it on every toggle.
+    registry.add(MonitorHandler);
 
     if features.enabled(Feature::DeferredExecutor) {
         registry.add(
