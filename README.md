@@ -43,13 +43,7 @@ The detail is in the [CHANGELOG](CHANGELOG.md).
 
 ## What's Coming
 
-ecodex's own forecast, made in 0.167.1 from its open work and its known weak spots. Each prediction carries a confidence, the evidence behind it and the observation that would prove it wrong, and is graded when it ships or is dropped. The word beside the confidence says how the basis is known: **measured** by a command, **reviewed** in the code, **reported** by someone else, or **inferred**; weaker evidence cannot carry a higher confidence. **planned** means a goal for it already existed when we predicted it: those are scored separately, because delivering planned work is not foresight.
-
-| Direction | Confidence | Why we expect it | What would change our mind |
-|---|---|---|---|
-| **Every release ships all four binaries within six hours**: From 0.167.2 on, every ecodex release has its four binaries (Linux and macOS, x86_64 and arm64) attached to the GitHub release within six hours of the tag. | 70% (measured) | Measured on 0.167.1. The Linux builds take about an hour, the macOS builds about three (2 h 55 on the Intel runner, 3 h 05 on Apple Silicon), under the six-hour job limit the workflow now sets. The risk is GitHub's macOS arm64 pool, which refused the job twice in one day before a third attempt was picked up; the Intel pool was never short. | A release tag whose GitHub release still lacks one of the four tarballs six hours after the tag was pushed. |
-
-Forecast record: 4 shipped (0 of them not on the plan when predicted), 4 dropped, 0 retracted, 0 superseded so far.
+Forecast record: 5 shipped (1 of them not on the plan when predicted), 4 dropped, 0 retracted, 0 superseded so far.
 
 ## What ecodex adds on top of codex
 

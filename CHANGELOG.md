@@ -9,7 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [Unreleased]
 
 ### Changed
-- **Empirica hooks re-vendored from core 1.17.20** (`ba5e6160e142`; CI's empirica-core pin moves to it; seven vendored files change across 1.17.19 and 1.17.20). It carries core's fixes for three findings from ecodex's 0.170.1 review. In discipline mode, `source-add --visibility shared` or `public` is now treated as a change, since it registers on Cortex at call time. A prompt counts as planned work only when it asks for a plan, spec or implementation, not when it merely mentions one. A null prompt or invalid input no longer crashes the context tracker.
+- **Empirica hooks re-vendored from core 1.17.20** (`ba5e6160e142`; CI's empirica-core pin moves to it; seven vendored files and the manifest change across 1.17.19 and 1.17.20). It carries core's fixes for three findings from ecodex's 0.170.1 review. In discipline mode, `source-add --visibility shared` or `public` is now treated as a change, since it registers on Cortex at call time. A prompt's plan, spec or implementation words no longer count when they are part of a file name (`plan.md`, `specs/README`); a prompt that only mentions a plan still loses the out-of-loop budget. A null prompt or invalid input no longer crashes the context tracker.
+
+### Fixed
+- **A symlinked `.git` can no longer extend `writable_git` into another repository.** `.git` is writable under that grant, so an agent could replace it with a symlink to another checkout's pointer file, whose back-pointer then satisfied the 0.170.1 containment check and granted writes to that repository's git state (its `hooks/` and `config` too when the target was a `--separate-git-dir` repository). The expansion now requires `.git` to be a regular file. The exposure is also in 0.170.1 and 0.170.2.
+- **Closing a session or failing to start one now stops the mesh listener and armed monitors first.** A failure after the mesh listener started (initial MCP runtime, inherited items, rollout materialization) returned without stopping it, leaking the listener and its session; shutdown also stopped tasks before the sources of new work.
+- **`workspace_write_git` keeps each extra writable root's own `.git` and `.codex` read-only** again, as upstream 0.172 does; `writable_git` still frees only the project's `.git`.
+
+### Changed (behaviour)
+- **The `monitor` tool is registered whether or not the turn has an execution environment.** It never used the environment (it spawns through the session), and gating it changed the tool set while an environment attached, which upstream keeps stable and which re-declared code mode's `exec` description on each toggle.
+- **TaskCompleted now fires on the completion paths upstream 0.172 added** (a budget-stopped turn), once per turn and only when no Stop hook stopped it.
+- **Plugin writable roots are re-applied when a permission profile is chosen mid-session** (carried from 0.170.1).
 
 ## [0.170.2] - 2026-11-27
 

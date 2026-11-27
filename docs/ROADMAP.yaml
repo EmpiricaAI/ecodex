@@ -120,7 +120,9 @@ items:
     falsifier: A release tag whose GitHub release still lacks one of the four tarballs six hours after the tag was pushed.
     horizon: "0.171.0"
     steered: false
-    status: predicted
+    status: shipped
+    resolved_in: "0.172.0"
+    reason: Graded at 0.172.0. It held for every release since the forecast. The four tarballs of 0.170.0 landed within 3 h 15 of the tag, those of 0.170.1 within 3 h 21 and those of 0.170.2 within 3 h 35, the slowest being Apple Silicon each time, so the macOS pool never came near the six-hour limit. There was no 0.171.0 release, so the horizon was met by the next release. Three releases is still a short record; a successor can ask whether the four-binary rule survives a macOS runner outage.
     revisions:
       - "on": "2026-11-25"
         from: 0.7
