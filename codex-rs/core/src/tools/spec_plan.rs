@@ -1360,11 +1360,15 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     }
     // ecodex addition: the Monitor tool arms a watch on a subprocess that the
     // session spawns itself (never through the turn's environment), so it works
-    // the same with or without one. It is registered unconditionally: upstream
-    // keeps the tool set stable while environments attach or become ready, and
-    // a tool that appeared and disappeared with the environment changed code
-    // mode's `exec` description and re-declared it on every toggle.
-    registry.add(MonitorHandler);
+    // the same with or without one. It follows the shell-tool feature, like the
+    // other tools that run subprocesses: upstream keeps the tool set stable while
+    // environments attach or become ready (a monitor that came and went with the
+    // environment re-declared code mode's `exec` description on every toggle),
+    // and requests that must carry no tools, such as structured recap generation,
+    // switch `features.shell_tool` off.
+    if features.enabled(Feature::ShellTool) {
+        registry.add(MonitorHandler);
+    }
 
     if features.enabled(Feature::DeferredExecutor) {
         registry.add(
