@@ -3,6 +3,7 @@
 use super::session_lifecycle_requests::HistoryCapabilities;
 use super::session_lifecycle_requests::start_recording_app_server_with_history;
 use super::*;
+use crate::app::session_lifecycle::FreshSessionStart;
 use codex_context_fragments::side_conversation_boundary;
 use pretty_assertions::assert_eq;
 
@@ -52,7 +53,7 @@ sandbox = "unelevated"
     app.start_fresh_session(
         &mut tui,
         &mut server,
-        /*session_start_source*/ None,
+        FreshSessionStart::PreserveCurrentView(None),
         /*initial_user_message*/ None,
         /*new_thread_name*/ None,
     )
@@ -211,7 +212,7 @@ sandbox = "unelevated"
     std::fs::create_dir(untrusted.path().join(".codex"))?;
     std::fs::write(untrusted.path().join(".codex/config.toml"), "")?;
     crate::config_update::write_trusted_project(server.request_handle(), untrusted.path()).await?;
-    app.new_agents_overview_session(&mut tui, &mut server, Some(untrusted.path().abs()))
+    app.new_agents_overview_session(&mut tui, &mut server, Some(untrusted.path().to_path_buf()))
         .await?;
     server
         .thread_inject_items(
@@ -331,15 +332,19 @@ async fn local_projectless_defaults_respect_trust_scope_and_explicit_settings() 
             LoaderOverrides::without_managed_config_for_tests(),
         )
         .await?;
+        let defaults = crate::config_update::read_effective_config_with_layers(
+            &server.request_handle(),
+            config.cwd.display().to_string(),
+        )
+        .await?;
         let startup = crate::app::startup::prepare_fresh_startup_config(
             &mut config,
             &server,
-            &AppServerTarget::Embedded,
+            &defaults,
             &[],
             &overrides,
             &EnvironmentManager::default_for_tests(),
-        )
-        .await?;
+        );
         if expected_approval.is_some() {
             assert_eq!(startup.approval_policy, None);
         }

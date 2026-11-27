@@ -45,6 +45,7 @@ use crate::state::validate_enabled_config_layers;
 use crate::strict_config::config_error_from_ignored_toml_value_fields;
 use crate::strict_config::ignored_config_warning;
 use crate::strict_config::ignored_toml_value_fields;
+use crate::strict_config::status_line_provider_warning;
 use crate::strict_config::unknown_feature_toml_value_field;
 use crate::strict_config::unknown_tui_toml_value_path;
 use crate::thread_config::ThreadConfigContext;
@@ -71,6 +72,7 @@ pub use local::LocalConfigLayers;
 pub use local::LocalTomlLayer;
 pub use local::LocalTomlLayerStack;
 pub use local::load_local_config_layers;
+pub use managed_requirements::load_guardian_policy_snapshot;
 pub use managed_requirements::load_managed_requirements_state;
 #[cfg(windows)]
 pub use windows::WindowsSystemConfigNamespaceProbe;
@@ -525,6 +527,10 @@ pub async fn load_config_layers_state(
             );
     config_layer_stack.is_projectless = is_projectless;
     config_layer_stack.project_trust = project_trust;
+    startup_warnings.extend(status_line_provider_warning(
+        &config_layer_stack,
+        strict_config,
+    )?);
     if config_layer_stack.layers_low_to_high().any(|layer| {
         matches!(
             layer.name,
@@ -1365,6 +1371,24 @@ fn sanitize_project_config(
         {
             ignored_keys.push("features.shell_snapshot".to_string());
         }
+        if let Some(guardian) = features
+            .get_mut("guardianv3")
+            .and_then(TomlValue::as_table_mut)
+        {
+            if guardian.remove("max_instruction_tokens").is_some() {
+                ignored_keys.push("features.guardianv3.max_instruction_tokens".to_string());
+            }
+            for (section, key) in [
+                ("housekeeper", "routing_instructions"),
+                ("reviewer", "retrieval_instructions"),
+            ] {
+                if let Some(settings) = guardian.get_mut(section).and_then(TomlValue::as_table_mut)
+                    && settings.remove(key).is_some()
+                {
+                    ignored_keys.push(format!("features.guardianv3.{section}.{key}"));
+                }
+            }
+        }
         if let Some(multi_agent) = features
             .get_mut("multi_agent_v2")
             .and_then(TomlValue::as_table_mut)
@@ -1653,7 +1677,11 @@ pub fn resolve_relative_paths_in_config_toml(
     }
     // The typed round trip resolves AbsolutePathBuf fields against this layer's directory.
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    let Ok(resolved) = ConfigToml::try_from(value_from_config_toml.clone()) else {
+    // Provider identities contain no paths. An ignored malformed identity must not
+    // prevent an unrelated path in this layer from being resolved against its directory.
+    let path_input =
+        crate::config_layer_source::without_status_line_provider(&value_from_config_toml);
+    let Ok(resolved) = ConfigToml::try_from(path_input.into_owned()) else {
         return Ok(value_from_config_toml);
     };
     drop(_guard);

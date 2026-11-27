@@ -499,6 +499,10 @@ pub struct AppToolConfig {
     /// Approval mode for this tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_mode: Option<AppToolApproval>,
+
+    /// Reviewer for this tool's approval prompts, overriding link-level and app-level settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
 }
 
 /// Tool settings for a single app.
@@ -508,6 +512,15 @@ pub struct AppToolsConfig {
     /// Per-tool overrides keyed by tool name (for example `repos/list`).
     #[serde(default, flatten)]
     pub tools: HashMap<String, AppToolConfig>,
+}
+
+impl AppToolsConfig {
+    /// Match a tool by its raw name first and use its title as a fallback.
+    pub fn for_tool(&self, name: &str, title: Option<&str>) -> Option<&AppToolConfig> {
+        self.tools
+            .get(name)
+            .or_else(|| title.and_then(|title| self.tools.get(title)))
+    }
 }
 
 /// Approval settings for a connected account within an app.
@@ -880,6 +893,28 @@ impl QuickDial {
     }
 }
 
+/// The configured MCP server and advertised tool name identify a status line provider.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatusLineProviderId {
+    pub server: String,
+    pub tool: String,
+}
+
+/// An explicit default overrides an MCP provider from a lower configuration layer.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum StatusLineSelection {
+    Builtin(BuiltinStatusLine),
+    Mcp(StatusLineProviderId),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum BuiltinStatusLine {
+    Default,
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -996,6 +1031,9 @@ pub struct Tui {
     /// When unset, the TUI defaults to: `model-with-reasoning`, `current-dir`, and `thread-name`.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
+
+    /// Local status line selection. Set to "default" for built-in items or specify an MCP server and tool.
+    pub status_line_provider: Option<Box<StatusLineSelection>>,
 
     /// Color status line items with colors derived from the active syntax theme.
     /// Defaults to `true`.
@@ -1253,6 +1291,9 @@ where
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MarketplaceConfig {
+    /// Check for updates to installed Git plugins from this marketplace when plugins are listed.
+    #[serde(default)]
+    pub auto_update: bool,
     /// Last time Codex successfully added or refreshed this marketplace.
     #[serde(default)]
     pub last_updated: Option<String>,

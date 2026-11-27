@@ -174,6 +174,7 @@ pub struct RemoteAppServerClient {
 #[derive(Clone)]
 pub struct RemoteAppServerRequestHandle {
     command_tx: mpsc::Sender<RemoteClientCommand>,
+    pub(crate) platform_os: Option<String>,
 }
 
 enum SocketPeerPolicy {
@@ -536,6 +537,7 @@ impl RemoteAppServerClient {
     pub fn request_handle(&self) -> RemoteAppServerRequestHandle {
         RemoteAppServerRequestHandle {
             command_tx: self.command_tx.clone(),
+            platform_os: self.metadata.platform_os.clone(),
         }
     }
 
@@ -1082,6 +1084,7 @@ mod tests {
                 &event_tx,
                 AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(
                     codex_app_server_protocol::AccountUpdatedNotification {
+                        reason: None,
                         auth_mode: None,
                         plan_type: None,
                     },

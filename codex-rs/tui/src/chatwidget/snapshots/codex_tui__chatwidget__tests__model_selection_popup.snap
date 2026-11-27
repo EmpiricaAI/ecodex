@@ -1,27 +1,26 @@
 ---
-source: tui/src/chatwidget/tests/popups_and_settings.rs
-assertion_line: 3482
-expression: "render_bottom_popup(&chat, 80)"
+source: tui/src/chatwidget/tests/model_picker_tests.rs
+expression: popup
 ---
   Select Model and Effort
 
 ↑
-  16. GPT-6.1-Sol                                       Previous generation
+      GPT-6.1-Sol                                       Previous generation
                                                         model for coding and
                                                         everyday work.
-  17. GPT-6-Astra                                       Previous generation
+      GPT-6-Astra                                       Previous generation
                                                         model for complex coding
                                                         and professional work.
-  18. GPT-6-Sol                                         Legacy model for coding
+      GPT-6-Sol                                         Legacy model for coding
                                                         and everyday work.
-  19. GPT-6-Luna                                        Fast and affordable
+      GPT-6-Luna                                        Fast and affordable
                                                         model for easier tasks.
-  20. GPT-5.6-Sol                                       Legacy model for coding
+      GPT-5.6-Sol                                       Legacy model for coding
                                                         and everyday work.
-  21. GPT-5.6-Terra                                     Legacy balanced model
+      GPT-5.6-Terra                                     Legacy balanced model
                                                         for agentic coding.
-  22. GPT-5.6-Luna                                      Legacy fast model for
+      GPT-5.6-Luna                                      Legacy fast model for
                                                         simpler tasks.
-› 23. GPT-5.5 (current)                                 Legacy coding model.
+›     GPT-5.5 (current)                                 Legacy coding model.
 
   enter select · esc back

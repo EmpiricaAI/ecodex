@@ -6,6 +6,7 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::common::SafetyBufferingTreatment;
 use crate::common::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
+use crate::common::with_tool_results;
 use crate::endpoint::responses_websocket_probe::ResponsesWebsocketClose;
 use crate::endpoint::responses_websocket_probe::ResponsesWebsocketProbe;
 use crate::endpoint::responses_websocket_probe::ResponsesWebsocketProbeError;
@@ -42,6 +43,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
@@ -55,6 +57,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::instrument;
+use tracing::instrument::WithSubscriber;
 use tungstenite::extensions::ExtensionsConfig;
 use tungstenite::extensions::compression::deflate::DeflateConfig;
 use tungstenite::protocol::WebSocketConfig;
@@ -68,9 +71,14 @@ struct WsStream {
     pump_task: tokio::task::JoinHandle<()>,
 }
 
+struct WsRequestText {
+    text: Utf8Bytes,
+    private: bool,
+}
+
 enum WsCommand {
     Send {
-        message: Message,
+        request: WsRequestText,
         tx_result: oneshot::Sender<Result<(), WsError>>,
     },
 }
@@ -120,8 +128,14 @@ impl WsStream {
                             break;
                         };
                         match command {
-                            WsCommand::Send { message, tx_result } => {
-                                let result = send_message(&mut inner, message).await;
+                            WsCommand::Send { request, tx_result } => {
+                                let send = send_message(&mut inner, Message::Text(request.text));
+                                // Tungstenite traces frame payloads from inside this future.
+                                let result = if request.private {
+                                    send.with_subscriber(tracing::Dispatch::none()).await
+                                } else {
+                                    send.await
+                                };
                                 let should_break = result.is_err();
                                 let _ = tx_result.send(result);
                                 if should_break {
@@ -189,8 +203,8 @@ impl WsStream {
         Err(WsError::ConnectionClosed)
     }
 
-    async fn send(&mut self, message: Message) -> Result<(), WsError> {
-        self.request(|tx_result| WsCommand::Send { message, tx_result })
+    async fn send(&mut self, request: WsRequestText) -> Result<(), WsError> {
+        self.request(|tx_result| WsCommand::Send { request, tx_result })
             .await
     }
 
@@ -283,17 +297,29 @@ impl ResponsesWebsocketConnection {
             .is_none_or(|stream| stream.pump_task.is_finished())
     }
 
+    pub async fn stream_request(
+        &self,
+        request: ResponsesWsRequest<'_>,
+        connection_reused: bool,
+        turn_state: Option<Arc<OnceLock<String>>>,
+    ) -> Result<ResponseStream, ApiError> {
+        self.stream_request_with_observer(request, connection_reused, turn_state, |_| {})
+            .await
+    }
+
+    /// Gives the observer the serialized request before private tool results are attached.
     #[instrument(
         name = "responses_websocket.stream_request",
         level = "info",
         skip_all,
         fields(transport = "responses_websocket", api.path = "/responses")
     )]
-    pub async fn stream_request(
+    pub async fn stream_request_with_observer(
         &self,
         request: ResponsesWsRequest<'_>,
         connection_reused: bool,
         turn_state: Option<Arc<OnceLock<String>>>,
+        on_encoded: impl FnOnce(&bytes::Bytes),
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -328,7 +354,13 @@ impl ResponsesWebsocketConnection {
             warmup: ws_request.generate == Some(false),
             connection_reused,
         };
-        let request_text = serialize_websocket_request(&request)?;
+        let request_text = Utf8Bytes::from(serialize_websocket_request(&request)?);
+        on_encoded(request_text.as_ref());
+        let enriched = with_tool_results(request_text.as_str(), &ws_request.tool_results);
+        let request_text = WsRequestText {
+            private: enriched.is_some(),
+            text: enriched.map(Utf8Bytes::from).unwrap_or(request_text),
+        };
 
         let current_span = Span::current();
         tokio::spawn(
@@ -827,7 +859,7 @@ fn is_websocket_receive_failure(
 async fn run_websocket_response_stream(
     ws_stream: &mut WsStream,
     tx_event: mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
-    request_text: String,
+    request_text: WsRequestText,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     turn_state: Option<&OnceLock<String>>,
@@ -869,11 +901,14 @@ async fn run_websocket_response_stream(
                 interruption = Some(request);
                 send_websocket_request(
                     ws_stream,
-                    serde_json::json!({
-                        "type": "response.interrupt",
-                        "response_id": response_id,
-                        "mode": "discard_partial_items",
-                    }).to_string(),
+                    WsRequestText {
+                        text: serde_json::json!({
+                            "type": "response.interrupt",
+                            "response_id": response_id,
+                            "mode": "discard_partial_items",
+                        }).to_string().into(),
+                        private: false,
+                    },
                     idle_timeout,
                     /*telemetry*/ None,
                     timing_log_context.connection_reused,
@@ -1104,25 +1139,22 @@ fn safety_buffering_for_event(
 
 async fn send_websocket_request(
     ws_stream: &mut WsStream,
-    request_text: String,
+    request_text: WsRequestText,
     idle_timeout: Duration,
     telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
 ) -> Result<(), ApiError> {
     if ws_stream
         .max_message_bytes
-        .is_some_and(|limit| request_text.len() > limit)
+        .is_some_and(|limit| request_text.text.len() > limit)
     {
         return Err(ApiError::WebsocketMessageTooLarge);
     }
     let request_start = Instant::now();
-    let result = tokio::time::timeout(
-        idle_timeout,
-        ws_stream.send(Message::Text(request_text.into())),
-    )
-    .await
-    .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
-    .and_then(|result| result.map_err(map_ws_stream_error));
+    let result = tokio::time::timeout(idle_timeout, ws_stream.send(request_text))
+        .await
+        .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
+        .and_then(|result| result.map_err(map_ws_stream_error));
 
     if let Some(t) = telemetry.as_ref() {
         t.on_ws_request(
@@ -1160,7 +1192,22 @@ mod tests {
 
     #[test]
     fn direct_serialization_preserves_websocket_request_payload() {
+        for (country_code, expected_country) in [
+            (None, None),
+            (Some(" de "), Some(json!("DE"))),
+            (Some("xX"), Some(Value::Null)),
+        ] {
+            assert_serialized_request(country_code, expected_country);
+        }
+    }
+
+    fn assert_serialized_request(country_code: Option<&str>, expected_country: Option<Value>) {
         let api_request = ResponsesApiRequest {
+            request_country: country_code
+                .map(codex_protocol::RequestCountry::from_iso_code)
+                .transpose()
+                .expect("country is valid")
+                .unwrap_or_default(),
             model: "gpt-test".to_string(),
             input: vec![ResponseItem::Message {
                 status: None,
@@ -1213,6 +1260,10 @@ mod tests {
 
         let mut expected_payload =
             serde_json::to_value(&api_request).expect("serialize responses API request");
+        assert_eq!(
+            expected_payload.get("request_country"),
+            expected_country.as_ref()
+        );
         expected_payload["type"] = json!("response.create");
         expected_payload["previous_response_id"] = json!("resp-1");
         expected_payload["generate"] = json!(false);
@@ -1224,6 +1275,10 @@ mod tests {
         let wire_payload =
             serde_json::from_str::<Value>(&request_text).expect("parse websocket request");
 
+        assert_eq!(
+            wire_payload.get("request_country"),
+            expected_country.as_ref()
+        );
         assert_eq!(wire_payload, expected_payload);
     }
 

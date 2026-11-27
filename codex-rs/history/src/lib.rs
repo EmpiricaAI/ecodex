@@ -19,6 +19,7 @@ mod initialization;
 pub use initialization::HistoryInitialization;
 
 use std::borrow::Borrow;
+use std::borrow::Cow;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::PathBuf;
@@ -44,8 +45,13 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::WorldStateItem;
+use codex_protocol::realtime::RealtimeHandoffMode;
 use codex_protocol::realtime::RealtimeItem;
+use codex_protocol::realtime::RealtimeItemContent;
+use codex_protocol::realtime::SessionInputReason;
 use codex_protocol::security_risk::SecurityRiskScore;
+use codex_protocol::turn_input::InjectedResponseItem;
+use codex_protocol::turn_input::ItemRetention;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -62,10 +68,33 @@ pub struct ResponseItemEnvelope {
     pub metadata: Option<CodexHarnessMetadata>,
 }
 
+/// Persisted search-provider state for a thread.
+///
+/// A missing checkpoint means the history predates this field and may contain Search MCP
+/// references. `Unused` means the writer knows that neither provider has run yet.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSearchState {
+    Unused,
+    SearchMcp,
+    Standalone,
+}
+
 /// Metadata owned by the Codex harness and persisted with a response item.
 ///
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct CodexHarnessMetadata {
+    /// Realtime provenance for an accepted ordinary turn input. Never model-visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realtime_handoff: Option<Box<RealtimeHandoffMetadata>>,
+
+    /// Provenance of a transcript chunk saved in ordinary model history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realtime_session_input: Option<Box<RealtimeSessionInputMetadata>>,
+    /// End-of-call transcript context, recorded without creating a user turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub realtime_session_end_input: bool,
+
     /// Thread-local append sequence. Compaction keeps the identities of retained inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_sequence: Option<u64>,
@@ -74,6 +103,10 @@ pub struct CodexHarnessMetadata {
     /// Compaction carries this checkpoint without advancing it. Never model-visible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampled_through_sequence: Option<u64>,
+
+    /// Original inline images to sanitize again on resume or fork.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_replay_sources: Vec<ImageReplaySource>,
 
     /// Complete retained records actually delivered by this Guardian message. Host-only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -100,8 +133,16 @@ pub struct CodexHarnessMetadata {
     pub additional_context_tool_output: bool,
 
     /// Whether a developer message was supplied by a client or a client requested tool-output retention.
+    ///
+    /// Use this field only to interpret older rollouts.
+    /// Store new retention decisions in `retain_across_windows`.
     #[serde(default)]
     pub client_authored: bool,
+
+    /// Per-item override of the thread's context-window retention policy.
+    /// Never sent to the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retain_across_windows: Option<bool>,
 
     /// The originating history budget, including any tool-specific allowance.
     /// Measured in tokens and reused when replaying persisted history.
@@ -111,6 +152,15 @@ pub struct CodexHarnessMetadata {
         skip_serializing_if = "Option::is_none"
     )]
     pub history_truncation_token_limit: Option<usize>,
+
+    /// Fresh tool output has already passed a producer limit. Used only to budget
+    /// storage-error placeholders before the item is recorded. Never persisted.
+    #[serde(skip)]
+    pub producer_bounded_tool_audio: bool,
+
+    /// Core applied the history limit while tool audio still had its inline cost.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tool_audio_budget_applied: bool,
 
     /// Bounded assistant text confirmed by a successful messaging tool result.
     /// Captured after input hooks; untrusted context, never user authorization.
@@ -151,6 +201,10 @@ pub struct CodexHarnessMetadata {
     )]
     pub mcp_attribution: Option<McpAttribution>,
 
+    /// Search provider already used by this thread, or confirmation that neither has run yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_search_state: Option<ModelSearchState>,
+
     /// Native search ran during automatic fallback, so its browsing references stay on native.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub native_search_fallback_used: bool,
@@ -158,6 +212,41 @@ pub struct CodexHarnessMetadata {
     /// Sender context captured by the host when this task message was accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_user_messages: Option<Box<SenderUserMessages>>,
+}
+
+/// Facts that connect an ordinary accepted input to its originating realtime frames.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct RealtimeHandoffMetadata {
+    pub event_id: String,
+    pub realtime_session_id: String,
+    pub observed_at_ms: i64,
+    pub handoff_id: String,
+    pub mode: RealtimeHandoffMode,
+    pub source_event_ids: Vec<String>,
+}
+
+/// Realtime provenance for a saved transcript chunk; the response item owns its text.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct RealtimeSessionInputMetadata {
+    pub event_id: String,
+    pub realtime_session_id: String,
+    pub observed_at_ms: i64,
+    pub source_event_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
+pub struct ImageReplaySource {
+    pub prepared_url_digest: Vec<u8>,
+    pub detail: Option<codex_protocol::models::ImageDetail>,
+    pub original_data_url: Arc<String>,
+}
+
+impl std::fmt::Debug for ImageReplaySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImageReplaySource")
+            .field("original_data_url_len", &self.original_data_url.len())
+            .finish_non_exhaustive()
+    }
 }
 
 fn deserialize_mcp_attribution_checkpoint<'de, D>(
@@ -192,6 +281,82 @@ impl CodexHarnessMetadata {
 }
 
 impl ResponseItemEnvelope {
+    fn validated_realtime_handoff(&self) -> Option<(&RealtimeHandoffMetadata, &str)> {
+        let metadata = self.metadata.as_ref()?.realtime_handoff.as_deref()?;
+        let ResponseItem::Message {
+            id: Some(_),
+            role,
+            content,
+            ..
+        } = &self.item
+        else {
+            return None;
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            return None;
+        };
+        if role != "user" || self.item.turn_id().is_none() {
+            return None;
+        }
+        Some((metadata, text))
+    }
+
+    /// Projects the realtime view of an accepted input without storing a second copy.
+    pub fn realtime_handoff_item(&self) -> Option<RealtimeItem> {
+        let (metadata, text) = self.validated_realtime_handoff()?;
+        Some(RealtimeItem {
+            id: metadata.event_id.clone(),
+            realtime_session_id: metadata.realtime_session_id.clone(),
+            observed_at_ms: Some(metadata.observed_at_ms),
+            content: RealtimeItemContent::TurnInputAccepted {
+                handoff_id: metadata.handoff_id.clone(),
+                turn_id: self.item.turn_id()?.to_string(),
+                mode: metadata.mode,
+                source_event_ids: metadata.source_event_ids.clone(),
+                input_item_id: self.item.id()?.to_string(),
+                input: text.to_string(),
+            },
+        })
+    }
+
+    /// Projects a chunk receipt from its canonical model input.
+    pub fn realtime_session_input_item(&self) -> Option<RealtimeItem> {
+        let metadata = self.metadata.as_ref()?.realtime_session_input.as_ref()?;
+        let ResponseItem::Message {
+            id: Some(id),
+            role,
+            content,
+            ..
+        } = &self.item
+        else {
+            return None;
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            return None;
+        };
+        if role != "user" {
+            return None;
+        }
+        Some(RealtimeItem {
+            id: metadata.event_id.clone(),
+            realtime_session_id: metadata.realtime_session_id.clone(),
+            observed_at_ms: Some(metadata.observed_at_ms),
+            content: RealtimeItemContent::SessionInputSaved {
+                reason: SessionInputReason::Chunk,
+                source_event_ids: metadata.source_event_ids.clone(),
+                input_item_id: id.to_string(),
+                input: text.clone(),
+            },
+        })
+    }
+
+    /// Whether the client requested that this item survive context-window changes and forks.
+    pub fn is_always_retained(&self) -> bool {
+        self.metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.retain_across_windows == Some(true))
+    }
+
     /// Wraps a raw Responses API item for persisted history.
     pub fn new(item: ResponseItem) -> Self {
         Self {
@@ -209,6 +374,19 @@ impl ResponseItemEnvelope {
 impl From<ResponseItem> for ResponseItemEnvelope {
     fn from(item: ResponseItem) -> Self {
         Self::new(item)
+    }
+}
+
+impl From<InjectedResponseItem> for ResponseItemEnvelope {
+    fn from(injected: InjectedResponseItem) -> Self {
+        let mut envelope = Self::new(injected.item);
+        if injected.retention != ItemRetention::Unspecified {
+            envelope
+                .metadata
+                .get_or_insert_default()
+                .retain_across_windows = Some(injected.retention == ItemRetention::Always);
+        }
+        envelope
     }
 }
 
@@ -255,6 +433,56 @@ pub enum RolloutItem {
     EventMsg(EventMsg),
     /// Sparse, model-invisible facts used to reconstruct realtime presentation.
     RealtimeItem(RealtimeItem),
+}
+
+impl RolloutItem {
+    /// Returns the handoff ID only when the rollout item is a valid acceptance receipt.
+    pub fn realtime_handoff_id(&self) -> Option<&str> {
+        match self {
+            Self::RealtimeItem(RealtimeItem {
+                content: RealtimeItemContent::TurnInputAccepted { handoff_id, .. },
+                ..
+            }) => Some(handoff_id),
+            Self::ResponseItem(envelope) => envelope
+                .validated_realtime_handoff()
+                .map(|(metadata, _)| metadata.handoff_id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Returns the canonical realtime observation time without constructing a projection.
+    pub fn realtime_observed_at_ms(&self) -> Option<i64> {
+        match self {
+            Self::RealtimeItem(item) => item.observed_at_ms,
+            Self::ResponseItem(envelope) => envelope
+                .metadata
+                .as_ref()?
+                .realtime_handoff
+                .as_ref()
+                .map(|metadata| metadata.observed_at_ms)
+                .or_else(|| {
+                    envelope
+                        .metadata
+                        .as_ref()?
+                        .realtime_session_input
+                        .as_ref()
+                        .map(|metadata| metadata.observed_at_ms)
+                }),
+            _ => None,
+        }
+    }
+
+    /// Returns the realtime presentation of this canonical rollout item, if any.
+    pub fn realtime_item(&self) -> Option<Cow<'_, RealtimeItem>> {
+        match self {
+            Self::RealtimeItem(item) => Some(Cow::Borrowed(item)),
+            Self::ResponseItem(envelope) => envelope
+                .realtime_handoff_item()
+                .or_else(|| envelope.realtime_session_input_item())
+                .map(Cow::Owned),
+            _ => None,
+        }
+    }
 }
 
 impl Serialize for RolloutItem {

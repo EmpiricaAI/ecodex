@@ -11,6 +11,7 @@ use codex_core::AgentSessionReader;
 use codex_core::AgentTurnAdmission;
 use codex_core::AgentTurnAdmissionRequest;
 use codex_core::CodexThread;
+use codex_core::SteerSubmission;
 use codex_core::SuspendTurnOutcome;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
@@ -161,6 +162,58 @@ fn assert_denied(event: &EventMsg, turn_id: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steered_audio_keeps_bytes_captured_while_admission_is_pending() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        ["initial", "after-steer"]
+            .map(|id| {
+                responses::sse(vec![
+                    responses::ev_response_created(id),
+                    responses::ev_completed(id),
+                ])
+            })
+            .to_vec(),
+    )
+    .await;
+    let builder = test_codex().with_model_info_override("gpt-5.5", |model| {
+        model
+            .input_modalities
+            .push(codex_protocol::openai_models::InputModality::Audio);
+    });
+    let (test, mut attempts) =
+        root_with_admission(&server, builder, /*session_reader*/ None).await?;
+    let (turn_id, decision) = start(&test, &mut attempts, "Listen to the attachment.").await?;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("clip.wav");
+    std::fs::write(&path, b"audio")?;
+    let submission = test
+        .codex
+        .steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::LocalAudio { path: path.clone() }]),
+            turn_id.clone(),
+        )
+        .await?;
+    assert_eq!(submission, SteerSubmission::Steered { turn_id });
+    std::fs::remove_file(path)?;
+    assert!(decision.send(Ok(AgentExecutionGuard::new(()))).is_ok());
+    wait_for_successful_turn(&test.codex).await;
+    let audio = mock.requests()[1]
+        .input()
+        .into_iter()
+        .flat_map(|item| item["content"].as_array().cloned().unwrap_or_default())
+        .filter(|part| part["type"] == "input_audio")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        audio,
+        [json!({"type": "input_audio", "audio_url": "data:audio/wav;base64,YXVkaW8="})]
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn root_denial_and_interruption_retain_input_and_grants_span_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -294,6 +347,93 @@ async fn interrupt_before_admission_skips_submit_hook_and_uninspected_prompt() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn injected_child_final_survives_parent_interrupt() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let sampling = Arc::new(Notify::new());
+    let sampled = Arc::clone(&sampling);
+    let model = responses::mount_response_handler(&server, move |request| {
+        let response = responses::sse_response(responses::sse_completed("done"));
+        if request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == "Continue work.")
+        {
+            response
+        } else {
+            sampled.notify_one();
+            response.set_delay(Duration::from_secs(60))
+        }
+    })
+    .await;
+    let builder = test_codex().with_config(|config| {
+        config
+            .features
+            .disable(Feature::InstantInterrupt)
+            .expect("keep mail queued during sampling");
+        // Mail must be durable even when no interruption marker is written.
+        config.agent_interrupt_message_enabled = false;
+    });
+    let (test, mut attempts) =
+        root_with_admission(&server, builder, /*session_reader*/ None).await?;
+    let (_, grant) = start(&test, &mut attempts, "Start work.").await?;
+    assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
+    sampling.notified().await;
+    let message: ResponseItem = serde_json::from_value(json!({
+        "type": "agent_message", "id": "agent_child-final", "author": "/root/worker", "recipient": "/root",
+        "content": [{"type": "input_text", "text": "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nThe worker finished."}]
+    }))?;
+    // Injection has acknowledged the final, but the blocked sample has not consumed it.
+    test.codex
+        .inject_response_items(vec![message.clone()])
+        .await?;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    let history = test
+        .thread_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: test.session_configured.thread_id,
+            include_archived: false,
+        })
+        .await?;
+    let persisted = history
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(envelope)
+                if matches!(envelope.item, ResponseItem::AgentMessage { .. }) =>
+            {
+                Some(responses::strip_metadata(envelope.item))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(persisted, vec![message.clone()]);
+
+    let (_, grant) = start(&test, &mut attempts, "Continue work.").await?;
+    assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
+    wait_for_successful_turn(&test.codex).await;
+    let mail = model
+        .requests()
+        .iter()
+        .map(|request| request.inputs_of_type("agent_message"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        responses::strip_metadata_from_json(json!(mail)),
+        json!([[], [message]])
+    );
+    insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
+        "An acknowledged child final queued during parent sampling survives interruption and appears once in the next request.",
+        &responses::received_responses_requests(&server).await,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    ));
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn suspending_root_during_admission_preserves_the_recoverable_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -303,6 +443,25 @@ async fn suspending_root_during_admission_preserves_the_recoverable_prompt() -> 
     let (turn_id, pending) = start(&test, &mut attempts, prompt).await?;
     suspend_and_check_recoverable_prompt(&test, &server, turn_id, prompt).await?;
     assert!(pending.is_closed());
+    Ok(())
+}
+
+#[tokio::test]
+async fn tree_suspension_leaves_an_ephemeral_turn_running() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let reply = responses::mount_sse_once(&server, responses::sse_completed("done")).await;
+    let builder = test_codex().with_config(|config| config.ephemeral = true);
+    let (test, mut attempts) =
+        root_with_admission(&server, builder, /*session_reader*/ None).await?;
+    let prompt = "Keep working after the suspension attempt.";
+    let (_, grant) = start(&test, &mut attempts, prompt).await?;
+    assert_eq!(
+        test.thread_manager.suspend_agent_tree(&test.codex).await?,
+        None
+    );
+    assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
+    wait_for_successful_turn(&test.codex).await;
+    assert!(reply.single_request().body_contains_text(prompt));
     Ok(())
 }
 

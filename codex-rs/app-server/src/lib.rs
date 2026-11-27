@@ -108,6 +108,7 @@ mod code_mode_host;
 mod codex_home_metrics;
 mod command_exec;
 mod config_layer;
+mod plugin_mcp_launch;
 mod startup_config;
 pub use startup_config::StartupConfigArgs;
 pub use startup_config::print_startup_config;
@@ -116,7 +117,6 @@ mod config_manager;
 mod config_manager_service;
 mod connection_cleanup;
 mod connection_rpc_gate;
-mod current_time;
 mod daemon_thread_recovery;
 mod dynamic_tools;
 mod effective_plugin_change;
@@ -161,6 +161,7 @@ pub use crate::code_mode_host::AppServerCodeModeHostArgs;
 pub use crate::code_mode_host::CodeModeHostTransport;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
+pub use crate::plugin_mcp_launch::PluginMcpLaunchArgs;
 pub use crate::transport::AppServerTransport;
 pub use crate::transport::RemoteControlStartupMode;
 pub use crate::transport::app_server_control_socket_path;
@@ -493,6 +494,7 @@ pub struct AppServerRuntimeOptions {
     pub remote_control_startup_mode: RemoteControlStartupMode,
     pub install_shutdown_signal_handler: bool,
     pub managed_daemon: bool,
+    pub plugin_mcp_launch: PluginMcpLaunchArgs,
 }
 
 impl Default for AppServerRuntimeOptions {
@@ -504,6 +506,7 @@ impl Default for AppServerRuntimeOptions {
             remote_control_startup_mode: RemoteControlStartupMode::ResolvePersisted,
             install_shutdown_signal_handler: true,
             managed_daemon: false,
+            plugin_mcp_launch: PluginMcpLaunchArgs::default(),
         }
     }
 }
@@ -571,7 +574,8 @@ pub async fn run_main_with_transport_options(
         Default::default(),
         arg0_paths.clone(),
         Arc::new(NoopThreadConfigLoader),
-    );
+    )
+    .with_mcp_launch_cwds(runtime_options.plugin_mcp_launch.into_cwds()?);
     let startup = config_manager
         .load_managed_startup_config(startup_cwd.clone())
         .await?;
@@ -604,7 +608,9 @@ pub async fn run_main_with_transport_options(
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
             .await
             .map_err(std::io::Error::other)?;
-    config_manager.update_managed_config_loader(auth_manager.clone(), &config);
+    config_manager
+        .update_managed_config_loader(auth_manager.clone(), &config)
+        .await;
     config_manager
         .sync_default_client_residency_requirement()
         .await;

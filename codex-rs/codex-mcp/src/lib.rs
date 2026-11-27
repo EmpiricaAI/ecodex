@@ -37,6 +37,7 @@ pub use runtime::McpRuntimeContext;
 pub use runtime::McpRuntimeInput;
 pub use runtime::McpStartupPolicy;
 pub use runtime::McpToolCallResult;
+pub use runtime::McpToolStartup;
 pub use runtime::apply_http_headers_helper;
 pub use sandbox_metadata::MCP_SANDBOX_LAUNCHER_META_KEY;
 pub use sandbox_metadata::MCP_SANDBOX_STATE_CAPABILITY;
@@ -67,6 +68,7 @@ pub use catalog::ResolvedMcpServer;
 
 pub use mcp::CODEX_APPS_MCP_SERVER_NAME;
 pub use mcp::DEFAULT_OPTIONAL_MCP_STARTUP_GRACE;
+pub use mcp::McpClientConfig;
 pub use mcp::McpConfig;
 pub use mcp::McpServerPermissions;
 pub use mcp::ToolPluginContext;

@@ -210,6 +210,7 @@ mod tests {
         let page = ThreadStore::list_threads(
             &store,
             ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
@@ -239,6 +240,7 @@ mod tests {
         let page = ThreadStore::list_threads(
             &store,
             ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
@@ -268,6 +270,7 @@ mod tests {
         let page = ThreadStore::list_threads(
             &store,
             ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
@@ -297,6 +300,7 @@ mod tests {
         let page = ThreadStore::list_threads(
             &store,
             ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
@@ -525,6 +529,7 @@ pub struct InMemoryThreadStoreCalls {
 pub struct InMemoryThreadStore {
     state: Arc<tokio::sync::Mutex<InMemoryThreadStoreState>>,
     omit_metadata_update_result: Arc<AtomicBool>,
+    model_ids: Arc<codex_state::MemoryModelIdStore>,
     state_db: Option<codex_rollout::StateDbHandle>,
 }
 
@@ -558,6 +563,7 @@ impl InMemoryThreadStore {
         Self {
             state: Arc::clone(&self.state),
             omit_metadata_update_result: Arc::clone(&self.omit_metadata_update_result),
+            model_ids: Arc::clone(&self.model_ids),
             state_db,
         }
     }
@@ -906,6 +912,7 @@ impl InMemoryThreadStore {
             0
         };
         let mut state = self.state.lock().await;
+        self.model_ids.remove(params.thread_id.into());
         let existed = state.histories.remove(&params.thread_id).is_some();
         state.created_threads.remove(&params.thread_id);
         state.names.remove(&params.thread_id);
@@ -927,6 +934,10 @@ impl InMemoryThreadStore {
 }
 
 impl ThreadStore for InMemoryThreadStore {
+    fn model_ids(&self) -> Option<Arc<dyn codex_state::SessionModelIdStore>> {
+        Some(self.model_ids.clone())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -1047,6 +1058,9 @@ impl ThreadStore for InMemoryThreadStore {
                 page.items.retain(|thread| {
                     thread.section.as_ref().map(|section| section.id.as_str()) == section.as_deref()
                 });
+            }
+            if let Some(ids) = &params.included_thread_ids {
+                page.items.retain(|thread| ids.contains(&thread.thread_id));
             }
             if params.sort_key == ThreadSortKey::SectionPosition {
                 page.items.sort_by_key(|thread| {

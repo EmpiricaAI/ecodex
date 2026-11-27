@@ -71,7 +71,8 @@ impl LunaSampler {
             .into_iter()
             .map(codex_history::ResponseItemEnvelope::new)
             .collect();
-        let (input, input_tokens) = Self::prepare_input(&request, /*history*/ None, evidence);
+        let (input, input_tokens) =
+            Self::finish_input(&request, LunaSampler::prepare_setup(&request), evidence);
         let (ready, score) = tokio::sync::oneshot::channel();
         let sample = super::ConversationSample {
             input: crate::async_scorer::request::PreparedRequest {
@@ -319,6 +320,7 @@ pub(in crate::async_scorer) fn sample_request(parent_turn_id: &str) -> LunaSampl
         parent_turn_id: parent_turn_id.to_owned(),
         root_turn_id: None,
         pending_score: None,
+        turn_id: Uuid::now_v7(),
     }
 }
 
@@ -731,6 +733,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
             parent_turn_id: "turn-1".to_owned(),
             root_turn_id: Some("turn-1".to_owned()),
             pending_score: None,
+            turn_id: Uuid::now_v7(),
         })
         .await?;
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -765,6 +768,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
             parent_turn_id: "turn-2".to_owned(),
             root_turn_id: Some("root-2".to_owned()),
             pending_score: None,
+            turn_id: Uuid::now_v7(),
         })
         .await?;
 
@@ -862,9 +866,9 @@ async fn sampler_returns_classification_token_before_terminal_response_events() 
     .await?;
 
     let request = sample_request("turn-1");
-    let (input, input_tokens) = LunaSampler::prepare_input(
+    let (input, input_tokens) = LunaSampler::finish_input(
         &request,
-        /*history*/ None,
+        LunaSampler::prepare_setup(&request),
         request
             .input
             .iter()

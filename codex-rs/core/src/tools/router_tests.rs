@@ -609,6 +609,7 @@ fn mcp_runtime(tool_info: codex_mcp::ToolInfo) -> RegisteredTool {
         exposure: runtime.exposure(),
         native_review: Default::default(),
         runtime,
+        is_trusted: false,
         model_spec: None,
     }
 }
@@ -692,7 +693,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         )
         .await?;
 
-    let response = result.into_response().item;
+    let response = result.into_response(/*file_backed_tool_audio*/ false).item;
     match response {
         ResponseItem::FunctionCallOutput {
             call_id, output, ..

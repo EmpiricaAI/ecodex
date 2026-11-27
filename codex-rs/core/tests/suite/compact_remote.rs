@@ -5,6 +5,7 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_core::RequestCountry;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -312,6 +313,7 @@ async fn remote_compact_v2_retains_metadata_from_resumed_history() -> Result<()>
 
     let builder = || test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let initial = builder()
+        .with_request_country(RequestCountry::from_iso_code("DE")?)
         .with_pre_build_hook(|home| {
             fs::write(
                 home.join("config.toml"),
@@ -334,12 +336,26 @@ async fn remote_compact_v2_retains_metadata_from_resumed_history() -> Result<()>
     let resumed = builder()
         .resume(&server, home, rollout_path.clone())
         .await?;
+    resumed
+        .codex
+        .update_thread_settings(codex_protocol::protocol::ThreadSettingsOverrides {
+            request_country: Some(RequestCountry::UNKNOWN),
+            ..Default::default()
+        })
+        .await?;
     resumed.codex.submit(Op::Compact).await?;
     wait_for_turn_complete(&resumed.codex).await;
     resumed.submit_turn("continue after compaction").await?;
     resumed.codex.shutdown_and_wait().await?;
 
     let requests = response_mock.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json().get("request_country").cloned())
+            .collect::<Vec<_>>(),
+        vec![Some(json!("DE")), Some(Value::Null), Some(Value::Null)]
+    );
     let compact_request = &requests[1];
     assert_eq!(
         compact_request.inputs_of_type("compaction_trigger").len(),
@@ -439,11 +455,7 @@ async fn remote_compact_v2_retains_only_client_developer_messages_when_enabled(
         .context("remote compaction should persist a checkpoint")?;
     let retained_client_developers = replacement_history
         .iter()
-        .filter(|item| {
-            item.metadata
-                .as_ref()
-                .is_some_and(|metadata| metadata.client_authored)
-        })
+        .filter(|item| item.is_always_retained())
         .count();
     assert_eq!(retained_client_developers, usize::from(enabled));
     Ok(())

@@ -19,6 +19,8 @@ use codex_agent_graph_store::AgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
 use codex_attachment_store::AttachmentStore;
 use codex_config::CloudConfigBundleLoader;
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
 use codex_core::CodexThread;
 pub use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
@@ -407,6 +409,7 @@ impl TestAuth {
 }
 
 pub struct TestCodexBuilder {
+    request_country: codex_protocol::RequestCountry,
     apps_tools_cache: codex_core::CodexAppsToolsCache,
     config_mutators: Vec<Box<ConfigMutator>>,
     thread_manager_configurer: Option<Box<dyn FnOnce(ThreadManager) -> ThreadManager + Send>>,
@@ -432,6 +435,12 @@ pub struct TestCodexBuilder {
 }
 
 impl TestCodexBuilder {
+    /// Set the initial country when creating a new thread.
+    pub fn with_request_country(mut self, request_country: codex_protocol::RequestCountry) -> Self {
+        self.request_country = request_country;
+        self
+    }
+
     pub fn with_apps_tools_cache(mut self, cache: codex_core::CodexAppsToolsCache) -> Self {
         self.apps_tools_cache = cache;
         self
@@ -995,6 +1004,7 @@ impl TestCodexBuilder {
                     None
                 };
                 Box::pin(thread_manager.start_thread(StartThreadOptions {
+                    request_country: self.request_country.clone(),
                     history_mode: self.history_mode,
                     client_mcp_extensions: client_mcp_extensions(),
                     environments: environment_requests,
@@ -1071,6 +1081,24 @@ impl TestCodexBuilder {
 
         Ok((config, cwd))
     }
+}
+
+pub fn configure_scenario_catalog(config: &mut Config) {
+    // Keep the fixture independent of the checkout's project configuration.
+    let stack = &config.config_layer_stack;
+    config.config_layer_stack = ConfigLayerStack::new(
+        stack
+            .all_layers_low_to_high()
+            .filter(|layer| !matches!(&layer.name, ConfigLayerSource::Project { .. }))
+            .cloned()
+            .collect(),
+        stack.requirements().clone(),
+        stack.requirements_toml().clone(),
+    )
+    .expect("fixture config layers")
+    .with_cloud_config_binding(stack.cloud_config_binding().cloned());
+    config.model_catalog = Some(bundled_models_response().expect("bundled model catalog"));
+    config.cloud_skill_enabled = false;
 }
 
 fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
@@ -1566,6 +1594,7 @@ fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
 
 pub fn test_codex() -> TestCodexBuilder {
     TestCodexBuilder {
+        request_country: Default::default(),
         apps_tools_cache: Default::default(),
         thread_manager_configurer: None,
         config_mutators: vec![Box::new(|config| {

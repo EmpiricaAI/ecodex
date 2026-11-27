@@ -1,7 +1,6 @@
-//! Self-only subscription tools over the captured reviewer catalog.
-//! Shared schemas are narrowed to channel names; replies never reveal a later live post ID.
+//! Reviewer tools that change only the caller’s live channel subscriptions.
 
-use crate::ReviewerSubscriptions;
+use codex_message_board::AgentMessageBoard;
 use codex_message_board::MAX_TOOL_ARGUMENT_KIB;
 use codex_message_board::MAX_TOOL_RESPONSE_BYTES;
 use codex_message_board::MessageBoardTool;
@@ -9,6 +8,8 @@ use codex_message_board::SubscriptionChange;
 use codex_message_board::SubscriptionRequest;
 use codex_message_board::SubscriptionState;
 use codex_message_board::SubscriptionTarget;
+use codex_protocol::AgentPath;
+use codex_protocol::ThreadId;
 use codex_tools::FunctionCallError;
 use codex_tools::JsonToolOutput;
 use codex_tools::ResponsesApiNamespace;
@@ -20,6 +21,7 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde::Deserialize;
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,14 +30,18 @@ struct Arguments {
 }
 
 struct SubscriptionTool {
-    subscriptions: Arc<ReviewerSubscriptions>,
+    board: Arc<dyn AgentMessageBoard>,
+    caller: ThreadId,
+    path: AgentPath,
     change: SubscriptionChange,
     name: ToolName,
     spec: ToolSpec,
 }
 
 pub(crate) fn tools(
-    subscriptions: &Arc<ReviewerSubscriptions>,
+    board: &Arc<dyn AgentMessageBoard>,
+    caller: ThreadId,
+    path: &AgentPath,
     namespace: Option<&str>,
     namespace_description: &str,
 ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
@@ -55,8 +61,8 @@ pub(crate) fn tools(
             .retain(|name, _| name == "channel_name");
         function.parameters.required = Some(vec!["channel_name".into()].into_boxed_slice());
         function.description = match change {
-            SubscriptionChange::Subscribe => "Subscribe yourself to an evidence channel in the captured catalog. This changes future evidence selection, without reading posts or authorizing any action.",
-            SubscriptionChange::Unsubscribe => "Unsubscribe yourself from an evidence channel in the captured catalog. Evidence already admitted to the reviewer conversation is retained.",
+            SubscriptionChange::Subscribe => "Subscribe yourself to new evidence in this channel. Search or read its earlier posts separately.",
+            SubscriptionChange::Unsubscribe => "Stop receiving new evidence from this channel. Evidence already admitted to the reviewer conversation is retained.",
         }
         .into();
         let name = ToolName::new(namespace.map(str::to_owned), function.name.clone());
@@ -69,7 +75,9 @@ pub(crate) fn tools(
             None => ToolSpec::Function(function),
         };
         Arc::new(SubscriptionTool {
-            subscriptions: Arc::clone(subscriptions),
+            board: Arc::clone(board),
+            caller,
+            path: path.clone(),
             change,
             name,
             spec,
@@ -100,36 +108,28 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SubscriptionTool {
             }
             let arguments: Arguments = serde_json::from_str(raw)
                 .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
-            let subscriptions = &self.subscriptions;
-            let channel = subscriptions
-                .view
-                .channels()
-                .iter()
-                .find(|channel| channel.channel_name == arguments.channel_name)
-                .ok_or_else(|| {
-                    FunctionCallError::RespondToModel(
-                        "channel is outside the captured catalog".into(),
-                    )
-                })?;
-            let response = serde_json::to_value(SubscriptionState {
-                channel_name: channel.channel_name.clone(),
+            // For live subscriptions the last post ID is known only after the write.
+            // Budget for a full UUID to avoid accepting a mutation we cannot acknowledge.
+            let largest_response = SubscriptionState {
+                channel_name: arguments.channel_name.clone(),
                 thread_id: None,
-                target_agent: subscriptions.path.clone(),
+                target_agent: self.path.clone(),
                 enabled: self.change == SubscriptionChange::Subscribe,
-                last_message_id: channel.last_message_id,
-            })
-            .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
-            if response.to_string().len() > call.response_byte_budget(MAX_TOOL_RESPONSE_BYTES) {
+                last_message_id: Some(Uuid::nil()),
+            };
+            if serde_json::to_vec(&largest_response)
+                .map_err(|error| FunctionCallError::Fatal(error.to_string()))?
+                .len()
+                > call.response_byte_budget(MAX_TOOL_RESPONSE_BYTES)
+            {
                 return Err(FunctionCallError::RespondToModel(
                     "subscription response exceeds the tool-output budget".into(),
                 ));
             }
-            // The ordinary backend operation owns atomic membership updates. Its live
-            // last_message_id is deliberately not returned through this captured view.
-            subscriptions
+            let state = self
                 .board
                 .set_subscription(
-                    subscriptions.caller,
+                    self.caller,
                     SubscriptionRequest {
                         target: SubscriptionTarget::Channel(arguments.channel_name),
                         target_agent: None,
@@ -138,6 +138,8 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SubscriptionTool {
                 )
                 .await
                 .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
+            let response = serde_json::to_value(state)
+                .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
             Ok(
                 Box::new(JsonToolOutput::new(response).with_external_context())
                     as Box<dyn codex_tools::ToolOutput>,

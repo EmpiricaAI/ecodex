@@ -1,5 +1,9 @@
 //! Compare model-visible prefixes from two app-server versions using the same catalog and inputs.
 //! The contract runner supplies a released CLI; ordinary runs check same-version determinism.
+//! Resume coverage checks that changed tool declarations leave the retained prefix intact.
+
+#[path = "prompt_prefix/resume_tests.rs"]
+mod resume_tests;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -106,7 +110,7 @@ async fn prompt_prefix_matches_release() -> Result<()> {
         let environment = app.auto_env_params()?;
         for (value, replacement) in [
             (environment.cwd.as_str(), "<ENVIRONMENT_CWD>"),
-            (thread.cwd.to_string_lossy().as_ref(), "<CWD>"),
+            (thread.cwd.as_str(), "<CWD>"),
             (home.path().to_string_lossy().as_ref(), "<CODEX_HOME>"),
             (thread.id.as_str(), "<THREAD_ID>"),
             (thread.session_id.as_str(), "<SESSION_ID>"),
@@ -124,7 +128,8 @@ async fn prompt_prefix_matches_release() -> Result<()> {
     if release.is_some() && prefixes[0] != prefixes[1] {
         let mut released: Value = serde_json::from_str(&prefixes[0])?;
         let current: Value = serde_json::from_str(&prefixes[1])?;
-        accept_unified_image_budget_rollout(&mut released, &current);
+        accept_spawn_agent_shortlist_rollout(&mut released, &current);
+        accept_default_tool_description_rollouts(&mut released, &current);
         prefixes[0] = serde_json::to_string_pretty(&released)?;
     }
     assert_eq!(
@@ -134,9 +139,60 @@ async fn prompt_prefix_matches_release() -> Result<()> {
     Ok(())
 }
 
-// Compare the released functions.exec description against the exact default-on image budget
-// rollout. Once the release includes it, the ordinary byte-for-byte comparison succeeds.
-fn accept_unified_image_budget_rollout(released: &mut Value, current: &Value) {
+// Accept the exact default-on shortlist expansion from #18296 while comparing with
+// releases that still advertise five models. All other description bytes stay checked.
+fn accept_spawn_agent_shortlist_rollout(released: &mut Value, current: &Value) {
+    const TOOL: &str = "/input/0/tools/2/tools/4";
+    for prefix in [&*released, current] {
+        if prefix.pointer("/input/0/role").and_then(Value::as_str) != Some("developer")
+            || prefix
+                .pointer("/input/0/tools/2/name")
+                .and_then(Value::as_str)
+                != Some("collaboration")
+            || prefix.pointer(TOOL).and_then(|tool| tool["name"].as_str()) != Some("spawn_agent")
+        {
+            return;
+        }
+    }
+    let Some(description) = released
+        .pointer_mut(TOOL)
+        .and_then(|tool| tool.get_mut("description"))
+    else {
+        return;
+    };
+    let Some(old) = description.as_str() else {
+        return;
+    };
+    const OLD_MODELS: &str = r#"Available model overrides (optional; inherited parent model is preferred):
+- `gpt-6.2-sol`: Fast, go-to model for coding and everyday work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6.2-astra`: Our most capable model for complex coding and professional work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6.1-terra`: Efficient model that excels at visual understanding and computer use. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6.1-sol`: Previous generation model for coding and everyday work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6-astra`: Previous generation model for complex coding and professional work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+"#;
+    const EXTRA_MODELS: &str = r#"- `gpt-6-sol`: Legacy model for coding and everyday work. Reasoning efforts: low, medium (default), high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-6-luna`: Fast and affordable model for easier tasks. Reasoning efforts: low, medium (default), high, xhigh, max. Service tiers: priority.
+- `gpt-5.6-sol`: Legacy model for coding and everyday work. Reasoning efforts: low (default), medium, high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-5.6-terra`: Legacy balanced model for agentic coding. Reasoning efforts: low, medium (default), high, xhigh, max, ultra. Service tiers: priority.
+- `gpt-5.6-luna`: Legacy fast model for simpler tasks. Reasoning efforts: low, medium (default), high, xhigh, max. Service tiers: priority.
+- `gpt-5.5`: Legacy coding model. Reasoning efforts: low, medium (default), high, xhigh. Service tiers: priority.
+"#;
+    if old.matches(OLD_MODELS).count() != 1 {
+        return;
+    }
+    let updated = old.replace(OLD_MODELS, &format!("{OLD_MODELS}{EXTRA_MODELS}"));
+    if current
+        .pointer(TOOL)
+        .and_then(|tool| tool["description"].as_str())
+        == Some(updated.as_str())
+    {
+        *description = Value::String(updated);
+    }
+}
+
+// Accept only the exact default-on changes to the released functions.exec description.
+// Once the release includes them, the ordinary byte-for-byte comparison succeeds.
+fn accept_default_tool_description_rollouts(released: &mut Value, current: &Value) {
     const TOOL: &str = "/input/0/tools/0/tools/0";
     for prefix in [&*released, current] {
         if prefix.pointer("/input/0/role").and_then(Value::as_str) != Some("developer")
@@ -178,12 +234,28 @@ fn accept_unified_image_budget_rollout(released: &mut Value, current: &Value) {
   // Data URL for the loaded image.
   image_url: string;
 }>; };"#;
-    if old.matches(OLD_IMAGE).count() != 1 || old.matches(OLD_VIEW_IMAGE).count() != 1 {
-        return;
+    const OLD_LOGIN: &str = "  // True runs the shell with -l/-i semantics; false disables them. Defaults to true.\n  login?: boolean;";
+    const UNIX_LOGIN: &str =
+        "  // Request login-shell startup. Omit to inherit.\n  login?: boolean;";
+    const POWERSHELL_LOGIN: &str = "  // Login-shell startup. In PowerShell, false skips profiles. Keep them enabled for profile-defined commands, even unattended. Omit to inherit.\n  login?: boolean;";
+    let current_description = current
+        .pointer(TOOL)
+        .and_then(|tool| tool["description"].as_str())
+        .unwrap_or_default();
+    let new_login = if current_description.contains(POWERSHELL_LOGIN) {
+        POWERSHELL_LOGIN
+    } else {
+        UNIX_LOGIN
+    };
+    let mut updated = old.to_owned();
+    if old.matches(OLD_IMAGE).count() == 1 && old.matches(OLD_VIEW_IMAGE).count() == 1 {
+        updated = updated
+            .replace(OLD_IMAGE, NEW_IMAGE)
+            .replace(OLD_VIEW_IMAGE, NEW_VIEW_IMAGE);
     }
-    let updated = old
-        .replace(OLD_IMAGE, NEW_IMAGE)
-        .replace(OLD_VIEW_IMAGE, NEW_VIEW_IMAGE);
+    if old.matches(OLD_LOGIN).count() == 1 {
+        updated = updated.replace(OLD_LOGIN, new_login);
+    }
     if current
         .pointer(TOOL)
         .and_then(|tool| tool["description"].as_str())

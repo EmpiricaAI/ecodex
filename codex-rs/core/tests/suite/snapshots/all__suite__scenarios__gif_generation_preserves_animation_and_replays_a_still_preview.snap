@@ -16,10 +16,11 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=cec010d63fda60d5):
-        - namespace/functions; hash=106dd1b983efd2f7
+00:additional_tools/developer (3; hash=6f583a9b0be26381):
+        - namespace/functions; hash=dcabbe5e995c7e05
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - custom/apply_patch
           - function/view_image

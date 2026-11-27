@@ -27,8 +27,8 @@ use crate::RolloutItem;
 use crate::RolloutLine;
 use crate::RolloutRecorder;
 use crate::RolloutRecorderParams;
+use crate::RolloutSnippetMatcher;
 use crate::append_rollout_item_to_path;
-use crate::first_rollout_content_match_snippet;
 use crate::read_session_meta_line;
 use crate::search_rollout_matches;
 
@@ -302,10 +302,7 @@ async fn search_rollout_matches_uses_logical_path_for_compressed_rollout() -> an
     )
     .await?;
 
-    assert_eq!(
-        matches.get(rollout_path.as_path()),
-        Some(&Some("targeted search term".to_string()))
-    );
+    assert_eq!(matches, std::collections::HashSet::from([rollout_path]));
     Ok(())
 }
 
@@ -344,7 +341,7 @@ async fn compressed_search_preserves_first_visible_snippet_and_no_match() -> any
             ("absent", None),
         ] {
             assert_eq!(
-                first_rollout_content_match_snippet(&path, query).await?,
+                RolloutSnippetMatcher::new(query).first_match(&path).await?,
                 expected.map(str::to_string),
                 "compressed={compressed}, query={query}"
             );
@@ -365,11 +362,14 @@ async fn compressed_search_only_reports_stream_errors_before_a_match() -> anyhow
     fs::write(&path, contents)?;
     compress_now(&path)?;
     assert_eq!(
-        first_rollout_content_match_snippet(&path, "needle").await?,
+        RolloutSnippetMatcher::new("needle")
+            .first_match(&path)
+            .await?,
         Some("needle before unreadable tail".to_owned())
     );
     assert_eq!(
-        first_rollout_content_match_snippet(&path, "absent")
+        RolloutSnippetMatcher::new("absent")
+            .first_match(&path)
             .await
             .unwrap_err()
             .kind(),
@@ -439,6 +439,12 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
     let fresh_id = ThreadId::from_string(&fresh_uuid.to_string())?;
     let fresh_path = rollout_path(home.path(), "2025-01-05T12-00-00", fresh_uuid);
     write_rollout(&fresh_path, fresh_id, "fresh active")?;
+    // Reading this recently modified file would advance its old access time on relatime mounts.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&fresh_path)?
+        .set_times(FileTimes::new().set_accessed(SystemTime::UNIX_EPOCH))?;
+    let fresh_accessed = fs::metadata(&fresh_path)?.accessed()?;
 
     let stale_temp = active_path.with_file_name("rollout-stale.jsonl.zst.tmp");
     fs::write(&stale_temp, "stale temp")?;
@@ -466,6 +472,7 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
     assert!(compressed_rollout_path(&archived_path).exists());
     assert!(fresh_path.exists());
     assert!(!compressed_rollout_path(&fresh_path).exists());
+    assert_eq!(fs::metadata(&fresh_path)?.accessed()?, fresh_accessed);
     assert!(!stale_temp.exists());
     assert!(fresh_temp.exists());
     let materialized_path = home.path().join("materialized.jsonl");
@@ -557,6 +564,7 @@ async fn worker_skips_unreadable_metadata_without_blocking_other_compression() -
 
     let unreadable_path = rollout_path(home.path(), "2025-01-03T12-00-01", Uuid::from_u128(21));
     fs::write(unreadable_path.as_path(), "{not json}\n")?;
+    set_old_mtime(&unreadable_path)?;
 
     worker::run(home.path().to_path_buf(), Startup).await?;
 

@@ -1815,7 +1815,60 @@ fn bundled_cleanup_hooks_are_trusted_without_saved_hashes() {
                 "{plugin_id} {event}"
             );
             assert!(discovered.handlers[0].builtin, "{plugin_id} {event}");
+            assert!(matches!(
+                discovered.handlers[0].kind,
+                ConfiguredHandlerKind::McpTool {
+                    expected_app_connector_id: None,
+                    ..
+                }
+            ));
         }
+    }
+}
+
+#[test]
+fn bundled_app_hook_trust_requires_exact_declaration() {
+    for (matcher, input, trusted) in [
+        ("^(startup|compact)$", serde_json::json!({}), true),
+        (".*", serde_json::json!({}), false),
+        (
+            "^(startup|compact)$",
+            serde_json::json!({"untrusted": true}),
+            false,
+        ),
+    ] {
+        let temp = tempdir().expect("plugin root");
+        let mut source = bundled_cleanup_source(
+            "codex-dream-memory@openai-bundled",
+            "codex_apps",
+            "SessionStart",
+        );
+        source.plugin_root = AbsolutePathBuf::try_from(temp.path()).unwrap();
+        source.hooks = serde_json::from_value(serde_json::json!({
+            "SessionStart": [{ "matcher": matcher, "hooks": [{
+                "type": "mcp_tool", "server": "codex_apps", "tool": "codex_dream_memory.get_mec", "input": input,
+            }] }],
+        })).unwrap();
+        let discovered = super::discovery::discover_handlers(
+            /*config_layer_stack*/ None,
+            vec![source],
+            Vec::new(),
+            /*bypass_hook_trust*/ false,
+            DiscoveryMode::Listing,
+        );
+        let expected = if trusted {
+            HookTrustStatus::Trusted
+        } else {
+            HookTrustStatus::Untrusted
+        };
+        assert_eq!(
+            (
+                discovered.handlers.len(),
+                discovered.hook_entries[0].trust_status,
+                discovered.hook_entries[0].builtin
+            ),
+            (usize::from(trusted), expected, trusted)
+        );
     }
 }
 
@@ -2427,6 +2480,7 @@ impl HookMcpExecutor for StaticMcpExecutor {
             self.calls.lock().expect("lock MCP calls").push(call);
             Ok(HookMcpOutput {
                 text: output,
+                structured_content: None,
                 source_tool_namespace: None,
             })
         }
@@ -2515,6 +2569,7 @@ fn executor_stop_hook_fixture() -> (
             source: HookSource::Plugin,
             display_order: 0,
             kind: ConfiguredHandlerKind::McpTool {
+                expected_app_connector_id: None,
                 server: "node_repl".to_string(),
                 tool: "turn_ended".to_string(),
                 input: serde_json::from_value(serde_json::json!({
@@ -2547,6 +2602,8 @@ fn executor_stop_hook_fixture() -> (
     };
 
     let expected_executor_call = HookMcpCall {
+        expected_app_connector_id: None,
+        skip_dormant_repl_cleanup: true,
         server: "node_repl".to_string(),
         tool: "turn_ended".to_string(),
         environment_id: Some("executor-a".to_string()),
@@ -2588,6 +2645,7 @@ async fn subagent_stop_paths_are_scoped_to_each_hook() {
         source_path: source_path.clone().into(),
         source: HookSource::User,
         kind: ConfiguredHandlerKind::McpTool {
+            expected_app_connector_id: None,
             server: "recorder".to_string(),
             tool: "capture".to_string(),
             input: serde_json::from_value(serde_json::json!({
@@ -2668,6 +2726,7 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::McpTool {
+            expected_app_connector_id: None,
             server: "security".to_string(),
             tool: "check".to_string(),
             input: Default::default(),
@@ -2682,6 +2741,8 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
         vec![
             expected_executor_call.clone(),
             HookMcpCall {
+                expected_app_connector_id: None,
+                skip_dormant_repl_cleanup: false,
                 server: "security".to_string(),
                 tool: "check".to_string(),
                 environment_id: None,
@@ -2704,6 +2765,7 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
         source: HookSource::User,
         display_order: 1,
         kind: ConfiguredHandlerKind::McpTool {
+            expected_app_connector_id: None,
             server: "security".to_string(),
             tool: "terminate".to_string(),
             input: Default::default(),
@@ -2720,6 +2782,8 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
         vec![
             expected_executor_call.clone(),
             HookMcpCall {
+                expected_app_connector_id: None,
+                skip_dormant_repl_cleanup: false,
                 server: "security".to_string(),
                 tool: "check".to_string(),
                 environment_id: None,
@@ -2728,6 +2792,8 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
                 timeout: Duration::from_secs(30),
             },
             HookMcpCall {
+                expected_app_connector_id: None,
+                skip_dormant_repl_cleanup: false,
                 server: "security".to_string(),
                 tool: "check".to_string(),
                 environment_id: None,
@@ -2736,6 +2802,8 @@ async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
                 timeout: Duration::from_secs(30),
             },
             HookMcpCall {
+                expected_app_connector_id: None,
+                skip_dormant_repl_cleanup: false,
                 server: "security".to_string(),
                 tool: "terminate".to_string(),
                 environment_id: None,
@@ -2869,6 +2937,8 @@ async fn memory_consolidation_stop_preserves_policy_and_executor_cleanup() {
             executor_stop_hook_fixture();
         request.target = StopHookTarget::MemoryConsolidation;
         let policy_call = HookMcpCall {
+            expected_app_connector_id: None,
+            skip_dormant_repl_cleanup: false,
             server: "security".to_string(),
             tool: "check".to_string(),
             environment_id: None,
@@ -2880,6 +2950,7 @@ async fn memory_consolidation_stop_preserves_policy_and_executor_cleanup() {
         handler.source_path = cwd().join("hooks.json").into();
         handler.source = source;
         handler.kind = ConfiguredHandlerKind::McpTool {
+            expected_app_connector_id: None,
             server: policy_call.server.clone(),
             tool: policy_call.tool.clone(),
             input: policy_call.input.clone(),
@@ -2916,6 +2987,7 @@ async fn executor_stop_hooks_do_not_delay_stop_completion() {
                 self.release.notified().await;
                 Ok(HookMcpOutput {
                     text: String::new(),
+                    structured_content: None,
                     source_tool_namespace: None,
                 })
             }
@@ -3035,6 +3107,8 @@ async fn mcp_tool_hooks_expand_event_input_and_apply_pre_tool_decisions() {
     assert_eq!(
         *calls.lock().expect("lock MCP calls"),
         vec![HookMcpCall {
+            expected_app_connector_id: None,
+            skip_dormant_repl_cleanup: false,
             server: "security".to_string(),
             tool: "scan".to_string(),
             environment_id: None,
@@ -3137,6 +3211,8 @@ async fn mcp_interrupt_hooks_expand_event_input_and_bound_timeout() {
     assert_eq!(
         *calls.lock().expect("lock MCP calls"),
         vec![HookMcpCall {
+            expected_app_connector_id: None,
+            skip_dormant_repl_cleanup: false,
             server: "security".to_string(),
             tool: "notify".to_string(),
             environment_id: None,

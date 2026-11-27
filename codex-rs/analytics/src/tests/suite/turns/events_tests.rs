@@ -154,6 +154,7 @@ fn turn_event_serializes_expected_shape() {
             codex_error_http_status_code: None,
             usage_limit_window_minutes: None,
             steer_count: Some(0),
+            used_dictation: None,
             total_tool_call_count: None,
             shell_command_count: None,
             file_change_count: None,
@@ -489,6 +490,7 @@ async fn turn_event_counts_completed_tool_items() {
     let mcp_tool_call_item = |status, duration_ms| ThreadItemPayload::McpToolCall {
         id: "mcp-1".to_string(),
         server: "server".to_string(),
+        environment_id: None,
         tool: "search".to_string(),
         status,
         arguments: json!({}),
@@ -790,6 +792,54 @@ async fn turn_does_not_emit_without_required_prerequisites() {
 }
 
 #[tokio::test]
+async fn turn_lifecycle_emits_dictation_from_accepted_inputs() {
+    for (inputs, expected) in [
+        (&[Some(false)][..], Some(false)),
+        (&[Some(false), None][..], None),
+        (&[None, Some(true), Some(false)][..], Some(true)),
+    ] {
+        let mut reducer = AnalyticsReducer::default();
+        let mut out = Vec::new();
+        ingest_turn_prerequisites(
+            &mut reducer,
+            &mut out,
+            /*include_initialize*/ true,
+            /*include_resolved_config*/ true,
+            /*include_started*/ true,
+            /*include_token_usage*/ false,
+        )
+        .await;
+        for &used_dictation in inputs {
+            reducer
+                .ingest(
+                    AnalyticsFact::Custom(CustomAnalyticsFact::AcceptedUserInput {
+                        turn_id: "turn-2".to_string(),
+                        used_dictation,
+                    }),
+                    &mut out,
+                )
+                .await;
+        }
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                    "thread-2",
+                    "turn-2",
+                    AppServerTurnStatus::Completed,
+                    /*codex_error_info*/ None,
+                ))),
+                &mut out,
+            )
+            .await;
+        let [event] = out.as_slice() else {
+            panic!("expected one turn event");
+        };
+        let payload = serde_json::to_value(event).expect("serialize turn event");
+        assert_eq!(payload["event_params"]["used_dictation"], json!(expected));
+    }
+}
+
+#[tokio::test]
 async fn turn_lifecycle_emits_failed_turn_event() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
@@ -973,6 +1023,7 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
 
 #[tokio::test]
 async fn critical_path_payload_preserves_capture_status_and_emits_once() {
+    use crate::IncompleteReason;
     use crate::TurnCriticalPath;
     use crate::TurnCriticalPathDurations;
     use crate::TurnProfileFact;
@@ -982,15 +1033,19 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
         AppServerTurnStatus::Completed,
         AppServerTurnStatus::Interrupted,
     ] {
-        for (critical_path, expected) in [
+        for (critical_path, expected, expected_reasons) in [
             (
                 TurnCriticalPath::Disabled,
                 json!([
                     "disabled", null, null, null, null, null, null, null, null, null
                 ]),
+                None,
             ),
             (
-                TurnCriticalPath::Incomplete,
+                TurnCriticalPath::Incomplete(vec![
+                    IncompleteReason::CodeModeUnsupported,
+                    IncompleteReason::UnattributedUserWait,
+                ]),
                 json!([
                     "incomplete",
                     null,
@@ -1003,6 +1058,7 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     null,
                     null
                 ]),
+                Some(json!(["code_mode_unsupported", "unattributed_user_wait"])),
             ),
             (
                 TurnCriticalPath::Complete(TurnCriticalPathDurations {
@@ -1018,6 +1074,7 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     unknown_ms: 4,
                 }),
                 json!(["complete", 1234, 700, 500, 200, 200, 100, 150, 80, 4]),
+                None,
             ),
             (
                 TurnCriticalPath::Complete(TurnCriticalPathDurations {
@@ -1033,6 +1090,7 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     unknown_ms: 0,
                 }),
                 json!(["complete", 1234, 1234, 1234, 0, 0, 0, 0, 0, 0]),
+                None,
             ),
         ] {
             let mut reducer = AnalyticsReducer::default();
@@ -1093,6 +1151,10 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     params["critical_path_unknown_ms"],
                 ]),
                 expected
+            );
+            assert_eq!(
+                params.get("critical_path_incomplete_reasons"),
+                expected_reasons.as_ref()
             );
             assert_eq!(
                 params.get("critical_path_auto_review_overhead_ms"),

@@ -4,7 +4,8 @@
 //! environment in which MCP servers execute. Transport startup lives in
 //! [`crate::rmcp_client`] and connection-set behavior lives in
 //! [`crate::connection_manager`]. Registry removal revokes EMA authority before
-//! the thread becomes untracked.
+//! the thread becomes untracked. Client targets resolve against the same runtime
+//! publication whose connections execute the operation.
 
 #[cfg(test)]
 #[path = "runtime/apps_tool_refresh_tests.rs"]
@@ -27,6 +28,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use anyhow::Context;
 use arc_swap::ArcSwap;
 use async_channel::Sender;
 use codex_config::types::McpServerDisabledReason;
@@ -84,6 +86,13 @@ pub enum McpStartupPolicy {
     DeferCachedStdio,
     /// Allow cached tools to satisfy startup for any eligible transport, including required servers.
     DeferCachedServers,
+}
+
+/// Startup behavior for a host-requested MCP tool call.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum McpToolStartup {
+    Wait,
+    SkipDormantReplCleanup,
 }
 
 /// A host-requested tool result and its identity in the published MCP catalog.
@@ -198,6 +207,21 @@ fn ensure_host_owned_apps_registration(
 }
 
 impl PublishedMcpRuntime {
+    fn environments_match(
+        &self,
+        selections: &[TurnEnvironmentSelection],
+        ready_environments: &HashMap<String, Arc<Environment>>,
+    ) -> bool {
+        self.config.is_some()
+            && self.environment_selections.as_ref() == selections
+            && self.ready_environments.len() == ready_environments.len()
+            && ready_environments.iter().all(|(id, environment)| {
+                self.ready_environments
+                    .get(id)
+                    .is_some_and(|published| Arc::ptr_eq(published, environment))
+            })
+    }
+
     // Shared by dirty detection and cache-key publication so their auth rules agree.
     fn auth_matches(&self, auth: Option<&CodexAuth>) -> bool {
         match (self.auth.as_ref(), auth) {
@@ -572,6 +596,7 @@ impl McpRuntime {
         Self::binding_from_published_runtime(current, &required_servers, required_plugins).await
     }
 
+    #[tracing::instrument(name = "mcp.binding.capture", skip_all, fields(cache_hit))]
     async fn binding_from_published_runtime(
         current: Arc<PublishedMcpRuntime>,
         required_servers: &[McpServerKey],
@@ -583,28 +608,33 @@ impl McpRuntime {
             .stable_catalog_revisions(required_servers, required_plugins)
             .await;
         if let Some(catalog_revisions) = &stable_catalog_revisions {
-            let cached = current
-                .cached_binding
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cached = tracing::info_span!("mcp.binding.cache_lock_wait").in_scope(|| {
+                current
+                    .cached_binding
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            });
             if let Some(cached) = cached.as_ref()
                 && &cached.catalog_revisions == catalog_revisions
                 && let Some(binding) = cached.binding.upgrade()
             {
+                tracing::Span::current().record("cache_hit", true);
                 return Some(binding);
             }
         }
 
+        // A binding built below is a miss even if a concurrent capture wins publication.
+        tracing::Span::current().record("cache_hit", false);
+        // Keep the instrumented catalog fan-out out of its callers' future layouts.
+        // The cache-hit path above does not need this allocation.
         let binding = Arc::new(
-            current
-                .connections
-                .capture_binding_with_metadata(
-                    config,
-                    current.plugins_available,
-                    required_servers,
-                    required_plugins,
-                )
-                .await,
+            Box::pin(current.connections.capture_binding_with_metadata(
+                config,
+                current.plugins_available,
+                required_servers,
+                required_plugins,
+            ))
+            .await,
         );
         if let Some(catalog_revisions) = stable_catalog_revisions
             && current
@@ -663,13 +693,13 @@ impl McpRuntime {
 
     /// Checks the current generation before retrying servers detected outside the refresh gate.
     pub async fn has_authentication_failed_servers(&self, server_names: &[McpServerKey]) -> bool {
-        self.current
+        !self
+            .current
             .load_full()
             .connections
-            .authentication_failed_servers()
+            .authentication_failed_servers(|name| server_names.contains(name))
             .await
-            .into_iter()
-            .any(|server_name| server_names.contains(&server_name))
+            .is_empty()
     }
 
     /// Waits for the selected server without capturing an execution binding.
@@ -696,6 +726,22 @@ impl McpRuntime {
         current
             .connections
             .prepare_call_for_tool(Arc::clone(config), advertised_tool)
+            .await
+    }
+
+    /// Prepares one host-owned App hook from its client's current catalog, including hidden tools.
+    /// Callable names are normalized for this call without capturing the model's global binding.
+    /// Callers must validate connector identity and current approval policy before dispatch.
+    pub async fn prepare_app_hook_call(&self, tool: &str) -> anyhow::Result<PreparedMcpCall> {
+        let current = self.current.load_full();
+        ensure_host_owned_apps_registration(&current, CODEX_APPS_MCP_SERVER_NAME)?;
+        let config = current
+            .config
+            .as_ref()
+            .context("Apps runtime is unavailable")?;
+        current
+            .connections
+            .prepare_app_hook_call(Arc::clone(config), tool)
             .await
     }
 
@@ -729,16 +775,9 @@ impl McpRuntime {
         selections: &[TurnEnvironmentSelection],
         ready_environments: &HashMap<String, Arc<Environment>>,
     ) -> bool {
-        let current = self.current.load();
-        current.config.is_some()
-            && current.environment_selections.as_ref() == selections
-            && current.ready_environments.len() == ready_environments.len()
-            && ready_environments.iter().all(|(id, environment)| {
-                current
-                    .ready_environments
-                    .get(id)
-                    .is_some_and(|published| Arc::ptr_eq(published, environment))
-            })
+        self.current
+            .load()
+            .environments_match(selections, ready_environments)
     }
 
     pub fn enable_full_access_form_input(&self) {
@@ -762,6 +801,43 @@ impl McpRuntime {
         self.latest_connections()
             .refresh_codex_apps_tools_for_discovery()
             .await
+    }
+
+    /// Capture before refreshing Core's MCP projection; retry preparation if refresh invalidates it.
+    /// Check again at dispatch so an old binding cannot bypass newer App policy.
+    pub fn capture_app_hook_admission(&self) -> impl Fn() -> anyhow::Result<()> + Send + Sync {
+        let (generation, current) = {
+            let generation = self
+                .catalog_publication
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (*generation, self.current.load_full())
+        };
+        let auth_changes = current.auth_manager.as_ref().map(|manager| {
+            let mut changes = manager.auth_change_state_receiver();
+            if !current.auth_matches(manager.auth_cached().as_ref()) {
+                changes.mark_changed();
+            }
+            changes
+        });
+        move || {
+            let publication = self
+                .catalog_publication
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _auth = auth_changes
+                .as_ref()
+                .map(tokio::sync::watch::Receiver::borrow);
+            anyhow::ensure!(
+                *publication == generation
+                    && Arc::ptr_eq(&self.current.load(), &current)
+                    && auth_changes
+                        .as_ref()
+                        .is_none_or(|changes| matches!(changes.has_changed(), Ok(false))),
+                "App hook policy changed before dispatch"
+            );
+            Ok(())
+        }
     }
 
     /// Captures the current Apps client under Core's session permit.
@@ -829,37 +905,61 @@ impl McpRuntime {
     pub async fn latest_read_resource(
         &self,
         server: &str,
+        environment_id: Option<&str>,
         params: ReadResourceRequestParams,
     ) -> anyhow::Result<ReadResourceResult> {
-        let connections = self.latest_connections();
-        let key = connections
-            .resolve_server_name(server)
+        let current = self.current.load_full();
+        let key = current
+            .config
+            .as_ref()
+            .map(|config| {
+                config
+                    .mcp_server_catalog
+                    .resolve_server_key(server, environment_id)
+            })
             .ok_or_else(|| anyhow::anyhow!("unknown MCP server '{server}'"))?;
-        connections.read_resource(key, params).await
+        current.connections.read_resource(&key, params).await
     }
 
     pub async fn latest_call_tool_without_attribution(
         &self,
         server: &str,
+        environment_id: Option<&str>,
         tool: &str,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
-        let connections = self.latest_connections();
-        let server_key =
-            connections.resolve_tool_call_server(server, tool, /*environment_id*/ None)?;
-        connections.wait_for_server_startup(server_key).await;
-        connections
+        let current = self.current.load_full();
+        let server_key = current
+            .config
+            .as_ref()
+            .map(|config| {
+                config
+                    .mcp_server_catalog
+                    .resolve_server_key(server, environment_id)
+            })
+            .ok_or_else(|| anyhow::anyhow!("unknown MCP server '{server}'"))?;
+        current.connections.validate_tool_call(&server_key, tool)?;
+        current
+            .connections
+            .wait_for_server_startup(&server_key)
+            .await;
+        current
+            .connections
             .call_tool(
-                server_key, tool, arguments, meta, /*requested_timeout*/ None,
+                &server_key,
+                tool,
+                arguments,
+                meta,
+                /*requested_timeout*/ None,
                 /*wait_for_server*/ true,
             )
             .await
     }
 
     /// Calls a tool for the host, retaining attribution while its catalogs stay unchanged.
-    /// Waiting calls capture a binding after the selected server starts; non-waiting calls
-    /// use the cached binding. Missing or changed catalogs leave the namespace unknown.
+    /// Capture a binding after the selected server starts. Missing or changed catalogs leave
+    /// the namespace unknown.
     #[allow(clippy::too_many_arguments)]
     pub async fn latest_call_tool(
         &self,
@@ -869,18 +969,30 @@ impl McpRuntime {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
         requested_timeout: Option<Duration>,
-        wait_for_server: bool,
+        startup: McpToolStartup,
     ) -> anyhow::Result<McpToolCallResult> {
         let current = self.current.load_full();
         let server_key =
             current
                 .connections
                 .resolve_tool_call_server(server, tool, environment_id)?;
-        let attribution = if wait_for_server
-            && current
-                .connections
-                .wait_for_server_startup(server_key)
-                .await
+        if startup == McpToolStartup::SkipDormantReplCleanup
+            && current.connections.is_dormant_private_stdio(server_key)
+        {
+            return Ok(McpToolCallResult {
+                result: CallToolResult {
+                    content: Vec::new(),
+                    structured_content: None,
+                    is_error: None,
+                    meta: None,
+                },
+                source_tool_namespace: None,
+            });
+        }
+        let attribution = if current
+            .connections
+            .wait_for_server_startup(server_key)
+            .await
             && let Some(revisions) = current
                 .connections
                 .stable_catalog_revisions(
@@ -914,7 +1026,7 @@ impl McpRuntime {
                 arguments,
                 meta,
                 requested_timeout,
-                wait_for_server,
+                /*wait_for_server*/ true,
             )
             .await?;
         // Host calls use live connections, unlike model calls pinned to a binding.
@@ -967,7 +1079,8 @@ impl McpRuntime {
     pub async fn connection_statuses(
         &self,
         config: &McpConfig,
-    ) -> std::collections::HashMap<String, codex_protocol::mcp::McpServerConnectionStatus> {
+    ) -> std::collections::HashMap<McpServerKey, codex_protocol::mcp::McpServerConnectionStatus>
+    {
         let current = self.current.load_full();
         let Some(published_config) = current.config.as_ref() else {
             return HashMap::new();
@@ -976,10 +1089,8 @@ impl McpRuntime {
         statuses.retain(|name, _| {
             published_config
                 .mcp_server_catalog
-                .server_by_name(name)
-                .is_some_and(|server| {
-                    config.mcp_server_catalog.server_by_name(name) == Some(server)
-                })
+                .server(name)
+                .is_some_and(|server| config.mcp_server_catalog.server(name) == Some(server))
         });
         statuses
     }
@@ -1342,6 +1453,7 @@ mod tests {
         runtime
             .latest_call_tool_without_attribution(
                 CODEX_APPS_MCP_SERVER_NAME,
+                /*environment_id*/ None,
                 "search",
                 /*arguments*/ None,
                 /*meta*/ None,

@@ -1191,7 +1191,6 @@ flag = false
 async fn managed_preferences_expand_home_directory_in_workspace_write_roots() -> anyhow::Result<()>
 {
     use base64::Engine;
-    use codex_protocol::protocol::SandboxPolicy;
 
     let Some(home) = dirs::home_dir() else {
         return Ok(());
@@ -1230,23 +1229,15 @@ writable_roots = ["~/code"]
         .await?;
 
     let expected_root = AbsolutePathBuf::from_absolute_path(home.join("code"))?;
-    match &config.legacy_sandbox_policy() {
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots,
-            network_access: true,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: false,
-        } => {
-            assert_eq!(
-                writable_roots
-                    .iter()
-                    .filter(|root| **root == expected_root)
-                    .count(),
-                1,
-            );
-        }
-        other => panic!("expected workspace-write policy, got {other:?}"),
-    }
+    assert_eq!(
+        config.permissions.permission_profile(),
+        &codex_protocol::models::PermissionProfile::workspace_write_with(
+            &[expected_root],
+            codex_protocol::permissions::NetworkSandboxPolicy::Enabled,
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ false,
+        )
+    );
 
     assert_eq!(config.permissions.active_permission_profile(), None);
     Ok(())
@@ -1889,6 +1880,8 @@ managed-standard = true
 [permissions.managed-standard]
 extends = ":workspace"
 
+[permissions.managed-standard.credentials]
+
 [permissions.managed-standard.network]
 enabled = true
 proxy_url = "http://127.0.0.1:43128"
@@ -1919,6 +1912,8 @@ enable_socks5 = false
         toml::from_str::<PermissionProfileToml>(
             r#"
 extends = ":workspace"
+
+[credentials]
 
 [filesystem]
 ":root" = "read"
@@ -2363,6 +2358,47 @@ extends = ":workspace"
         error.to_string(),
         "requirements.toml permissions profile `duplicate-profile` conflicts with a config-defined profile of the same name"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_managed_credentials_table_cannot_select_a_user_profile() -> anyhow::Result<()> {
+    let home = tempdir()?;
+    tokio::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        "[permissions.credentials]\nextends = ':workspace'",
+    )
+    .await?;
+
+    for (selected, child) in [
+        ("credentials", ""),
+        ("build", "[permissions.build]\nextends = 'credentials'"),
+    ] {
+        let requirements = format!(
+            r#"
+default_permissions = "{selected}"
+
+[allowed_permission_profiles]
+{selected} = true
+
+[permissions.credentials]
+{child}
+"#
+        );
+        let err = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(home.path().to_path_buf())
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+            )
+            .build()
+            .await
+            .expect_err("an empty managed profile must not bind to the writable user profile");
+        assert!(
+            err.to_string().contains("`permissions.credentials` in requirements.toml is reserved for shared credential policy; rename the managed profile"),
+            "{selected}: {err}"
+        );
+    }
     Ok(())
 }
 

@@ -944,6 +944,10 @@ async fn migration_rolls_back_response_and_inter_agent_user_boundaries() {
             )),
             rollout_response_item(input_response_message(
                 "developer",
+                "<catalog_apps_instructions>context only</catalog_apps_instructions>",
+            )),
+            rollout_response_item(input_response_message(
+                "developer",
                 "<permissions instructions>context only</permissions instructions>",
             )),
             rollout_response_item(input_response_message(
@@ -1734,6 +1738,76 @@ async fn migration_preserves_reverse_replay_anchor_after_pre_compaction_rollback
         })
         .expect("retained compaction");
     assert!(replacement_history.is_empty());
+}
+
+#[tokio::test]
+async fn migration_does_not_count_session_end_input_in_checkpoint_rollback() {
+    let first = input_response_message("user", "first turn");
+    let tail = input_response_message(
+        "user",
+        "<environment_context>saved speech</environment_context>",
+    );
+    let next = input_response_message("user", "next turn");
+    let mut saved_tail = codex_rollout::ResponseItemEnvelope::new(tail.clone());
+    saved_tail
+        .metadata
+        .get_or_insert_default()
+        .realtime_session_end_input = true;
+
+    let migrated = migrate_after_rollback(vec![
+        rollout_response_item(first.clone()),
+        RolloutItem::ResponseItem(saved_tail.clone()),
+        rollout_response_item(next.clone()),
+    ])
+    .await;
+    assert!(migrated.iter().any(|item| {
+        matches!(item, RolloutItem::ResponseItem(response) if response == &saved_tail)
+    }));
+
+    for (before_checkpoint, after_checkpoint, expected) in [
+        (
+            vec![rollout_response_item(first.clone())],
+            Vec::new(),
+            Vec::new(),
+        ),
+        (
+            vec![rollout_response_item(first.clone())],
+            vec![
+                started("next-turn"),
+                rollout_response_item(next.clone()),
+                completed("next-turn"),
+            ],
+            vec![first.clone(), tail],
+        ),
+    ] {
+        let mut checkpoint = compacted(Vec::new());
+        let RolloutItem::Compacted(item) = &mut checkpoint else {
+            unreachable!();
+        };
+        item.replacement_history = Some(vec![first.clone().into(), saved_tail.clone()]);
+        let migrated = migrate_after_rollback(
+            before_checkpoint
+                .into_iter()
+                .chain([checkpoint])
+                .chain(after_checkpoint)
+                .collect(),
+        )
+        .await;
+        let replacement = migrated
+            .into_iter()
+            .find_map(|item| match item {
+                RolloutItem::Compacted(item) => item.replacement_history,
+                _ => None,
+            })
+            .expect("surviving checkpoint");
+        assert_eq!(
+            replacement
+                .into_iter()
+                .map(codex_rollout::ResponseItemEnvelope::into_item)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
 }
 
 #[tokio::test]
@@ -2671,6 +2745,7 @@ async fn migration_preserves_legacy_displayed_thread_names() {
         }
         let page = store
             .list_threads(ListThreadsParams {
+                included_thread_ids: None,
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,

@@ -984,6 +984,23 @@ impl HistoryCell for MutableHistoryCell {
 }
 
 #[test]
+fn cached_mutable_history_prevents_reusing_painted_geometry() {
+    let mutable: Arc<dyn HistoryCell> = Arc::new(MutableHistoryCell {
+        version: Arc::new(AtomicUsize::new(/*v*/ 1)),
+        renders: Arc::default(),
+    });
+    let cells = vec![mutable, cell("static tail")];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells, /*width*/ 24, /*height*/ 16);
+    assert!(!view.can_scroll_without_refresh(&cells, /*live_key*/ None));
+    drop(cells);
+
+    let cells = vec![cell("static tail")];
+    render(&mut view, &cells, /*width*/ 24, /*height*/ 16);
+    assert!(view.can_scroll_without_refresh(&cells, /*live_key*/ None));
+}
+
+#[test]
 fn mutable_history_formats_once_per_frame_and_refreshes_the_next_frame() {
     let version = Arc::new(AtomicUsize::new(/*v*/ 1));
     let renders = Arc::new(AtomicUsize::new(/*v*/ 0));
@@ -1419,6 +1436,42 @@ fn assistant_message(
         )
         .with_phase(phase),
     )
+}
+
+#[test]
+fn collapsing_tool_group_refills_viewport() {
+    let mut cells = vec![
+        prompt("Check the field notes"),
+        cell("Opened the field notes\nChecking dates and locations\nChecking names and totals"),
+    ];
+    for id in 1..=6 {
+        cells.push(Arc::new(crate::history_cell::new_web_search_call(
+            format!("lookup-{id}"),
+            format!("field note {id}"),
+            codex_app_server_protocol::WebSearchAction::Other,
+        )));
+    }
+    cells.push(cell("Checking the last source"));
+    let mut view = TranscriptView::default();
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    let screen = |view: &mut TranscriptView| {
+        text(&render(view, &cells, /*width*/ 52, /*height*/ 8))
+    };
+    let initial = screen(&mut view);
+    view.handle_key(KeyCode::F(4).into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    screen(&mut view);
+    // Read down to the expanded group's details, then close it in place.
+    view.scroll(&cells, /*rows*/ 2);
+    let expanded = screen(&mut view);
+    assert!(expanded.contains("▾ 6 tool calls"), "{expanded}");
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    let collapsed = screen(&mut view);
+    assert_eq!(collapsed, initial);
+    assert!(view.is_activity_focused());
+    assert!(!view.is_following());
+    assert_eq!(screen(&mut view), collapsed);
+    insta::assert_snapshot!(collapsed);
 }
 
 #[test]

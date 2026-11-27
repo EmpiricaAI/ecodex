@@ -48,6 +48,7 @@ use self::input_boundary::terminal_input_is_readable;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::insert_history::HistoryLineWrapPolicy;
+use crate::insert_history::InsertHistoryMode;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
 use crate::terminal_hyperlinks::HyperlinkLine;
@@ -73,6 +74,9 @@ mod job_control;
 mod keyboard_modes;
 mod link_pointer;
 pub(crate) use link_pointer::PointerShape;
+#[cfg(test)]
+#[path = "tui/inline_image_history_tests.rs"]
+mod inline_image_history_tests;
 mod notification_preview;
 #[cfg(test)]
 #[path = "tui/owned_screen_tests.rs"]
@@ -108,6 +112,7 @@ pub(crate) struct InitializedTerminal {
     pub(crate) terminal: Terminal,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) terminal_app_over_ssh: bool,
+    pub(crate) herdr_kitty_graphics: Option<bool>,
     pub(crate) stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
 
@@ -513,6 +518,12 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     let backend = CrosstermBackend::new(stdout());
 
     #[cfg(unix)]
+    let probe_herdr = {
+        let info = codex_terminal_detection::terminal_info();
+        info.multiplexer.is_none() && info.term_program.as_deref() == Some("herdr")
+    };
+
+    #[cfg(unix)]
     let startup_probe = {
         use crate::terminal_probe::StartupKeyboardEnhancementProbe;
 
@@ -522,8 +533,11 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
         } else {
             StartupKeyboardEnhancementProbe::Query
         };
-        match crate::terminal_probe::startup(crate::terminal_probe::DEFAULT_TIMEOUT, keyboard_probe)
-        {
+        match crate::terminal_probe::startup(
+            crate::terminal_probe::DEFAULT_TIMEOUT,
+            keyboard_probe,
+            probe_herdr,
+        ) {
             Ok(probe) => {
                 tracing::info!(
                     duration_ms = %started_at.elapsed().as_millis(),
@@ -539,15 +553,18 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
                     duration_ms = %started_at.elapsed().as_millis(),
                     "terminal startup probes failed: {err}"
                 );
-                crate::terminal_probe::StartupProbe {
-                    cursor_position: None,
-                    default_colors: None,
-                    keyboard_enhancement_supported: None,
-                    terminal_app_over_ssh: None,
-                }
+                crate::terminal_probe::StartupProbe::default()
             }
         }
     };
+
+    #[cfg(unix)]
+    ALTERNATE_SCREEN.initial_scroll_enabled.store(
+        startup_probe
+            .alternate_scroll_enabled
+            .unwrap_or(/*default*/ false),
+        Ordering::Relaxed,
+    );
 
     #[cfg(unix)]
     crate::terminal_palette::set_default_colors_from_startup_probe(startup_probe.default_colors);
@@ -600,6 +617,10 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
             .unwrap_or(/*default*/ false),
         #[cfg(not(unix))]
         terminal_app_over_ssh: false,
+        #[cfg(unix)]
+        herdr_kitty_graphics: probe_herdr.then_some(startup_probe.kitty_graphics),
+        #[cfg(not(unix))]
+        herdr_kitty_graphics: None,
         stderr_guard,
     };
     restore_guard.active = false;
@@ -731,6 +752,7 @@ pub struct Tui {
     enhanced_keys_supported: bool,
     // Cache the startup result so later configuration loads use the same terminal policy.
     pub(crate) terminal_app_over_ssh: bool,
+    pub(crate) herdr_kitty_graphics: Option<bool>,
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
     scrollback: ScrollbackStrategy,
@@ -809,6 +831,7 @@ impl Tui {
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             terminal_app_over_ssh: false,
+            herdr_kitty_graphics: None,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             scrollback,
@@ -1068,6 +1091,12 @@ impl Tui {
         if let Err(err) = terminal_stderr::resume() {
             tracing::warn!("failed to suppress terminal stderr after external program: {err}");
         }
+        // An editor's suspend/resume cycle can change termios behind crossterm's raw-mode cache.
+        // Clear that cache so set_modes actually restores raw mode.
+        #[cfg(unix)]
+        if let Err(err) = disable_raw_mode() {
+            tracing::warn!("failed to reset raw mode after external program: {err}");
+        }
         if let Err(err) = set_modes() {
             tracing::warn!("failed to re-enable terminal modes after external program: {err}");
         }
@@ -1143,6 +1172,7 @@ impl Tui {
         Self::flush_pending_history_lines(
             &mut self.terminal,
             &mut self.pending_history_lines,
+            &mut self.retained_images,
             self.scrollback,
             screen_size,
         )?;
@@ -1325,22 +1355,38 @@ impl Tui {
     }
 
     /// Write any buffered history lines above the viewport and clear the buffer.
-    fn flush_pending_history_lines(
-        terminal: &mut Terminal,
+    fn flush_pending_history_lines<B>(
+        terminal: &mut CustomTerminal<B>,
         pending_history_lines: &mut Vec<PendingHistoryLines>,
+        retained_images: &mut Vec<crate::transcript_image::ImagePlacement>,
         scrollback: ScrollbackStrategy,
         screen_size: Size,
-    ) -> Result<()> {
-        if pending_history_lines.is_empty() {
-            return Ok(());
-        }
-
-        // A failed write can already have emitted part of this batch. Never retry that batch
-        // automatically: replaying it would duplicate the successful prefix. Remaining batches
-        // stay queued, and the caller reports the I/O error.
-        while !pending_history_lines.is_empty() {
-            let batch = pending_history_lines.remove(/*index*/ 0);
+    ) -> Result<()>
+    where
+        B: Backend<Error = io::Error> + Write,
+    {
+        while let Some(batch) = pending_history_lines.first() {
             let mode = scrollback.history_insertion_mode(batch.wrap_policy);
+            let viewport = terminal.viewport_area;
+            // Standard insertion scrolls only above a bottom-aligned viewport when there
+            // are at least two history rows (the minimum for a DEC scroll region).
+            let preserves_direct_kitty = mode == InsertHistoryMode::Standard
+                && viewport.top() > 1
+                && viewport.bottom() == screen_size.height
+                && screen_size == terminal.last_known_screen_size
+                && terminal.tmux_kitty_image_base.is_none();
+            if retained_images.iter().any(|placement| {
+                !preserves_direct_kitty
+                    || placement.image.protocol != crate::pets::ImageProtocol::Kitty
+                    || placement.area.intersection(viewport) != placement.area
+            }) {
+                // iTerm2's file-backed images and Sixel pixels can scroll with history.
+                terminal.clear_frame_images(retained_images)?;
+            }
+
+            // Once insertion starts, an I/O error can leave a prefix on screen. Dequeue
+            // this batch first so retrying the remaining batches cannot duplicate that prefix.
+            let batch = pending_history_lines.remove(/*index*/ 0);
             crate::insert_history::insert_history_hyperlink_lines_with_mode_and_wrap_policy(
                 terminal,
                 &batch.lines,
@@ -1469,6 +1515,7 @@ impl Tui {
             Self::flush_pending_history_lines(
                 terminal,
                 &mut self.pending_history_lines,
+                &mut self.retained_images,
                 self.scrollback,
                 screen_size,
             )?;
@@ -1565,6 +1612,8 @@ impl Tui {
         hud: Option<crate::bottom_pane::ShortcutHud>,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
+        // This draw uses the caller's resolved geometry directly, so its reservation is consumed.
+        self.screen_size.pending_draw_size = None;
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]
@@ -1607,6 +1656,7 @@ impl Tui {
             Self::flush_pending_history_lines(
                 terminal,
                 &mut self.pending_history_lines,
+                &mut self.retained_images,
                 self.scrollback,
                 screen_size,
             )?;

@@ -1,9 +1,17 @@
 use super::*;
+use crate::sandboxing::ExecOptions;
 use crate::tools::handlers::unified_exec::preparation::ExecCommandLifetime;
 use crate::tools::handlers::unified_exec::preparation::ParsedExecCommand;
 use crate::unified_exec::clamp_yield_time;
 use codex_exec_server::ExecOutputStream;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::RemoteNetworkProxyConfig;
+use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::sandbox::SandboxOverride;
+use codex_sandboxing::SandboxExecRequest;
+use codex_sandboxing::SandboxType;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
@@ -172,21 +180,22 @@ fn exec_env_policy_excludes_non_inheritable_and_runtime_variables() {
     );
 }
 
-#[test]
-fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
-    let cwd: codex_utils_absolute_path::AbsolutePathBuf = std::env::current_dir()
-        .expect("current dir")
-        .try_into()
-        .expect("absolute path");
+#[tokio::test]
+async fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
+    let policy_cwd = PathUri::parse("file:///workspace").expect("policy cwd");
+    let command_cwd = PathUri::parse("file:///workspace/subdir").expect("command cwd");
     let permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let managed_network = ManagedNetworkSandboxContext {
         loopback_ports: vec![43123],
         allow_local_binding: false,
+        transparent_tcp: true,
         ..Default::default()
     };
-    let mut request = ExecRequest {
+    let launch = SandboxExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-        cwd: cwd.clone().into(),
+        native_program: None,
+        cwd: command_cwd.clone(),
+        sandbox_policy_cwd: policy_cwd.clone(),
         env: HashMap::from([
             ("HOME".to_string(), "/client-home".to_string()),
             ("PATH".to_string(), "/sandbox-path".to_string()),
@@ -201,46 +210,48 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
                 "/client/custom-ca.pem".to_string(),
             ),
         ]),
-        exec_server_env_config: Some(ExecServerEnvConfig {
-            policy: codex_exec_server::ExecEnvPolicy {
-                inherit: codex_protocol::config_types::ShellEnvironmentPolicyInherit::Core,
-                ignore_default_excludes: false,
-                exclude: Vec::new(),
-                r#set: HashMap::new(),
-                include_only: Vec::new(),
-            },
-            local_policy_env: HashMap::from([
-                ("HOME".to_string(), "/client-home".to_string()),
-                ("PATH".to_string(), "/client-path".to_string()),
-                (
-                    "HTTP_PROXY".to_string(),
-                    "http://127.0.0.1:43123".to_string(),
-                ),
-                ("CODEX_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
-                (
-                    "SSL_CERT_FILE".to_string(),
-                    "/client/custom-ca.pem".to_string(),
-                ),
-            ]),
-        }),
-        exec_server_shell_snapshot: None,
         network: None,
         network_environment_id: None,
-        expiration: crate::exec::ExecExpiration::DefaultTimeout,
-        capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
-        sandbox: codex_sandboxing::SandboxType::None,
-        windows_sandbox_policy_cwd: cwd.clone().into(),
-        windows_sandbox_workspace_roots: vec![cwd],
-        windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        sandbox: SandboxType::None,
+        sandbox_override: SandboxOverride::NoOverride,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
         permission_profile: permission_profile.clone(),
-        windows_sandbox_filesystem_overrides: None,
         arg0: None,
-        exec_server_sandbox: None,
-        exec_server_enforce_managed_network: true,
-        exec_server_managed_network: Some(managed_network.clone()),
-        exec_server_network_proxy: None,
     };
-
+    let mut request = ExecRequest::from_sandbox_exec_request(
+        launch,
+        ExecOptions {
+            expiration: crate::exec::ExecExpiration::DefaultTimeout,
+            capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
+        },
+        &[],
+    )
+    .await
+    .expect("exec request");
+    request.exec_server_env_config = Some(ExecServerEnvConfig {
+        policy: codex_exec_server::ExecEnvPolicy {
+            inherit: codex_protocol::config_types::ShellEnvironmentPolicyInherit::Core,
+            ignore_default_excludes: false,
+            exclude: Vec::new(),
+            r#set: HashMap::new(),
+            include_only: Vec::new(),
+        },
+        local_policy_env: HashMap::from([
+            ("HOME".to_string(), "/client-home".to_string()),
+            ("PATH".to_string(), "/client-path".to_string()),
+            (
+                "HTTP_PROXY".to_string(),
+                "http://127.0.0.1:43123".to_string(),
+            ),
+            ("CODEX_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
+            (
+                "SSL_CERT_FILE".to_string(),
+                "/client/custom-ca.pem".to_string(),
+            ),
+        ]),
+    });
+    request.exec_server_enforce_managed_network = true;
+    request.exec_server_managed_network = Some(managed_network.clone());
     let proxy_settings_mode = codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve;
     let params_for_request = |request: &ExecRequest| {
         exec_server_params_for_request(
@@ -259,9 +270,14 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     );
     assert_ne!(params.process_id, params_for_request(&request).process_id);
     assert_eq!(params.metadata, None);
-    assert_eq!(params.cwd, request.cwd);
     assert!(params.enforce_managed_network);
-    assert_eq!(params.managed_network, Some(managed_network));
+    assert_eq!(
+        params.managed_network,
+        Some(ManagedNetworkSandboxContext {
+            transparent_tcp: false,
+            ..managed_network
+        })
+    );
     assert!(params.env_policy.is_some());
     assert_eq!(
         params.env,
@@ -285,16 +301,20 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     let mut snapshot_env = params.env;
     snapshot_env.remove("PATH");
     assert_eq!(params_for_request(&request).env, snapshot_env);
-    request.exec_server_shell_snapshot = None;
-
     request.exec_server_sandbox = Some(
         codex_exec_server::FileSystemSandboxContext::from_permission_profile(
             permission_profile,
-            request.cwd.clone(),
+            request.sandbox_policy_cwd().clone(),
         ),
     );
     let first = params_for_request(&request);
     let second = params_for_request(&request);
+    assert_eq!(first.cwd, command_cwd);
+    assert_eq!(
+        first.sandbox.as_ref().map(|sandbox| &sandbox.cwd),
+        Some(&policy_cwd)
+    );
+    assert_eq!(first.requests_transparent_tcp(), cfg!(target_os = "linux"));
     assert_eq!(
         first
             .sandbox
@@ -305,6 +325,22 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     assert!(first.process_id.as_str().starts_with("123-"));
     assert!(second.process_id.as_str().starts_with("123-"));
     assert_ne!(first.process_id, second.process_id);
+
+    request.exec_server_shell_snapshot = None;
+    request.exec_server_managed_network = None;
+    request.exec_server_network_proxy = Some(RemoteNetworkProxyLaunchConfig::new(
+        RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
+            enabled: true,
+            transparent_tcp: true,
+            ..Default::default()
+        })
+        .unwrap(),
+    ));
+    assert!(params_for_request(&request).requests_transparent_tcp());
+    request.exec_server_sandbox = None;
+    let proxy = params_for_request(&request).network_proxy.unwrap().proxy;
+    assert!(proxy.enabled);
+    assert!(!proxy.transparent_tcp);
 }
 
 #[cfg(windows)]

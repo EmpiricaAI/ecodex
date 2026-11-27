@@ -94,7 +94,7 @@ impl App {
         self.chat_widget
             .observe_config_editor_transition_key_event(key_event);
         self.transcript_view.set_keymap_bindings(&self.keymap);
-        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+        if let Some(overlay) = &mut self.overlay {
             overlay.set_keymap_bindings(&self.keymap);
         }
         if self.overlay.is_none() && self.chat_widget.handle_quick_dial_menu(key_event) {
@@ -102,15 +102,30 @@ impl App {
         }
         let contexts = self.key_chord_contexts(tui);
         let select_mode_chord = self.select_mode_owns_chord(tui, key_event);
-        if (matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(key_event))
+        if (self
+            .overlay
+            .as_ref()
+            .and_then(Overlay::input_transcript)
+            .is_some_and(|view| view.owns_interaction_key(key_event))
             || (tui.is_owned_screen()
                 && self.overlay.is_none()
                 && !self.focused_sidebar_chooser(tui)
                 && self.chat_widget.no_modal_or_popup_active()
-                && self.transcript_view.owns_interaction_key(key_event)
-                && (self.transcript_view.has_active_interaction()
-                    || self.backtrack.overlay_preview_active
-                    || crate::transcript_view::JumpTarget::from_key(key_event).is_none())))
+                && self.focused_document().map_or_else(
+                    || {
+                        self.transcript_view.owns_interaction_key(key_event)
+                            && (self.transcript_view.has_active_interaction()
+                                || self.backtrack.overlay_preview_active
+                                || crate::transcript_view::JumpTarget::from_key(key_event)
+                                    .is_none())
+                    },
+                    |document| {
+                        document.owns_interaction_key(key_event)
+                            && (!document.allows_tab_shortcut(key_event)
+                                || crate::transcript_view::JumpTarget::from_key(key_event)
+                                    .is_none())
+                    },
+                )))
             && !select_mode_chord
         {
             let close = tui.is_owned_screen()
@@ -225,7 +240,7 @@ impl App {
         }
     }
 
-    fn focused_sidebar_chooser(&self, tui: &tui::Tui) -> bool {
+    pub(super) fn focused_sidebar_chooser(&self, tui: &tui::Tui) -> bool {
         self.conversation_focus_available(tui)
             && self.chooser_focus() == Some(super::sidebar::PaneFocus::Sidebar)
             && self.sidebar_chooser_available()
@@ -274,30 +289,36 @@ impl App {
         use crate::keymap::KeymapContextSet;
 
         if let Some(overlay) = &self.overlay {
-            let context = if matches!(overlay, Overlay::Transcript(view) if view.is_search_editing())
-            {
-                KeymapContext::Editor
-            } else {
-                KeymapContext::Pager
-            };
-            let contexts =
-                if matches!(overlay, Overlay::Transcript(_)) && context == KeymapContext::Pager {
-                    KeymapContextSet::transcript()
-                } else {
-                    KeymapContextSet::new(context)
+            let contexts = match overlay.input_transcript() {
+                Some(view) if view.is_search_editing() => {
+                    KeymapContextSet::new(KeymapContext::Editor)
                 }
-                .with_voice_toggle(&self.keymap);
-            return if self.backtrack.overlay_preview_active && context == KeymapContext::Pager {
-                KeymapContextSet::browsing().with_voice_toggle(&self.keymap)
-            } else {
-                contexts
+                Some(view) if view.is_select_mode() => {
+                    KeymapContextSet::transcript().with_transcript_select()
+                }
+                _ if self.backtrack.overlay_preview_active => KeymapContextSet::browsing(),
+                Some(_) => KeymapContextSet::transcript(),
+                None => KeymapContextSet::new(KeymapContext::Pager),
             };
+            return contexts.with_voice_toggle(&self.keymap);
+        }
+        if self.chat_widget.no_modal_or_popup_active()
+            && let Some(doc) = self.focused_document()
+        {
+            return if doc.is_search_editing() {
+                KeymapContextSet::new(KeymapContext::Editor)
+            } else {
+                KeymapContextSet::transcript()
+            }
+            .with_voice_toggle(&self.keymap);
         }
         if self.transcript_view.is_search_editing() && self.chat_widget.no_modal_or_popup_active() {
             return KeymapContextSet::new(KeymapContext::Editor).with_voice_toggle(&self.keymap);
         }
         if self.transcript_view.is_select_mode() && self.chat_widget.no_modal_or_popup_active() {
-            return KeymapContextSet::transcript().with_voice_toggle(&self.keymap);
+            return KeymapContextSet::transcript()
+                .with_transcript_select()
+                .with_voice_toggle(&self.keymap);
         }
         if self.transcript_view.is_activity_focused() && self.chat_widget.no_modal_or_popup_active()
         {
@@ -476,7 +497,7 @@ impl App {
                 _ => {}
             }
         }
-        if self.chat_widget.is_external_writer_view()
+        if self.chat_widget.is_read_only_view()
             && self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
             && key_event.kind == KeyEventKind::Press
@@ -500,7 +521,8 @@ impl App {
                 self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
                 return;
             }
-            if matches!(key_event.code, KeyCode::Char('f' | 'F'))
+            if self.chat_widget.is_external_writer_view()
+                && matches!(key_event.code, KeyCode::Char('f' | 'F'))
                 && (modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT)
             {
                 self.chat_widget.fork_in_progress = true;
@@ -508,25 +530,35 @@ impl App {
                     .send(AppEvent::ForkCurrentSession { name: None });
                 return;
             }
-            if matches!(key_event.code, KeyCode::Char('r' | 'R'))
+            let recovery_key = if self.chat_widget.is_archived_view() {
+                matches!(key_event.code, KeyCode::Char('u' | 'U'))
+            } else {
+                matches!(key_event.code, KeyCode::Char('r' | 'R'))
+            };
+            if recovery_key
                 && (modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT)
                 && let Some(thread_id) = self.current_displayed_thread_id()
             {
-                let target = SessionTarget {
-                    backend_id: app_server.backend_id(),
-                    path: self
-                        .primary_session_configured
-                        .as_ref()
-                        .and_then(|session| session.rollout_path.clone()),
-                    thread_id,
-                    cwd: None,
-                    history_mode: None,
-                };
-                if let Ok(AppRunControl::Exit(_)) =
-                    self.resume_target_session(tui, app_server, target).await
+                if self.chat_widget.is_archived_view()
+                    && let Err(error) = app_server.thread_unarchive(thread_id).await
+                    && !crate::app_server_session::is_active_writer_error(&error)
                 {
-                    self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
+                    // Another client may have restored it before its notification arrived.
+                    let already_unarchived = error.chain().any(|cause| {
+                        cause.to_string().contains(&format!(
+                            "no archived rollout found for thread id {thread_id}"
+                        ))
+                    }) && app_server
+                        .thread_read(thread_id, /*include_turns*/ false)
+                        .await
+                        .is_ok();
+                    if !already_unarchived {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to unarchive thread: {error}"));
+                        return;
+                    }
                 }
+                archived_thread::resume_displayed_thread(self, tui, app_server, thread_id).await;
                 return;
             }
         }
@@ -680,18 +712,17 @@ impl App {
             return;
         }
 
-        if self.chat_widget.is_external_writer_view()
-            && self.overlay.is_none()
-            && self.chat_widget.no_modal_or_popup_active()
-        {
-            if key_event.kind == KeyEventKind::Press
-                && key_event.code == KeyCode::Left
-                && key_event.modifiers == KeyModifiers::NONE
-                && self.chat_widget.agents_navigation_key_available()
+        if self.overlay.is_none() && self.chat_widget.no_modal_or_popup_active() {
+            if self
+                .chat_widget
+                .blocked_thread_command_center_key_pressed(key_event)
             {
                 self.open_agents_overview(app_server);
+                return;
             }
-            return;
+            if self.chat_widget.is_read_only_view() {
+                return;
+            }
         }
 
         if self.should_handle_unavailable_thread_key(key_event) {
@@ -852,7 +883,7 @@ impl App {
     }
 
     pub(crate) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
-        !self.chat_widget.is_external_writer_view()
+        !self.chat_widget.is_read_only_view()
             && !self.chat_widget.has_provider_error()
             && !self.chat_widget.side_conversation_active()
             && !self.chat_widget.shortcut_overlay_visible()

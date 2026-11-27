@@ -67,7 +67,6 @@ impl SideParentStatus {
             | ServerRequest::ExecCommandApproval { .. } => Some(SideParentStatus::NeedsApproval),
             ServerRequest::DynamicToolCall { .. }
             | ServerRequest::AttestationGenerate { .. }
-            | ServerRequest::CurrentTimeRead { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
         }
     }
@@ -316,9 +315,18 @@ impl App {
     /// Zoom follows the displayed conversation even when its peer cannot be selected offline.
     pub(super) fn open_pane_focus(&self) -> Option<ThreadId> {
         let focused = self.current_displayed_thread_id()?;
+        if self.panel_focus() == Some(sidebar::PaneFocus::Sidebar)
+            && matches!(
+                self.sidebar()?.visible_content(),
+                Some(sidebar::SidebarContent::Document(_))
+            )
+        {
+            return Some(focused);
+        }
         let child = self.side_pair_key(focused)?;
-        (self.sidebar()?.visible_content() == Some(sidebar::SidebarContent::Chat(child)))
-            .then_some(focused)
+        (self.docked_agent().is_some()
+            || self.sidebar()?.visible_content() == Some(sidebar::SidebarContent::Chat(child)))
+        .then_some(focused)
     }
 
     pub(super) fn switchable_side_child(&self) -> Option<ThreadId> {
@@ -329,7 +337,11 @@ impl App {
     }
 
     pub(super) fn side_pair_key(&self, thread_id: ThreadId) -> Option<ThreadId> {
-        if self.side_threads.contains_key(&thread_id) {
+        if let Some((owner, agent)) = self.docked_agent()
+            && (thread_id == owner || thread_id == agent)
+        {
+            Some(agent)
+        } else if self.side_threads.contains_key(&thread_id) {
             Some(thread_id)
         } else {
             self.side_thread_for_parent(thread_id)
@@ -467,7 +479,13 @@ impl App {
         let Some(active_thread_id) = self.current_displayed_thread_id() else {
             return Ok(());
         };
-        let target_thread_id = if let Some(state) = self.side_threads.get(&active_thread_id) {
+        let target_thread_id = if let Some((owner, agent)) = self.docked_agent() {
+            if active_thread_id == agent {
+                owner
+            } else {
+                agent
+            }
+        } else if let Some(state) = self.side_threads.get(&active_thread_id) {
             state.parent_thread_id
         } else if let Some(side_thread_id) = self.side_thread_for_parent(active_thread_id) {
             side_thread_id
@@ -494,10 +512,18 @@ impl App {
         let Some(child) = self.current_displayed_thread_id() else {
             return Ok(());
         };
-        let Some(side) = self.side_threads.get(&child) else {
+        let parent = self
+            .side_threads
+            .get(&child)
+            .map(|side| side.parent_thread_id)
+            .or_else(|| {
+                self.docked_agent()
+                    .filter(|(_, agent)| *agent == child)
+                    .map(|(parent, _)| parent)
+            });
+        let Some(parent) = parent else {
             return Ok(());
         };
-        let parent = side.parent_thread_id;
         self.select_agent_thread(tui, app_server, parent).await?;
         if self.current_displayed_thread_id() == Some(parent) {
             self.sidebar_mut().hide();
@@ -585,6 +611,7 @@ impl App {
                         response: crate::dynamic_tools::failure_response(
                             "Source task was closed while handling a dynamic tool call",
                         ),
+                        reply: None,
                     });
                     task.abort();
                     false
@@ -594,6 +621,9 @@ impl App {
             });
         self.abort_thread_event_listener(thread_id);
         self.thread_event_channels.remove(&thread_id);
+        self.agents_overview
+            .draft_cloud_environments
+            .remove(&thread_id);
         self.pending_server_profiles.remove(&thread_id);
         self.agents_overview.activity.remove(&thread_id);
         self.sidebars.remove(&Some(thread_id));
@@ -817,6 +847,7 @@ impl App {
         let fork = app_server.sidebar_fork(
             self.local_settings.clone(),
             self.side_fork_config(),
+            Some(self.chat_widget.session_workspace_roots().to_vec()),
             parent_thread_id,
             self.selected_server_profile(parent_thread_id),
             if workspace && app_server.can_list_saved_side_chats(parent_thread_id) {
@@ -953,7 +984,7 @@ impl App {
                 if !enter {
                     self.side_companions
                         .entry(child_thread_id)
-                        .or_insert_with(|| SideCompanion::empty(forked.session.cwd.clone()));
+                        .or_insert_with(|| SideCompanion::empty(forked.session.cwd.to_path_buf()));
                 }
                 let channel = self.ensure_thread_channel(child_thread_id);
                 channel.backend_id = Some(app_server.backend_id());

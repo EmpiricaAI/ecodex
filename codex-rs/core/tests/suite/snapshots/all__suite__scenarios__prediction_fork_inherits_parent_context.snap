@@ -16,10 +16,11 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=ba36cb129fbde5df):
-        - namespace/functions; hash=106dd1b983efd2f7
+00:additional_tools/developer (2; hash=b25d763af30b93ab):
+        - namespace/functions; hash=dcabbe5e995c7e05
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
@@ -93,10 +94,11 @@ Settings:
 ## Window 2 (after request 3: input repeated)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (2; hash=ba36cb129fbde5df):
-        - namespace/functions; hash=106dd1b983efd2f7
+00:additional_tools/developer (2; hash=b25d763af30b93ab):
+        - namespace/functions; hash=dcabbe5e995c7e05
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - custom/apply_patch
           - function/view_image

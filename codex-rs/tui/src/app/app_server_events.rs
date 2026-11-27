@@ -76,19 +76,24 @@ impl App {
                     "app-server event consumer lagged; dropping ignored events"
                 );
                 self.chat_widget.finish_mcp_startup_after_lag();
-                if let Some(task) = self.agents_overview.refresh_task.take() {
-                    task.abort();
-                }
-                self.agents_overview.active_refresh = None;
-                self.agents_overview.refresh_show_more = false;
-                self.agents_overview.active_refresh_thread_ids.clear();
-                self.agents_overview.refresh_pending = false;
+                let owner = app_server_client.backend_id();
+                self.cancel_agents_overview_refresh(owner);
+                self.reset_agents_overview_discovery(owner);
+                let registry = &self.backend_registry;
+                let belongs_to_other =
+                    |id: &ThreadId| registry.owner(*id).is_some_and(|known| known != owner);
                 self.agents_overview
-                    .invalidate_discovery(app_server_client.backend_id(), /*displayed*/ true);
-                self.agents_overview.refresh_notifications.clear();
-                self.agents_overview.activity.clear();
-                self.agents_overview.last_messages.clear();
-                self.agents_overview.usage.clear();
+                    .refresh_notifications
+                    .retain(|id, _| belongs_to_other(id));
+                self.agents_overview
+                    .activity
+                    .retain(|id, _| belongs_to_other(id));
+                self.agents_overview
+                    .last_messages
+                    .retain(|id, _| belongs_to_other(id));
+                self.agents_overview
+                    .usage
+                    .retain(|id, _| belongs_to_other(id));
                 self.agents_overview.pending_usage = None;
                 self.agents_overview.usage_disabled = false;
                 self.repaint_agents_overview();
@@ -257,6 +262,7 @@ impl App {
             }
         }
 
+        self.observe_sidebar_agent_event(&notification);
         if let ServerNotification::ThreadStatusChanged(status) = &notification {
             let _ = self.dynamic_tool_status_updates.send(status.clone());
         }
@@ -367,13 +373,10 @@ impl App {
                     pending.completions.push(notification.clone());
                     return;
                 }
-                if notification.login_id.is_some() {
-                    if notification.login_id.as_ref()
-                        != self.active_mcp_login_ids.get(&notification.name)
-                    {
-                        return;
-                    }
-                    self.active_mcp_login_ids.remove(&notification.name);
+                if let Some(login_id) = &notification.login_id
+                    && self.active_mcp_login_ids.remove(login_id).is_none()
+                {
+                    return;
                 }
             }
 
@@ -401,8 +404,9 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
-                self.agents_overview
-                    .invalidate_discovery(app_server_client.backend_id(), /*displayed*/ true);
+                let owner = app_server_client.backend_id();
+                self.cancel_agents_overview_refresh(owner);
+                self.reset_agents_overview_discovery(owner);
                 self.refresh_changed_agents_overview_threads(app_server_client);
                 self.agents_overview.usage.clear();
                 self.agents_overview.pending_usage = None;
@@ -679,19 +683,25 @@ impl App {
                     app_server_client.thread_tool_transport(),
                     crate::dynamic_tools_mcp::ThreadToolTransport::Mcp(_)
                 );
+            let archiving =
+                thread_id.is_some_and(|id| self.agents_overview.pending_archives.contains_key(&id));
             if !tui_tool
                 || requires_mcp
+                || archiving
                 || codex_protocol::ThreadId::from_string(&params.thread_id)
                     .is_ok_and(|thread_id| self.abandoned_side_threads.contains(&thread_id))
             {
                 let response = crate::dynamic_tools::failure_response(if requires_mcp {
                     "TUI task tools require the approval-gated MCP server"
+                } else if archiving {
+                    "Source task is being archived"
                 } else {
                     "TUI dynamic tools require an active task in the TUI namespace"
                 });
                 self.app_event_tx.send(AppEvent::DynamicToolCallCompleted {
                     request_id: request_id.clone(),
                     response,
+                    reply: Some(buffered_request.reply),
                 });
                 return;
             }
@@ -710,6 +720,7 @@ impl App {
                     .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
                     .is_none_or(|thread_id| app_server_client.task_tools_available(thread_id));
             let params = params.clone();
+            let reply = buffered_request.reply;
             let mut thread_start_params =
                 crate::app_server_session::thread_start_params_from_config(
                     &self.config,
@@ -748,6 +759,7 @@ impl App {
                 app_event_tx.send(AppEvent::DynamicToolCallCompleted {
                     request_id,
                     response,
+                    reply: Some(reply),
                 });
             });
             self.dynamic_tool_tasks
@@ -794,7 +806,6 @@ impl App {
             &request,
             ServerRequest::DynamicToolCall { .. }
                 | ServerRequest::AttestationGenerate { .. }
-                | ServerRequest::CurrentTimeRead { .. }
                 | ServerRequest::ApplyPatchApproval { .. }
                 | ServerRequest::ExecCommandApproval { .. }
         );

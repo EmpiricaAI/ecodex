@@ -1454,6 +1454,39 @@ fn missing_symbolic_metadata_carveouts_need_direct_runtime_enforcement() {
 }
 
 #[test]
+fn compatibility_writable_roots_preserve_the_output_only_fallback() -> io::Result<()> {
+    let temp = TempDir::new()?;
+    let root = AbsolutePathBuf::from_absolute_path(canonicalize_preserving_symlinks(temp.path())?)?;
+    let cwd = root.join("workspace");
+    let output = root.join("output");
+    std::fs::create_dir_all(output.join(".git"))?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+        output.clone().into(),
+        FileSystemAccessMode::Write,
+    )]);
+
+    let profile =
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+
+    assert_eq!(
+        compatibility_writable_roots_for_permission_profile(&profile, &cwd),
+        [
+            WritableRoot {
+                root: output.clone(),
+                read_only_subpaths: vec![output.join(".git")],
+                protected_metadata_names: Vec::new(),
+            },
+            WritableRoot {
+                root: cwd.clone(),
+                read_only_subpaths: vec![cwd.join(".codex")],
+                protected_metadata_names: Vec::new(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn root_write_with_read_only_child_is_not_full_disk_write() {
     let cwd = TempDir::new().expect("tempdir");
     let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
@@ -1749,25 +1782,26 @@ fn materialize_project_roots_with_workspace_roots_expands_exact_and_glob_entries
 }
 
 #[test]
-fn with_additional_legacy_workspace_writable_roots_protects_metadata() {
+fn workspace_write_with_extra_root_protects_metadata() {
     let temp_dir = TempDir::new().expect("tempdir");
     let extra = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("extra"))
         .expect("resolve extra root");
     std::fs::create_dir_all(extra.join(".git")).expect("create .git dir");
-    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-        path: FileSystemPath::Special {
-            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
-        },
-        access: FileSystemAccessMode::Write,
-        missing_path_behavior: None,
-    }]);
-
-    let actual =
-        policy.with_additional_legacy_workspace_writable_roots(std::slice::from_ref(&extra));
+    let actual = FileSystemSandboxPolicy::workspace_write(
+        std::slice::from_ref(&extra),
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
 
     assert_eq!(
         actual,
         FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root
+                },
+                FileSystemAccessMode::Read,
+            ),
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
                     value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
@@ -1782,6 +1816,30 @@ fn with_additional_legacy_workspace_writable_roots_protects_metadata() {
                 access: FileSystemAccessMode::Write,
                 missing_path_behavior: None,
             },
+            FileSystemSandboxEntry::skip_missing_path(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".git".to_string())),
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::skip_missing_path(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".agents".to_string())),
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::skip_missing_path(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".codex".to_string())),
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::skip_missing_path(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".aws".to_string())),
+                },
+                FileSystemAccessMode::Read,
+            ),
             FileSystemSandboxEntry::skip_missing_path(
                 FileSystemPath::Path {
                     path: extra.join(".git").into()
@@ -2225,6 +2283,35 @@ fn writable_git_ignores_a_submodule_gitdir_that_names_another_checkout() {
         FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ true);
 
     assert!(!on.can_write_local_path_with_cwd(&module_gitdir.join("index.lock"), &submodule));
+}
+
+// `.git` is writable under the grant being expanded, so an agent can replace it
+// with a symlink to ANOTHER checkout's pointer file. That file's `gitdir`
+// back-pointer canonicalizes to the very file the symlink resolves to, so a check
+// that only compares canonical paths accepts it and would grant writes to the
+// other repository's git state.
+#[cfg(unix)]
+#[test]
+fn writable_git_ignores_a_dot_git_symlinked_to_another_checkouts_pointer() {
+    let temp = TempDir::new().expect("tempdir");
+    let (victim_worktree, main_git) = linked_worktree_fixture(&temp);
+    let attacker = temp.path().join("attacker");
+    std::fs::create_dir_all(&attacker).expect("create attacker checkout");
+    std::os::unix::fs::symlink(victim_worktree.join(".git"), attacker.join(".git"))
+        .expect("symlink .git to the other checkout's pointer file");
+    let on =
+        FileSystemSandboxPolicy::workspace_write_git(&[], true, true, /*writable_git*/ true);
+
+    for path in [
+        main_git.join("worktrees/wt/index.lock"),
+        main_git.join("refs/heads/topic.lock"),
+        main_git.join("objects/ab/tmp_obj_x"),
+    ] {
+        assert!(
+            !on.can_write_local_path_with_cwd(&path, &attacker),
+            "a symlinked .git must not extend the grant to {path:?}"
+        );
+    }
 }
 
 #[test]

@@ -5,6 +5,7 @@ use crate::app_event::AgentsOverviewAction;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_model_provider_info::ModelProviderInfo;
@@ -21,9 +22,28 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
     let started = app_server.start_thread(&app.config).await?;
     let thread_id = started.session.thread_id;
+    attach_thread(&mut app, thread_id);
     let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.backend_registry.connect(&app_server);
+    app.open_agents_overview(&app_server);
+    finish_overview_refresh(&mut app, &app_server, &mut rx).await;
 
+    let status_changed = |status| {
+        ServerNotification::ThreadStatusChanged(ThreadStatusChangedNotification {
+            thread_id: thread_id.to_string(),
+            status,
+        })
+    };
     for pinned in [true, false] {
+        app.refresh_agents_overview_threads(&app_server);
+        app.track_agents_overview_notification(&status_changed(ThreadStatus::Active {
+            active_flags: Vec::new(),
+        }));
+        assert!(
+            app.agents_overview
+                .refresh_notifications
+                .contains_key(&thread_id)
+        );
         Box::pin(app.handle_event(
             &mut tui,
             &mut app_server,
@@ -34,6 +54,12 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
             .agents_overview
             .pending_pin_change
             .expect("pin request started");
+        app.chat_widget.handle_key_event(KeyCode::Esc.into());
+        assert!(
+            app.chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                .is_none()
+        );
         let completed = tokio::time::timeout(std::time::Duration::from_secs(15), async {
             loop {
                 let event = rx.recv().await.expect("pin request completes");
@@ -45,12 +71,19 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
             }
         })
         .await?;
-        app.agents_overview
-            .refresh_notifications
-            .insert(thread_id, Vec::new());
         Box::pin(app.handle_event(&mut tui, &mut app_server, completed)).await?;
         assert_eq!(app.agents_overview.pending_pin_change, None);
-        assert!(app.agents_overview.refresh_notifications.is_empty());
+        assert_eq!(app.agents_overview.active_refresh, None);
+        app.track_agents_overview_notification(&status_changed(ThreadStatus::Idle));
+        app.open_agents_overview(&app_server);
+        finish_overview_refresh(&mut app, &app_server, &mut rx).await;
+        assert_eq!(
+            app.agents_overview.threads[&thread_id]
+                .as_ref()
+                .unwrap()
+                .status,
+            ThreadStatus::Idle
+        );
         let threads = list_pinned_threads(&app_server.request_handle())
             .await
             .map_err(color_eyre::eyre::Report::msg)?
@@ -178,6 +211,44 @@ async fn cloud_archive_preserves_attached_child_and_other_tasks() -> Result<()> 
     if let Some(refresh) = app.agents_overview.refresh_task.take() {
         refresh.abort();
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn pin_completion_cancels_the_originating_backends_stale_refresh() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let backend_id = BackendId::new();
+    let thread_id = ThreadId::new();
+    app.backend_registry.observe(backend_id, thread_id);
+    app.agents_overview
+        .pins_by_backend
+        .insert(backend_id, Some(Vec::new()));
+    let pin_request = Uuid::new_v4();
+    app.agents_overview.pending_pin_change = Some((pin_request, backend_id));
+    let stale_refresh = Uuid::new_v4();
+    app.agents_overview.active_refresh = Some((stale_refresh, backend_id));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::AgentsOverviewPinToggled {
+            backend_id,
+            request_id: pin_request,
+            thread_id,
+            pinned: true,
+            result: Ok(()),
+        },
+    ))
+    .await?;
+
+    assert_eq!(app.agents_overview.active_refresh, None);
+    assert_eq!(
+        app.agents_overview.pins_by_backend[&backend_id],
+        Some(vec![thread_id])
+    );
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -336,7 +407,7 @@ async fn archiving_selects_the_next_displayed_task() -> Result<()> {
                         &title,
                         ThreadStatus::Idle,
                     );
-                    thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs();
+                    thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs().into();
                     thread.model = Some(format!("model-{index}"));
                     thread.updated_at = index as i64;
                     app.agents_overview.threads.insert(id, Some(thread.clone()));
@@ -444,6 +515,82 @@ async fn archiving_selects_the_next_displayed_task() -> Result<()> {
 }
 
 #[tokio::test]
+async fn archiving_keeps_another_backends_page_in_flight() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    app.backend_registry.connect(&app_server);
+    let rollout_id = app_test_support::create_fake_rollout(
+        &app.config.codex_home,
+        "2025-01-01T12-00-00",
+        "2025-01-01T12:00:00Z",
+        "Local task",
+        Some(&app.config.model_provider_id),
+        /*git_info*/ None,
+    )
+    .map_err(color_eyre::eyre::Report::msg)?;
+    let thread_id = ThreadId::from_string(&rollout_id)?;
+    app.backend_registry
+        .observe(app_server.backend_id(), thread_id);
+    let foreign = crate::backend_id::BackendId::new();
+    let foreign_thread = ThreadId::new();
+    app.backend_registry.observe(foreign, foreign_thread);
+    let foreign_request = Uuid::new_v4();
+    app.agents_overview.active_refresh = Some((foreign_request, foreign));
+    app.agents_overview.refresh_show_more = true;
+    for id in [thread_id, foreign_thread] {
+        app.track_agents_overview_notification(&ServerNotification::ThreadStarted(
+            codex_app_server_protocol::ThreadStartedNotification {
+                thread: overview_thread(
+                    id,
+                    /*parent_thread_id*/ None,
+                    "Task",
+                    ThreadStatus::Idle,
+                ),
+            },
+        ));
+    }
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.pause_events();
+
+    Box::pin(app.run_agents_overview_action(
+        &mut tui,
+        &mut app_server,
+        thread_id,
+        AgentsOverviewAction::Archive,
+    ))
+    .await?;
+
+    let overview = &app.agents_overview;
+    assert!(overview.removed_threads.contains(&thread_id));
+    assert_eq!(overview.active_refresh, Some((foreign_request, foreign)));
+    assert!(overview.refresh_show_more);
+    assert!(!overview.refresh_notifications.contains_key(&thread_id));
+    assert!(overview.refresh_notifications.contains_key(&foreign_thread));
+    assert!(
+        overview
+            .pending_refresh_backends
+            .contains(&app_server.backend_id())
+    );
+    app.apply_agents_overview_thread_refresh(
+        &app_server,
+        foreign_request,
+        Ok(crate::app_event::AgentsOverviewThreadRefresh {
+            cleared_unread: Vec::new(),
+            threads: HashMap::new(),
+            last_messages: HashMap::new(),
+            recent_seed_complete: true,
+            discovery: None,
+            pinned_thread_ids: None,
+        }),
+    );
+    assert!(app.agents_overview.removed_threads.contains(&thread_id));
+    assert!(!app.agents_overview.threads.contains_key(&thread_id));
+    assert!(app.agents_overview.threads.contains_key(&foreign_thread));
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn external_removals_preserve_adjacent_selection() {
     for grouping in [
         AgentsOverviewGrouping::Project,
@@ -464,7 +611,7 @@ async fn external_removals_preserve_adjacent_selection() {
                         if index == 1 { "Other" } else { "Task" },
                         ThreadStatus::Idle,
                     );
-                    thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs();
+                    thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs().into();
                     thread.model = Some(format!("model-{index}"));
                     thread.updated_at = index as i64;
                     thread
@@ -557,7 +704,7 @@ async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> 
                 ThreadStatus::Idle,
             );
             thread.name = Some(format!("{} {index}", thread.preview));
-            thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs();
+            thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs().into();
             thread.model = Some(format!("model-{index}"));
             thread.updated_at = index as i64;
             thread
@@ -977,6 +1124,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
         };
         let mut tui = crate::tui::test_support::make_test_tui()?;
         tui.pause_events();
+        app.backend_registry.connect(&app_server);
         app.open_agents_overview(&app_server);
         if action == AgentsOverviewAction::Archive {
             let rollout = app_server

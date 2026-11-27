@@ -258,3 +258,7 @@ pub enum MonitorArmError {
     #[error("failed to spawn monitor subprocess: {0}")]
     SpawnFailed(String),
 }
+
+#[cfg(test)]
+#[path = "monitor_tests.rs"]
+mod tests;

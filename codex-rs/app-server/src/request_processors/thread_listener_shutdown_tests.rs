@@ -37,7 +37,6 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use test_case::test_case;
-use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 
 async fn test_processor(
@@ -81,7 +80,7 @@ async fn test_processor(
         Default::default(),
         thread_state_manager,
         thread_watch_manager,
-        Arc::new(Semaphore::new(/*permits*/ 1)),
+        Arc::new(ThreadListState::default()),
         thread_goal_processor,
         /*state_db*/ None,
         /*log_db*/ None,
@@ -91,6 +90,196 @@ async fn test_processor(
         Arc::new(SampleResponseRegistry::default()),
     );
     Ok((processor, outgoing_rx))
+}
+
+#[tokio::test]
+async fn late_command_cancellation_reaches_the_current_subscriber() -> Result<()> {
+    let server = wiremock::MockServer::start().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let thread_id = test.session_configured.thread_id;
+    let (processor, mut messages) = test_processor(&test).await?;
+    let thread_state_manager = &processor.thread_state_manager;
+    let original = ConnectionId(1);
+    let resumed = ConnectionId(2);
+    for client in [original, resumed] {
+        processor
+            .connection_initialized(client, ConnectionCapabilities::default())
+            .await;
+    }
+    processor
+        .try_attach_thread_listener(thread_id, test.codex.clone(), vec![original])
+        .await;
+    let outgoing = ThreadScopedOutgoingMessageSender::new(
+        processor.outgoing.clone(),
+        vec![original],
+        thread_id,
+    );
+    let approval = serde_json::from_value(serde_json::json!({
+        "turn_id": "finished-turn",
+        "call_id": "late-command",
+        "started_at_ms": 42,
+        "command": ["echo", "late"],
+        "parsed_cmd": [],
+        "cwd": test.config.cwd,
+    }))?;
+    apply_bespoke_event_handling(
+        codex_protocol::protocol::Event {
+            id: "finished-turn".into(),
+            msg: EventMsg::ExecApprovalRequest(approval),
+        },
+        thread_id,
+        test.codex.clone(),
+        test.thread_manager.clone(),
+        outgoing.clone(),
+        thread_state_manager.thread_state(thread_id).await,
+        processor.thread_watch_manager.clone(),
+    )
+    .await;
+
+    assert!(
+        thread_state_manager
+            .try_add_connection_to_thread(thread_id, resumed)
+            .await
+    );
+    assert!(
+        thread_state_manager
+            .unsubscribe_connection_from_thread(thread_id, original)
+            .await
+    );
+    outgoing.abort_pending_server_requests().await;
+
+    let recipient = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+        while let Some(message) = messages.recv().await {
+            if let OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(notification),
+                ..
+            } = message
+                && let ServerNotification::ItemCompleted(event) = notification.notification
+                && event.item.id() == "late-command"
+            {
+                return Ok(connection_id);
+            }
+        }
+        anyhow::bail!("missing late command completion")
+    })
+    .await??;
+    assert_eq!(recipient, resumed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn only_canonical_id_resumes_share_list_state() -> Result<()> {
+    let server = wiremock::MockServer::start().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let thread_id = test.session_configured.thread_id;
+    test.thread_store
+        .persist_thread(thread_id, PersistContext::Standard)
+        .await?;
+    let (processor, mut outgoing) = test_processor(&test).await?;
+    let connection_id = ConnectionId(1);
+    processor
+        .connection_initialized(connection_id, ConnectionCapabilities::default())
+        .await;
+    let held = processor
+        .thread_list_state_permit
+        .acquire_resume(/*shared*/ true)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?;
+    let resume_id = ConnectionRequestId {
+        connection_id,
+        request_id: RequestId::Integer(1),
+    };
+    let resume = tokio::time::timeout(
+        Duration::from_secs(10),
+        processor.thread_resume(
+            ThreadResumeTarget::Client(resume_id),
+            ThreadResumeParams {
+                thread_id: thread_id.to_string(),
+                exclude_turns: true,
+                ..Default::default()
+            },
+            /*app_server_client_name*/ None,
+            /*app_server_client_version*/ None,
+            /*client_mcp_extensions*/ Default::default(),
+        ),
+    )
+    .await
+    .context("loaded resume blocked by an unrelated held list-state permit")?
+    .map_err(|error| anyhow::anyhow!("resume failed: {}", error.message))?;
+    assert!(resume.is_none());
+    assert!(
+        std::iter::from_fn(|| outgoing.try_recv().ok()).any(|envelope| matches!(
+            envelope,
+            OutgoingEnvelope::ToConnection {
+                message: OutgoingMessage::Response(response),
+                ..
+            } if response.id == RequestId::Integer(1)
+        ))
+    );
+    // The alias uses a different request queue, so it must wait for shared resumes to finish.
+    let alias_resume = processor.thread_resume(
+        ThreadResumeTarget::Client(ConnectionRequestId {
+            connection_id,
+            request_id: RequestId::Integer(3),
+        }),
+        ThreadResumeParams {
+            thread_id: thread_id.to_string().replace('-', ""),
+            exclude_turns: true,
+            ..Default::default()
+        },
+        /*app_server_client_name*/ None,
+        /*app_server_client_version*/ None,
+        /*client_mcp_extensions*/ Default::default(),
+    );
+    tokio::pin!(alias_resume);
+    assert!(futures::poll!(&mut alias_resume).is_pending());
+    drop(held);
+    let alias_response = tokio::time::timeout(Duration::from_secs(10), alias_resume)
+        .await
+        .context("aliased resume did not finish after shared resumes")?
+        .map_err(|error| anyhow::anyhow!("aliased resume failed: {}", error.message))?;
+    assert!(alias_response.is_none());
+    assert!(
+        std::iter::from_fn(|| outgoing.try_recv().ok()).any(|envelope| matches!(
+            envelope,
+            OutgoingEnvelope::ToConnection { message: OutgoingMessage::Response(response), .. }
+                if response.id == RequestId::Integer(3)
+        ))
+    );
+
+    // A path may not exist until an earlier exclusive restore completes. Do not
+    // inspect it or return a path error ahead of that operation.
+    let writer = processor
+        .acquire_thread_list_state_permit()
+        .await
+        .expect("writer permit");
+    let path_resume = processor.thread_resume(
+        ThreadResumeTarget::Client(ConnectionRequestId {
+            connection_id,
+            request_id: RequestId::Integer(2),
+        }),
+        ThreadResumeParams {
+            thread_id: thread_id.to_string(),
+            path: Some(
+                test.config
+                    .codex_home
+                    .join("missing-rollout.jsonl")
+                    .to_path_buf(),
+            ),
+            exclude_turns: true,
+            ..Default::default()
+        },
+        /*app_server_client_name*/ None,
+        /*app_server_client_version*/ None,
+        /*client_mcp_extensions*/ Default::default(),
+    );
+    tokio::pin!(path_resume);
+    assert!(futures::poll!(&mut path_resume).is_pending());
+    drop(writer);
+    let error = path_resume.await.expect_err("missing running-thread path");
+    assert!(error.message.contains("stale path"));
+    Ok(())
 }
 
 #[test_case(true; "listener attached before shutdown")]
@@ -419,5 +608,230 @@ async fn resume_preserves_recovery_turn_before_status_publication() -> Result<()
     );
     processor.thread_state_manager.clear_all_listeners().await;
     processor.skills_watcher.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
+async fn revert_settles_interrupts_before_replacing_a_runtime() -> Result<()> {
+    use super::super::turn_processor::TurnRequestProcessor;
+    use crate::outgoing_message::OutgoingError;
+    use codex_app_server_protocol::ThreadRevertParams;
+    use codex_app_server_protocol::TurnInterruptParams;
+    use codex_core::TurnInputRequest;
+    use codex_core::TurnInputSubmission;
+    use codex_extension_api::ExtensionFuture;
+    use codex_extension_api::ExtensionRegistryBuilder;
+    use codex_extension_api::TurnLifecycleContributor;
+    use codex_extension_api::TurnStopInput;
+    use codex_protocol::protocol::MultiAgentVersion;
+    use codex_protocol::protocol::ThreadHistoryMode;
+    use tokio::sync::Notify;
+
+    #[derive(Default)]
+    struct StopGate {
+        entered: Notify,
+        release: Notify,
+    }
+
+    impl TurnLifecycleContributor for StopGate {
+        fn on_turn_stop<'a>(&'a self, _: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
+            Box::pin(async {
+                self.entered.notify_one();
+                self.release.notified().await;
+            })
+        }
+    }
+
+    let gate = Arc::new(StopGate::default());
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.turn_lifecycle_contributor(gate.clone());
+    let server = responses::start_mock_server().await;
+    responses::mount_sse_once(&server, responses::sse_completed("first")).await;
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config(|config| {
+            config.agents_enabled = false;
+            config
+                .features
+                .disable(codex_features::Feature::MultiAgentV2)
+                .unwrap();
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let thread_id = test.session_configured.thread_id;
+    let (processor, mut outgoing_rx) = test_processor(&test).await?;
+    // Keep transport flowing, retaining every reply and turn boundary in client-visible order.
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let collector = tokio::spawn(async move {
+        while let Some(envelope) = outgoing_rx.recv().await {
+            let OutgoingEnvelope::ToConnection { message, .. } = envelope else {
+                continue;
+            };
+            let relevant = match &message {
+                OutgoingMessage::Response(_) | OutgoingMessage::Error(_) => true,
+                OutgoingMessage::AppServerNotification(envelope) => matches!(
+                    envelope.notification,
+                    ServerNotification::TurnStarted(_) | ServerNotification::TurnCompleted(_)
+                ),
+                OutgoingMessage::Request(_) => false,
+            };
+            if relevant && observed_tx.send(message).is_err() {
+                break;
+            }
+        }
+    });
+    let connection_id = ConnectionId(1);
+    processor
+        .connection_initialized(connection_id, ConnectionCapabilities::default())
+        .await;
+    processor
+        .try_attach_thread_listener(thread_id, test.codex.clone(), vec![connection_id])
+        .await;
+    let turn_processor = TurnRequestProcessor::new(
+        test.thread_manager.clone(),
+        processor.outgoing.clone(),
+        AnalyticsEventsClient::disabled(),
+        processor.config.clone(),
+        processor.config_manager.clone(),
+        processor.pending_thread_unloads.clone(),
+        processor.thread_state_manager.clone(),
+        processor.thread_watch_manager.clone(),
+        processor.skills_watcher.clone(),
+        /*turn_cost_worker*/ None,
+    );
+    let request_id = |id| ConnectionRequestId {
+        connection_id,
+        request_id: RequestId::Integer(id),
+    };
+    let interrupt = async |id, turn_id: &str| {
+        turn_processor
+            .turn_interrupt(
+                &request_id(id),
+                TurnInterruptParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: turn_id.to_owned(),
+                },
+            )
+            .await
+    };
+    let start = async |thread: &Arc<CodexThread>, text: &str| -> Result<String> {
+        let TurnInputSubmission::Started { turn_id, .. } = thread
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: text.to_owned(),
+                text_elements: vec![],
+            }]))
+            .await?
+        else {
+            anyhow::bail!("expected a new turn")
+        };
+        Ok(turn_id)
+    };
+    let first = start(&test.codex, "first").await?;
+    assert_eq!(
+        test.codex.multi_agent_version(),
+        Some(MultiAgentVersion::Disabled)
+    );
+    gate.entered.notified().await;
+    assert!(matches!(observed_rx.recv().await,
+        Some(OutgoingMessage::AppServerNotification(n))
+            if matches!(&n.notification, ServerNotification::TurnStarted(started) if started.turn.id == first)
+    ));
+    assert!(
+        interrupt(/*id*/ 99, &first)
+            .await
+            .expect("interrupt accepted")
+            .is_none()
+    );
+    let state = processor.thread_state_manager.thread_state(thread_id).await;
+    assert_eq!(state.lock().await.pending_interrupts.len(), 1);
+    let mut drain = state
+        .lock()
+        .await
+        .shutdown_drain
+        .clone()
+        .expect("listener installed");
+
+    let revert = processor.thread_revert(
+        request_id(/*id*/ 100),
+        ThreadRevertParams {
+            thread_id: thread_id.to_string(),
+            before_turn_id: first.clone(),
+        },
+        /*app_server_client_name*/ None,
+        /*app_server_client_version*/ None,
+    );
+    tokio::pin!(revert);
+    // Stop polling revert at its shutdown barrier so late requests still load the retired runtime.
+    tokio::select! {
+        biased;
+        drained = drain.wait_for(|drained| *drained) => { drained?; }
+        result = &mut revert => { anyhow::bail!("revert passed the shutdown barrier: {result:?}"); }
+    }
+    assert!(Arc::ptr_eq(
+        &test.codex,
+        &test.thread_manager.get_thread(thread_id).await?
+    ));
+    let Some(OutgoingMessage::Error(error)) = observed_rx.recv().await else {
+        anyhow::bail!("expected the pending interrupt's shutdown error");
+    };
+    assert_eq!(
+        error,
+        OutgoingError {
+            id: request_id(/*id*/ 99).request_id,
+            error: internal_error("thread shut down before turn interruption completed"),
+        }
+    );
+    assert!(state.lock().await.pending_interrupts.is_empty());
+    assert_eq!(
+        interrupt(/*id*/ 101, &first).await.unwrap_err(),
+        invalid_request("thread runtime is no longer accepting interrupts")
+    );
+
+    gate.release.notify_one();
+    wait_for_event(
+        &test.codex,
+        |msg| matches!(msg, EventMsg::TurnComplete(done) if done.turn_id == first),
+    )
+    .await;
+    // Late finalization changes Core's status back from Shutdown; the listener must stay closed.
+    assert!(!test.codex.has_shutdown_status());
+    assert_eq!(
+        interrupt(/*id*/ 102, &first).await.unwrap_err(),
+        invalid_request("thread runtime is no longer accepting interrupts")
+    );
+    revert.await.expect("revert replaces the retired runtime");
+    assert!(matches!(observed_rx.recv().await,
+        Some(OutgoingMessage::Response(response)) if response.id == request_id(/*id*/ 100).request_id
+    ));
+    let replacement = test.thread_manager.get_thread(thread_id).await?;
+    assert!(!Arc::ptr_eq(&test.codex, &replacement));
+
+    responses::mount_sse_once(&server, responses::sse_completed("second")).await;
+    let second = start(&replacement, "second").await?;
+    gate.entered.notified().await;
+    assert!(matches!(observed_rx.recv().await,
+        Some(OutgoingMessage::AppServerNotification(n))
+            if matches!(&n.notification, ServerNotification::TurnStarted(started) if started.turn.id == second)
+    ));
+    assert!(
+        interrupt(/*id*/ 103, &second)
+            .await
+            .expect("replacement accepts interrupts")
+            .is_none()
+    );
+    gate.release.notify_one();
+    assert!(matches!(observed_rx.recv().await,
+        Some(OutgoingMessage::Response(response)) if response.id == request_id(/*id*/ 103).request_id
+    ));
+    assert!(matches!(observed_rx.recv().await,
+        Some(OutgoingMessage::AppServerNotification(n))
+            if matches!(&n.notification, ServerNotification::TurnCompleted(done) if done.turn.id == second)
+    ));
+    assert!(state.lock().await.pending_interrupts.is_empty());
+    replacement.shutdown_and_wait().await?;
+    processor.thread_state_manager.clear_all_listeners().await;
+    processor.skills_watcher.shutdown();
+    collector.abort();
     Ok(())
 }

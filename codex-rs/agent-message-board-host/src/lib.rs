@@ -3,6 +3,7 @@
 //! The extension owns backend construction, storage and tool registration. This adapter
 //! selects configuration and supplies host capabilities. It never starts or restores
 //! recipients during lookup. Notifications use ordinary agent-message scheduling.
+//! The opt-in local MCP mode uses the generic injection entry point for delivery.
 //! Permanent board deletion uses the thread store's existing host cleanup callback.
 
 #![deny(clippy::print_stdout, clippy::print_stderr)]
@@ -31,6 +32,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_state::SqliteConfig;
 use codex_thread_store::ThreadStoreError;
@@ -99,6 +101,11 @@ pub fn install_agent_message_board(
                     tree,
                     caller,
                     remote_notifications: false,
+                    notification_route: if mcp {
+                        NotificationRoute::Injection
+                    } else {
+                        NotificationRoute::Native
+                    },
                     connection,
                 },
             ))
@@ -124,13 +131,32 @@ pub async fn delete_agent_message_boards(
         })
 }
 
+/// Host membership and clock for a local board in this existing agent tree.
+pub fn local_board_host(manager: Weak<ThreadManager>, root: ThreadId) -> Arc<dyn MessageBoardHost> {
+    Arc::new(LocalBoardHost {
+        manager,
+        tree: root.into(),
+        caller: root,
+        remote_notifications: false,
+        notification_route: NotificationRoute::Native,
+        connection: None,
+    })
+}
+
 #[derive(Clone)]
 struct LocalBoardHost {
     manager: Weak<ThreadManager>,
     tree: SessionId,
     caller: ThreadId,
     remote_notifications: bool,
+    notification_route: NotificationRoute,
     connection: Option<Arc<LocalBoardConnection>>,
+}
+
+#[derive(Clone, Copy)]
+enum NotificationRoute {
+    Native,
+    Injection,
 }
 
 impl LocalBoardHost {
@@ -212,7 +238,7 @@ impl MessageBoardHost for LocalBoardHost {
         Box::pin(async move {
             let actor = self.actor(caller).await?;
             self.registered_path(&actor).await?;
-            actor.current_time().await
+            actor.current_time()
         })
     }
 
@@ -249,12 +275,24 @@ impl MessageBoardHost for LocalBoardHost {
                     "remote board notice exceeds the context budget".into(),
                 ));
             }
-            recipient
-                .submit(Op::InterAgentCommunication {
-                    communication,
-                    start_options: Default::default(),
-                })
-                .await?;
+            match self.notification_route {
+                NotificationRoute::Injection
+                    if recipient.multi_agent_version() == Some(MultiAgentVersion::V2)
+                        && !recipient.config().await.multi_agent_v2.disable_native_tools =>
+                {
+                    recipient
+                        .inject_response_items(vec![communication.to_model_input_item()])
+                        .await?;
+                }
+                NotificationRoute::Native | NotificationRoute::Injection => {
+                    recipient
+                        .submit(Op::InterAgentCommunication {
+                            communication,
+                            start_options: Default::default(),
+                        })
+                        .await?;
+                }
+            }
             Ok(NotificationDelivery::Accepted)
         })
     }

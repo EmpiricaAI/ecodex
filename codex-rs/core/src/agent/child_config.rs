@@ -20,7 +20,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::MultiAgentVersion;
 
-pub(crate) const MAX_SPAWN_AGENT_MODEL_OVERRIDES: usize = 5;
+pub(crate) const MAX_SPAWN_AGENT_MODEL_OVERRIDES: usize = 16;
 
 pub(crate) fn model_supports_multi_agent_backend(
     model: &ModelPreset,
@@ -167,19 +167,19 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, String> {
         .or(turn.model_info().default_reasoning_level.as_ref())
         .cloned();
     config.model_reasoning_summary = Some(turn.reasoning_summary());
-    config.developer_instructions = turn.developer_instructions.clone();
-    if turn.multi_agent_version == MultiAgentVersion::V2
-        && let Some(developer_instructions) = turn
-            .config
-            .multi_agent_v2
-            .subagent_developer_instructions
-            .clone()
-    {
-        config.developer_instructions = Some(developer_instructions);
-    }
+    config.developer_instructions = inherited_developer_instructions(turn);
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
     Ok(config)
+}
+
+pub(crate) fn inherited_developer_instructions(turn: &TurnContext) -> Option<String> {
+    if turn.multi_agent_version == MultiAgentVersion::V2
+        && let Some(instructions) = &turn.config.multi_agent_v2.subagent_developer_instructions
+    {
+        return Some(instructions.clone());
+    }
+    turn.developer_instructions.clone()
 }
 
 fn reject_full_fork_agent_type_override(agent_type: Option<&str>) -> Result<(), String> {

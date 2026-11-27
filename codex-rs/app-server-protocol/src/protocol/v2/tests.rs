@@ -324,7 +324,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             recency_at: Some(1),
             status: ThreadStatus::Idle,
             path: None,
-            cwd: absolute_path("tmp"),
+            cwd: absolute_path("tmp").into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Exec,
             can_accept_direct_input: None,
@@ -334,12 +334,13 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             git_info: None,
             name: None,
             daybreak_enabled: None,
+            daybreak_program_propagation_enrolled: None,
             turns: Vec::new(),
         },
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
-        cwd: absolute_path("tmp"),
+        cwd: absolute_path("tmp").into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AskForApproval::OnRequest,
@@ -2015,7 +2016,7 @@ fn sandbox_policy_round_trips_external_sandbox_network_access() {
         network_access: NetworkAccess::Enabled,
     };
 
-    let core_policy = v2_policy.to_core();
+    let core_policy = v2_policy.try_to_core().unwrap();
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
@@ -2033,7 +2034,7 @@ fn sandbox_policy_round_trips_read_only_network_access() {
         network_access: true,
     };
 
-    let core_policy = v2_policy.to_core();
+    let core_policy = v2_policy.try_to_core().unwrap();
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::ReadOnly {
@@ -2694,6 +2695,7 @@ fn mcp_server_elicitation_response_serializes_nullable_content() {
 fn mcp_server_status_serializes_absent_server_info_as_null() {
     let response = ListMcpServerStatusResponse {
         data: vec![McpServerStatus {
+            environment_id: None,
             tool_list_meta: None,
             server_capabilities: None,
             tools_error: None,
@@ -2715,6 +2717,7 @@ fn mcp_server_status_serializes_absent_server_info_as_null() {
         json!({
             "data": [{
                 "name": "not-ready",
+                "environmentId": null,
                 "runtimeStatus": null,
                 "pluginId": null,
                 "httpOrigin": null,
@@ -2747,6 +2750,7 @@ fn mcp_server_status_accepts_older_inventory_without_runtime_status() {
     assert_eq!(
         status,
         McpServerStatus {
+            environment_id: None,
             tool_list_meta: None,
             server_capabilities: None,
             tools_error: None,
@@ -2775,6 +2779,7 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
     let expected = McpServerStatusUpdatedNotification {
         thread_id: None,
         name: "optional_broken".to_string(),
+        environment_id: None,
         status: McpServerStartupState::Failed,
         error: Some("handshake failed".to_string()),
         failure_reason: None,
@@ -2785,6 +2790,7 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
         json!({
             "threadId": null,
             "name": "optional_broken",
+            "environmentId": null,
             "status": "failed",
             "error": "handshake failed",
             "failureReason": null,
@@ -2798,6 +2804,7 @@ fn mcp_server_status_updated_serializes_failure_reason() {
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
             thread_id: Some("thread-1".to_string()),
             name: "expired-oauth".to_string(),
+            environment_id: Some("remote".to_string()),
             status: McpServerStartupState::Failed,
             error: Some("OAuth credentials expired".to_string()),
             failure_reason: Some(McpServerStartupFailureReason::ReauthenticationRequired),
@@ -2810,6 +2817,7 @@ fn mcp_server_status_updated_serializes_failure_reason() {
             "params": {
                 "threadId": "thread-1",
                 "name": "expired-oauth",
+                "environmentId": "remote",
                 "status": "failed",
                 "error": "OAuth credentials expired",
                 "failureReason": "reauthenticationRequired",
@@ -2822,6 +2830,7 @@ fn mcp_server_status_updated_serializes_failure_reason() {
 fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
     let response = ListMcpServerStatusResponse {
         data: vec![McpServerStatus {
+            environment_id: None,
             tool_list_meta: None,
             server_capabilities: None,
             tools_error: None,
@@ -2850,6 +2859,7 @@ fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
         json!({
             "data": [{
                 "name": "initialized",
+                "environmentId": null,
                 "runtimeStatus": null,
                 "pluginId": "lookup@test",
                 "httpOrigin": null,
@@ -2880,13 +2890,13 @@ fn sandbox_policy_round_trips_workspace_write_access() {
     let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
     std::fs::create_dir(root.join(".git")).expect("git metadata");
     let v2_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![root.clone(), root.clone()],
+        writable_roots: vec![root.clone().into(), root.clone().into()],
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
 
-    let core_policy = v2_policy.to_core();
+    let core_policy = v2_policy.try_to_core().unwrap();
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
@@ -2898,7 +2908,7 @@ fn sandbox_policy_round_trips_workspace_write_access() {
     );
 
     let profile = codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy_template(
-        &v2_policy.to_core(),
+        &core_policy,
     );
     assert!(
         !profile
@@ -2925,6 +2935,43 @@ fn sandbox_policy_round_trips_workspace_write_access() {
 
     let back_to_v2 = SandboxPolicy::from(core_policy);
     assert_eq!(back_to_v2, v2_policy);
+}
+
+#[test]
+fn sandbox_policy_template_preserves_foreign_writable_roots() {
+    let root = if cfg!(windows) { "/extra" } else { r"C:\extra" };
+    let policy: SandboxPolicy = serde_json::from_value(json!({
+        "type": "workspaceWrite",
+        "writableRoots": [root],
+    }))
+    .expect("workspace-write policy");
+    let root = PathUri::try_from(LegacyAppPathString::from_string(root)).expect("foreign root");
+    let file_system = policy
+        .permission_profile_template()
+        .expect("permission profile template")
+        .file_system_sandbox_policy();
+    assert!(file_system.entries.iter().any(|entry| {
+        entry.access.can_write()
+            && matches!(&entry.path, codex_protocol::permissions::FileSystemPath::Path { path } if path == &root)
+    }));
+}
+
+#[test]
+fn sandbox_policy_rejects_home_relative_writable_roots_for_enforcement() {
+    let policy: SandboxPolicy = serde_json::from_value(json!({
+        "type": "workspaceWrite",
+        "writableRoots": ["~/extra"],
+    }))
+    .expect("workspace-write policy");
+    let home = std::env::current_dir().expect("current directory");
+    let result =
+        codex_utils_absolute_path::AbsolutePathBufGuard::with_home_directory(&home, || {
+            policy.try_to_core()
+        });
+    assert_eq!(
+        result.expect_err("writable roots must be absolute").kind(),
+        std::io::ErrorKind::InvalidInput
+    );
 }
 
 #[test]
@@ -2962,7 +3009,7 @@ fn sandbox_policy_deserializes_legacy_workspace_write_full_access_field() {
     assert_eq!(
         policy,
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![absolute_path("/workspace")],
+            writable_roots: vec![absolute_path("/workspace").into()],
             network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -3714,6 +3761,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     let mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
         id: "mcp-1".to_string(),
         server: "server".to_string(),
+        environment_id: Some("remote".to_string()),
         tool: "tool".to_string(),
         arguments: json!({"arg": "value"}),
         connector_id: Some("calendar".to_string()),
@@ -3735,6 +3783,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         ThreadItemPayload::McpToolCall {
             id: "mcp-1".to_string(),
             server: "server".to_string(),
+            environment_id: Some("remote".to_string()),
             tool: "tool".to_string(),
             status: McpToolCallStatus::InProgress,
             arguments: json!({"arg": "value"}),
@@ -3758,6 +3807,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     let completed_mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
         id: "mcp-2".to_string(),
         server: "server".to_string(),
+        environment_id: None,
         tool: "tool".to_string(),
         arguments: JsonValue::Null,
         connector_id: None,
@@ -3784,6 +3834,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         ThreadItemPayload::McpToolCall {
             id: "mcp-2".to_string(),
             server: "server".to_string(),
+            environment_id: None,
             tool: "tool".to_string(),
             status: McpToolCallStatus::Completed,
             arguments: JsonValue::Null,
@@ -3821,6 +3872,7 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
     let item = ThreadItemPayload::McpToolCall {
         id: "mcp-1".to_string(),
         server: "codex_apps".to_string(),
+        environment_id: None,
         tool: "calendar.create_event".to_string(),
         status: McpToolCallStatus::InProgress,
         arguments: json!({}),
@@ -3846,6 +3898,7 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
             "type": "mcpToolCall",
             "id": "mcp-1",
             "server": "codex_apps",
+            "environmentId": null,
             "tool": "calendar.create_event",
             "status": "inProgress",
             "arguments": {},
@@ -4943,6 +4996,22 @@ fn codex_error_info_serializes_http_status_code_in_camel_case() {
 fn core_error_info_converts_to_camel_case() {
     for (core, expected) in [
         (
+            CoreCodexErrorInfo::ApiKeySpendLimitExceeded,
+            json!("apiKeySpendLimitExceeded"),
+        ),
+        (
+            CoreCodexErrorInfo::ProjectSpendLimitExceeded,
+            json!("projectSpendLimitExceeded"),
+        ),
+        (
+            CoreCodexErrorInfo::OrganizationSpendLimitExceeded,
+            json!("organizationSpendLimitExceeded"),
+        ),
+        (
+            CoreCodexErrorInfo::UsageLimitExceeded,
+            json!("usageLimitExceeded"),
+        ),
+        (
             CoreCodexErrorInfo::PolicyCapacityUnavailable,
             json!("policyCapacityUnavailable"),
         ),
@@ -4951,7 +5020,7 @@ fn core_error_info_converts_to_camel_case() {
             CoreCodexErrorInfo::InferenceHookDenied,
             json!("inferenceHookDenied"),
         ),
-        (CoreCodexErrorInfo::BioPolicy, json!("other")),
+        (CoreCodexErrorInfo::BioPolicy, json!("bioPolicy")),
         (CoreCodexErrorInfo::InvalidPrompt, json!("other")),
         (
             CoreCodexErrorInfo::FlexUnavailable,
@@ -5131,6 +5200,11 @@ fn thread_start_params_preserve_explicit_null_service_tier() {
 
 #[test]
 fn thread_lifecycle_responses_default_missing_optional_fields() {
+    let cwd = if cfg!(windows) {
+        "/home/alice/repo"
+    } else {
+        r"D:\repo"
+    };
     let response = json!({
         "thread": {
             "id": "thread-id",
@@ -5143,7 +5217,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
             "updatedAt": 1,
             "status": { "type": "idle" },
             "path": null,
-            "cwd": absolute_path_string("tmp"),
+            "cwd": cwd,
             "cliVersion": "0.0.0",
             "source": "exec",
             "agentNickname": null,
@@ -5155,10 +5229,11 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
         "model": "gpt-5",
         "modelProvider": "openai",
         "serviceTier": null,
-        "cwd": absolute_path_string("tmp"),
+        "cwd": cwd,
         "approvalPolicy": "on-request",
         "approvalsReviewer": "user",
-        "sandbox": { "type": "dangerFullAccess" },
+        "runtimeWorkspaceRoots": [cwd],
+        "sandbox": { "type": "workspaceWrite", "writableRoots": [cwd] },
         "reasoningEffort": null
     });
 
@@ -5169,6 +5244,12 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     let fork: ThreadForkResponse =
         serde_json::from_value(response.clone()).expect("thread/fork response");
 
+    for encoded in [json!(start), json!(resume), json!(fork)] {
+        assert_eq!(encoded["thread"]["cwd"], cwd);
+        assert_eq!(encoded["cwd"], cwd);
+        assert_eq!(encoded["runtimeWorkspaceRoots"], json!([cwd]));
+        assert_eq!(encoded["sandbox"]["writableRoots"], json!([cwd]));
+    }
     assert_eq!(start.instruction_sources, Vec::<LegacyAppPathString>::new());
     assert_eq!(start.thread.parent_thread_id, None);
     assert_eq!(start.thread.recency_at, None);
@@ -5281,6 +5362,76 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     let serialized_without_override =
         serde_json::to_value(&without_override).expect("params should serialize");
     assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn model_access_programs_preserve_availability_across_wire_formats() {
+    use codex_protocol::openai_models::ModelAccessPrograms as CoreModelAccessPrograms;
+
+    for (core_availability, app_server_availability, normalized_availability) in [
+        (json!("available"), json!("available"), json!("available")),
+        (
+            json!("enrollment_required"),
+            json!("enrollmentRequired"),
+            json!("enrollmentRequired"),
+        ),
+        (
+            json!("unavailable_for_model"),
+            json!("unavailableForModel"),
+            json!("unavailableForModel"),
+        ),
+        (json!("default"), json!("default"), json!("default")),
+        (
+            json!("future_status"),
+            json!("futureStatus"),
+            json!("default"),
+        ),
+    ] {
+        let core: CoreModelAccessPrograms = serde_json::from_value(json!({
+            "cyber": ["standard", "daybreak_blue", "daybreak_red"],
+            "daybreak_availability": core_availability,
+        }))
+        .expect("catalog availability should deserialize");
+        let app_server: ModelAccessPrograms = serde_json::from_value(json!({
+            "cyber": ["standard", "daybreakBlue", "daybreakRed"],
+            "daybreakAvailability": app_server_availability,
+        }))
+        .expect("app-server availability should deserialize");
+
+        assert_eq!(ModelAccessPrograms::from(core.clone()), app_server);
+        assert_eq!(CoreModelAccessPrograms::from(app_server.clone()), core);
+        assert_eq!(
+            serde_json::to_value(app_server).expect("model access programs should serialize"),
+            json!({
+                "cyber": ["standard", "daybreakBlue", "daybreakRed"],
+                "daybreakAvailability": normalized_availability,
+            }),
+        );
+    }
+
+    let legacy_core: CoreModelAccessPrograms = serde_json::from_value(json!({
+        "cyber": ["standard", "daybreak_blue"],
+    }))
+    .expect("old catalog metadata should deserialize");
+    let legacy_app_server: ModelAccessPrograms = serde_json::from_value(json!({
+        "cyber": ["standard", "daybreakBlue"],
+    }))
+    .expect("old app-server metadata should deserialize");
+    assert_eq!(
+        ModelAccessPrograms::from(legacy_core.clone()),
+        legacy_app_server,
+    );
+    assert_eq!(
+        CoreModelAccessPrograms::from(legacy_app_server.clone()),
+        legacy_core
+    );
+    assert_eq!(
+        serde_json::to_value(legacy_app_server).expect("legacy programs should serialize"),
+        json!({
+            "cyber": ["standard", "daybreakBlue"],
+            "daybreakAvailability": "default",
+        }),
+    );
 }
 
 #[test]
@@ -5645,4 +5796,14 @@ fn feedback_paths_preserve_native_wire_spelling_before_host_validation() {
             path
         );
     }
+}
+
+#[test]
+fn an_undated_live_voice_item_preserves_its_wire_shape() {
+    let wire = serde_json::json!({
+        "id": "speech", "realtimeSessionId": "voice", "type": "transcriptSegment",
+        "role": "assistant", "text": "hello",
+    });
+    let item: ThreadRealtimeItem = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(item).unwrap(), wire);
 }

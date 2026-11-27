@@ -168,7 +168,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
 
     let mut stream = client_session
         .stream(
-            &prompt,
+            &Arc::new(prompt),
             &model_info,
             &session_telemetry,
             effort,
@@ -319,7 +319,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
 
     let mut stream = client_session
         .stream(
-            &prompt,
+            &Arc::new(prompt),
             &model_info,
             &session_telemetry,
             effort,
@@ -455,7 +455,7 @@ async fn responses_respects_model_info_overrides_from_config() {
 
     let mut stream = client_session
         .stream(
-            &prompt,
+            &Arc::new(prompt),
             &model_info,
             &session_telemetry,
             effort,
@@ -504,6 +504,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
     ]);
 
     let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
         .with_config(|config| config.analytics_enabled = Some(true))
         .build(&server)
         .await
@@ -620,7 +621,11 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
     let first_response = responses::sse(vec![
         responses::ev_response_created("resp-2"),
         responses::ev_reasoning_item("rsn-1", &["thinking"], &[]),
-        responses::ev_exec_command_call("call-1", "echo turn-metadata"),
+        responses::ev_function_call(
+            "wait-for-git",
+            "test_sync_tool",
+            r#"{"wait_for_git_enrichment":true}"#,
+        ),
         responses::ev_completed("resp-2"),
     ]);
     let follow_up_response = responses::sse(vec![

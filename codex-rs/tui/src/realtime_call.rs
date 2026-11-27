@@ -23,10 +23,12 @@ use codex_protocol::protocol::RealtimeVoice;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::ensure;
 use http::HeaderValue;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub(crate) struct CreatedCall {
     pub(crate) call_id: String,
+    pub(crate) voice_session_id: Uuid,
     pub(crate) answer_sdp: RealtimeSdp,
 }
 
@@ -34,7 +36,7 @@ pub(crate) async fn create(
     config: &Config,
     thread: &Thread,
     offer: String,
-    voice: RealtimeVoice,
+    voice: Option<RealtimeVoice>,
 ) -> Result<CreatedCall> {
     ensure!(
         config.realtime.session_type == RealtimeWsMode::Conversational,
@@ -57,6 +59,7 @@ pub(crate) async fn create(
         ClientRedirectPolicy::Reject,
     )?;
     let id = thread.id.clone();
+    let voice_session_id = Uuid::new_v4();
     let mut headers = build_realtime_thread_headers(
         thread.session_id.clone(),
         id.clone(),
@@ -64,6 +67,10 @@ pub(crate) async fn create(
     );
     headers.insert("openai-alpha", HeaderValue::from_static("quicksilver=v2"));
     headers.insert("x-session-id", HeaderValue::from_str(&id)?);
+    headers.insert(
+        "voice-session-id",
+        HeaderValue::from_str(&voice_session_id.to_string())?,
+    );
     add_originator_header(&mut headers, &originator().value);
     let session = RealtimeSessionConfig {
         instructions: prepare_realtime_backend_prompt(
@@ -76,7 +83,7 @@ pub(crate) async fn create(
             config
                 .experimental_realtime_ws_model
                 .clone()
-                .unwrap_or_else(|| "gpt-live-1-codex".to_string()),
+                .unwrap_or_else(|| "gpt-live-1.1-codex".to_string()),
         ),
         session_id: Some(id),
         event_parser: RealtimeEventParser::FramelessBidi,
@@ -93,6 +100,7 @@ pub(crate) async fn create(
     .await?;
     Ok(CreatedCall {
         call_id: call.call_id,
+        voice_session_id,
         answer_sdp: call.sdp.into(),
     })
 }

@@ -89,6 +89,7 @@ impl Config {
         // Enterprise opt-in always comes from trusted layers instead.
         for feature in [
             Feature::McpConnectionSharing,
+            Feature::McpSharedReplCwd,
             Feature::McpLazyStdioStartup,
             Feature::SecretAuthStorage,
             Feature::McpOAuthRefreshCoordination,
@@ -213,12 +214,30 @@ impl Config {
         }
         config.config_layer_stack = layers
             .with_mcp_ema_cancellation(self.config_layer_stack.mcp_ema_cancellation().clone());
+        // Startup and publication assign a revision when Guardian owns the policy.
+        if matches!(scope, RuntimeConfigRefresh::Mcp) && self.guardian_policy_revision != 0 {
+            config
+                .config_layer_stack
+                .retain_guardian_policy_from(&self.config_layer_stack);
+        }
         config.plugins = cfg.plugins;
         if enterprise_retired {
             config.disable_mcp_enterprise_auth();
         }
         config.validate_windows_mxc_requirement()?;
         Ok(config)
+    }
+
+    pub(crate) fn retain_guardian_policy_from(&mut self, current: &Self) {
+        self.config_layer_stack
+            .retain_guardian_policy_from(&current.config_layer_stack);
+        self.guardian_policy_config
+            .clone_from(&current.guardian_policy_config);
+        self.guardian_extra_policy
+            .clone_from(&current.guardian_extra_policy);
+        self.guardian_policy_revision = current.guardian_policy_revision;
+        self.requested_approvals_reviewer = current.requested_approvals_reviewer;
+        self.approvals_reviewer = current.approvals_reviewer;
     }
 
     /// Disables enterprise MCP authorization while preserving unrelated MCP servers.

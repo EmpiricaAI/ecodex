@@ -17,7 +17,7 @@ fn thread_settings_for_test(
         thread_settings: codex_app_server_protocol::ThreadSettings {
             disabled_plugin_ids: Vec::new(),
             environments: None,
-            cwd: test_path_buf("/tmp/thread-settings").abs(),
+            cwd: test_path_buf("/tmp/thread-settings").abs().into(),
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
             sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
@@ -45,8 +45,13 @@ fn thread_settings_for_test(
     }
 }
 
-fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::ThreadSessionState {
+pub(super) fn configured_thread_session(
+    thread_id: ThreadId,
+) -> crate::session_state::ThreadSessionState {
     crate::session_state::ThreadSessionState {
+        read_only_history: false,
+        thread_settings_confirmed: true,
+        primary_environment_cwd: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -60,8 +65,8 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
         approvals_reviewer: ApprovalsReviewer::User,
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
-        cwd: test_path_buf("/tmp/thread-settings").abs(),
-        runtime_workspace_roots: vec![test_path_buf("/tmp/thread-settings").abs()],
+        cwd: test_path_buf("/tmp/thread-settings").abs().into(),
+        runtime_workspace_roots: vec![test_path_buf("/tmp/thread-settings").abs().into()],
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
@@ -589,6 +594,7 @@ async fn tool_suggestion_install_url_is_validated_before_opening() {
         chat.handle_elicitation_request_now(
             codex_app_server_protocol::RequestId::Integer(9),
             codex_app_server_protocol::McpServerElicitationRequestParams {
+                environment_id: None,
                 thread_id: request_thread_id.to_string(),
                 turn_id: Some("turn-install".to_string()),
                 server_name: "connector-server".to_string(),
@@ -653,6 +659,7 @@ async fn invalid_url_elicitation_is_declined() {
     chat.handle_elicitation_request_now(
         codex_app_server_protocol::RequestId::Integer(9),
         codex_app_server_protocol::McpServerElicitationRequestParams {
+            environment_id: Some("env-a".to_string()),
             thread_id: request_thread_id.to_string(),
             turn_id: Some("turn-auth".to_string()),
             server_name: "payments".to_string(),
@@ -681,6 +688,74 @@ async fn invalid_url_elicitation_is_declined() {
 }
 
 #[tokio::test]
+async fn statusline_workspace_follows_primary_executor_and_legacy_settings() {
+    let (mut chat, _events, _ops) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(id));
+    let mut update = thread_settings_for_test("gpt-5.2", id);
+    let host = update.thread_settings.cwd.to_string();
+    let remote = r"C:\executor\checkout";
+    let primary = codex_app_server_protocol::ThreadEnvironment {
+        environment_id: "remote".into(),
+        cwd: codex_utils_path_uri::LegacyAppPathString::from_string(remote),
+        runtime_workspace_roots: Vec::new(),
+    };
+    for (environments, expected) in [
+        (Some(vec![primary]), remote),
+        (None, remote),
+        (Some(vec![]), host.as_str()),
+    ] {
+        update.thread_settings.environments = environments;
+        chat.handle_server_notification(
+            ServerNotification::ThreadSettingsUpdated(update.clone()),
+            /*replay_kind*/ None,
+        );
+        let state = serde_json::to_value(chat.statusline_state()).unwrap();
+        assert_eq!(state["thread"]["workspace"]["cwd"], expected);
+    }
+}
+
+#[tokio::test]
+async fn statusline_and_title_abbreviate_only_the_local_workspace() {
+    let (mut chat, _events, _ops) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(id));
+    let mut update = thread_settings_for_test("gpt-5.2", id);
+    let path = dirs::home_dir()
+        .unwrap()
+        .join("a-checkout-with-a-long-directory-name");
+    let raw = path.display().to_string();
+    let local = format_directory_display(&path, /*max_width*/ None);
+    for (environment_id, expected) in [
+        ("remote", raw.as_str()),
+        (codex_exec_server::LOCAL_ENVIRONMENT_ID, local.as_str()),
+    ] {
+        update.thread_settings.environments =
+            Some(vec![codex_app_server_protocol::ThreadEnvironment {
+                environment_id: environment_id.into(),
+                cwd: codex_utils_path_uri::LegacyAppPathString::from_path(&path),
+                runtime_workspace_roots: Vec::new(),
+            }]);
+        chat.handle_server_notification(
+            ServerNotification::ThreadSettingsUpdated(update.clone()),
+            /*replay_kind*/ None,
+        );
+        assert_eq!(
+            chat.status_line_value_for_item(StatusLineItem::CurrentDir)
+                .as_deref(),
+            Some(expected)
+        );
+        assert_eq!(
+            chat.terminal_title_value_for_item(TerminalTitleItem::CurrentDir, Instant::now()),
+            Some(ChatWidget::truncate_terminal_title_part(
+                expected.into(),
+                /*max_chars*/ 32
+            ))
+        );
+    }
+}
+
+#[tokio::test]
 async fn thread_settings_updated_updates_visible_state_without_transcript() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     set_chatgpt_auth(&mut chat);
@@ -688,7 +763,9 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     chat.set_feature_enabled(Feature::Apps, /*enabled*/ true);
     let thread_id = ThreadId::new();
     let mut session = configured_thread_session(thread_id);
-    session.cwd = test_path_buf("/tmp/original-workspace").abs();
+    session.cwd = test_path_buf("/tmp/original-workspace").abs().into();
+    session.runtime_workspace_roots = vec![session.cwd.clone()];
+    session.thread_settings_confirmed = false;
     chat.handle_thread_session(session);
     chat.config.permissions.approval_policy =
         Constrained::allow_only(AskForApproval::Never.to_core());
@@ -700,15 +777,32 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     });
     let _ = drain_insert_history(&mut rx);
 
+    let remote_cwd = if cfg!(windows) {
+        "/home/alice/repo"
+    } else {
+        r"D:\repo"
+    };
+    let mut notification = thread_settings_for_test("gpt-5.4", thread_id);
+    notification.thread_settings.cwd =
+        codex_utils_path_uri::LegacyAppPathString::from_string(remote_cwd);
     chat.handle_server_notification(
-        ServerNotification::ThreadSettingsUpdated(thread_settings_for_test("gpt-5.4", thread_id)),
+        ServerNotification::ThreadSettingsUpdated(notification),
         /*replay_kind*/ None,
     );
 
+    assert_eq!(chat.session_cwd().inferred_native_path_string(), remote_cwd);
+    assert_eq!(
+        chat.current_workspace_roots.as_slice(),
+        std::slice::from_ref(chat.session_cwd())
+    );
+    assert!(chat.config_ref().workspace_roots.is_empty());
     assert_ne!(chat.connector_scope_generation(), previous_generation);
     assert!(chat.connectors_for_mentions().is_none());
     assert!(chat.connectors.mention_refresh_in_flight);
     assert_eq!(chat.current_model(), "gpt-5.4");
+    let state = serde_json::to_value(chat.statusline_state()).unwrap();
+    assert_eq!(state["thread"]["approval"]["policy"], "on-request");
+    assert_eq!(state["thread"]["model"]["service_tier"], "fast");
     assert_eq!(
         chat.current_reasoning_effort(),
         Some(ReasoningEffortConfig::High)
@@ -1227,7 +1321,7 @@ async fn startup_config_warning_is_not_repeated_by_thread() {
             chat.remote_connection =
                 Some(crate::status::remote_connection::RemoteConnectionStatus {
                     address: "local".into(),
-                    version: "v0.153.0".into(),
+                    version: Some("v0.153.0".into()),
                     is_local_daemon: true,
                     is_managed_daemon: managed_daemon,
                 });

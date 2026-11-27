@@ -42,6 +42,7 @@ pub const FS_CLOSE_METHOD: &str = "fs/close";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
+pub const FS_GET_METADATA_BATCH_METHOD: &str = "fs/getMetadataBatch";
 pub const FS_WATCH_MISSING_METHOD: &str = "fs/watchMissing";
 pub const FS_MISSING_CHANGED_METHOD: &str = "fs/missingChanged";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
@@ -158,6 +159,9 @@ pub struct EnvironmentCapabilities {
     /// Whether executor proxies enforce managed review domains before ordinary allows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub network_proxy_review_domains: bool,
+    /// Whether the executor can capture TCP for a managed Linux sandbox launch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub network_proxy_transparent_tcp: bool,
     /// Whether the selected shell can mask executor environment credentials.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     credential_masking: bool,
@@ -167,6 +171,9 @@ pub struct EnvironmentCapabilities {
     /// Whether capability discovery applies the filesystem sandbox sent with each root.
     #[serde(default)]
     pub capability_discovery_sandbox: bool,
+    /// Whether this executor supports ordered per-path metadata results in one request.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fs_metadata_batch: bool,
     /// Whether missing metadata paths can be watched on this physical connection.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fs_watch_missing: bool,
@@ -273,7 +280,7 @@ impl EnvironmentInfo {
             if let Some(path) = std::env::var_os(name)
                 .filter(|path| !path.is_empty())
                 .filter(|path| cfg!(unix) || std::path::Path::new(path).is_absolute())
-                .and_then(&normalize_temp_path)
+                .and_then(normalize_temp_path)
                 && !temporary_directories.contains(&path)
             {
                 temporary_directories.push(path);
@@ -323,9 +330,11 @@ impl EnvironmentInfo {
             capabilities: EnvironmentCapabilities {
                 network_proxy_launch: true,
                 network_proxy_review_domains: true,
+                network_proxy_transparent_tcp: cfg!(target_os = "linux"),
                 credential_masking,
                 credential_masking_custom_providers: credential_masking,
                 capability_discovery_sandbox: true,
+                fs_metadata_batch: true,
                 fs_watch_missing: cfg!(target_os = "linux"),
                 capability_discovery_v2: true,
                 environment_config_read: true,
@@ -413,6 +422,18 @@ pub struct ExecParams {
     pub network_proxy: Option<RemoteNetworkProxyLaunchConfig>,
 }
 
+impl ExecParams {
+    pub fn requests_transparent_tcp(&self) -> bool {
+        self.network_proxy
+            .as_ref()
+            .is_some_and(|launch| launch.proxy.transparent_tcp)
+            || self
+                .managed_network
+                .as_ref()
+                .is_some_and(|ctx| ctx.transparent_tcp)
+    }
+}
+
 /// Executor ingress for process requests from clients that may omit the sandbox policy cwd.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -495,6 +516,24 @@ pub struct ShellSnapshotRequest {
     pub scope_id: String,
     /// Executor-native shell used to capture and restore the snapshot.
     pub shell: ShellInfo,
+}
+
+/// Optional JSON-RPC error data for a rejected `process/start`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ProcessStartErrorData {
+    SpawnNotFound,
+    SpawnPermissionDenied,
+    SpawnFailed,
+    SandboxUnavailable,
+    SandboxPreparation,
+}
+
+impl ProcessStartErrorData {
+    pub fn attach_to(self, mut error: JSONRPCErrorError) -> JSONRPCErrorError {
+        error.data = Some(serde_json::json!(self));
+        error
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -760,6 +799,21 @@ pub struct FsGetMetadataParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_symlinks: Option<bool>,
     pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsGetMetadataBatchParams {
+    pub paths: Vec<PathUri>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_symlinks: Option<bool>,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsGetMetadataBatchResponse {
+    pub results: Vec<Result<codex_file_system::FileMetadata, JSONRPCErrorError>>,
 }
 
 /// One unsandboxed metadata observation per connection. A newer id supersedes the prior watch.
@@ -1390,6 +1444,7 @@ mod tests {
             sandbox: None,
             enforce_managed_network: true,
             managed_network: Some(ManagedNetworkSandboxContext {
+                transparent_tcp: false,
                 loopback_ports: vec![43123, 48081],
                 allow_local_binding: false,
                 allow_unix_sockets: vec!["/tmp/allowed.sock".to_string()],
@@ -1522,6 +1577,7 @@ mod tests {
                 sandbox: None,
                 enforce_managed_network: true,
                 managed_network: Some(ManagedNetworkSandboxContext {
+                    transparent_tcp: false,
                     loopback_ports: vec![43123],
                     allow_local_binding: true,
                     allow_unix_sockets: Vec::new(),
@@ -1572,9 +1628,11 @@ mod tests {
             EnvironmentCapabilities {
                 network_proxy_launch: true,
                 network_proxy_review_domains: false,
+                network_proxy_transparent_tcp: false,
                 credential_masking: false,
                 credential_masking_custom_providers: false,
                 capability_discovery_sandbox: true,
+                fs_metadata_batch: false,
                 fs_watch_missing: false,
                 capability_discovery_v2: false,
                 environment_config_read: false,

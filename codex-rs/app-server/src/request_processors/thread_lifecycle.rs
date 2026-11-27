@@ -1,8 +1,10 @@
 use super::thread_processor::THREAD_ITEMS_MAX_LIMIT;
 use super::thread_processor::thread_turns_page_size;
 use super::*;
+use crate::bespoke_event_handling::complete_command_execution_item;
 use crate::extensions::send_thread_warning;
 use crate::thread_state::ListenerStateCandidate;
+use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_core::ThreadEvictionOutcome;
@@ -349,7 +351,7 @@ async fn start_listener(
         .await;
     let is_v2_child = conversation.multi_agent_version() == Some(MultiAgentVersion::V2)
         && matches!(config_snapshot.session_source, SessionSource::SubAgent(_));
-    let thread_settings_baseline = thread_settings_from_config_snapshot(&config_snapshot);
+    let thread_settings_baseline = thread_settings_from_config_snapshot(&config_snapshot).ok();
     let thread_state = Arc::clone(listener_state.state());
     let (mut listener_command_rx, listener_generation, mut unloading_state, attached) = {
         let (created, connection_ids, raw_events_enabled) = match &startup {
@@ -554,7 +556,7 @@ async fn start_listener(
                         let mut thread_state = thread_state.lock().await;
                         thread_state.track_current_turn_event(&event.id, &event.msg);
                         let terminal = matches!(event.msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
-                            .then(|| thread_state.turn_summary.clone());
+                            .then(|| thread_state.turn_summaries.get(&event.id).cloned().unwrap_or_default());
                         (thread_state.experimental_raw_events, terminal)
                     };
                     if matches!(
@@ -581,7 +583,7 @@ async fn start_listener(
                         ).await
                     {
                         super::thread_read_state::notify(
-                            &db, &thread_state_manager,
+                            &db,
                             &outgoing_for_task, conversation_id,
                         ).await;
                     }
@@ -754,6 +756,25 @@ async fn start_listener(
         drop(turn_cost_worker);
 
         if shutdown_complete {
+            // Close registration and take the queue under the same lock used by turn/interrupt.
+            // Detached finalizers can publish their terminal events after this listener retires.
+            let pending_interrupts = {
+                let mut state = thread_state.lock().await;
+                if state.listener_generation == listener_generation {
+                    state.listener_shutdown = true;
+                    std::mem::take(&mut state.pending_interrupts)
+                } else {
+                    Vec::new()
+                }
+            };
+            for (_, request_id) in pending_interrupts {
+                outgoing_for_task
+                    .send_error(
+                        request_id,
+                        internal_error("thread shut down before turn interruption completed"),
+                    )
+                    .await;
+            }
             drained_tx.send_replace(true);
             let relay_command = |command| {
                 handle_thread_listener_command(
@@ -999,6 +1020,31 @@ pub(super) async fn handle_thread_listener_command(
         ThreadListenerCommand::EmitThreadGoalSnapshot { state_db } => {
             send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
         }
+        ThreadListenerCommand::CompleteLateCommandApproval {
+            turn_id,
+            item_id,
+            completion_item,
+        } => {
+            let subscribers = thread_state_manager
+                .subscribed_connection_ids(conversation_id)
+                .await;
+            let outgoing = ThreadScopedOutgoingMessageSender::new(
+                Arc::clone(outgoing),
+                subscribers,
+                conversation_id,
+            );
+            complete_command_execution_item(
+                &conversation_id,
+                turn_id,
+                item_id,
+                *completion_item,
+                CommandExecutionStatus::Declined,
+                /*completed_at_ms*/ None,
+                &outgoing,
+                thread_state,
+            )
+            .await;
+        }
         ThreadListenerCommand::ResolveServerRequest {
             request_id,
             completion_tx,
@@ -1212,7 +1258,13 @@ pub(super) async fn handle_pending_thread_resume_request(
 
     let config_snapshot = pending.config_snapshot;
     let sandbox = config_snapshot.sandbox_policy().into();
-    let cwd = config_snapshot.cwd().clone();
+    let cwd = match thread_cwd_for_api(config_snapshot.cwd()) {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            outgoing.send_error(request_id, error).await;
+            return;
+        }
+    };
     let ThreadConfigSnapshot {
         model,
         disabled_plugin_ids,
@@ -1240,7 +1292,9 @@ pub(super) async fn handle_pending_thread_resume_request(
         model_provider: model_provider_id,
         service_tier,
         cwd,
-        runtime_workspace_roots: workspace_roots,
+        runtime_workspace_roots: codex_utils_path_uri::LegacyAppPathString::from_abs_paths(
+            &workspace_roots,
+        ),
         instruction_sources,
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),

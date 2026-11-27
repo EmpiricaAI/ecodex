@@ -3,6 +3,8 @@ pub(crate) mod debug_sandbox;
 mod exit_status;
 mod git_credential;
 pub(crate) mod login;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod shared_sandbox_launcher;
 
 use clap::Args;
 use clap::Parser;
@@ -11,7 +13,7 @@ use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
 use std::path::PathBuf;
 
-pub use debug_sandbox::run_command_under_landlock;
+pub use debug_sandbox::run_command_under_linux_sandbox;
 pub use debug_sandbox::run_command_under_seatbelt;
 pub use debug_sandbox::run_command_under_windows_sandbox;
 pub use git_credential::GitCredentialArgs;
@@ -108,7 +110,11 @@ fn parse_absolute_path(raw: &str) -> Result<AbsolutePathBuf, String> {
 }
 
 #[derive(Debug, Parser)]
-pub struct LandlockCommand {
+pub struct LinuxSandboxCommand {
+    /// Route outbound TCP through the managed SOCKS proxy.
+    #[arg(long)]
+    pub transparent_tcp: bool,
+
     #[command(flatten)]
     pub sandbox_state: SandboxStateArgs,
 

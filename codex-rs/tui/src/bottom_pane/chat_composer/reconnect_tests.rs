@@ -194,7 +194,18 @@ fn unavailable_thread_dispatches_recovery_and_local_commands() {
         SlashCommand::Raw,
     ] {
         let (mut composer, _) = new_test_composer();
-        composer.set_text_content(format!("/{}", command.command()), Vec::new(), Vec::new());
+        composer.blocks_direct_input = true;
+        let text = format!("/{}", command.command());
+        if command == SlashCommand::Status {
+            for ch in text.chars() {
+                composer.handle_restricted_key(
+                    KeyCode::Char(ch).into(),
+                    RestrictedInputMode::UnavailableThread,
+                );
+            }
+        } else {
+            composer.set_text_content(text, Vec::new(), Vec::new());
+        }
         assert_eq!(
             composer.handle_restricted_key(
                 KeyEvent::from(KeyCode::Enter),
@@ -203,6 +214,109 @@ fn unavailable_thread_dispatches_recovery_and_local_commands() {
             InputResult::Command(command),
         );
         assert_eq!(composer.current_text(), "");
+        if command == SlashCommand::Status {
+            composer.handle_restricted_key(
+                KeyCode::F(7).into(),
+                RestrictedInputMode::UnavailableThread,
+            );
+            assert_eq!(composer.current_text(), "");
+        }
+    }
+}
+
+#[test]
+fn unavailable_thread_accepts_highlighted_recovery_completion() {
+    let (mut composer, _) = new_test_composer();
+    for ch in "/sub".chars() {
+        composer.handle_restricted_key(
+            KeyCode::Char(ch).into(),
+            RestrictedInputMode::UnavailableThread,
+        );
+    }
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+    terminal
+        .draw(|frame| composer.render(frame.area(), frame.buffer_mut()))
+        .unwrap();
+    insta::assert_snapshot!("unavailable_thread_recovery_completion", terminal.backend());
+    assert_eq!(
+        composer.handle_restricted_key(
+            KeyCode::Enter.into(),
+            RestrictedInputMode::UnavailableThread
+        ),
+        InputResult::Command(SlashCommand::MultiAgents),
+    );
+    assert_eq!(composer.current_text(), "");
+
+    composer.set_text_content("/comp".into(), Vec::new(), Vec::new());
+    assert_eq!(
+        composer.handle_restricted_key(
+            KeyCode::Enter.into(),
+            RestrictedInputMode::UnavailableThread
+        ),
+        InputResult::None,
+    );
+    assert_eq!(composer.current_text(), "/comp");
+
+    composer.set_text_content("/status ".into(), Vec::new(), Vec::new());
+    composer.handle_restricted_key(KeyCode::Left.into(), RestrictedInputMode::UnavailableThread);
+    composer.handle_restricted_key(KeyCode::Down.into(), RestrictedInputMode::UnavailableThread);
+    assert_eq!(
+        composer.handle_restricted_key(
+            KeyCode::Enter.into(),
+            RestrictedInputMode::UnavailableThread
+        ),
+        InputResult::None,
+    );
+    assert_eq!(composer.current_text(), "/status ");
+
+    composer.set_text_content("/".into(), Vec::new(), Vec::new());
+    composer.blocks_direct_input = true;
+    let ActivePopup::Command(popup) = &composer.popups.active else {
+        panic!("expected command popup");
+    };
+    for _ in 0..popup.filtered_items().len() {
+        if matches!(&composer.popups.active, ActivePopup::Command(popup)
+            if popup.selected_item() == Some(CommandItem::Builtin(SlashCommand::MultiAgents)))
+        {
+            break;
+        }
+        composer
+            .handle_restricted_key(KeyCode::Down.into(), RestrictedInputMode::UnavailableThread);
+    }
+    let key = KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL | KeyModifiers::ALT);
+    composer.submit_keys = vec![key_hint::KeyBinding::from_event(key)];
+    assert_eq!(
+        composer.handle_restricted_key(key, RestrictedInputMode::UnavailableThread),
+        InputResult::Command(SlashCommand::MultiAgents),
+    );
+}
+
+#[test]
+fn unavailable_thread_vim_escape_and_search_keep_popup_closed() {
+    for text in ["/sub", "/raw "] {
+        let (mut composer, _) = new_test_composer();
+        composer.enable_vim_in_insert_mode();
+        for ch in text.chars() {
+            composer.handle_restricted_key(
+                KeyCode::Char(ch).into(),
+                RestrictedInputMode::UnavailableThread,
+            );
+        }
+        assert!(matches!(
+            composer.popups.active,
+            ActivePopup::Command(_) | ActivePopup::Argument(_)
+        ));
+        composer.handle_restricted_key(KeyCode::Esc.into(), RestrictedInputMode::UnavailableThread);
+        assert!(composer.draft.textarea.is_vim_normal_mode());
+        composer.sync_popups();
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+        assert_eq!(composer.current_text(), text);
+        composer.handle_restricted_key(
+            KeyCode::Char('/').into(),
+            RestrictedInputMode::UnavailableThread,
+        );
+        assert!(composer.draft.textarea.vim_query().is_some());
+        assert!(matches!(composer.popups.active, ActivePopup::None));
     }
 }
 
@@ -219,6 +333,11 @@ fn disconnected_input_dispatches_local_config_command() {
         InputResult::Command(SlashCommand::Config),
     );
     assert_eq!(composer.current_text(), "");
+    composer.set_text_content("/rc".into(), Vec::new(), Vec::new());
+    assert_eq!(
+        composer.handle_restricted_key(KeyCode::Enter.into(), RestrictedInputMode::Disconnected),
+        InputResult::Command(SlashCommand::Rc),
+    );
 }
 
 #[test]
@@ -307,4 +426,17 @@ fn unavailable_thread_expands_pasted_commands_without_dispatching() {
         InputResult::None
     );
     assert_eq!(composer.current_text(), text);
+}
+
+#[test]
+fn disconnected_edit_invalidates_ordinary_redo() {
+    let (mut composer, _) = new_test_composer();
+    composer.set_disable_paste_burst(/*disabled*/ true);
+    composer.handle_key_event(KeyCode::Char('a').into());
+    let undo = KeyEvent::new(KeyCode::F(7), KeyModifiers::NONE);
+    composer.handle_restricted_key(undo, RestrictedInputMode::Disconnected);
+    assert_eq!(composer.current_text(), "");
+    composer.handle_restricted_key(KeyCode::Char('b').into(), RestrictedInputMode::Disconnected);
+    composer.handle_key_event(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+    assert_eq!(composer.current_text(), "b");
 }

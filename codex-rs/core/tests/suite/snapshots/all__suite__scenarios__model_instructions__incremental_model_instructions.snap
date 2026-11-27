@@ -15,10 +15,11 @@ Settings:
   stream: true
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=946019c94afdd69a):
-        - namespace/functions; hash=ce01915b77cef9ee
+00:additional_tools/developer (2; hash=db3de0ee245f6526):
+        - namespace/functions; hash=ad1a48f5ab883060
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - function/view_image
         - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=d492855cc7064c73
@@ -62,10 +63,11 @@ Settings:
 ## Window 2 (after request 4: input diverged at item 01)
 Settings: same as window 1
 -- request 5 (turn) --
-00:additional_tools/developer (2; hash=946019c94afdd69a):
-        - namespace/functions; hash=ce01915b77cef9ee
+00:additional_tools/developer (2; hash=db3de0ee245f6526):
+        - namespace/functions; hash=ad1a48f5ab883060
           - function/exec_command
           - function/write_stdin
+          - function/monitor
           - function/request_user_input
           - function/view_image
         - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=d492855cc7064c73

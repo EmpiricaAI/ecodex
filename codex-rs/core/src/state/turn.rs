@@ -22,6 +22,7 @@ use tokio::sync::oneshot;
 
 use super::TurnTokenUsage;
 use crate::agent::types::AgentExecutionGuard;
+use crate::session::SamplingInterrupt;
 use crate::session::TurnInput;
 use crate::session::TurnInputQueue;
 use crate::session::step_context::StepContext;
@@ -35,7 +36,10 @@ use codex_protocol::protocol::TokenUsage;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
+    /// The slot's owner, retained after its task detaches to emit the terminal event.
+    pub(crate) turn_id: Option<String>,
     pub(crate) task: Option<RunningTask>,
+    pub(crate) sampling_interrupt: Option<SamplingInterrupt>,
     /// Present when input admission is closed; cancelled when the final batch is recorded.
     /// Reservations that have not started still accept inputs.
     pub(crate) finishing: Option<CancellationToken>,
@@ -65,7 +69,9 @@ pub(crate) enum MailboxDeliveryPhase {
 impl Default for ActiveTurn {
     fn default() -> Self {
         Self {
+            turn_id: None,
             task: None,
+            sampling_interrupt: None,
             finishing: None,
             turn_state: Arc::new(Mutex::new(TurnState::default())),
         }
@@ -84,6 +90,8 @@ pub(crate) struct RunningTask {
     pub(crate) kind: TaskKind,
     pub(crate) task: Arc<dyn AnySessionTask>,
     pub(crate) cancellation_token: CancellationToken,
+    /// MCP reviews can span sampling attempts and must stop even while the sampler drains.
+    pub(crate) mcp_elicitation_cancellation: CancellationToken,
     pub(crate) handle: AbortOnDropHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
     pub(crate) _agent_execution_guard: Option<AgentExecutionGuard>,

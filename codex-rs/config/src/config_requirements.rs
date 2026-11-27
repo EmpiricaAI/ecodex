@@ -21,6 +21,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::str::FromStr;
 use wildmatch::WildMatchPattern;
@@ -39,6 +40,7 @@ use crate::browser_computer_use_requirements::ComputerUseRequirementsToml;
 use crate::config_toml::ConfigToml;
 use crate::mcp_requirements::validate_mcp_server_requirement;
 use crate::mcp_types::AppToolApproval;
+use crate::permissions_toml::CredentialPermissionsToml;
 use crate::permissions_toml::PermissionProfileToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
@@ -390,6 +392,18 @@ pub enum NetworkDomainPermissionToml {
     Deny,
 }
 
+impl NetworkDomainPermissionToml {
+    /// Unsupported patterns retain their exact spelling. They can never compare equal
+    /// to a valid selector and disappear when two published declarations are combined.
+    pub(crate) fn pattern_identity(self, pattern: &str) -> Result<String, String> {
+        match self {
+            Self::Allow => codex_network_proxy::canonical_allow_pattern(pattern),
+            Self::Deny => codex_network_proxy::canonical_deny_pattern(pattern),
+        }
+        .map_err(|_| pattern.to_owned())
+    }
+}
+
 impl std::fmt::Display for NetworkDomainPermissionToml {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let permission = match self {
@@ -439,6 +453,8 @@ pub struct NetworkRequirementsToml {
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
+    /// Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.
+    pub transparent_tcp: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub domains: Option<NetworkDomainPermissionsToml>,
@@ -454,6 +470,45 @@ pub struct NetworkRequirementsToml {
     /// Requirements-only header injections. These annotate matching requests
     /// without changing whether non-matching requests are allowed.
     pub header_injections: Option<Vec<NetworkHeaderInjectionToml>>,
+}
+
+impl NetworkRequirementsToml {
+    /// Compare the selector identities used by the proxy without modifying the published
+    /// representation. Keep allow and deny contributions distinct, including shadowed grants.
+    pub(crate) fn describes_same_policy(&self, other: &Self) -> bool {
+        if self == other {
+            return true;
+        }
+        let domain_rules = |policy: &Self| {
+            policy.domains.as_ref().map(|domains| {
+                domains
+                    .entries
+                    .iter()
+                    .map(|(pattern, &rule)| (rule, rule.pattern_identity(pattern)))
+                    .collect::<BTreeSet<_>>()
+            })
+        };
+        let review_patterns = |policy: &Self| {
+            policy.review_domains.as_ref().map(|patterns| {
+                patterns
+                    .iter()
+                    .map(|pattern| {
+                        codex_network_proxy::canonical_review_pattern(pattern)
+                            .map_err(|_| pattern.to_owned())
+                    })
+                    .collect::<BTreeSet<_>>()
+            })
+        };
+        if domain_rules(self) != domain_rules(other)
+            || review_patterns(self) != review_patterns(other)
+        {
+            return false;
+        }
+        let mut comparable = other.clone();
+        comparable.domains.clone_from(&self.domains);
+        comparable.review_domains.clone_from(&self.review_domains);
+        self == &comparable
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -481,6 +536,7 @@ struct RawNetworkRequirementsToml {
     http_port: Option<u16>,
     socks_port: Option<u16>,
     allow_upstream_proxy: Option<bool>,
+    transparent_tcp: Option<bool>,
     dangerously_allow_non_loopback_proxy: Option<bool>,
     dangerously_allow_all_unix_sockets: Option<bool>,
     domains: Option<NetworkDomainPermissionsToml>,
@@ -510,6 +566,7 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             http_port,
             socks_port,
             allow_upstream_proxy,
+            transparent_tcp,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains,
@@ -540,6 +597,7 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             http_port,
             socks_port,
             allow_upstream_proxy,
+            transparent_tcp,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains: domains
@@ -593,6 +651,8 @@ pub struct NetworkConstraints {
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
+    /// Route outbound TCP from managed Linux sandbox commands through the managed SOCKS5 proxy.
+    pub transparent_tcp: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub domains: Option<NetworkDomainPermissionsToml>,
@@ -622,6 +682,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             http_port,
             socks_port,
             allow_upstream_proxy,
+            transparent_tcp,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains,
@@ -636,6 +697,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             http_port,
             socks_port,
             allow_upstream_proxy,
+            transparent_tcp,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains,
@@ -701,8 +763,9 @@ pub struct PermissionsRequirementsToml {
     // Keep the optional raw payload out of config-loading futures' inline storage.
     #[serde(default, deserialize_with = "deserialize_permissions_network")]
     pub network: Option<Box<NetworkRequirementsToml>>,
-    // `filesystem` and `network` are reserved for requirements-level
-    // constraints and cannot name profiles.
+    #[serde(default, deserialize_with = "deserialize_permissions_credentials")]
+    pub credentials: Option<CredentialPermissionsToml>,
+    // Shared requirements tables cannot name profiles.
     #[serde(default, flatten)]
     pub profiles: BTreeMap<String, PermissionProfileToml>,
 }
@@ -712,7 +775,10 @@ impl PermissionsRequirementsToml {
     pub(crate) fn take_network(table: &mut Option<Self>) -> Option<Box<NetworkRequirementsToml>> {
         let permissions = table.as_mut()?;
         let network = permissions.network.take()?;
-        if permissions.filesystem.is_none() && permissions.profiles.is_empty() {
+        if permissions.filesystem.is_none()
+            && permissions.credentials.is_none()
+            && permissions.profiles.is_empty()
+        {
             *table = None;
         }
         Some(network)
@@ -724,6 +790,32 @@ fn deserialize_permissions_network<'de, D>(
 ) -> Result<Option<Box<NetworkRequirementsToml>>, D::Error>
 where
     D: serde::Deserializer<'de>,
+{
+    deserialize_shared_permission_table(
+        deserializer,
+        "`permissions.network` in requirements.toml is reserved for shared network constraints; rename the managed profile (for example, to `network-access`) and update `default_permissions`, `allowed_permission_profiles`, and `extends`; check saved session profile references. Profiles named `network` in config.toml remain valid",
+    )
+}
+
+fn deserialize_permissions_credentials<'de, D>(
+    deserializer: D,
+) -> Result<Option<CredentialPermissionsToml>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_shared_permission_table(
+        deserializer,
+        "`permissions.credentials` in requirements.toml is reserved for shared credential policy; rename the managed profile (for example, to `credential-access`) and update `default_permissions`, `allowed_permission_profiles`, and `extends`; check saved session profile references. Profiles named `credentials` in config.toml remain valid",
+    )
+}
+
+fn deserialize_shared_permission_table<'de, D, T>(
+    deserializer: D,
+    rename_error: &'static str,
+) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
 {
     let table = toml::Table::deserialize(deserializer)?;
     if table.is_empty()
@@ -737,9 +829,7 @@ where
         .iter()
         .any(|key| table.contains_key(*key))
     {
-        return Err(D::Error::custom(
-            "`permissions.network` in requirements.toml is reserved for shared network constraints; rename the managed profile (for example, to `network-access`) and update `default_permissions`, `allowed_permission_profiles`, and `extends`; check saved session profile references. Profiles named `network` in config.toml remain valid",
-        ));
+        return Err(D::Error::custom(rename_error));
     }
     toml::Value::Table(table)
         .try_into()
@@ -1193,6 +1283,11 @@ pub struct ConfigRequirementsToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OtelRequirementsToml {
+    pub headers_helper: Option<String>,
+    pub headers_helper_refresh_interval_ms: Option<NonZeroU64>,
+    // Computed during composition. A policy cannot grant a helper access to another layer's collector.
+    #[serde(skip)]
+    managed_helper_targets: OtelHeadersHelperTargets,
     pub tool_result: Option<ToolResultLogConfig>,
     pub log_sse_deltas: Option<bool>,
     pub log_user_prompt: Option<bool>,
@@ -1206,9 +1301,49 @@ pub struct OtelRequirementsToml {
     pub tracestate: Option<BTreeMap<String, BTreeMap<String, String>>>,
 }
 
+/// Signals whose collector may receive the configured helper's credentials.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OtelHeadersHelperTargets {
+    pub logs: bool,
+    pub traces: bool,
+    pub metrics: bool,
+}
+
+impl OtelHeadersHelperTargets {
+    fn merge_layer(&mut self, layer: &OtelRequirementsToml) {
+        let has_helper = layer.headers_helper.is_some();
+        let update = |target: &mut bool, exporter: &Option<OtelExporterKind>| {
+            // Replacing either side of the binding revokes the previous grant.
+            // An empty HTTP endpoint falls back to the process environment in the OTLP SDK.
+            if has_helper || exporter.is_some() {
+                *target = has_helper
+                    && matches!(exporter, Some(OtelExporterKind::OtlpHttp { endpoint, .. }) if !endpoint.is_empty());
+            }
+        };
+        update(&mut self.logs, &layer.exporter);
+        update(&mut self.traces, &layer.trace_exporter);
+        update(&mut self.metrics, &layer.metrics_exporter);
+    }
+}
+
 impl OtelRequirementsToml {
+    /// A managed helper serves its own layer's exporters. A user helper serves unmanaged exporters.
+    pub fn headers_helper_targets(&self) -> OtelHeadersHelperTargets {
+        if self.headers_helper.is_some() {
+            self.managed_helper_targets
+        } else {
+            OtelHeadersHelperTargets {
+                logs: self.exporter.is_none(),
+                traces: self.trace_exporter.is_none(),
+                metrics: self.metrics_exporter.is_none(),
+            }
+        }
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
-        self.tool_result.is_none()
+        self.headers_helper.is_none()
+            && self.headers_helper_refresh_interval_ms.is_none()
+            && self.tool_result.is_none()
             && self.log_sse_deltas.is_none()
             && self.log_user_prompt.is_none()
             && self.log_agent_responses.is_none()
@@ -1344,15 +1479,16 @@ pub struct ConfigRequirementsWithSources {
 
 impl ConfigRequirementsWithSources {
     pub(crate) fn validate_network_spelling(&self) -> Result<(), ConstraintError> {
-        if let (Some(nested), Some(top_level)) = (&self.permissions_network, &self.network) {
+        if let (Some(nested), Some(top_level)) = (&self.permissions_network, &self.network)
+            && !nested.value.describes_same_policy(&top_level.value)
+        {
             return Err(ConstraintError::InvalidValue {
                 field_name: "permissions.network",
                 candidate: format!(
                     "configured together with top-level network requirements from {}",
                     top_level.source
                 ),
-                allowed: "specify managed network requirements through exactly one surface"
-                    .to_string(),
+                allowed: "legacy and permissions.network requirements must describe the same network policy".to_string(),
                 requirement_source: nested.source.clone(),
             });
         }
@@ -1542,6 +1678,8 @@ impl ConfigRequirementsWithSources {
         }
     }
 
+    /// Public loader view. Older runtime clients still read the top-level
+    /// network field when selecting an executor policy, including on resume.
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
             config_server,
@@ -1596,6 +1734,12 @@ impl ConfigRequirementsWithSources {
             permissions.get_or_insert_with(Default::default).network =
                 Some(Box::new(network.value));
         }
+        let network = network.map(|sourced| sourced.value).or_else(|| {
+            permissions
+                .as_ref()
+                .and_then(|permissions| permissions.network.as_deref())
+                .cloned()
+        });
         ConfigRequirementsToml {
             config_server: config_server.map(|sourced| sourced.value),
             allowed_login_methods: allowed_login_methods.map(|sourced| sourced.value),
@@ -1637,7 +1781,7 @@ impl ConfigRequirementsWithSources {
             apps: apps.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
-            network: network.map(|sourced| sourced.value),
+            network,
             application: application.map(|sourced| sourced.value),
             permissions,
             auto_review: auto_review.map(|sourced| sourced.value),
@@ -1882,7 +2026,7 @@ impl ConfigRequirementsToml {
             return Some("model_providers");
         }
         let otel = self.otel.as_ref();
-        let managed_fields: [(bool, &[&str], &'static str); 18] = [
+        let managed_fields: [(bool, &[&str], &'static str); 20] = [
             (
                 self.model_provider.is_some(),
                 &["model_provider"],
@@ -1927,6 +2071,16 @@ impl ConfigRequirementsToml {
                 otel.is_some_and(|otel| otel.tool_result.is_some()),
                 &["otel", "tool_result"],
                 "otel.tool_result",
+            ),
+            (
+                otel.is_some_and(|otel| otel.headers_helper.is_some()),
+                &["otel", "headers_helper"],
+                "otel.headers_helper",
+            ),
+            (
+                otel.is_some_and(|otel| otel.headers_helper_refresh_interval_ms.is_some()),
+                &["otel", "headers_helper_refresh_interval_ms"],
+                "otel.headers_helper_refresh_interval_ms",
             ),
             (
                 otel.is_some_and(|otel| otel.log_user_prompt.is_some()),
@@ -2004,6 +2158,9 @@ macro_rules! otel_merge_functions {
                 );
                 contributed = true;
             }
+            if let Some(merged) = requirements {
+                merged.managed_helper_targets.merge_layer(higher_priority);
+            }
             contributed
         }
 
@@ -2028,6 +2185,8 @@ macro_rules! otel_merge_functions {
 }
 
 otel_merge_functions!(
+    headers_helper,
+    headers_helper_refresh_interval_ms,
     tool_result,
     log_sse_deltas,
     log_user_prompt,
@@ -2522,10 +2681,13 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 /*source*/ None,
             ),
         };
-        let network = permissions_network
-            .map(|network| *network)
-            .or(network)
-            .map(|Sourced { value, source }| Sourced::new(NetworkConstraints::from(value), source));
+        let network = match (permissions_network, network) {
+            // A dual-published source keeps its original selector text on older executors.
+            (Some(nested), Some(legacy)) if nested.source == legacy.source => Some(legacy),
+            (Some(nested), _) => Some(*nested),
+            (None, legacy) => legacy,
+        }
+        .map(|Sourced { value, source }| Sourced::new(NetworkConstraints::from(value), source));
         let filesystem = permissions
             .filter(|permissions| permissions.value.filesystem.is_some())
             .map(|Sourced { value, source }| {
@@ -2681,6 +2843,8 @@ mod tests {
     #[test_case::test_case(&["otel"], Some("otel.tool_result"); "otel_parent")]
     #[test_case::test_case(&["otel", "tool_result"], Some("otel.tool_result"); "tool_result")]
     #[test_case::test_case(&["otel", "tool_result", "max_bytes"], Some("otel.tool_result"); "tool_result_max_bytes")]
+    #[test_case::test_case(&["otel", "headers_helper"], Some("otel.headers_helper"); "headers_helper")]
+    #[test_case::test_case(&["otel", "headers_helper_refresh_interval_ms"], Some("otel.headers_helper_refresh_interval_ms"); "headers_helper_refresh_interval_ms")]
     #[test_case::test_case(&["otel", "log_user_prompt"], Some("otel.log_user_prompt"); "log_user_prompt")]
     #[test_case::test_case(&["otel", "log_sse_deltas"], Some("otel.log_sse_deltas"); "log_sse_deltas")]
     #[test_case::test_case(&["otel", "environment"], Some("otel.environment"); "environment")]
@@ -2704,6 +2868,8 @@ mod tests {
             r#"
 [otel]
 tool_result = { max_bytes = 1024 }
+headers_helper = "/opt/company/otel-headers"
+headers_helper_refresh_interval_ms = 60000
 log_user_prompt = false
 environment = "managed"
 log_sse_deltas = false
@@ -2718,6 +2884,8 @@ tracestate = { managed = { tenant = "enterprise" }, empty = {} }
             r#"
 [otel]
 tool_result = { max_bytes = 4096 }
+headers_helper = "user-headers"
+headers_helper_refresh_interval_ms = 90000
 log_user_prompt = true
 environment = "user"
 log_sse_deltas = true
@@ -2736,6 +2904,8 @@ tracestate = { managed = { tenant = "user", region = "us" }, other = { keep = "y
                 r#"
 [otel]
 tool_result = { max_bytes = 1024 }
+headers_helper = "/opt/company/otel-headers"
+headers_helper_refresh_interval_ms = 60000
 log_user_prompt = false
 environment = "managed"
 log_sse_deltas = false
@@ -4995,6 +5165,15 @@ command = "python3 /enterprise/hooks/pre.py"
             ))
         };
         assert_eq!(parse("network_proxy")?, parse("experimental_network")?);
+        for table in ["network_proxy", "experimental_network"] {
+            let dual: ConfigRequirementsToml = from_str(&format!(
+                "[{table}]\ndenied_domains = ['2001:db8::1']\n\
+                 [permissions.network]\ndenied_domains = ['2001:0db8:0:0:0:0:0:1']"
+            ))?;
+            let expected = dual.network.clone().map(NetworkConstraints::from);
+            let runtime = ConfigRequirements::try_from(with_unknown_source(dual))?;
+            assert_eq!(runtime.network.map(|network| network.value), expected);
+        }
         for values in ["", "enabled = true"] {
             let both = format!("[network_proxy]\n{values}\n[experimental_network]\n{values}");
             assert!(from_str::<ConfigRequirementsToml>(&both).is_err());
@@ -5008,6 +5187,7 @@ command = "python3 /enterprise/hooks/pre.py"
             [permissions.network]
             enabled = true
             allow_upstream_proxy = false
+            transparent_tcp = true
             dangerously_allow_all_unix_sockets = true
             managed_allowed_domains_only = true
             allow_local_binding = false
@@ -5042,6 +5222,7 @@ command = "python3 /enterprise/hooks/pre.py"
 
         assert_eq!(sourced_network.source, source);
         assert_eq!(sourced_network.value.enabled, Some(true));
+        assert_eq!(sourced_network.value.transparent_tcp, Some(true));
         assert_eq!(sourced_network.value.allow_upstream_proxy, Some(false));
         assert_eq!(
             sourced_network.value.dangerously_allow_all_unix_sockets,

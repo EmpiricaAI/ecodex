@@ -12,7 +12,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_protocol::user_input::UserInput;
+use codex_user_input::ResolvedUserInput;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -107,6 +107,7 @@ pub(crate) async fn run_codex_thread_interactive(
         attached_thread: false,
         startup: Some(Arc::clone(&startup)),
         config,
+        request_country: parent_ctx.request_country().clone(),
         prompt_cache_key: parent_session
             .services
             .model_client
@@ -240,7 +241,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     config: Config,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
-    input: Vec<UserInput>,
+    input: Vec<ResolvedUserInput>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
@@ -307,16 +308,16 @@ pub(crate) async fn run_codex_thread_one_shot(
             let _ = tx_bridge.send(event).await;
             if should_shutdown {
                 let _ = ops_tx
-                    .send(Submission {
+                    .send(Box::new(Submission {
                         id: "shutdown".to_string(),
-                        op: Op::Shutdown {},
+                        op: Op::Shutdown.into(),
                         turn_extension_init: None,
                         trace: None,
                         parent_turn_id: None,
                         root_turn_id: None,
                         residency_guard: None,
                         message_delivery: None,
-                    })
+                    }))
                     .await;
                 child_cancel.cancel();
                 break;
@@ -417,7 +418,7 @@ async fn forward_event_or_shutdown(
 /// Forward ops from a caller to a sub-agent, respecting cancellation.
 async fn forward_ops(
     io: Arc<SessionIo>,
-    rx_ops: Receiver<Submission>,
+    rx_ops: Receiver<Box<Submission>>,
     cancel_token_ops: CancellationToken,
 ) {
     loop {

@@ -791,6 +791,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
             harness.summary,
             /*service_tier*/ None,
             &responses_metadata,
+            /*reuse_response*/ true,
         )
         .await
         .expect("websocket prewarm failed");
@@ -888,6 +889,7 @@ async fn responses_websocket_request_prewarm_uses_caller_supplied_metadata() {
             harness.summary,
             /*service_tier*/ None,
             &responses_metadata,
+            /*reuse_response*/ true,
         )
         .await
         .expect("websocket prewarm failed");
@@ -915,12 +917,13 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
     let server = start_websocket_server(vec![vec![
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
     let mut client_session = harness.client.new_session();
-    let prompt = prompt_with_input(vec![message_item("hello")]);
+    let mut prompt = prompt_with_input_and_instructions(vec![message_item("hello")], "Base rules");
     let prewarm_responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
 
     client_session
@@ -932,6 +935,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
             harness.summary,
             /*service_tier*/ None,
             &prewarm_responses_metadata,
+            /*reuse_response*/ true,
         )
         .await
         .expect("websocket prewarm failed");
@@ -961,7 +965,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
         .expect("turn started");
 
     let inference_trace = InferenceTraceContext::enabled(
-        writer,
+        Arc::clone(&writer),
         harness.thread_id.to_string(),
         "turn-1".to_string(),
         harness.model_info.slug.clone(),
@@ -989,6 +993,29 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
         }
     }
 
+    let attribution = serde_json::json!([{"provenance": {"type": "user"}}]);
+    Arc::make_mut(&mut prompt).input.push(serde_json::from_value(serde_json::json!({
+        "type": "message", "role": "user", "content": [{"type": "input_text", "text": "follow up"}],
+        "internal_chat_message_metadata_passthrough": {"content_item_metadata": attribution}
+    })).unwrap());
+    let mut next = client_session
+        .stream(
+            &prompt,
+            &harness.model_info,
+            &harness.session_telemetry,
+            harness.effort.clone(),
+            harness.summary,
+            /*service_tier*/ None,
+            &responses_metadata,
+            &inference_trace,
+        )
+        .await
+        .expect("second websocket stream");
+    while let Some(event) = next.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+            break;
+        }
+    }
     let connection = server.single_connection();
     let follow_up = connection
         .get(1)
@@ -997,21 +1024,52 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
     assert_eq!(follow_up["previous_response_id"].as_str(), Some("warm-1"));
     assert_eq!(follow_up["input"], serde_json::json!([]));
 
+    writer.flush().expect("publish the live trace");
     let rollout = replay_bundle(trace_dir.path()).expect("replay trace");
-    let inference = rollout
-        .inference_calls
-        .values()
-        .next()
-        .expect("inference should be present");
-    assert_eq!(inference.request_item_ids.len(), 1);
-    assert_eq!(
-        rollout.conversation_items[&inference.request_item_ids[0]]
-            .body
-            .parts,
-        vec![ConversationPart::Text {
-            text: "hello".to_string(),
-        }],
-    );
+    let mut reader = codex_rollout_trace::PayloadReader::new(trace_dir.path());
+    assert_eq!(rollout.inference_calls.len(), 2);
+    for (index, response_id, previous, wire_items, prepared_items) in
+        [(1, "resp-1", "warm-1", 0, 1), (2, "resp-2", "resp-1", 1, 2)]
+    {
+        let call = rollout
+            .inference_calls
+            .values()
+            .find(|call| call.response_id.as_deref() == Some(response_id))
+            .unwrap();
+        let outgoing = connection[index].body_json();
+        assert_eq!(
+            reader
+                .read_json(&rollout.raw_payloads[&call.raw_request_payload_id])
+                .unwrap(),
+            outgoing
+        );
+        assert_eq!(outgoing["previous_response_id"], previous);
+        assert_eq!(outgoing["input"].as_array().unwrap().len(), wire_items);
+        let prepared = reader
+            .read_json(&rollout.raw_payloads[&call.prepared_prompt_payload_id])
+            .unwrap();
+        assert_eq!(prepared["base_instructions"]["text"], "Base rules");
+        assert_eq!(
+            prepared["input"],
+            serde_json::to_value(&prompt.input[..prepared_items]).unwrap()
+        );
+        if index == 2 {
+            assert_eq!(
+                prepared["input"][1]["internal_chat_message_metadata_passthrough"]["content_item_metadata"],
+                attribution
+            );
+            assert!(outgoing["input"][0]["internal_chat_message_metadata_passthrough"]["content_item_metadata"].is_null());
+        }
+        assert_eq!(call.request_item_ids.len(), prepared_items + 1);
+        assert_eq!(
+            rollout.conversation_items[&call.request_item_ids[1]]
+                .body
+                .parts,
+            vec![ConversationPart::Text {
+                text: "hello".to_string()
+            }]
+        );
+    }
 
     server.shutdown().await;
 }
@@ -1342,6 +1400,7 @@ async fn responses_websocket_prewarm_reuses_advisory_model_and_tier_routing_hint
             harness.summary,
             warmup_tier.map(str::to_string),
             &responses_metadata,
+            /*reuse_response*/ true,
         )
         .await
         .expect("websocket prewarm failed");
@@ -2037,11 +2096,15 @@ async fn responses_websocket_uses_incremental_create_on_prefix() {
 
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
-    let audio = ResponseItem::from(ResponseInputItem::from(vec![UserInput::Audio {
-        audio: AudioReference::File {
-            file_id: "file_audio".to_string(),
-        },
-    }]));
+    let audio = ResponseItem::from(ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputAudio {
+            audio: AudioReference::File {
+                file_id: "file_audio".to_string(),
+            },
+        }],
+        phase: None,
+    });
     let prompt_one = prompt_with_input(vec![audio.clone()]);
     let prompt_two = prompt_with_input(vec![
         audio,
@@ -2501,7 +2564,7 @@ async fn responses_websocket_v2_creates_without_previous_response_id_when_non_in
     let mut session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let mut prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
-    prompt_two.output_schema = output_schema;
+    Arc::make_mut(&mut prompt_two).output_schema = output_schema;
     let mut model_info = harness.model_info.clone();
     if let Some(model) = model {
         model_info.slug = model.to_string();
@@ -2661,6 +2724,30 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
     json!({"type": "error", "status": 400, "error": {"code": "budget_reached"}}),
     CodexErrorInfo::SessionBudgetExceeded; "budget HTTP envelope"
 )]
+#[test_case::test_case(
+    json!({"type": "error", "sequence_number": 0, "error": {"code": "bio_policy", "message": "policy rejection"}}),
+    CodexErrorInfo::BioPolicy; "bio policy without status"
+)]
+#[test_case::test_case(
+    json!({"type": "error", "sequence_number": 0, "error": {"code": "cyber_policy", "message": "policy rejection"}}),
+    CodexErrorInfo::CyberPolicy; "cyber policy without status"
+)]
+#[test_case::test_case(
+    json!({"type": "error", "error": {"code": "invalid_prompt"}}),
+    CodexErrorInfo::InvalidPrompt; "statusless invalid prompt"
+)]
+#[test_case::test_case(
+    json!({"type": "error", "error": {"code": "insufficient_quota"}}),
+    CodexErrorInfo::UsageLimitExceeded; "statusless quota"
+)]
+#[test_case::test_case(
+    json!({"type": "error", "error": {"code": "misalignment_policy_violation"}}),
+    CodexErrorInfo::MisalignmentPolicyViolation; "statusless misalignment"
+)]
+#[test_case::test_case(
+    json!({"type": "error", "error": {"code": "server_is_overloaded"}}),
+    CodexErrorInfo::ServerOverloaded; "statusless overload without advice"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
     failure: serde_json::Value,
@@ -2780,20 +2867,18 @@ fn assistant_message_item(id: &str, text: &str) -> ResponseItem {
     }
 }
 
-fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {
-    let mut prompt = Prompt::default();
-    prompt.input = input;
-    prompt.base_instructions.text.clear();
-    prompt
+fn prompt_with_input(input: Vec<ResponseItem>) -> Arc<Prompt> {
+    prompt_with_input_and_instructions(input, "")
 }
 
-fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &str) -> Prompt {
-    let mut prompt = prompt_with_input(input);
+fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &str) -> Arc<Prompt> {
+    let mut prompt = Prompt::default();
+    prompt.input = input;
     prompt.base_instructions = BaseInstructions {
         text: instructions.to_string(),
         provenance: None,
     };
-    prompt
+    Arc::new(prompt)
 }
 
 fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
@@ -3218,7 +3303,7 @@ fn assert_counter<const N: usize>(
 async fn stream_until_complete(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
-    prompt: &Prompt,
+    prompt: &Arc<Prompt>,
 ) {
     stream_until_complete_with_service_tier(
         client_session,
@@ -3232,7 +3317,7 @@ async fn stream_until_complete(
 async fn stream_until_complete_with_model_info(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
-    prompt: &Prompt,
+    prompt: &Arc<Prompt>,
     model_info: &ModelInfo,
     expected_response_id: &str,
 ) {
@@ -3265,7 +3350,7 @@ async fn stream_until_complete_with_model_info(
 async fn stream_until_complete_with_service_tier(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
-    prompt: &Prompt,
+    prompt: &Arc<Prompt>,
     service_tier: Option<ServiceTier>,
 ) {
     let responses_metadata = turn_metadata(harness, /*turn_id*/ None);
@@ -3282,7 +3367,7 @@ async fn stream_until_complete_with_service_tier(
 async fn stream_until_complete_with_metadata(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
-    prompt: &Prompt,
+    prompt: &Arc<Prompt>,
     service_tier: Option<ServiceTier>,
     responses_metadata: &CodexResponsesMetadata,
 ) {

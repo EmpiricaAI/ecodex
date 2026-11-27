@@ -1,6 +1,6 @@
 //! Shared root-conversation and host-verified answer sections.
 //!
-//! Hosts resolve source provenance; sync preparation applies request limits. Source roles remain
+//! Hosts resolve source provenance; preparation applies request limits. Source roles remain
 //! line-labeled evidence, not instructions or a change to the delivery role.
 
 use crate::ContextSection;
@@ -84,9 +84,7 @@ impl SectionContributor for RootConversationSection {
     }
 
     fn contribute(&self, input: &SectionInput<'_>) -> Result<Option<ContextSection>, SectionError> {
-        if input.target == crate::ContextTarget::Sync
-            && let Some(candidates) = input.root_conversation_candidates
-        {
+        if let Some(candidates) = input.root_conversation_candidates {
             return Ok(Some(ContextSection::RootConversation {
                 content: RootConversationContent::Collected(candidates.clone()),
             }));

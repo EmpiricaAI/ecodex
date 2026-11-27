@@ -1,6 +1,5 @@
 ---
 source: tui/src/chatwidget/tests/bedrock_catalog_tests.rs
-assertion_line: 114
 expression: "render_bottom_popup(&chat, 100)"
 ---
   Select Model and Effort
@@ -31,22 +30,22 @@ expression: "render_bottom_popup(&chat, 100)"
                                                                       Opus via OpenRouter without
                                                                       separate Anthropic API key/
                                                                       billing.
-  10. Cloud — router (catchall) — GPT-5.2 Codex (OpenAI via OpenRout… OpenAI codex-tuned tier —
+      Cloud — router (catchall) — GPT-5.2 Codex (OpenAI via OpenRout… OpenAI codex-tuned tier —
                                                                       purpose-built for coding
                                                                       agents, 400K context. Reach
                                                                       GPT-5 family without OpenAI
                                                                       direct provider setup.
-  11. Cloud — router (catchall) — Grok Code Fast 1 (xAI via OpenRout… xAI fast coding tier — high
+      Cloud — router (catchall) — Grok Code Fast 1 (xAI via OpenRout… xAI fast coding tier — high
                                                                       throughput, 256K context,
                                                                       competitive on tool-use. The
                                                                       cheap-and-fast option when
                                                                       latency dominates quality.
-  12. Cloud — router (catchall) — Gemini 2.5 Pro (Google via OpenRou… Google flagship general model,
+      Cloud — router (catchall) — Gemini 2.5 Pro (Google via OpenRou… Google flagship general model,
                                                                       1M context. Strong on long-
                                                                       document analysis. Reach
                                                                       Gemini without separate Google
                                                                       Cloud setup.
-› 13. GPT-5.6 Terra (current)                                         Legacy balanced model for
+›     GPT-5.6 Terra (current)                                         Legacy balanced model for
                                                                       agentic coding.
 ↓
   enter select · esc back

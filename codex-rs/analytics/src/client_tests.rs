@@ -678,6 +678,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         section_entered_at: None,
         project_id: None,
         daybreak_enabled: None,
+        daybreak_program_propagation_enrolled: None,
         history_mode: Default::default(),
         model_provider: "openai".to_string(),
         model: None,
@@ -687,7 +688,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         recency_at: Some(2),
         status: AppServerThreadStatus::Idle,
         path: None,
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: test_path_buf("/tmp").abs().into(),
         cli_version: "0.0.0".to_string(),
         source: AppServerSessionSource::Exec,
         can_accept_direct_input: None,
@@ -707,7 +708,7 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: test_path_buf("/tmp").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnRequest,
@@ -726,7 +727,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: test_path_buf("/tmp").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnRequest,
@@ -749,7 +750,7 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: test_path_buf("/tmp").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnRequest,
@@ -935,10 +936,7 @@ fn track_response_ignores_unserializable_thread_responses() {
     let ClientResponsePayload::ThreadStart(thread_start) = &mut response else {
         panic!("expected thread/start response");
     };
-    thread_start.cwd = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
-        std::path::PathBuf::from(OsString::from_vec(vec![b'/', b'b', b'a', b'd', 0xff])),
-    )
-    .expect("non-UTF-8 Unix paths are valid absolute paths");
+    thread_start.thread.path = Some(OsString::from_vec(b"/bad\xff".to_vec()).into());
 
     client.track_response(/*connection_id*/ 7, RequestId::Integer(1), &response);
 
